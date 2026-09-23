@@ -84,6 +84,7 @@ SCREEN_WIDTH, SCREEN_HEIGHT = pyautogui.size()
 
 # Behavior flags
 FOCUS_WINDOW_ON_ACTION = True  # click the Roblox window to focus it before acting
+CATCH_ENABLED = False          # disable catch need handler (set to True to re-enable)
 
 # Timing (seconds)
 RESPAWN_KEY_DURATION = 0.05    # how long each respawn key is held
@@ -131,7 +132,7 @@ ICON_CLAHE_TILE = (8, 8)
 ICON_COMPARE_SIZE = (32, 32)
 
 # Button detection (middle band of screen)
-BUTTON_BAND_Y = (0.35, 0.65)
+BUTTON_BAND_Y = (0.40, 0.70)
 BUTTON_BAND_X = (0.25, 0.75)
 BUTTON_MIN_AREA = 150
 BUTTON_MIN_CIRCULARITY = 0.65
@@ -733,6 +734,8 @@ def get_need_handler(need_name):
     """Return the handler responsible for a given need name."""
     if need_name.startswith("walk"):
         return WalkNeedHandler()
+    if need_name == "catch" and not CATCH_ENABLED:
+        return None  # catch is disabled
     handler_cls = NEED_HANDLER_CLASSES.get(need_name)
     if handler_cls:
         return handler_cls()
@@ -747,7 +750,9 @@ def needs_action_pending(config):
         if not matched_need or score < ICON_MATCH_THRESHOLD:
             continue
         need_name = base_need_name(matched_need)
-        if need_name.startswith("walk") or need_name in config["buttons"] or need_name == "catch":
+        if need_name.startswith("walk") or need_name in config["buttons"]:
+            return True
+        if need_name == "catch" and CATCH_ENABLED:
             return True
     return False
 
@@ -777,7 +782,11 @@ def process_needs():
         if matched_need:
             need_name = base_need_name(matched_need)
             print(f"\n[!] MATCHED: {need_name} (score: {score:.4f})")
-            get_need_handler(need_name).handle(config)
+            handler = get_need_handler(need_name)
+            if handler is None:
+                print(f"[debug] {need_name} is disabled, skipping")
+                continue
+            handler.handle(config)
         else:
             print(f"\n[!] NEW NEED (best score: {score:.4f})")
             need_name = prompt_rename_need(icon_img, idx)

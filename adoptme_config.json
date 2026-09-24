@@ -1,24 +1,24 @@
 {
   "buttons": {
     "hungry": [
-      678,
-      652
+      655,
+      702
     ],
     "thirsty": [
-      756,
-      652
+      738,
+      703
     ],
     "dirty": [
-      860,
-      624
+      852,
+      672
     ],
     "potty": [
-      997,
-      621
+      1000,
+      668
     ],
     "sleepy": [
-      1214,
-      604
+      1235,
+      650
     ]
   },
   "needs": {
@@ -48,6 +48,7 @@
     "need_potty": true,
     "need_ride": true,
     "need_pizza": true,
-    "need_bored": true
+    "need_bored": true,
+    "need_puddle": true
   }
 }

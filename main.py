@@ -144,11 +144,11 @@ PET_CIRCLE_DURATION = 10.0     # how long to make circles with mouse
 CATCH_TOYS_POS = (754, 854)
 CATCH_SQUEAKY_TOY_POS = (976, 875)
 CATCH_EQUIP_POS = (1083, 980)
-CATCH_UNEQUIP_POS = (1089, 977)
+CATCH_UNEQUIP_POS = (1054, 983)
 
 # A spot on screen that's just empty game world - no UI, no character menu.
 # Used as the "click into empty space" throw motion in catch.
-EMPTY_POS = (380, 557)
+EMPTY_POS = (142, 233)
 
 # Click this to open the pet's interaction menu (pet/weather/feed/dress up/
 # tricks/pick up/ride/fly icons arranged around the pet).
@@ -168,6 +168,10 @@ RIDE_VEHICLES_POS = (816, 804)
 RIDE_FIRST_VEHICLE_POS = (976, 708)
 RIDE_EQUIP_POS = (1062, 814)
 RIDE_WALK_DURATION = 40.0      # total time spent walking back and forth while riding
+
+# Pen check
+TASK_BOARD_POS = (60, 576)
+READY_POS = (1029, 485)
 
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75
@@ -772,15 +776,9 @@ class PetNeedHandler(NeedHandler):
         if not focus_roblox():
             return False
 
-        # First e press
-        print("[debug] pressing e (first)...")
-        pydirectinput.press('e')
-        wait_interruptible(PET_FIRST_E_WAIT)
-
-        # Second e press
-        print("[debug] pressing e (second)...")
-        pydirectinput.press('e')
-        wait_interruptible(2)
+        print("[debug] focusing pet...")
+        jitter_click(*FOCUS_PET_POS)
+        wait_interruptible(UI_SETTLE)
 
         # Hold the mouse button down and trace a circle around the middle of the screen
         print(f"[debug] holding mouse and circling for {PET_CIRCLE_DURATION}s...")
@@ -789,7 +787,7 @@ class PetNeedHandler(NeedHandler):
 
         # Move to the circle's starting point before pressing down, so the
         # button goes down already on the circle rather than jumping to it.
-        pyautogui.moveTo(center_x + circle_radius, center_y, duration=0.1)
+        pyautogui.moveTo(center_x+circle_radius, center_y, duration=0.1)
         pydirectinput.mouseDown()
         try:
             start_time = time.time()

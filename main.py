@@ -891,9 +891,11 @@ def process_needs():
     dirty, potty, sleepy, or any other need with no dedicated handler) are
     handled in place: walk to the buttons once, then click each one that
     matched. Needs with dedicated logic (catch, pet, choose, ride, walk) are
-    handled by their own handler instead. Either way, the character
-    respawns once afterward. Returns True if anything was found and acted
-    on, False if there was nothing to do this check."""
+    handled by their own handler instead - and only these walk anywhere
+    first; basic needs never require it. Either way, the character respawns
+    once afterward. Returns True if anything was actually resolved this
+    check, False if there was nothing to do - including when every matched
+    need turned out to be a disabled special (see get_special_need_handler())."""
     if not focus_roblox_click():
         return False
 
@@ -930,7 +932,7 @@ def process_needs():
     if not basic_needs and not special_needs:
         return False
 
-    respawn_needed = False
+    resolved = False
 
     if basic_needs:
         walk_to_buttons()
@@ -938,7 +940,7 @@ def process_needs():
         for need_name in basic_needs:
             check_running()
             click_basic_need_button(need_name)
-        respawn_needed = True
+        resolved = True
 
     for need_name in special_needs:
         check_running()
@@ -947,12 +949,12 @@ def process_needs():
             print(f"[debug] {need_name} is disabled, skipping")
             continue
         handler.handle()
-        respawn_needed = True
+        resolved = True
 
-    if respawn_needed:
+    if resolved:
         respawn_character()
 
-    return True
+    return resolved
 
 # ============================================================================
 # WORKFLOWS
@@ -985,16 +987,21 @@ def run_workflow():
     print("\n[WORKFLOW] Done\n")
 
 def run_workflow_loop():
-    """Repeat the workflow continuously. The only way this loop ever ends is
-    via a stop request - there's no other exit condition, so StopRequested
-    is expected here, not an error. It's allowed to propagate on up to
-    run_async()'s worker (via the bare `finally`, not `except`) so the GUI
-    still reports [STOPPED] correctly; the finally just prints locally first."""
+    """Respawn once, then repeat the workflow continuously. The only way this
+    loop ever ends is via a stop request - there's no other exit condition,
+    so StopRequested is expected here, not an error. It's allowed to
+    propagate on up to run_async()'s worker (via the bare `finally`, not
+    `except`) so the GUI still reports [STOPPED] correctly; the finally
+    just prints locally first."""
     global STOP_FLAG
     STOP_FLAG = False
     print("\n" + "=" * 50)
     print("[LOOP] Starting continuous workflow")
     print("=" * 50)
+
+    # Respawn once up front so the loop always starts from a known state,
+    # regardless of wherever the character happened to be standing.
+    respawn_character()
 
     loop_num = 0
     try:
@@ -1091,19 +1098,23 @@ class AdoptMeGUI:
         start_container.pack(side=tk.LEFT, padx=(0, 4))
         start_container.pack_propagate(False)
 
+        START_BUTTON_COLOR = "#2ecc71"
+
         btn_start = tk.Button(start_container, text="\U0001F504", command=self.run_workflow,
-                               font=("Courier", 16, "bold"), bg="#2ecc71", fg=self.fg, cursor="hand2")
+                               font=("Courier", 20, "bold"), bg=START_BUTTON_COLOR, fg=self.fg, cursor="hand2")
         btn_start.pack(fill=tk.BOTH, expand=True)
         self.action_buttons.append(btn_start)
 
-        # The "1" (single-cycle) badge is a separate Label layered on top of
-        # the icon via place(), rather than a second line of button text, so
-        # the button itself can stay square and short. Clicking the badge
+        # The "1" (single-cycle) badge is a separate Label layered directly
+        # on top of the icon via place(), rather than a second line of
+        # button text, so the button itself can stay square and short. Its
+        # background matches the button's own color (no contrasting box
+        # around it) and it sits centered on the icon. Clicking the badge
         # forwards to the real button via invoke(), which already respects
         # the button's enabled/disabled state - no separate state tracking needed.
         start_badge = tk.Label(start_container, text="1", font=("Courier", 8, "bold"),
-                                bg=self.bg, fg=self.fg, cursor="hand2")
-        start_badge.place(relx=0.78, rely=0.78, anchor="center")
+                                bg=START_BUTTON_COLOR, fg=self.fg, cursor="hand2")
+        start_badge.place(relx=0.5, rely=0.5, anchor="center")
         start_badge.bind("<Button-1>", lambda e: btn_start.invoke())
 
         # Not added to action_buttons: must remain clickable while a workflow is running
@@ -1116,7 +1127,7 @@ class AdoptMeGUI:
         self.btn_stop.pack(fill=tk.BOTH, expand=True)
 
         btn_loop = tk.Button(main_row, text="\U0001F504", command=self.run_workflow_loop,
-                              font=("Courier", 16, "bold"), bg="#27ae60", fg=self.fg, cursor="hand2")
+                              font=("Courier", 20, "bold"), bg="#2980b9", fg=self.fg, cursor="hand2")
         btn_loop.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.action_buttons.append(btn_loop)
 
@@ -1125,7 +1136,7 @@ class AdoptMeGUI:
         tk.Label(btn_frame, text="Functions", font=("Courier", 9, "bold"), bg=self.bg, fg=self.accent).pack(anchor=tk.W)
 
         btn_respawn = tk.Button(btn_frame, text="Respawn", command=lambda: self.run_async(respawn_character),
-                                 font=("Courier", 9), bg=self.accent, fg=self.fg, height=1, cursor="hand2")
+                                 font=("Courier", 9), bg="#8e44ad", fg=self.fg, height=1, cursor="hand2")
         btn_respawn.pack(fill=tk.X, pady=2)
         self.action_buttons.append(btn_respawn)
 

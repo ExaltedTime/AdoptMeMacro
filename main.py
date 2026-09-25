@@ -11,7 +11,7 @@
 # pydirectinput - direct input for game compatibility
 # pygetwindow - window management
 #
-# Standard library: os, sys, json, time, random, threading, abc, enum, pathlib, tkinter
+# Standard library: os, sys, time, random, threading, abc, enum, pathlib, tkinter
 
 # ============================================================================
 # CODE RUNDOWN
@@ -36,7 +36,6 @@
 #
 # Key pieces, top to bottom:
 #   - CONSTANTS          all tunable numbers/timings/colors in one place
-#   - CONFIG              load/save adoptme_config.json (button positions)
 #   - WINDOW FOCUS         bring Roblox to front, grab screenshots, and
 #                          find_exact_color() for buttons matched by color
 #                          rather than shape (used by the choose need)
@@ -52,8 +51,8 @@
 #                          for the actual need buttons) / simple_click
 #                          (used for backpack/toy UI clicks)
 #   - BUTTON DETECTION      finds the purple action buttons (hungry,
-#                          thirsty, dirty, potty, sleepy) and saves their
-#                          screen positions to config
+#                          thirsty, dirty, potty, sleepy) and caches their
+#                          screen positions in memory (BUTTON_POSITIONS)
 #   - MOVEMENT              respawn_character(), walk_alternating() (shared
 #                          by walk, a/d, and ride, w/s - same pattern,
 #                          different keys and duration passed in)
@@ -88,7 +87,7 @@
 # mid-action and leave an input stuck down in the game, which is worse than
 # the ~0.1s worst-case delay this cooperative approach has instead.
 
-import os, sys, json, time, random, threading
+import os, sys, time, random, threading
 from abc import ABC, abstractmethod
 from enum import Enum
 from pathlib import Path
@@ -108,8 +107,9 @@ import pygetwindow as gw
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 NEEDS_DIR = os.path.join(SCRIPT_DIR, "needs")
-CONFIG_FILE = os.path.join(SCRIPT_DIR, "adoptme_config.json")
+DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
 Path(NEEDS_DIR).mkdir(exist_ok=True)
+Path(DEBUG_DIR).mkdir(exist_ok=True)
 
 pyautogui.FAILSAFE = True
 pydirectinput.FAILSAFE = True
@@ -243,20 +243,6 @@ def check_stop():
         raise StopRequested()
 
 # ============================================================================
-# CONFIG
-# ============================================================================
-
-def load_config():
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE) as f:
-            return json.load(f)
-    return {"buttons": {}, "needs": {}}
-
-def save_config(config):
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(config, f, indent=2)
-
-# ============================================================================
 # WINDOW FOCUS & SCREEN CAPTURE
 # ============================================================================
 
@@ -316,6 +302,13 @@ class Position(Enum):
     HOME = "home"        # where the pet-care buttons are, just past the respawn spot
 
 CURRENT_POSITION = None  # unknown until the first respawn
+
+# Detected action-button screen positions, keyed by need name (e.g. "hungry").
+# Populated by refresh_button_mapping() and re-detected fresh every time the
+# character reaches HOME, so this is a same-run cache, not persisted state -
+# there's nothing gained from saving it to disk since it's never trusted
+# across a run anyway (screen layout can change between sessions).
+BUTTON_POSITIONS = {}
 
 def move_to(position):
     """Move the character to the given position, if a route for it exists.
@@ -410,7 +403,7 @@ def detect_need_icons(save_debug=False):
         debug_img = top_strip.copy()
         for cx, cy, r in found:
             cv2.circle(debug_img, (cx, cy), r, (0, 255, 0), 2)
-        cv2.imwrite(os.path.join(SCRIPT_DIR, "debug_needs.png"), debug_img)
+        cv2.imwrite(os.path.join(DEBUG_DIR, "debug_needs.png"), debug_img)
 
     return found, img
 
@@ -586,16 +579,11 @@ def detect_buttons(save_debug=False):
         for i, (cx, cy) in enumerate(positions):
             cv2.circle(debug_img, (cx, cy), 8, (0, 0, 255), 2)
             cv2.putText(debug_img, str(i + 1), (cx - 5, cy - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-        cv2.imwrite(os.path.join(SCRIPT_DIR, "debug_buttons.png"), debug_img)
-        # Also save the raw masks so a failed detection can actually be diagnosed
-        cv2.imwrite(os.path.join(SCRIPT_DIR, "debug_buttons_band.png"), band)
-        cv2.imwrite(os.path.join(SCRIPT_DIR, "debug_buttons_purple_mask.png"), purple_mask)
-        cv2.imwrite(os.path.join(SCRIPT_DIR, "debug_buttons_white_mask.png"), white_mask)
+        cv2.imwrite(os.path.join(DEBUG_DIR, "debug_buttons.png"), debug_img)
 
     if not positions:
-        print("[!] No buttons detected. Check debug_buttons_band.png (what was scanned) and "
-              "debug_buttons_purple_mask.png (what counted as 'purple') in the script folder "
-              "to see whether PURPLE_RANGE / BUTTON_BAND_X / BUTTON_BAND_Y need adjusting.")
+        print("[!] No buttons detected. Check debug_buttons.png in the debug/ folder to see "
+              "whether PURPLE_RANGE / BUTTON_BAND_X / BUTTON_BAND_Y need adjusting.")
 
     return positions
 
@@ -609,25 +597,23 @@ def click_button(button_x, button_y, need_name):
     return True
 
 def refresh_button_mapping():
-    """Detect the current action button positions and save them to config.
-    Assumes the character is already at the home position."""
+    """Detect the current action button positions and cache them in
+    BUTTON_POSITIONS. Assumes the character is already at the home position."""
     positions = detect_buttons(save_debug=True)
     if not positions:
         print("[!] ERROR: No buttons detected!")
         return False
 
-    config = load_config()
-    config["buttons"] = {}
+    BUTTON_POSITIONS.clear()
 
     print(f"\n[!] DETECTED {len(positions)} BUTTON(S)")
     for i, (cx, cy) in enumerate(positions):
         if i < len(BUTTON_NAMES):
             name = BUTTON_NAMES[i]
-            config["buttons"][name] = [cx, cy]
+            BUTTON_POSITIONS[name] = (cx, cy)
             print(f"[!] Button {i + 1}: '{name}' @ ({cx}, {cy})")
 
-    save_config(config)
-    print("\n[!] CONFIG SAVED\n")
+    print("\n[!] BUTTON MAPPING REFRESHED\n")
     return True
 
 # ============================================================================
@@ -695,7 +681,7 @@ class NeedHandler(ABC):
             move_to(self.position)
 
     @abstractmethod
-    def handle(self, config):
+    def handle(self):
         """Perform the action for this need. Return True if it was handled."""
         raise NotImplementedError
 
@@ -704,7 +690,7 @@ class WalkNeedHandler(NeedHandler):
     After walking, respawns to reset position before any further processing."""
     position = None
 
-    def handle(self, config):
+    def handle(self):
         print("[!] WALK NEED")
         walk_alternating(("a", "d"), WALK_TOTAL_DURATION)
         # After walking, respawn to reset position
@@ -716,7 +702,7 @@ class CatchNeedHandler(NeedHandler):
     """The 'catch' need requires opening backpack, equipping a toy, then throwing it."""
     position = None  # works at any position (respawn or home)
 
-    def handle(self, config):
+    def handle(self):
         print("[!] CATCH NEED")
         if not focus_roblox():
             return False
@@ -770,7 +756,7 @@ class PetNeedHandler(NeedHandler):
     the middle of the screen."""
     position = Position.RESPAWN
 
-    def handle(self, config):
+    def handle(self):
         print("[!] PET NEED")
         self.ensure_position()  # respawns only if we aren't at RESPAWN already
         if not focus_roblox():
@@ -816,7 +802,7 @@ class ChooseNeedHandler(NeedHandler):
     then click the middle of the screen to dismiss the menu."""
     position = Position.RESPAWN
 
-    def handle(self, config):
+    def handle(self):
         print("[!] CHOOSE NEED")
         self.ensure_position()  # respawns only if we aren't at RESPAWN already
         if not focus_roblox():
@@ -847,7 +833,7 @@ class RideNeedHandler(NeedHandler):
     walk back and forth for a while astride it."""
     position = None  # works at any position (respawn or home)
 
-    def handle(self, config):
+    def handle(self):
         print("[!] RIDE NEED")
         if not focus_roblox():
             return False
@@ -914,16 +900,15 @@ class ButtonNeedHandler(NeedHandler):
         if need_name is not None:
             self.need_name = need_name
 
-    def handle(self, config):
+    def handle(self):
         self.ensure_position()
-        refresh_button_mapping()
-        config = load_config()  # reload to pick up the freshly mapped buttons
+        refresh_button_mapping()  # populates BUTTON_POSITIONS with the freshly mapped buttons
 
-        if self.need_name not in config["buttons"]:
+        if self.need_name not in BUTTON_POSITIONS:
             print(f"[!] WARNING: no button mapped for '{self.need_name}'")
             return False
 
-        button_x, button_y = config["buttons"][self.need_name]
+        button_x, button_y = BUTTON_POSITIONS[self.need_name]
         print(f"[!] CLICKING: {self.need_name}")
         click_button(button_x, button_y, self.need_name)
         print(f"[debug] waiting {POST_NEED_CLICK_WAIT}s before next action...")
@@ -978,7 +963,6 @@ def process_needs():
     if not focus_roblox_click():
         return
 
-    config = load_config()
     found_icons, full_img = detect_need_icons(save_debug=True)
     if not found_icons:
         print("[debug] no need icons detected")
@@ -999,12 +983,14 @@ def process_needs():
             if handler is None:
                 print(f"[debug] {need_name} is disabled, skipping")
                 continue
-            handler.handle(config)
+            handler.handle()
         else:
             print(f"\n[!] NEW NEED (best score: {score:.4f})")
-            need_name = prompt_rename_need(icon_img, idx)
-            config.setdefault("needs", {})[need_name] = True
-            save_config(config)
+            # prompt_rename_need() already saves the reference icon into
+            # NEEDS_DIR - that .png file is the only record needed for this
+            # need to be recognized next time, so there's nothing further to
+            # persist here.
+            prompt_rename_need(icon_img, idx)
 
 # ============================================================================
 # WORKFLOWS
@@ -1095,8 +1081,8 @@ class AdoptMeGUI:
         print("\n" + "=" * 60)
         print("ADOPT ME BOT - CONTROL PANEL")
         print("=" * 60)
-        print(f"Config: {CONFIG_FILE}")
         print(f"Needs:  {NEEDS_DIR}")
+        print(f"Debug:  {DEBUG_DIR}")
         print("=" * 60 + "\n")
 
         self.is_running = False
@@ -1249,7 +1235,7 @@ class AdoptMeGUI:
         working code that's just not wired into automatic need processing yet."""
         def test():
             print("\n[TEST] Running pet handler...")
-            PetNeedHandler().handle(load_config())
+            PetNeedHandler().handle()
             print("[TEST] Pet handler complete\n")
         self.run_async(test)
 
@@ -1259,7 +1245,7 @@ class AdoptMeGUI:
         icon to actually appear on screen."""
         def test():
             print("\n[TEST] Running ride handler...")
-            RideNeedHandler().handle(load_config())
+            RideNeedHandler().handle()
             print("[TEST] Ride handler complete\n")
         self.run_async(test)
 
@@ -1269,7 +1255,7 @@ class AdoptMeGUI:
         working code that's just not wired into automatic need processing yet."""
         def test():
             print("\n[TEST] Running choose handler...")
-            ChooseNeedHandler().handle(load_config())
+            ChooseNeedHandler().handle()
             print("[TEST] Choose handler complete\n")
         self.run_async(test)
 

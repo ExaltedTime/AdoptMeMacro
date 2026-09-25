@@ -39,13 +39,16 @@ your Roblox window somewhere it won't be covered by the panel.
 
 ## The GUI
 
+The top row has three buttons side by side: a small square on the left, a
+wide button filling the center, and a small square on the right.
+
 | Button | What it does |
 |---|---|
-| **[START] WORKFLOW** | Waits for a need to appear (checking every few seconds), then handles it, once. |
-| **[LOOP] FULL WORKFLOW** | Repeats that continuously until stopped. |
-| **[STOP]** | Signals whatever is currently running to stop as soon as it safely can. Always clickable, even mid-action. |
+| 🔄 with a **1** (left square) | Waits for a need to appear (checking every few seconds), then handles it, once. |
+| 🔄 (center, wide) | Same as the button above, but repeats continuously until stopped. |
+| ■ (right square) | Signals whatever is currently running to stop as soon as it safely can. Always clickable, even mid-action. |
 | **Respawn** | Runs just the respawn sequence (Esc, R, Enter) on its own. |
-| **[TEST] Pet / Ride / Choose** | Runs that one need handler directly, bypassing icon detection - useful for tuning a handler without waiting for its icon to appear naturally. |
+| **[TEST] Catch / Pet / Ride / Choose** | Runs that one need handler directly, bypassing icon detection - useful for tuning a handler without waiting for its icon to appear naturally. |
 
 The scrolling **Output** panel at the bottom mirrors everything printed to
 the console, so you can watch what the bot is doing/deciding in real time.
@@ -64,12 +67,13 @@ them into two groups and handles each differently:
 - **Basic needs** (hungry/thirsty/dirty/potty/sleepy, or any other need
   with no dedicated handler) are handled in place: walk forward to the
   action buttons once, refresh the button mapping, then click each matching
-  button. No respawn involved.
+  button.
 - **Special needs** (catch, pet, choose, ride, walk) each have dedicated
-  logic and work from wherever the character currently is. The character
-  respawns once after handling any of these - that's the only reset they
-  need, and it's also what puts the character back at a known spot in time
-  for the next cycle's check.
+  logic and work from wherever the character currently is.
+
+Either way, the character respawns once after handling whatever was
+found - that's also what puts it back at a known spot in time for the next
+cycle's check.
 
 `PET_ENABLED` and `CHOOSE_ENABLED` are OFF by default (near the top of
 `CONSTANTS`) - both are fully implemented but not yet wired into automatic
@@ -118,15 +122,15 @@ Key pieces, top to bottom:
 
 | Need | How it's handled |
 |---|---|
-| `hungry` / `thirsty` / `dirty` / `potty` / `sleepy` (and any unrecognized need) | Basic: walk to the action buttons, click the matching one. |
+| `hungry` / `thirsty` | Basic: walk to the action buttons, click the matching one, wait 10s (`POST_NEED_CLICK_WAIT_SHORT`). |
+| `dirty` / `potty` / `sleepy` (and any unrecognized need) | Basic: walk to the action buttons, click the matching one, wait 15s (`POST_NEED_CLICK_WAIT`). |
 | `catch` | Opens the backpack, equips the squeaky toy, throws it 3x into empty space, unequips it. |
 | `pet` | Clicks to focus the pet, then holds the mouse down and moves it in a circle. *(Disabled by default - see `PET_ENABLED`.)* |
 | `choose` | Focuses the pet's menu, finds a button by its exact color, clicks it. *(Disabled by default - see `CHOOSE_ENABLED`.)* |
 | `ride` | Mounts a vehicle from the backpack, then walks back and forth for a while. |
 | `walk` | Walks left-right for a while. |
 
-A respawn always follows a `catch`/`pet`/`choose`/`ride`/`walk` need; basic
-needs never trigger a respawn on their own.
+A respawn always follows, whether the need was basic or special.
 
 ## Stopping safely
 

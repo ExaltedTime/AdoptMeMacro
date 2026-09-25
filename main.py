@@ -62,6 +62,8 @@ CLICK_MOVE_DURATION = 0.3      # mouse travel time for an ordinary click
 CLICK_SETTLE_DELAY = 0.2       # pause after moving the mouse, before clicking
 POST_CLICK_DELAY = 0.4         # pause after each click
 POST_NEED_CLICK_WAIT = 15      # pause after satisfying a need via button click
+POST_NEED_CLICK_WAIT_SHORT = 10  # shorter pause for needs that refill quickly
+SHORT_WAIT_NEED_NAMES = {"hungry", "thirsty"}  # basic needs that use the shorter wait above
 NEED_CHECK_RETRY_DELAY = 5.0   # pause before re-checking when no need was found
 LOOP_DELAY = 2.0               # pause between iterations of the workflow loop
 STOP_CHECK_INTERVAL = 0.1      # granularity of the interruptible wait loop
@@ -542,8 +544,9 @@ def click_basic_need_button(need_name):
     button_x, button_y = BUTTON_POSITIONS[need_name]
     print(f"[!] CLICKING: {need_name}")
     click_button(button_x, button_y, need_name)
-    print(f"[debug] waiting {POST_NEED_CLICK_WAIT}s before next action...")
-    wait_interruptible(POST_NEED_CLICK_WAIT)
+    wait_time = POST_NEED_CLICK_WAIT_SHORT if need_name in SHORT_WAIT_NEED_NAMES else POST_NEED_CLICK_WAIT
+    print(f"[debug] waiting {wait_time}s before next action...")
+    wait_interruptible(wait_time)
 
 # ============================================================================
 # MOVEMENT
@@ -843,9 +846,9 @@ def process_needs():
     dirty, potty, sleepy, or any other need with no dedicated handler) are
     handled in place: walk to the buttons once, then click each one that
     matched. Needs with dedicated logic (catch, pet, choose, ride, walk) are
-    handled by their own handler, and the character respawns afterward -
-    that's the only reset those need. Returns True if anything was found and
-    acted on, False if there was nothing to do this check."""
+    handled by their own handler instead. Either way, the character
+    respawns once afterward. Returns True if anything was found and acted
+    on, False if there was nothing to do this check."""
     if not focus_roblox_click():
         return False
 
@@ -882,14 +885,16 @@ def process_needs():
     if not basic_needs and not special_needs:
         return False
 
+    respawn_needed = False
+
     if basic_needs:
         walk_to_buttons()
         refresh_button_mapping()
         for need_name in basic_needs:
             check_stop()
             click_basic_need_button(need_name)
+        respawn_needed = True
 
-    respawn_needed = False
     for need_name in special_needs:
         check_stop()
         handler = get_special_need_handler(need_name)
@@ -1020,20 +1025,28 @@ class AdoptMeGUI:
 
         self.action_buttons = []  # every button that starts a background task
 
-        btn_start = tk.Button(btn_frame, text="[START] WORKFLOW", command=self.run_workflow,
-                               font=("Courier", 10, "bold"), bg="#2ecc71", fg=self.fg, height=3, cursor="hand2")
-        btn_start.pack(fill=tk.X, pady=4)
+        # One row: [START] (single cycle, square) on the left, [LOOP] (continuous
+        # workflow) expanding to fill the center, [STOP] (square) on the right.
+        main_row = tk.Frame(btn_frame, bg=self.bg)
+        main_row.pack(fill=tk.X, pady=4)
+
+        btn_start = tk.Button(main_row, text="\U0001F504\n1", command=self.run_workflow,
+                               font=("Courier", 14, "bold"), bg="#2ecc71", fg=self.fg,
+                               width=4, height=3, cursor="hand2")
+        btn_start.pack(side=tk.LEFT, padx=(0, 4))
         self.action_buttons.append(btn_start)
 
-        btn_loop = tk.Button(btn_frame, text="[LOOP] FULL WORKFLOW", command=self.run_workflow_loop,
-                              font=("Courier", 10, "bold"), bg="#27ae60", fg=self.fg, height=3, cursor="hand2")
-        btn_loop.pack(fill=tk.X, pady=4)
-        self.action_buttons.append(btn_loop)
-
         # Not added to action_buttons: must remain clickable while a workflow is running
-        self.btn_stop = tk.Button(btn_frame, text="[STOP]", command=self.stop,
-                                   font=("Courier", 10, "bold"), bg="#d62828", fg=self.fg, height=2, cursor="hand2")
-        self.btn_stop.pack(fill=tk.X, pady=4)
+        self.btn_stop = tk.Button(main_row, text="■", command=self.stop,
+                                   font=("Courier", 18, "bold"), bg="#d62828", fg=self.fg,
+                                   width=4, height=3, cursor="hand2")
+        self.btn_stop.pack(side=tk.RIGHT, padx=(4, 0))
+
+        btn_loop = tk.Button(main_row, text="\U0001F504", command=self.run_workflow_loop,
+                              font=("Courier", 18, "bold"), bg="#27ae60", fg=self.fg,
+                              height=3, cursor="hand2")
+        btn_loop.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.action_buttons.append(btn_loop)
 
         tk.Frame(btn_frame, bg=self.accent, height=2).pack(fill=tk.X, pady=4)
 
@@ -1046,6 +1059,11 @@ class AdoptMeGUI:
 
         tk.Frame(btn_frame, bg=self.accent, height=1).pack(fill=tk.X, pady=2)
         tk.Label(btn_frame, text="Tests", font=("Courier", 9, "bold"), bg=self.bg, fg=self.accent).pack(anchor=tk.W)
+
+        btn_test_catch = tk.Button(btn_frame, text="[TEST] Catch", command=self.test_catch,
+                                    font=("Courier", 9), bg="#e74c3c", fg=self.fg, height=1, cursor="hand2")
+        btn_test_catch.pack(fill=tk.X, pady=2)
+        self.action_buttons.append(btn_test_catch)
 
         # Pet stays behind PET_ENABLED, so this is its only way to run
         # outside of the [TEST] button being pressed directly.
@@ -1143,6 +1161,16 @@ class AdoptMeGUI:
 
     def run_workflow_loop(self):
         self.run_async(run_workflow_loop)
+
+    def test_catch(self):
+        """Run the catch handler on its own, outside the normal need-detection
+        flow - useful for testing it in isolation without waiting for a catch
+        icon to actually appear on screen."""
+        def test():
+            print("\n[TEST] Running catch handler...")
+            CatchNeedHandler().handle()
+            print("[TEST] Catch handler complete\n")
+        self.run_async(test)
 
     def test_pet(self):
         """Run the pet handler on its own, outside the normal need-detection

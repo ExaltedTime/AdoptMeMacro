@@ -561,13 +561,16 @@ def click_button(button_x, button_y, need_name):
 
 def refresh_button_mapping():
     """Detect the current action button positions and cache them in
-    BUTTON_POSITIONS. Assumes the character is already at the buttons."""
+    BUTTON_POSITIONS. Assumes the character is already at the buttons.
+    Always clears any previous mapping first, even on failure, so a failed
+    detection can never leave a stale (possibly wrong) position behind for
+    click_basic_need_button() to use."""
+    BUTTON_POSITIONS.clear()
+
     positions = detect_buttons(save_debug=True)
     if not positions:
         print("[!] ERROR: No buttons detected!")
         return False
-
-    BUTTON_POSITIONS.clear()
 
     print(f"\n[!] DETECTED {len(positions)} BUTTON(S)")
     for i, (cx, cy) in enumerate(positions):
@@ -581,16 +584,20 @@ def refresh_button_mapping():
 
 def click_basic_need_button(need_name):
     """Click the action button mapped to a basic need (see is_basic_need()).
-    Assumes refresh_button_mapping() has already been called this cycle."""
+    Assumes refresh_button_mapping() has already been called this cycle.
+    Returns True if a mapped button was actually found and clicked, False
+    otherwise - the caller must not treat this need as resolved (or
+    respawn) on a False return."""
     if need_name not in BUTTON_POSITIONS:
         print(f"[!] WARNING: no button mapped for '{need_name}'")
-        return
+        return False
     button_x, button_y = BUTTON_POSITIONS[need_name]
     print(f"[!] CLICKING: {need_name}")
     click_button(button_x, button_y, need_name)
     wait_time = POST_NEED_CLICK_WAIT_SHORT if need_name in SHORT_WAIT_NEED_NAMES else POST_NEED_CLICK_WAIT
     print(f"[debug] waiting {wait_time}s before next action...")
     wait_interruptible(wait_time)
+    return True
 
 # ============================================================================
 # MOVEMENT
@@ -892,11 +899,13 @@ def process_needs():
     (hungry/thirsty/dirty/potty/sleepy, or any other need with no dedicated
     handler - see is_basic_need()); otherwise its own handler runs directly
     (catch, pet, choose, ride, walk). Either way, the character respawns
-    immediately after that single need is resolved, before moving on to the
-    next matched need - never batched. Returns True if anything was
-    actually resolved this check, False if there was nothing to do -
-    including when every matched need turned out to be a disabled special
-    (see get_special_need_handler())."""
+    immediately after that single need is *actually* resolved, before
+    moving on to the next matched need - never batched, and never respawned
+    for a need that wasn't really handled (a disabled special, or a basic
+    need whose button wasn't found this pass - e.g. because
+    refresh_button_mapping() failed to detect any buttons at all). Returns
+    True if anything was actually resolved this check, False if there was
+    nothing to do."""
     if not focus_roblox_click():
         return False
 
@@ -937,8 +946,9 @@ def process_needs():
 
         if is_basic_need(need_name):
             walk_to_buttons()
-            refresh_button_mapping()
-            click_basic_need_button(need_name)
+            if not refresh_button_mapping() or not click_basic_need_button(need_name):
+                print(f"[debug] could not resolve '{need_name}' this pass, skipping")
+                continue
         else:
             handler = get_special_need_handler(need_name)
             if handler is None:
@@ -1092,24 +1102,14 @@ class AdoptMeGUI:
 
         START_BUTTON_COLOR = "#2ecc71"
 
-        btn_start = tk.Button(start_container, text="\U0001F504", command=self.run_workflow,
-                               font=("Courier", 20, "bold"), bg=START_BUTTON_COLOR, fg=self.fg,
+        # Single cycle: icon + "1" as plain button text (no overlay Label -
+        # a Label placed on top of the button kept showing a visible seam/
+        # box behind it despite matching colors, so this is just simpler).
+        btn_start = tk.Button(start_container, text="\U0001F5041", command=self.run_workflow,
+                               font=("Courier", 14, "bold"), bg=START_BUTTON_COLOR, fg=self.fg,
                                cursor="hand2", **NO_BORDER)
         btn_start.pack(fill=tk.BOTH, expand=True)
         self.action_buttons.append(btn_start)
-
-        # The "1" (single-cycle) badge is a separate Label layered directly
-        # on top of the icon via place(), rather than a second line of
-        # button text, so the button itself can stay square and short. Its
-        # background matches the button's own color and it has no border of
-        # its own, so there's no visible box around it - just the digit,
-        # sitting centered on the icon. Clicking the badge forwards to the
-        # real button via invoke(), which already respects the button's
-        # enabled/disabled state - no separate state tracking needed.
-        start_badge = tk.Label(start_container, text="1", font=("Courier", 8, "bold"),
-                                bg=START_BUTTON_COLOR, fg=self.fg, cursor="hand2", **NO_BORDER)
-        start_badge.place(relx=0.5, rely=0.5, anchor="center")
-        start_badge.bind("<Button-1>", lambda e: btn_start.invoke())
 
         # Not added to action_buttons: must remain clickable while a workflow is running
         stop_container = tk.Frame(main_row, width=SQUARE_BUTTON_SIZE, height=SQUARE_BUTTON_SIZE, bg=self.bg)

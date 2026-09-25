@@ -11,85 +11,10 @@
 # pydirectinput - direct input for game compatibility
 # pygetwindow - window management
 #
-# Standard library: os, sys, time, random, threading, abc, enum, pathlib, tkinter
-
-# ============================================================================
-# CODE RUNDOWN
-# ============================================================================
-# What this does: watches the Roblox "Adopt Me" window for pet-care need
-# icons (hunger, thirst, etc.) and clicks the matching action button.
-#
-# Flow: respawn_character() -> process_needs() -> repeat. Detecting which
-# needs are active never requires a specific position; only actually
-# satisfying a need does, and each need's handler moves there itself:
-#   - hungry/thirsty/dirty/potty/sleepy require HOME (walks there, then
-#     refreshes the button mapping, since that's the only reason to be there)
-#   - pet requires RESPAWN (respawns first if we're anywhere else)
-#   - catch, choose, ride, and walk work from wherever the character is
-#
-# PET_ENABLED is OFF by default (near the top of CONSTANTS) - it's fully
-# implemented but not yet wired into automatic need processing, so it's
-# skipped in process_needs() until flipped on. Its [TEST] button in the GUI
-# runs it directly regardless. Every other need type is live and has no
-# manual GUI trigger of its own - respawn is the only one that still does,
-# since it's occasionally useful to fire on its own.
-#
-# Key pieces, top to bottom:
-#   - CONSTANTS          all tunable numbers/timings/colors in one place
-#   - WINDOW FOCUS         bring Roblox to front, grab screenshots, and
-#                          find_exact_color() for buttons matched by color
-#                          rather than shape (used by the choose need)
-#   - POSITIONING          tracks whether the character is at "respawn" or
-#                          "home" (Position enum); move_to() is the single
-#                          dispatch point that routes a Position to the
-#                          function that actually gets you there
-#   - ICON PROCESSING       turns an icon into strict black & white so it
-#                          can be matched regardless of its original color
-#   - NEED ICON DETECTION   finds circular need icons at the top of screen,
-#                          compares them to saved reference icons in needs/
-#   - CLICKING              jitter_click (click, nudge, click again - used
-#                          for the actual need buttons) / simple_click
-#                          (used for backpack/toy UI clicks)
-#   - BUTTON DETECTION      finds the purple action buttons (hungry,
-#                          thirsty, dirty, potty, sleepy) and caches their
-#                          screen positions in memory (BUTTON_POSITIONS)
-#   - MOVEMENT              respawn_character(), walk_alternating() (shared
-#                          by walk, a/d, and ride, w/s - same pattern,
-#                          different keys and duration passed in)
-#   - NEED HANDLERS         one class per need type (ABC pattern), each
-#                          declares the Position it needs (or None) and
-#                          what to do once there. CatchNeedHandler runs a
-#                          backpack -> equip toy -> throw x3 -> unequip
-#                          sequence; RideNeedHandler backpack -> equip
-#                          vehicle -> walk; ChooseNeedHandler finds and
-#                          clicks a button by its exact color
-#   - WORKFLOWS             run_full_cycle() ties respawn + process
-#                          together; run_workflow_loop() repeats it
-#   - GUI                   tkinter control panel; every button that starts
-#                          a background task runs it via run_async(), which
-#                          disables all such buttons while it's running and
-#                          ALWAYS re-enables them in a finally block once it
-#                          ends - normal finish, stop, or crash alike.
-#
-# STOPPING: pressing [STOP] sets STOP_FLAG, and wait_interruptible()/
-# check_stop() raise StopRequested the moment they next notice it. That
-# exception unwinds the call stack on its own via ordinary Python exception
-# propagation, all the way up to run_async()'s worker thread - so a handler
-# doesn't need to manually check a flag after every single action, it just
-# calls wait_interruptible() like normal and stopping "just happens." The
-# one thing this doesn't do for free is release a key or mouse button that's
-# being held down at the moment of the stop, so anywhere that happens (e.g.
-# holding "w" to walk, holding the mouse button to pet) wraps the wait in
-# try/finally to guarantee the release. This is deliberately NOT solved by
-# running the workflow and a second "killer" thread that terminates it from
-# outside: Python has no safe way to force-kill a running thread, and the
-# unsafe tricks that exist (async-raising into another thread) can land
-# mid-action and leave an input stuck down in the game, which is worse than
-# the ~0.1s worst-case delay this cooperative approach has instead.
+# See README.md for an explanation of how the code is organized and how it behaves.
 
 import os, sys, time, random, threading
 from abc import ABC, abstractmethod
-from enum import Enum
 from pathlib import Path
 import tkinter as tk
 from tkinter import scrolledtext
@@ -115,6 +40,7 @@ pyautogui.FAILSAFE = True
 pydirectinput.FAILSAFE = True
 pydirectinput.PAUSE = 0.05
 SCREEN_WIDTH, SCREEN_HEIGHT = pyautogui.size()
+SCREEN_CENTER_X, SCREEN_CENTER_Y = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2
 
 # Behavior flags
 FOCUS_WINDOW_ON_ACTION = True  # click the Roblox window to focus it before acting
@@ -125,19 +51,29 @@ CHOOSE_ENABLED = False         # disable choose need handler (set to True to re-
 # Timing (seconds)
 RESPAWN_KEY_DURATION = 0.05    # how long each respawn key is held
 RESPAWN_WAIT = 4.0             # settle time after respawning, before it's usable
-HOME_WALK_DURATION = 0.8       # time spent walking from respawn to home
+WALK_TO_BUTTONS_DURATION = 0.8 # time spent walking forward to reach the action buttons
 WALK_ALTERNATING_STEP = 1.0    # duration of each a/d press in alternating walk pattern
+WALK_STEP_GAP = 0.1            # pause between steps in the alternating walk pattern
 WALK_TOTAL_DURATION = 20.0     # total duration to keep walking back and forth
 UI_SETTLE = 0.5                # generic pause for UI to catch up
 FOCUS_DELAY = 0.3              # pause after focusing the window
+FOCUS_CLICK_SETTLE_DELAY = 0.2 # pause after the window-focus click
+CLICK_MOVE_DURATION = 0.3      # mouse travel time for an ordinary click
+CLICK_SETTLE_DELAY = 0.2       # pause after moving the mouse, before clicking
 POST_CLICK_DELAY = 0.4         # pause after each click
 POST_NEED_CLICK_WAIT = 15      # pause after satisfying a need via button click
+NEED_CHECK_RETRY_DELAY = 5.0   # pause before re-checking when no need was found
 LOOP_DELAY = 2.0               # pause between iterations of the workflow loop
+STOP_CHECK_INTERVAL = 0.1      # granularity of the interruptible wait loop
 CATCH_WAIT_AFTER_EQUIP = 2.0   # wait after equipping toy before throwing
 CATCH_EMOTE_DELAY = 10.0       # delay between throw clicks
 CATCH_CLICK_DELAY = 0.5        # delay between catch sequence clicks
-PET_FIRST_E_WAIT = 6.0         # wait between first and second 'e' press in pet need
+CATCH_THROW_COUNT = 3          # number of times the toy is thrown
 PET_CIRCLE_DURATION = 10.0     # how long to make circles with mouse
+PET_CIRCLE_RADIUS = 100                # radius (px) of the circle traced around screen center
+PET_CIRCLE_START_MOVE_DURATION = 0.1   # time to move to the circle's starting point
+PET_CIRCLE_STEP_MOVE_DURATION = 0.05   # time for each small step around the circle
+ICON_EXTRACT_PADDING = 5       # px of padding added around a detected icon's radius
 
 # Catch need positions (screen coordinates for the toy-throwing sequence;
 # opening/closing the backpack itself uses the 'b' key, not a click)
@@ -169,10 +105,6 @@ RIDE_FIRST_VEHICLE_POS = (976, 708)
 RIDE_EQUIP_POS = (1062, 814)
 RIDE_WALK_DURATION = 40.0      # total time spent walking back and forth while riding
 
-# Pen check
-TASK_BOARD_POS = (60, 576)
-READY_POS = (1029, 485)
-
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75
 FOCUS_CLICK_Y = 5
@@ -201,6 +133,22 @@ BUTTON_MIN_AREA = 150
 BUTTON_MIN_CIRCULARITY = 0.65
 BUTTON_MAX_COUNT = 5
 BUTTON_NAMES = ["hungry", "thirsty", "dirty", "potty", "sleepy"]
+BUTTON_LOOSE_AREA_FACTOR = 0.7         # how much looser than BUTTON_MIN_AREA a candidate may be
+BUTTON_MAX_AREA_FRACTION = 0.5         # reject a blob covering more than this fraction of the band
+BUTTON_MIN_RADIUS = 5                  # reject a candidate smaller than this radius (px)
+BUTTON_LOOSE_CIRCULARITY_FACTOR = 0.8  # how much looser than BUTTON_MIN_CIRCULARITY a candidate may be
+BUTTON_PURPLE_DILATE_ITERATIONS = 3    # dilation used to build the outline search zone
+BUTTON_PURPLE_ERODE_ITERATIONS = 1     # erosion used to build the outline search zone
+BUTTON_OUTLINE_PADDING = 3             # px of padding around a candidate when scoring its white outline
+
+# Debug drawing
+DEBUG_NEED_MARKER_COLOR = (0, 255, 0)      # BGR
+DEBUG_NEED_MARKER_THICKNESS = 2
+DEBUG_BUTTON_MARKER_COLOR = (0, 0, 255)    # BGR
+DEBUG_BUTTON_MARKER_RADIUS = 8
+DEBUG_BUTTON_MARKER_THICKNESS = 2
+DEBUG_BUTTON_LABEL_OFFSET = (-5, -15)      # px offset of the number label from its marker
+DEBUG_BUTTON_LABEL_SCALE = 0.5
 
 # Color ranges (HSV): lower, upper
 BLUE_RANGE = (np.array([95, 100, 100]), np.array([125, 255, 255]))
@@ -268,7 +216,7 @@ def focus_roblox_click():
     click_x = int(SCREEN_WIDTH * FOCUS_CLICK_X_PERCENT)
     pyautogui.moveTo(click_x, FOCUS_CLICK_Y)
     pydirectinput.click()
-    time.sleep(0.2)
+    time.sleep(FOCUS_CLICK_SETTLE_DELAY)
     return True
 
 def grab_screen():
@@ -292,51 +240,15 @@ def find_exact_color(img, rgb):
     return int(xs.mean()), int(ys.mean())
 
 # ============================================================================
-# POSITIONING
+# STATE
 # ============================================================================
-# The character can be at one of a few known locations. Each need declares
-# which one it requires; we only move there if we aren't already.
-
-class Position(Enum):
-    RESPAWN = "respawn"  # where the character lands right after respawning
-    HOME = "home"        # where the pet-care buttons are, just past the respawn spot
-
-CURRENT_POSITION = None  # unknown until the first respawn
 
 # Detected action-button screen positions, keyed by need name (e.g. "hungry").
-# Populated by refresh_button_mapping() and re-detected fresh every time the
-# character reaches HOME, so this is a same-run cache, not persisted state -
-# there's nothing gained from saving it to disk since it's never trusted
-# across a run anyway (screen layout can change between sessions).
+# Populated by refresh_button_mapping() each time the bot walks to the
+# buttons, so this is a same-run cache, not persisted state - there's
+# nothing gained from saving it to disk since it's never trusted across a
+# run anyway (screen layout can change between sessions).
 BUTTON_POSITIONS = {}
-
-def move_to(position):
-    """Move the character to the given position, if a route for it exists.
-    This is the single dispatch point ensure_position() calls through, so
-    adding a new named position later just means adding a branch here."""
-    if position == Position.HOME:
-        go_home()
-    elif position == Position.RESPAWN:
-        respawn_character()
-
-def go_home():
-    """Walk forward from the respawn spot to the home position, if not there already."""
-    global CURRENT_POSITION
-    if CURRENT_POSITION == Position.HOME:
-        return
-    if not focus_roblox():
-        return
-    print("[debug] walking to home position...")
-    pydirectinput.keyDown("w")
-    try:
-        wait_interruptible(HOME_WALK_DURATION)
-    finally:
-        # Always release the key, even if StopRequested fires mid-wait -
-        # otherwise "w" stays stuck held down in the game.
-        pydirectinput.keyUp("w")
-    wait_interruptible(UI_SETTLE)
-    CURRENT_POSITION = Position.HOME
-    print("[debug] arrived home")
 
 # ============================================================================
 # ICON PROCESSING
@@ -368,7 +280,7 @@ def compare_icons(icon1, icon2):
 # NEED ICON DETECTION
 # ============================================================================
 
-def extract_icon(img, cx, cy, radius, padding=5):
+def extract_icon(img, cx, cy, radius, padding=ICON_EXTRACT_PADDING):
     r = radius + padding
     x0, x1 = max(0, cx - r), min(img.shape[1], cx + r)
     y0, y1 = max(0, cy - r), min(img.shape[0], cy + r)
@@ -402,7 +314,7 @@ def detect_need_icons(save_debug=False):
     if save_debug:
         debug_img = top_strip.copy()
         for cx, cy, r in found:
-            cv2.circle(debug_img, (cx, cy), r, (0, 255, 0), 2)
+            cv2.circle(debug_img, (cx, cy), r, DEBUG_NEED_MARKER_COLOR, DEBUG_NEED_MARKER_THICKNESS)
         cv2.imwrite(os.path.join(DEBUG_DIR, "debug_needs.png"), debug_img)
 
     return found, img
@@ -450,8 +362,8 @@ def prompt_rename_need(icon_img, idx):
 
 def jitter_click(x, y):
     """Click at (x, y), nudge the mouse a few pixels, then click again."""
-    pyautogui.moveTo(x, y, duration=0.3)
-    time.sleep(0.2)
+    pyautogui.moveTo(x, y, duration=CLICK_MOVE_DURATION)
+    time.sleep(CLICK_SETTLE_DELAY)
     pydirectinput.click()
     time.sleep(POST_CLICK_DELAY)
 
@@ -459,37 +371,38 @@ def jitter_click(x, y):
     offset_y = random.randint(-JITTER_PIXELS, JITTER_PIXELS)
     new_x = max(0, min(SCREEN_WIDTH, x + offset_x))
     new_y = max(0, min(SCREEN_HEIGHT, y + offset_y))
-    pydirectinput.moveTo(new_x, new_y, duration=0.3)
-    time.sleep(0.2)
+    pydirectinput.moveTo(new_x, new_y, duration=CLICK_MOVE_DURATION)
+    time.sleep(CLICK_SETTLE_DELAY)
 
     pydirectinput.click()
     time.sleep(POST_CLICK_DELAY)
 
 def simple_click(x, y):
     """Simple click without jitter."""
-    pyautogui.moveTo(x, y, duration=0.3)
-    time.sleep(0.2)
+    pyautogui.moveTo(x, y, duration=CLICK_MOVE_DURATION)
+    time.sleep(CLICK_SETTLE_DELAY)
     pydirectinput.click()
     time.sleep(POST_CLICK_DELAY)
 
-def slow_click(x, y, duration=1.0):
+def slow_click(x, y, duration):
     """Move the mouse to (x, y) deliberately slowly (over `duration` seconds,
-    instead of the usual quick 0.3s), then click. Used where jumping the
-    mouse straight to the target might not register the same way a slower,
-    more human-like movement would."""
+    instead of the usual quick CLICK_MOVE_DURATION), then click. Used where
+    jumping the mouse straight to the target might not register the same way
+    a slower, more human-like movement would."""
     pyautogui.moveTo(x, y, duration=duration)
-    time.sleep(0.2)
+    time.sleep(CLICK_SETTLE_DELAY)
     pydirectinput.click()
     time.sleep(POST_CLICK_DELAY)
 
 def wait_interruptible(duration):
-    """Sleep for `duration`, in 0.1s chunks, checking for a stop request
-    between each chunk. Raises StopRequested the moment STOP_FLAG is set,
-    instead of returning a bool the caller has to check after every call."""
+    """Sleep for `duration`, in STOP_CHECK_INTERVAL chunks, checking for a
+    stop request between each chunk. Raises StopRequested the moment
+    STOP_FLAG is set, instead of returning a bool the caller has to check
+    after every call."""
     elapsed = 0.0
     while elapsed < duration:
         check_stop()
-        sleep_chunk = min(0.1, duration - elapsed)
+        sleep_chunk = min(STOP_CHECK_INTERVAL, duration - elapsed)
         time.sleep(sleep_chunk)
         elapsed += sleep_chunk
     check_stop()
@@ -532,8 +445,8 @@ def detect_buttons(save_debug=False):
     purple_mask = cv2.inRange(hsv, *PURPLE_RANGE)
     white_mask = cv2.inRange(hsv, *WHITE_RANGE)
 
-    purple_dilated = cv2.dilate(purple_mask, None, iterations=3)
-    outline_zone = cv2.subtract(purple_dilated, cv2.erode(purple_mask, None, iterations=1))
+    purple_dilated = cv2.dilate(purple_mask, None, iterations=BUTTON_PURPLE_DILATE_ITERATIONS)
+    outline_zone = cv2.subtract(purple_dilated, cv2.erode(purple_mask, None, iterations=BUTTON_PURPLE_ERODE_ITERATIONS))
     has_white = cv2.bitwise_and(outline_zone, white_mask)
 
     contours, _ = cv2.findContours(purple_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -543,26 +456,27 @@ def detect_buttons(save_debug=False):
     rejected_area, rejected_radius, rejected_circularity = 0, 0, 0
     for c in contours:
         area = cv2.contourArea(c)
-        if area < BUTTON_MIN_AREA * 0.7:  # slightly looser than the base threshold
+        if area < BUTTON_MIN_AREA * BUTTON_LOOSE_AREA_FACTOR:
             rejected_area += 1
             continue
-        if area > band_w * band_h * 0.5:  # reject blobs covering most of the band (not a button)
+        if area > band_w * band_h * BUTTON_MAX_AREA_FRACTION:  # reject blobs covering most of the band (not a button)
             rejected_area += 1
             continue
 
         _, radius = cv2.minEnclosingCircle(c)
-        if radius < 5:
+        if radius < BUTTON_MIN_RADIUS:
             rejected_radius += 1
             continue
 
         circularity = area / (np.pi * radius * radius + 1e-6)
-        if circularity < BUTTON_MIN_CIRCULARITY * 0.8:  # slightly looser than the base threshold
+        if circularity < BUTTON_MIN_CIRCULARITY * BUTTON_LOOSE_CIRCULARITY_FACTOR:
             rejected_circularity += 1
             continue
 
         x, y, cw, ch = cv2.boundingRect(c)
         cx, cy = x + cw // 2, y + ch // 2
-        roi = has_white[max(0, y - 3):y + ch + 3, max(0, x - 3):x + cw + 3]
+        pad = BUTTON_OUTLINE_PADDING
+        roi = has_white[max(0, y - pad):y + ch + pad, max(0, x - pad):x + cw + pad]
         white_score = cv2.countNonZero(roi)
         candidates.append((cx + x0, cy + y0, area, white_score))
 
@@ -577,8 +491,11 @@ def detect_buttons(save_debug=False):
     if save_debug:
         debug_img = img.copy()
         for i, (cx, cy) in enumerate(positions):
-            cv2.circle(debug_img, (cx, cy), 8, (0, 0, 255), 2)
-            cv2.putText(debug_img, str(i + 1), (cx - 5, cy - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+            cv2.circle(debug_img, (cx, cy), DEBUG_BUTTON_MARKER_RADIUS,
+                       DEBUG_BUTTON_MARKER_COLOR, DEBUG_BUTTON_MARKER_THICKNESS)
+            label_pos = (cx + DEBUG_BUTTON_LABEL_OFFSET[0], cy + DEBUG_BUTTON_LABEL_OFFSET[1])
+            cv2.putText(debug_img, str(i + 1), label_pos, cv2.FONT_HERSHEY_SIMPLEX,
+                        DEBUG_BUTTON_LABEL_SCALE, DEBUG_BUTTON_MARKER_COLOR, DEBUG_BUTTON_MARKER_THICKNESS)
         cv2.imwrite(os.path.join(DEBUG_DIR, "debug_buttons.png"), debug_img)
 
     if not positions:
@@ -598,7 +515,7 @@ def click_button(button_x, button_y, need_name):
 
 def refresh_button_mapping():
     """Detect the current action button positions and cache them in
-    BUTTON_POSITIONS. Assumes the character is already at the home position."""
+    BUTTON_POSITIONS. Assumes the character is already at the buttons."""
     positions = detect_buttons(save_debug=True)
     if not positions:
         print("[!] ERROR: No buttons detected!")
@@ -616,13 +533,24 @@ def refresh_button_mapping():
     print("\n[!] BUTTON MAPPING REFRESHED\n")
     return True
 
+def click_basic_need_button(need_name):
+    """Click the action button mapped to a basic need (see is_basic_need()).
+    Assumes refresh_button_mapping() has already been called this cycle."""
+    if need_name not in BUTTON_POSITIONS:
+        print(f"[!] WARNING: no button mapped for '{need_name}'")
+        return
+    button_x, button_y = BUTTON_POSITIONS[need_name]
+    print(f"[!] CLICKING: {need_name}")
+    click_button(button_x, button_y, need_name)
+    print(f"[debug] waiting {POST_NEED_CLICK_WAIT}s before next action...")
+    wait_interruptible(POST_NEED_CLICK_WAIT)
+
 # ============================================================================
 # MOVEMENT
 # ============================================================================
 
 def respawn_character():
-    """Respawn (ESC, R, ENTER), wait to settle, and mark the position as 'respawn'."""
-    global CURRENT_POSITION
+    """Respawn the character (ESC, R, ENTER) and wait for it to settle."""
     print("[debug] respawning...")
     if not focus_roblox_click():
         return
@@ -632,8 +560,22 @@ def respawn_character():
         pydirectinput.keyUp(key)
         time.sleep(RESPAWN_KEY_DURATION)
     wait_interruptible(RESPAWN_WAIT)
-    CURRENT_POSITION = Position.RESPAWN
     print("[debug] respawn complete")
+
+def walk_to_buttons():
+    """Walk forward from the respawn spot to where the action buttons are."""
+    if not focus_roblox():
+        return
+    print("[debug] walking to buttons...")
+    pydirectinput.keyDown("w")
+    try:
+        wait_interruptible(WALK_TO_BUTTONS_DURATION)
+    finally:
+        # Always release the key, even if StopRequested fires mid-wait -
+        # otherwise "w" stays stuck held down in the game.
+        pydirectinput.keyUp("w")
+    wait_interruptible(UI_SETTLE)
+    print("[debug] arrived at buttons")
 
 def walk_alternating(direction_pair, total_duration, step_duration=WALK_ALTERNATING_STEP):
     """Alternate between the two given keys, holding each for `step_duration`,
@@ -657,7 +599,7 @@ def walk_alternating(direction_pair, total_duration, step_duration=WALK_ALTERNAT
             # Always release, even if StopRequested fires mid-step - otherwise
             # this direction key stays stuck held down in the game.
             pydirectinput.keyUp(direction)
-        time.sleep(0.1)
+        time.sleep(WALK_STEP_GAP)
 
         direction_idx += 1
         elapsed = time.time() - start_time
@@ -667,18 +609,16 @@ def walk_alternating(direction_pair, total_duration, step_duration=WALK_ALTERNAT
 # ============================================================================
 # NEED HANDLERS
 # ============================================================================
-# Each need type has its own handler. A handler knows what position it needs
-# (if any) and what to do once there. Splitting these out means each need can
-# later be customized independently without touching the others.
+# A need with no dedicated handler is a "basic" need (see is_basic_need()):
+# it's satisfied by walking to the action buttons and clicking the one that
+# matches its name - hungry/thirsty/dirty/potty/sleepy today, and any future
+# need the bot is taught that also works the same way. Needs with dedicated
+# logic (catch, pet, choose, ride, walk) get their own handler class below,
+# so each can be customized independently without touching the others.
 
 class NeedHandler(ABC):
-    """Reacts to one detected need. Subclass this to add new need behaviors."""
-    position = None  # Position required before handle() runs; None = no requirement
-
-    def ensure_position(self):
-        """Move the character to this need's required position, if not already there."""
-        if self.position is not None and CURRENT_POSITION != self.position:
-            move_to(self.position)
+    """Reacts to one detected need that needs more than a basic button click.
+    Subclass this to add a new such need behavior."""
 
     @abstractmethod
     def handle(self):
@@ -686,21 +626,15 @@ class NeedHandler(ABC):
         raise NotImplementedError
 
 class WalkNeedHandler(NeedHandler):
-    """The 'walk' need is satisfied by moving around, not clicking a button.
-    After walking, respawns to reset position before any further processing."""
-    position = None
+    """The 'walk' need is satisfied by walking left-right for a while."""
 
     def handle(self):
         print("[!] WALK NEED")
         walk_alternating(("a", "d"), WALK_TOTAL_DURATION)
-        # After walking, respawn to reset position
-        print("[debug] respawning after walk...")
-        respawn_character()
         return True
 
 class CatchNeedHandler(NeedHandler):
     """The 'catch' need requires opening backpack, equipping a toy, then throwing it."""
-    position = None  # works at any position (respawn or home)
 
     def handle(self):
         print("[!] CATCH NEED")
@@ -736,9 +670,9 @@ class CatchNeedHandler(NeedHandler):
         print(f"[debug] waiting {CATCH_WAIT_AFTER_EQUIP}s before throwing...")
         wait_interruptible(CATCH_WAIT_AFTER_EQUIP)
 
-        # Click empty space three times to throw, with a delay between throws
-        for i in range(3):
-            print(f"[debug] throw {i + 1}/3...")
+        # Click empty space to throw, with a delay between throws
+        for i in range(CATCH_THROW_COUNT):
+            print(f"[debug] throw {i + 1}/{CATCH_THROW_COUNT}...")
             simple_click(*EMPTY_POS)
             wait_interruptible(CATCH_EMOTE_DELAY)
 
@@ -750,15 +684,11 @@ class CatchNeedHandler(NeedHandler):
         return True
 
 class PetNeedHandler(NeedHandler):
-    """The 'pet' need requires being at the respawn position (not home) - it
-    respawns first if we're anywhere else, then: press e, wait, press e
-    again, then hold the mouse button down and move it in a circle around
-    the middle of the screen."""
-    position = Position.RESPAWN
+    """The 'pet' need: click to focus the pet, then hold the mouse button
+    down and move it in a circle around the middle of the screen."""
 
     def handle(self):
         print("[!] PET NEED")
-        self.ensure_position()  # respawns only if we aren't at RESPAWN already
         if not focus_roblox():
             return False
 
@@ -768,12 +698,11 @@ class PetNeedHandler(NeedHandler):
 
         # Hold the mouse button down and trace a circle around the middle of the screen
         print(f"[debug] holding mouse and circling for {PET_CIRCLE_DURATION}s...")
-        center_x, center_y = (960, 540)
-        circle_radius = 100
 
         # Move to the circle's starting point before pressing down, so the
         # button goes down already on the circle rather than jumping to it.
-        pyautogui.moveTo(center_x+circle_radius, center_y, duration=0.1)
+        pyautogui.moveTo(SCREEN_CENTER_X + PET_CIRCLE_RADIUS, SCREEN_CENTER_Y,
+                          duration=PET_CIRCLE_START_MOVE_DURATION)
         pydirectinput.mouseDown()
         try:
             start_time = time.time()
@@ -781,9 +710,9 @@ class PetNeedHandler(NeedHandler):
             while elapsed < PET_CIRCLE_DURATION:
                 check_stop()  # inside a manual loop, not wait_interruptible - check explicitly
                 angle = (elapsed / PET_CIRCLE_DURATION) * 2 * np.pi
-                x = int(center_x + circle_radius * np.cos(angle))
-                y = int(center_y + circle_radius * np.sin(angle))
-                pyautogui.moveTo(x, y, duration=0.05)
+                x = int(SCREEN_CENTER_X + PET_CIRCLE_RADIUS * np.cos(angle))
+                y = int(SCREEN_CENTER_Y + PET_CIRCLE_RADIUS * np.sin(angle))
+                pyautogui.moveTo(x, y, duration=PET_CIRCLE_STEP_MOVE_DURATION)
                 elapsed = time.time() - start_time
         finally:
             # Always release, even if StopRequested fires mid-circle -
@@ -794,17 +723,14 @@ class PetNeedHandler(NeedHandler):
         return True
 
 class ChooseNeedHandler(NeedHandler):
-    """The 'choose' need: focusing the pet requires being at RESPAWN, so
-    respawn first if we aren't already there. Then: jitter-click to open
-    the pet's interaction menu, find the button with a distinctive exact
-    color (it has no distinguishing icon, so shape detection doesn't apply
-    here), move to it slowly rather than jumping straight there, click it,
-    then click the middle of the screen to dismiss the menu."""
-    position = Position.RESPAWN
+    """The 'choose' need: jitter-click to open the pet's interaction menu,
+    find the button with a distinctive exact color (it has no distinguishing
+    icon, so shape detection doesn't apply here), move to it slowly rather
+    than jumping straight there, click it, then click the middle of the
+    screen to dismiss the menu."""
 
     def handle(self):
         print("[!] CHOOSE NEED")
-        self.ensure_position()  # respawns only if we aren't at RESPAWN already
         if not focus_roblox():
             return False
 
@@ -823,7 +749,7 @@ class ChooseNeedHandler(NeedHandler):
         wait_interruptible(UI_SETTLE)
 
         print("[debug] clicking middle of screen...")
-        simple_click(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
+        simple_click(SCREEN_CENTER_X, SCREEN_CENTER_Y)
 
         print("[!] Choose complete!")
         return True
@@ -831,7 +757,6 @@ class ChooseNeedHandler(NeedHandler):
 class RideNeedHandler(NeedHandler):
     """The 'ride' need: step back, mount a vehicle from the backpack, then
     walk back and forth for a while astride it."""
-    position = None  # works at any position (respawn or home)
 
     def handle(self):
         print("[!] RIDE NEED")
@@ -889,124 +814,114 @@ class RideNeedHandler(NeedHandler):
         print("[!] Ride complete!")
         return True
 
-class ButtonNeedHandler(NeedHandler):
-    """Base for needs satisfied by clicking a mapped button at the home position.
-    Getting home also refreshes the button mapping, since that's the only reason
-    to be there - other need types (catch, walk) never trigger this."""
-    position = Position.HOME
-    need_name = None  # subclasses hardcode this; or pass one in for an unrecognized need
+# Need names with dedicated handler logic above, rather than being a basic
+# at-home button click. "walk"/"walk2"/etc. are matched by prefix instead of
+# being listed here - see is_basic_need() / get_special_need_handler().
+SPECIAL_NEED_NAMES = {"catch", "pet", "choose", "ride"}
 
-    def __init__(self, need_name=None):
-        if need_name is not None:
-            self.need_name = need_name
+def is_basic_need(need_name):
+    """A basic need has no dedicated handler - it's satisfied by walking to
+    the action buttons and clicking the one matching its name."""
+    return not need_name.startswith("walk") and need_name not in SPECIAL_NEED_NAMES
 
-    def handle(self):
-        self.ensure_position()
-        refresh_button_mapping()  # populates BUTTON_POSITIONS with the freshly mapped buttons
-
-        if self.need_name not in BUTTON_POSITIONS:
-            print(f"[!] WARNING: no button mapped for '{self.need_name}'")
-            return False
-
-        button_x, button_y = BUTTON_POSITIONS[self.need_name]
-        print(f"[!] CLICKING: {self.need_name}")
-        click_button(button_x, button_y, self.need_name)
-        print(f"[debug] waiting {POST_NEED_CLICK_WAIT}s before next action...")
-        wait_interruptible(POST_NEED_CLICK_WAIT)
-        return True
-
-class HungryNeedHandler(ButtonNeedHandler):
-    need_name = "hungry"
-
-class ThirstyNeedHandler(ButtonNeedHandler):
-    need_name = "thirsty"
-
-class DirtyNeedHandler(ButtonNeedHandler):
-    need_name = "dirty"
-
-class PottyNeedHandler(ButtonNeedHandler):
-    need_name = "potty"
-
-class SleepyNeedHandler(ButtonNeedHandler):
-    need_name = "sleepy"
-
-NEED_HANDLER_CLASSES = {
-    "hungry": HungryNeedHandler,
-    "thirsty": ThirstyNeedHandler,
-    "dirty": DirtyNeedHandler,
-    "potty": PottyNeedHandler,
-    "sleepy": SleepyNeedHandler,
-    "catch": CatchNeedHandler,
-    "pet": PetNeedHandler,
-    "choose": ChooseNeedHandler,
-    "ride": RideNeedHandler,
-}
-
-def get_need_handler(need_name):
-    """Return the handler responsible for a given need name."""
+def get_special_need_handler(need_name):
+    """Return the handler for a need with dedicated logic. Only call this
+    when is_basic_need(need_name) is False. Returns None if this need type
+    is currently disabled via its _ENABLED flag."""
     if need_name.startswith("walk"):
         return WalkNeedHandler()
-    if need_name == "catch" and not CATCH_ENABLED:
-        return None  # catch is disabled
-    if need_name == "pet" and not PET_ENABLED:
-        return None  # pet is disabled
-    if need_name == "choose" and not CHOOSE_ENABLED:
-        return None  # choose is disabled
-    handler_cls = NEED_HANDLER_CLASSES.get(need_name)
-    if handler_cls:
-        return handler_cls()
-    return ButtonNeedHandler(need_name)  # fallback for any custom need
+    if need_name == "catch":
+        return CatchNeedHandler() if CATCH_ENABLED else None
+    if need_name == "pet":
+        return PetNeedHandler() if PET_ENABLED else None
+    if need_name == "choose":
+        return ChooseNeedHandler() if CHOOSE_ENABLED else None
+    return RideNeedHandler()  # only "ride" remains
 
 def process_needs():
-    """Detect needs on screen and dispatch each to its handler."""
-    print("\n[debug] processing needs...")
+    """Detect needs on screen and handle them. Basic needs (hungry, thirsty,
+    dirty, potty, sleepy, or any other need with no dedicated handler) are
+    handled in place: walk to the buttons once, then click each one that
+    matched. Needs with dedicated logic (catch, pet, choose, ride, walk) are
+    handled by their own handler, and the character respawns afterward -
+    that's the only reset those need. Returns True if anything was found and
+    acted on, False if there was nothing to do this check."""
     if not focus_roblox_click():
-        return
+        return False
 
     found_icons, full_img = detect_need_icons(save_debug=True)
     if not found_icons:
         print("[debug] no need icons detected")
-        return
+        return False
 
     print(f"[debug] found {len(found_icons)} icon(s)")
 
+    basic_needs, special_needs = [], []
     for idx, (cx, cy, radius) in enumerate(found_icons):
         check_stop()
 
         icon_img = extract_icon(full_img, cx, cy, radius)
         matched_need, score = find_matching_need(icon_img)
 
-        if matched_need:
-            need_name = base_need_name(matched_need)
-            print(f"\n[!] MATCHED: {need_name} (score: {score:.4f})")
-            handler = get_need_handler(need_name)
-            if handler is None:
-                print(f"[debug] {need_name} is disabled, skipping")
-                continue
-            handler.handle()
-        else:
+        if not matched_need:
             print(f"\n[!] NEW NEED (best score: {score:.4f})")
             # prompt_rename_need() already saves the reference icon into
             # NEEDS_DIR - that .png file is the only record needed for this
             # need to be recognized next time, so there's nothing further to
             # persist here.
             prompt_rename_need(icon_img, idx)
+            continue
+
+        need_name = base_need_name(matched_need)
+        print(f"\n[!] MATCHED: {need_name} (score: {score:.4f})")
+        if is_basic_need(need_name):
+            basic_needs.append(need_name)
+        else:
+            special_needs.append(need_name)
+
+    if not basic_needs and not special_needs:
+        return False
+
+    if basic_needs:
+        walk_to_buttons()
+        refresh_button_mapping()
+        for need_name in basic_needs:
+            check_stop()
+            click_basic_need_button(need_name)
+
+    respawn_needed = False
+    for need_name in special_needs:
+        check_stop()
+        handler = get_special_need_handler(need_name)
+        if handler is None:
+            print(f"[debug] {need_name} is disabled, skipping")
+            continue
+        handler.handle()
+        respawn_needed = True
+
+    if respawn_needed:
+        respawn_character()
+
+    return True
 
 # ============================================================================
 # WORKFLOWS
 # ============================================================================
 
 def run_full_cycle():
-    """One full cycle: respawn, then process needs. Each need's handler decides
-    for itself whether it needs to walk home (only the five basic needs do)."""
-    print("\n[1/2] Respawning...")
-    respawn_character()
-
-    print("\n[2/2] Processing needs...")
-    process_needs()
+    """One full cycle: keep checking for needs, waiting NEED_CHECK_RETRY_DELAY
+    between checks whenever none are found, until something is detected and
+    handled."""
+    while True:
+        check_stop()
+        print("\n[debug] checking needs...")
+        if process_needs():
+            return
+        print(f"[debug] no needs found, waiting {NEED_CHECK_RETRY_DELAY}s...")
+        wait_interruptible(NEED_CHECK_RETRY_DELAY)
 
 def run_workflow():
-    """Run a single cycle: respawn -> process needs (buttons are mapped on demand)."""
+    """Run a single cycle: wait for a need to appear, then handle it."""
     global STOP_FLAG
     STOP_FLAG = False
     print("\n" + "=" * 50)

@@ -218,6 +218,20 @@ else is built on - see [Stopping & focus safety](#stopping--focus-safety).
 
 ## Need handlers
 
+**Currently active** (handler exists *and* enabled - these are the only
+needs the macro will act on by itself right now):
+
+- `hungry`, `thirsty`, `dirty`, `potty`, `sleepy` - basic, always on
+- `catch` - `CATCH_ENABLED = True`
+- `ride` - no flag, always on
+- `walk` - no flag, always on
+
+**Implemented but disabled** (handler exists, flag is off - a detected
+icon for these is logged and skipped, not resolved):
+
+- `pet` - `PET_ENABLED = False`
+- `choose` - `CHOOSE_ENABLED = False`
+
 | Need | How it's handled |
 |---|---|
 | `hungry` / `thirsty` | Basic. Walk to the buttons, click, wait `POST_NEED_CLICK_WAIT_SHORT` (10s). |
@@ -233,6 +247,14 @@ Dispatch: `is_basic_need(name)` returns `False` for anything starting with
 everything else is basic. `get_special_need_handler(name)` is only ever
 called for a non-basic name, and returns `None` if that need's `_ENABLED`
 flag is off.
+
+A basic need only counts as resolved (and only then triggers a respawn) if
+`refresh_button_mapping()` actually found buttons *and*
+`click_basic_need_button()` found this specific need's button in that
+mapping - both return a bool for exactly this reason. If either fails (no
+buttons detected at all, or this particular one wasn't among them), the
+need is logged and skipped for this pass with no respawn, the same as a
+disabled special.
 
 `PET_ENABLED` and `CHOOSE_ENABLED` default to `False` - both handlers are
 fully implemented but not wired into automatic processing yet. Their
@@ -313,18 +335,14 @@ knowing if you're modifying it:
   all three individually, rather than letting the center one inherit it
   from its siblings, is what keeps the row aligned regardless of any
   future font size change to any one of them.
-- Every button in that row (and the "1" badge below) is created with
-  `bd=0, highlightthickness=0` - Tk's default border/focus-ring rendering
-  can otherwise show a faint seam where a flat `Label` overlaps a
-  beveled `Button`, even when their fill colors match exactly.
-- **The "1" badge** on the single-cycle button is a separate `Label`
-  layered on top of the icon via `place()` (not a second line of button
-  text), with a background matching the button's own color and no border
-  of its own, so there's no visible box around it - just the digit,
-  centered on the icon. Clicking the badge calls `btn_start.invoke()`,
-  which triggers the button's command *and* respects its current
-  enabled/disabled state - no separate state tracking needed for the
-  overlay.
+- Every button in that row is created with `bd=0, highlightthickness=0` to
+  flatten Tk's default border/focus-ring rendering.
+- **The single-cycle button's label** is plain button text
+  (`"\U0001F5041"`, the refresh icon followed by "1") rather than a
+  separate overlay widget - an earlier version tried layering a `Label`
+  with `place()` on top of the icon for a cleaner look, but Tk's border
+  rendering kept showing a visible seam/box behind it even with matching
+  fill colors, so plain text turned out simpler and more reliable.
 - **`DebugCapture`** redirects `sys.stdout` into the on-screen console
   (`self.debug_text`) for the lifetime of the GUI, so every `print()`
   anywhere in the macro shows up there automatically.

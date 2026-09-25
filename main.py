@@ -117,6 +117,8 @@ JITTER_PIXELS = 5
 
 # Need-icon detection (top strip of screen)
 NEED_ICON_TOP_PERCENT = 0.15        # fraction of screen height searched for icons
+NEED_ICON_WIDTH_PERCENT = 0.70      # fraction of screen width searched, from the left edge -
+                                     # keeps the GUI panel (docked top-right) out of frame
 NEED_ICON_BLANK_HEIGHT = 0.15       # top-left UI cluster to ignore (height)
 NEED_ICON_BLANK_WIDTH = 0.20        # top-left UI cluster to ignore (width)
 NEED_ICON_MIN_AREA = 50
@@ -326,7 +328,7 @@ def detect_need_icons(save_debug=False):
     img = grab_screen()
     h, w = img.shape[:2]
 
-    top_strip = img[0:int(h * NEED_ICON_TOP_PERCENT), :].copy()
+    top_strip = img[0:int(h * NEED_ICON_TOP_PERCENT), 0:int(w * NEED_ICON_WIDTH_PERCENT)].copy()
     top_strip[0:int(h * NEED_ICON_BLANK_HEIGHT), 0:int(w * NEED_ICON_BLANK_WIDTH)] = 0
 
     hsv = cv2.cvtColor(top_strip, cv2.COLOR_BGR2HSV)
@@ -1074,24 +1076,47 @@ class AdoptMeGUI:
 
         # One row: [START] (single cycle, square) on the left, [LOOP] (continuous
         # workflow) expanding to fill the center, [STOP] (square) on the right.
+        # The two square buttons sit in a fixed-pixel-size container
+        # (pack_propagate(False)) so they're identically sized regardless of
+        # font metrics - a Button's own width/height (character units) don't
+        # scale consistently across font sizes. The center button has no
+        # fixed size of its own; it stretches to match the row height these
+        # containers establish.
+        SQUARE_BUTTON_SIZE = 44  # px, short and square
+
         main_row = tk.Frame(btn_frame, bg=self.bg)
         main_row.pack(fill=tk.X, pady=4)
 
-        btn_start = tk.Button(main_row, text="\U0001F504\n1", command=self.run_workflow,
-                               font=("Courier", 14, "bold"), bg="#2ecc71", fg=self.fg,
-                               width=4, height=3, cursor="hand2")
-        btn_start.pack(side=tk.LEFT, padx=(0, 4))
+        start_container = tk.Frame(main_row, width=SQUARE_BUTTON_SIZE, height=SQUARE_BUTTON_SIZE, bg=self.bg)
+        start_container.pack(side=tk.LEFT, padx=(0, 4))
+        start_container.pack_propagate(False)
+
+        btn_start = tk.Button(start_container, text="\U0001F504", command=self.run_workflow,
+                               font=("Courier", 16, "bold"), bg="#2ecc71", fg=self.fg, cursor="hand2")
+        btn_start.pack(fill=tk.BOTH, expand=True)
         self.action_buttons.append(btn_start)
 
+        # The "1" (single-cycle) badge is a separate Label layered on top of
+        # the icon via place(), rather than a second line of button text, so
+        # the button itself can stay square and short. Clicking the badge
+        # forwards to the real button via invoke(), which already respects
+        # the button's enabled/disabled state - no separate state tracking needed.
+        start_badge = tk.Label(start_container, text="1", font=("Courier", 8, "bold"),
+                                bg=self.bg, fg=self.fg, cursor="hand2")
+        start_badge.place(relx=0.78, rely=0.78, anchor="center")
+        start_badge.bind("<Button-1>", lambda e: btn_start.invoke())
+
         # Not added to action_buttons: must remain clickable while a workflow is running
-        self.btn_stop = tk.Button(main_row, text="■", command=self.stop,
-                                   font=("Courier", 18, "bold"), bg="#d62828", fg=self.fg,
-                                   width=4, height=3, cursor="hand2")
-        self.btn_stop.pack(side=tk.RIGHT, padx=(4, 0))
+        stop_container = tk.Frame(main_row, width=SQUARE_BUTTON_SIZE, height=SQUARE_BUTTON_SIZE, bg=self.bg)
+        stop_container.pack(side=tk.RIGHT, padx=(4, 0))
+        stop_container.pack_propagate(False)
+
+        self.btn_stop = tk.Button(stop_container, text="■", command=self.stop,
+                                   font=("Courier", 16, "bold"), bg="#d62828", fg=self.fg, cursor="hand2")
+        self.btn_stop.pack(fill=tk.BOTH, expand=True)
 
         btn_loop = tk.Button(main_row, text="\U0001F504", command=self.run_workflow_loop,
-                              font=("Courier", 18, "bold"), bg="#27ae60", fg=self.fg,
-                              height=3, cursor="hand2")
+                              font=("Courier", 16, "bold"), bg="#27ae60", fg=self.fg, cursor="hand2")
         btn_loop.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.action_buttons.append(btn_loop)
 

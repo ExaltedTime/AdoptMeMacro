@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Adopt Me Bot - Automated pet care with GUI control panel."""
+"""Adopt Me Macro - Automated pet care with GUI control panel."""
 
 # ============================================================================
 # EXTERNAL DEPENDENCIES (install via pip)
@@ -71,6 +71,7 @@ CATCH_WAIT_AFTER_EQUIP = 2.0   # wait after equipping toy before throwing
 CATCH_EMOTE_DELAY = 10.0       # delay between throw clicks
 CATCH_CLICK_DELAY = 0.5        # delay between catch sequence clicks
 CATCH_THROW_COUNT = 3          # number of times the toy is thrown
+CATCH_SCROLL_AMOUNT = 5        # mouse wheel notches scrolled up before each throw
 PET_CIRCLE_DURATION = 10.0     # how long to make circles with mouse
 PET_CIRCLE_RADIUS = 100                # radius (px) of the circle traced around screen center
 PET_CIRCLE_START_MOVE_DURATION = 0.1   # time to move to the circle's starting point
@@ -173,24 +174,50 @@ class StopRequested(Exception):
     This is deliberately cooperative cancellation, not thread-killing. Python
     has no safe way to force-terminate a running thread from the outside -
     the closest trick (async-raising into another thread via ctypes) is
-    explicitly unsafe, and for a game bot that matters a lot: if the kill
+    explicitly unsafe, and for a game macro that matters a lot: if the kill
     landed while a movement key or the mouse button was held down, it would
     never get released and would stay stuck in the game.
 
-    Instead, wait_interruptible() and check_stop() raise this the moment they
-    notice STOP_FLAG, and ordinary Python exception propagation unwinds the
-    call stack from wherever we are all the way up to run_async()'s worker
-    thread, which catches it. Any try/finally in between (used wherever a key
-    or the mouse is held down) still runs on the way up, so cleanup always
-    happens no matter where the stop lands - without every function needing
-    to manually check a flag after every single action."""
+    Instead, wait_interruptible() and check_running() raise this the moment
+    they notice STOP_FLAG, and ordinary Python exception propagation unwinds
+    the call stack from wherever we are all the way up to run_async()'s
+    worker thread, which catches it. Any try/finally in between (used
+    wherever a key or the mouse is held down) still runs on the way up, so
+    cleanup always happens no matter where the stop lands - without every
+    function needing to manually check a flag after every single action."""
+    pass
+
+class FocusLost(Exception):
+    """Raised when Roblox is no longer the focused window while a workflow
+    is running. Handled the same way as StopRequested - it unwinds via
+    ordinary exception propagation, releasing any held key/mouse button via
+    the same try/finally blocks along the way - so the macro never keeps
+    sending clicks or keypresses into whatever window the user switched to."""
     pass
 
 def check_stop():
-    """Raise StopRequested if the user has pressed [STOP]. Call this at safe
-    checkpoints inside a loop that doesn't otherwise call wait_interruptible()."""
+    """Raise StopRequested if the user has pressed [STOP]. Prefer
+    check_running() at checkpoints that should also require Roblox focus -
+    this exists on its own for the one checkpoint that shouldn't (see
+    run_full_cycle())."""
     if STOP_FLAG:
         raise StopRequested()
+
+def check_focus():
+    """Raise FocusLost if Roblox is running but is no longer the focused
+    window. Prefer check_running() at most checkpoints."""
+    if not is_roblox_focused():
+        print("\n[!] Roblox is no longer focused - stopping.")
+        raise FocusLost()
+
+def check_running():
+    """Raise StopRequested or FocusLost if the workflow should not continue
+    right now. This is the single checkpoint used everywhere - inside
+    wait_interruptible() and any manual loop that doesn't otherwise call it
+    - so both a [STOP] press and tabbing away from Roblox are noticed at
+    the same, frequent cadence."""
+    check_stop()
+    check_focus()
 
 # ============================================================================
 # WINDOW FOCUS & SCREEN CAPTURE
@@ -208,6 +235,12 @@ def focus_roblox():
     w.activate()
     time.sleep(FOCUS_DELAY)
     return True
+
+def is_roblox_focused():
+    """Return True if a window with 'roblox' in its title is currently the
+    active (focused) window."""
+    active = gw.getActiveWindow()
+    return active is not None and "roblox" in (active.title or "").lower()
 
 def focus_roblox_click():
     """Focus Roblox and click near the top edge to make sure input registers."""
@@ -246,7 +279,7 @@ def find_exact_color(img, rgb):
 # ============================================================================
 
 # Detected action-button screen positions, keyed by need name (e.g. "hungry").
-# Populated by refresh_button_mapping() each time the bot walks to the
+# Populated by refresh_button_mapping() each time the macro walks to the
 # buttons, so this is a same-run cache, not persisted state - there's
 # nothing gained from saving it to disk since it's never trusted across a
 # run anyway (screen layout can change between sessions).
@@ -386,6 +419,15 @@ def simple_click(x, y):
     pydirectinput.click()
     time.sleep(POST_CLICK_DELAY)
 
+def scroll_wheel_up(x, y, amount):
+    """Move to (x, y) and scroll the mouse wheel up by `amount` notches.
+    Uses pyautogui rather than pydirectinput - pydirectinput has no scroll
+    function of its own."""
+    pyautogui.moveTo(x, y, duration=CLICK_MOVE_DURATION)
+    time.sleep(CLICK_SETTLE_DELAY)
+    pyautogui.scroll(amount)
+    time.sleep(POST_CLICK_DELAY)
+
 def slow_click(x, y, duration):
     """Move the mouse to (x, y) deliberately slowly (over `duration` seconds,
     instead of the usual quick CLICK_MOVE_DURATION), then click. Used where
@@ -397,20 +439,20 @@ def slow_click(x, y, duration):
     time.sleep(POST_CLICK_DELAY)
 
 def wait_interruptible(duration):
-    """Sleep for `duration`, in STOP_CHECK_INTERVAL chunks, checking for a
-    stop request between each chunk. Raises StopRequested the moment
-    STOP_FLAG is set, instead of returning a bool the caller has to check
-    after every call."""
+    """Sleep for `duration`, in STOP_CHECK_INTERVAL chunks, checking
+    check_running() between each chunk. Raises StopRequested or FocusLost
+    the moment either condition is noticed, instead of returning a bool the
+    caller has to check after every call."""
     elapsed = 0.0
     while elapsed < duration:
-        check_stop()
+        check_running()
         sleep_chunk = min(STOP_CHECK_INTERVAL, duration - elapsed)
         time.sleep(sleep_chunk)
         elapsed += sleep_chunk
-    check_stop()
+    check_running()
 
 def release_all_inputs():
-    """Best-effort safety net: release every key this bot ever holds down,
+    """Best-effort safety net: release every key this macro ever holds down,
     plus the mouse button. The try/finally blocks around each individual
     held key/button should already guarantee this, but this is called once
     more whenever a background task ends (run_async's worker finally block)
@@ -615,7 +657,7 @@ def walk_alternating(direction_pair, total_duration, step_duration=WALK_ALTERNAT
 # A need with no dedicated handler is a "basic" need (see is_basic_need()):
 # it's satisfied by walking to the action buttons and clicking the one that
 # matches its name - hungry/thirsty/dirty/potty/sleepy today, and any future
-# need the bot is taught that also works the same way. Needs with dedicated
+# need the macro is taught that also works the same way. Needs with dedicated
 # logic (catch, pet, choose, ride, walk) get their own handler class below,
 # so each can be customized independently without touching the others.
 
@@ -673,9 +715,10 @@ class CatchNeedHandler(NeedHandler):
         print(f"[debug] waiting {CATCH_WAIT_AFTER_EQUIP}s before throwing...")
         wait_interruptible(CATCH_WAIT_AFTER_EQUIP)
 
-        # Click empty space to throw, with a delay between throws
+        # Scroll up then click empty space to throw, with a delay between throws
         for i in range(CATCH_THROW_COUNT):
             print(f"[debug] throw {i + 1}/{CATCH_THROW_COUNT}...")
+            scroll_wheel_up(*EMPTY_POS, CATCH_SCROLL_AMOUNT)
             simple_click(*EMPTY_POS)
             wait_interruptible(CATCH_EMOTE_DELAY)
 
@@ -711,7 +754,7 @@ class PetNeedHandler(NeedHandler):
             start_time = time.time()
             elapsed = 0.0
             while elapsed < PET_CIRCLE_DURATION:
-                check_stop()  # inside a manual loop, not wait_interruptible - check explicitly
+                check_running()  # inside a manual loop, not wait_interruptible - check explicitly
                 angle = (elapsed / PET_CIRCLE_DURATION) * 2 * np.pi
                 x = int(SCREEN_CENTER_X + PET_CIRCLE_RADIUS * np.cos(angle))
                 y = int(SCREEN_CENTER_Y + PET_CIRCLE_RADIUS * np.sin(angle))
@@ -861,7 +904,7 @@ def process_needs():
 
     basic_needs, special_needs = [], []
     for idx, (cx, cy, radius) in enumerate(found_icons):
-        check_stop()
+        check_running()
 
         icon_img = extract_icon(full_img, cx, cy, radius)
         matched_need, score = find_matching_need(icon_img)
@@ -891,12 +934,12 @@ def process_needs():
         walk_to_buttons()
         refresh_button_mapping()
         for need_name in basic_needs:
-            check_stop()
+            check_running()
             click_basic_need_button(need_name)
         respawn_needed = True
 
     for need_name in special_needs:
-        check_stop()
+        check_running()
         handler = get_special_need_handler(need_name)
         if handler is None:
             print(f"[debug] {need_name} is disabled, skipping")
@@ -918,6 +961,10 @@ def run_full_cycle():
     between checks whenever none are found, until something is detected and
     handled."""
     while True:
+        # check_stop() only, not check_running() - clicking [START]/[LOOP]
+        # in this Python GUI is what has focus at this exact instant, and
+        # process_needs() below is what brings Roblox to the front. Once
+        # that succeeds, every wait from here on does check_running().
         check_stop()
         print("\n[debug] checking needs...")
         if process_needs():
@@ -982,7 +1029,7 @@ class DebugCapture:
 class AdoptMeGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Adopt Me Bot")
+        self.root.title("Adopt Me Macro")
         self.root.geometry("380x650+1550+30")
         self.root.resizable(False, False)
         self.root.attributes('-topmost', True)
@@ -999,7 +1046,7 @@ class AdoptMeGUI:
         sys.stdout = self.capture
 
         print("\n" + "=" * 60)
-        print("ADOPT ME BOT - CONTROL PANEL")
+        print("ADOPT ME MACRO - CONTROL PANEL")
         print("=" * 60)
         print(f"Needs:  {NEEDS_DIR}")
         print(f"Debug:  {DEBUG_DIR}")
@@ -1017,7 +1064,7 @@ class AdoptMeGUI:
         title = tk.Frame(self.root, bg=self.accent, height=40)
         title.pack(fill=tk.X)
         title.pack_propagate(False)
-        tk.Label(title, text="ADOPT ME BOT", font=("Courier", 11, "bold"), bg=self.accent, fg=self.fg).pack(pady=8)
+        tk.Label(title, text="ADOPT ME MACRO", font=("Courier", 11, "bold"), bg=self.accent, fg=self.fg).pack(pady=8)
 
         # Main buttons
         btn_frame = tk.Frame(self.root, bg=self.bg)
@@ -1106,8 +1153,9 @@ class AdoptMeGUI:
 
         Lifecycle: disable the action buttons -> run func() in the background
         -> ALWAYS re-enable the buttons when func() returns, whether it
-        finished normally, was interrupted via STOP_FLAG, or raised an
-        exception. That "always" is done with try/except/finally so there is
+        finished normally, was interrupted via STOP_FLAG, lost Roblox's
+        focus, or raised an exception. That "always" is done with
+        try/except/finally so there is
         no code path that leaves the UI stuck in the disabled "Running..."
         state - the bug that made buttons stop responding once a workflow
         completed on its own.
@@ -1133,6 +1181,10 @@ class AdoptMeGUI:
                 # broad handler came first it would catch this too and
                 # misreport a clean stop as "[ERROR]".
                 final_status = "[STOPPED]"
+            except FocusLost:
+                # Same reasoning as StopRequested above - must come before
+                # the generic Exception handler.
+                final_status = "[STOPPED: Roblox not focused]"
             except Exception as e:
                 print(f"\n[ERROR] {e}")
                 final_status = "[ERROR]"

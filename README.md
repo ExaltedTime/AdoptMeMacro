@@ -1,6 +1,6 @@
-# Adopt Me Bot
+# Adopt Me Macro
 
-A Python desktop bot that watches the Roblox game **Adopt Me** for pet-care
+A Python desktop macro that watches the Roblox game **Adopt Me** for pet-care
 "need" icons (hunger, thirst, etc.) and automatically performs the action
 that satisfies each one, controlled from a small `tkinter` GUI.
 
@@ -8,7 +8,7 @@ Everything lives in a single file: `main.py`.
 
 ## How it works, in one paragraph
 
-The bot takes a screenshot, looks at a strip along the top of the screen for
+The macro takes a screenshot, looks at a strip along the top of the screen for
 colored circular icons, and compares each one (using shape/contrast, not
 raw color) against a folder of reference icons it has seen before
 (`needs/`). Once it recognizes a need, it hands it off to whatever satisfies
@@ -51,7 +51,7 @@ wide button filling the center, and a small square on the right.
 | **[TEST] Catch / Pet / Ride / Choose** | Runs that one need handler directly, bypassing icon detection - useful for tuning a handler without waiting for its icon to appear naturally. |
 
 The scrolling **Output** panel at the bottom mirrors everything printed to
-the console, so you can watch what the bot is doing/deciding in real time.
+the console, so you can watch what the macro is doing/deciding in real time.
 
 ## Code structure
 
@@ -124,7 +124,7 @@ Key pieces, top to bottom:
 |---|---|
 | `hungry` / `thirsty` | Basic: walk to the action buttons, click the matching one, wait 10s (`POST_NEED_CLICK_WAIT_SHORT`). |
 | `dirty` / `potty` / `sleepy` (and any unrecognized need) | Basic: walk to the action buttons, click the matching one, wait 15s (`POST_NEED_CLICK_WAIT`). |
-| `catch` | Opens the backpack, equips the squeaky toy, throws it 3x into empty space, unequips it. |
+| `catch` | Opens the backpack, equips the squeaky toy, scrolls the mouse wheel up then throws it 3x into empty space, unequips it. |
 | `pet` | Clicks to focus the pet, then holds the mouse down and moves it in a circle. *(Disabled by default - see `PET_ENABLED`.)* |
 | `choose` | Focuses the pet's menu, finds a button by its exact color, clicks it. *(Disabled by default - see `CHOOSE_ENABLED`.)* |
 | `ride` | Mounts a vehicle from the backpack, then walks back and forth for a while. |
@@ -132,21 +132,29 @@ Key pieces, top to bottom:
 
 A respawn always follows, whether the need was basic or special.
 
-## Stopping safely
+## Stopping safely (and only running while Roblox is focused)
 
 Pressing **[STOP]** sets a flag (`STOP_FLAG`). `wait_interruptible()` (used
-for essentially every delay in the bot) checks that flag between short
+for essentially every delay in the macro) checks that flag between short
 sleep chunks and raises `StopRequested` the instant it's set. That exception
 unwinds the call stack all the way up through ordinary Python exception
 propagation - no handler needs to manually check "did the user stop me?"
 after every action.
 
+The same checkpoint (`check_running()`) also checks that Roblox is still the
+focused window, and raises `FocusLost` the moment it isn't - so if you tab
+away mid-workflow, the macro stops instead of continuing to click or type
+into whatever window you switched to. This check is skipped for the very
+first check of a cycle (before the macro has had a chance to bring Roblox
+to the front itself), but applies everywhere after that.
+
 The one thing that doesn't happen automatically is releasing a key or mouse
 button that's currently held down (e.g. holding "w" to walk, or holding the
 mouse button to pet). Every place that holds an input down wraps the wait in
-`try/finally` so the release always happens, stop or no stop. As a final
-safety net, `release_all_inputs()` runs once more whenever any background
-task ends, releasing every key/button the bot ever touches.
+`try/finally` so the release always happens, whatever the reason for
+stopping. As a final safety net, `release_all_inputs()` runs once more
+whenever any background task ends, releasing every key/button the macro
+ever touches.
 
 This is deliberately *not* solved with a second thread that force-kills the
 running one from outside - Python has no safe way to do that, and the
@@ -156,16 +164,16 @@ cooperative approach costs instead.
 
 ## The `needs/` folder
 
-Reference icons the bot has learned, saved as high-contrast black & white
-PNGs (e.g. `need_hungry.png`). This *is* the bot's memory of what each need
+Reference icons the macro has learned, saved as high-contrast black & white
+PNGs (e.g. `need_hungry.png`). This *is* the macro's memory of what each need
 looks like - delete a file here and it will ask you to re-name that icon
-the next time it sees it. It's the only persistent state this bot has;
+the next time it sees it. It's the only persistent state this macro has;
 there is no config file.
 
 ## Debug
 
 Every detection pass writes screenshots into a `debug/` folder next to
-`main.py`, so you can see exactly what the bot is looking at:
+`main.py`, so you can see exactly what the macro is looking at:
 
 - `debug_needs.png` - the top strip with a circle drawn around every
   detected need icon.

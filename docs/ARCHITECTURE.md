@@ -347,5 +347,6 @@ next to each constant in `main.py` for exact values and rationale):
 
 If detection isn't finding what you expect after changing screen
 resolution or Roblox's UI, check `debug/debug_needs.png` and
-`debug/debug_buttons.png` first (see the README's Debug section) before
-tuning any of these.
+`debug/debug_buttons.png` first - both are overwritten every detection
+pass and show exactly what the macro is looking at - before tuning any of
+these.

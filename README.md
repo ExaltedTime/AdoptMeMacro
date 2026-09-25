@@ -39,12 +39,12 @@ your Roblox window somewhere it won't be covered by the panel.
 
 ## The GUI
 
-The top row has three buttons side by side: a small square on the left, a
-wide button filling the center, and a small square on the right.
+The top row has three short buttons side by side: two identically-sized
+squares on the left and right, and a wide button filling the center.
 
 | Button | What it does |
 |---|---|
-| 🔄 with a **1** (left square) | Waits for a need to appear (checking every few seconds), then handles it, once. |
+| 🔄 with a small **1** badge (left square) | Waits for a need to appear (checking every few seconds), then handles it, once. |
 | 🔄 (center, wide) | Same as the button above, but repeats continuously until stopped. |
 | ■ (right square) | Signals whatever is currently running to stop as soon as it safely can. Always clickable, even mid-action. |
 | **Respawn** | Runs just the respawn sequence (Esc, R, Enter) on its own. |
@@ -94,8 +94,10 @@ Key pieces, top to bottom:
   action button positions.
 - **ICON PROCESSING** - turns an icon into strict black & white so it can be
   matched regardless of its original color.
-- **NEED ICON DETECTION** - finds circular need icons at the top of screen,
-  compares them to saved reference icons in `needs/`.
+- **NEED ICON DETECTION** - finds circular need icons in the top-left 70%
+  of the screen (`NEED_ICON_WIDTH_PERCENT`) - narrowed from the full width
+  so the GUI panel itself, docked top-right, is never mistaken for a need
+  icon - and compares them to saved reference icons in `needs/`.
 - **CLICKING** - `jitter_click()` (click, nudge, click again - used for the
   actual need buttons) / `simple_click()` (used for backpack/toy UI clicks)
   / `slow_click()` (deliberately slow travel before clicking).

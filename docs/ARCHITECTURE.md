@@ -42,32 +42,38 @@ no-op as progress.
    well enough triggers `prompt_rename_need()` (asks you, in the console,
    to name and save it) and is otherwise skipped this pass - it isn't
    "resolved," it's just been taught for next time.
-4. Every icon that *did* match gets sorted into one of two buckets by
-   `is_basic_need()`:
-   - **Basic** - hungry/thirsty/dirty/potty/sleepy, or any other need name
-     with no dedicated handler. These share one behavior: walk to the
-     action buttons, click.
-   - **Special** - catch, pet, choose, ride, or anything starting with
-     `"walk"`. These each have their own handler class and, importantly,
-     **never walk anywhere first** - they act from wherever the character
-     already is.
-5. If there are any basic needs, walk to the buttons *once*
-   (`walk_to_buttons()`), refresh the button mapping *once*
-   (`refresh_button_mapping()`), then click each matched button in turn
-   (`click_basic_need_button()`). This one-walk-then-click-many pattern is
-   why basic needs are batched into a list first instead of being handled
-   icon-by-icon as they're found.
-6. Every special need goes to `get_special_need_handler()`, which returns
-   either a handler instance or `None` if that need type is currently
-   disabled (`CATCH_ENABLED` / `PET_ENABLED` / `CHOOSE_ENABLED`). A `None`
-   result is logged and skipped - critically, it does **not** count as
-   resolved.
-7. If anything in steps 5-6 actually ran, the character respawns once
-   (whether it was a basic need, a special one, or both) - that's the only
-   reset either path needs, and it's also what leaves the character in a
-   known position for the next cycle. If nothing ran (e.g. the only match
-   was a disabled special), no respawn happens and `process_needs()`
-   returns `False`, so `run_full_cycle()` waits and tries again.
+4. Every icon that *did* match is collected into an ordered list of need
+   names (`matched_needs`), in the order they were detected.
+5. That list is then worked through **one need at a time**, and each one
+   ends with its own respawn before moving to the next - nothing is
+   batched. For each `need_name`:
+   - `is_basic_need(need_name)` decides the path:
+     - **Basic** (hungry/thirsty/dirty/potty/sleepy, or any other need
+       name with no dedicated handler): walk to the action buttons
+       (`walk_to_buttons()`), refresh the button mapping
+       (`refresh_button_mapping()`), click the one matching button
+       (`click_basic_need_button()`).
+     - **Special** (catch, pet, choose, ride, or anything starting with
+       `"walk"`): `get_special_need_handler(need_name)` returns a handler
+       instance, or `None` if that need type is currently disabled
+       (`CATCH_ENABLED` / `PET_ENABLED` / `CHOOSE_ENABLED`) - a `None`
+       result is logged and skipped, without walking anywhere or
+       respawning. A special need never walks to the buttons first; it
+       acts from wherever the character already is.
+   - If the need actually ran (a basic click, or an enabled special
+     handler), the character respawns immediately - **before** the next
+     matched need is even looked at.
+6. `process_needs()` returns `True` if at least one need in the list
+   actually ran, `False` otherwise (e.g. every match turned out to be a
+   disabled special). A `False` return is what sends `run_full_cycle()`
+   back to waiting and re-checking instead of treating a no-op as
+   progress.
+
+Respawning between every individual need - rather than once per cycle - is
+what keeps `walk_to_buttons()` reliable when multiple needs are detected
+together: it always starts from the same known respawn point, instead of
+compounding an extra walk from wherever the previous need left the
+character standing.
 
 ## Code structure, top to bottom
 
@@ -295,17 +301,27 @@ knowing if you're modifying it:
   same path back to a usable UI. `[STOP]` is deliberately excluded from
   `action_buttons`, since it must stay clickable while something is
   running.
-- **The main row** (start/loop/stop) uses fixed-pixel-size `Frame`
-  containers with `pack_propagate(False)` for the two square buttons,
+- **The main row** (start/loop/stop) gives all three buttons their own
+  fixed-pixel-**height** `Frame` container (`pack_propagate(False)`),
   rather than relying on `Button`'s own `width`/`height` (character
-  units) - those scale inconsistently across different font sizes, which
-  is why they used to look mismatched. The center button has no fixed
-  size of its own; it stretches to match whatever height the two fixed
-  containers establish.
+  units) - those scale inconsistently across different font sizes, and an
+  unconstrained button's natural height grows with its font, which is
+  what broke the row's alignment the first two times a font size changed.
+  The two side containers fix both width and height (making them equal
+  squares); the center container fixes only height and otherwise expands
+  (`fill=tk.X, expand=True`) to fill the remaining width. Fixing height on
+  all three individually, rather than letting the center one inherit it
+  from its siblings, is what keeps the row aligned regardless of any
+  future font size change to any one of them.
+- Every button in that row (and the "1" badge below) is created with
+  `bd=0, highlightthickness=0` - Tk's default border/focus-ring rendering
+  can otherwise show a faint seam where a flat `Label` overlaps a
+  beveled `Button`, even when their fill colors match exactly.
 - **The "1" badge** on the single-cycle button is a separate `Label`
   layered on top of the icon via `place()` (not a second line of button
-  text), with a background matching the button's own color so there's no
-  visible box around it. Clicking the badge calls `btn_start.invoke()`,
+  text), with a background matching the button's own color and no border
+  of its own, so there's no visible box around it - just the digit,
+  centered on the icon. Clicking the badge calls `btn_start.invoke()`,
   which triggers the button's command *and* respects its current
   enabled/disabled state - no separate state tracking needed for the
   overlay.

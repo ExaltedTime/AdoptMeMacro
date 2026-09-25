@@ -56,7 +56,7 @@ squares on the left and right, and a wide button filling the center.
 | Button | What it does |
 |---|---|
 | 🔄 with a small **1** overlaid (left square, green) | Waits for a need to appear (checking every few seconds), then handles it, once. |
-| 🔄 (center, wide, blue) | Same as the button above, but repeats continuously until stopped - respawning once up front, then again every time a need is resolved. |
+| 🔄 (center, wide, blue) | Same as the button above, but repeats continuously until stopped - respawning once up front, then again after every single need it resolves. |
 | ■ (right square, red) | Signals whatever is currently running to stop as soon as it safely can. Always clickable, even mid-action. |
 | **Respawn** (purple) | Runs just the respawn sequence (Esc, R, Enter) on its own. |
 | **[TEST] Catch / Pet / Ride / Choose** | Runs that one need handler directly, bypassing icon detection - useful for tuning a handler without waiting for its icon to appear naturally. |

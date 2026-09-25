@@ -887,15 +887,16 @@ def get_special_need_handler(need_name):
     return RideNeedHandler()  # only "ride" remains
 
 def process_needs():
-    """Detect needs on screen and handle them. Basic needs (hungry, thirsty,
-    dirty, potty, sleepy, or any other need with no dedicated handler) are
-    handled in place: walk to the buttons once, then click each one that
-    matched. Needs with dedicated logic (catch, pet, choose, ride, walk) are
-    handled by their own handler instead - and only these walk anywhere
-    first; basic needs never require it. Either way, the character respawns
-    once afterward. Returns True if anything was actually resolved this
-    check, False if there was nothing to do - including when every matched
-    need turned out to be a disabled special (see get_special_need_handler())."""
+    """Detect needs on screen and resolve them one at a time: for each
+    matched need, walk to the buttons first only if it's a basic one
+    (hungry/thirsty/dirty/potty/sleepy, or any other need with no dedicated
+    handler - see is_basic_need()); otherwise its own handler runs directly
+    (catch, pet, choose, ride, walk). Either way, the character respawns
+    immediately after that single need is resolved, before moving on to the
+    next matched need - never batched. Returns True if anything was
+    actually resolved this check, False if there was nothing to do -
+    including when every matched need turned out to be a disabled special
+    (see get_special_need_handler())."""
     if not focus_roblox_click():
         return False
 
@@ -906,7 +907,7 @@ def process_needs():
 
     print(f"[debug] found {len(found_icons)} icon(s)")
 
-    basic_needs, special_needs = [], []
+    matched_needs = []
     for idx, (cx, cy, radius) in enumerate(found_icons):
         check_running()
 
@@ -924,35 +925,29 @@ def process_needs():
 
         need_name = base_need_name(matched_need)
         print(f"\n[!] MATCHED: {need_name} (score: {score:.4f})")
-        if is_basic_need(need_name):
-            basic_needs.append(need_name)
-        else:
-            special_needs.append(need_name)
+        matched_needs.append(need_name)
 
-    if not basic_needs and not special_needs:
+    if not matched_needs:
         return False
 
     resolved = False
 
-    if basic_needs:
-        walk_to_buttons()
-        refresh_button_mapping()
-        for need_name in basic_needs:
-            check_running()
-            click_basic_need_button(need_name)
-        resolved = True
-
-    for need_name in special_needs:
+    for need_name in matched_needs:
         check_running()
-        handler = get_special_need_handler(need_name)
-        if handler is None:
-            print(f"[debug] {need_name} is disabled, skipping")
-            continue
-        handler.handle()
-        resolved = True
 
-    if resolved:
+        if is_basic_need(need_name):
+            walk_to_buttons()
+            refresh_button_mapping()
+            click_basic_need_button(need_name)
+        else:
+            handler = get_special_need_handler(need_name)
+            if handler is None:
+                print(f"[debug] {need_name} is disabled, skipping")
+                continue
+            handler.handle()
+
         respawn_character()
+        resolved = True
 
     return resolved
 
@@ -1069,12 +1064,6 @@ class AdoptMeGUI:
         disable/re-enable all of them together as a group. The [STOP] button
         is deliberately excluded - it must stay clickable while something
         is running, since that's the whole point of it."""
-        # Title bar
-        title = tk.Frame(self.root, bg=self.accent, height=40)
-        title.pack(fill=tk.X)
-        title.pack_propagate(False)
-        tk.Label(title, text="ADOPT ME MACRO", font=("Courier", 11, "bold"), bg=self.accent, fg=self.fg).pack(pady=8)
-
         # Main buttons
         btn_frame = tk.Frame(self.root, bg=self.bg)
         btn_frame.pack(fill=tk.BOTH, expand=False, padx=8, pady=8)
@@ -1083,13 +1072,16 @@ class AdoptMeGUI:
 
         # One row: [START] (single cycle, square) on the left, [LOOP] (continuous
         # workflow) expanding to fill the center, [STOP] (square) on the right.
-        # The two square buttons sit in a fixed-pixel-size container
-        # (pack_propagate(False)) so they're identically sized regardless of
-        # font metrics - a Button's own width/height (character units) don't
-        # scale consistently across font sizes. The center button has no
-        # fixed size of its own; it stretches to match the row height these
-        # containers establish.
+        # All three sit in their own fixed-HEIGHT container (pack_propagate(False))
+        # so they're always the same height regardless of font metrics - a
+        # Button's own width/height (character units) don't scale consistently
+        # across font sizes, and an unconstrained button's natural height grows
+        # with its font size, which is what broke this row last time the icon
+        # font got bigger. The two side containers also fix their WIDTH (making
+        # them equal squares); the center container only fixes height and
+        # otherwise expands to fill the remaining width.
         SQUARE_BUTTON_SIZE = 44  # px, short and square
+        NO_BORDER = dict(bd=0, highlightthickness=0)  # flat edges, no default Tk bevel/focus ring
 
         main_row = tk.Frame(btn_frame, bg=self.bg)
         main_row.pack(fill=tk.X, pady=4)
@@ -1101,19 +1093,21 @@ class AdoptMeGUI:
         START_BUTTON_COLOR = "#2ecc71"
 
         btn_start = tk.Button(start_container, text="\U0001F504", command=self.run_workflow,
-                               font=("Courier", 20, "bold"), bg=START_BUTTON_COLOR, fg=self.fg, cursor="hand2")
+                               font=("Courier", 20, "bold"), bg=START_BUTTON_COLOR, fg=self.fg,
+                               cursor="hand2", **NO_BORDER)
         btn_start.pack(fill=tk.BOTH, expand=True)
         self.action_buttons.append(btn_start)
 
         # The "1" (single-cycle) badge is a separate Label layered directly
         # on top of the icon via place(), rather than a second line of
         # button text, so the button itself can stay square and short. Its
-        # background matches the button's own color (no contrasting box
-        # around it) and it sits centered on the icon. Clicking the badge
-        # forwards to the real button via invoke(), which already respects
-        # the button's enabled/disabled state - no separate state tracking needed.
+        # background matches the button's own color and it has no border of
+        # its own, so there's no visible box around it - just the digit,
+        # sitting centered on the icon. Clicking the badge forwards to the
+        # real button via invoke(), which already respects the button's
+        # enabled/disabled state - no separate state tracking needed.
         start_badge = tk.Label(start_container, text="1", font=("Courier", 8, "bold"),
-                                bg=START_BUTTON_COLOR, fg=self.fg, cursor="hand2")
+                                bg=START_BUTTON_COLOR, fg=self.fg, cursor="hand2", **NO_BORDER)
         start_badge.place(relx=0.5, rely=0.5, anchor="center")
         start_badge.bind("<Button-1>", lambda e: btn_start.invoke())
 
@@ -1123,12 +1117,18 @@ class AdoptMeGUI:
         stop_container.pack_propagate(False)
 
         self.btn_stop = tk.Button(stop_container, text="■", command=self.stop,
-                                   font=("Courier", 16, "bold"), bg="#d62828", fg=self.fg, cursor="hand2")
+                                   font=("Courier", 16, "bold"), bg="#d62828", fg=self.fg,
+                                   cursor="hand2", **NO_BORDER)
         self.btn_stop.pack(fill=tk.BOTH, expand=True)
 
-        btn_loop = tk.Button(main_row, text="\U0001F504", command=self.run_workflow_loop,
-                              font=("Courier", 20, "bold"), bg="#2980b9", fg=self.fg, cursor="hand2")
-        btn_loop.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        loop_container = tk.Frame(main_row, height=SQUARE_BUTTON_SIZE, bg=self.bg)
+        loop_container.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        loop_container.pack_propagate(False)
+
+        btn_loop = tk.Button(loop_container, text="\U0001F504", command=self.run_workflow_loop,
+                              font=("Courier", 20, "bold"), bg="#2980b9", fg=self.fg,
+                              cursor="hand2", **NO_BORDER)
+        btn_loop.pack(fill=tk.BOTH, expand=True)
         self.action_buttons.append(btn_loop)
 
         tk.Frame(btn_frame, bg=self.accent, height=2).pack(fill=tk.X, pady=4)

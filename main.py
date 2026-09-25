@@ -877,7 +877,7 @@ SPECIAL_NEED_NAMES = {"catch", "pet", "choose", "ride"}
 def is_basic_need(need_name):
     """A basic need has no dedicated handler - it's satisfied by walking to
     the action buttons and clicking the one matching its name."""
-    return not need_name.startswith("walk") and need_name not in SPECIAL_NEED_NAMES
+    return need_name in BUTTON_NAMES
 
 def get_special_need_handler(need_name):
     """Return the handler for a need with dedicated logic. Only call this
@@ -891,7 +891,8 @@ def get_special_need_handler(need_name):
         return PetNeedHandler() if PET_ENABLED else None
     if need_name == "choose":
         return ChooseNeedHandler() if CHOOSE_ENABLED else None
-    return RideNeedHandler()  # only "ride" remains
+    if need_name == 'ride':
+        RideNeedHandler()
 
 def process_needs():
     """Detect needs on screen and resolve them one at a time: for each

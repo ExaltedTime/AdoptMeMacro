@@ -1,21 +1,14 @@
 # Adopt Me Macro
+A very much vibe-coded attempt at automating the needs of an Adopt Me pet.
 
-Watches Roblox's **Adopt Me** for pet-care need icons and automates the
-click or mini-game that satisfies each one, via a small `tkinter` GUI.
-Everything lives in `main.py`.
-
-## Setup
-
-- Windows, Python 3.9+, Roblox running with Adopt Me open
-- `pip install numpy opencv-python mss pyautogui pydirectinput pygetwindow`
-
-## Run
-
-```bash
+## Running the script
+After navigating to the working directory, run
+```
 python main.py
 ```
+Requires Windows, python and a lot of adjustments, since button placements are hard-coded right now.
 
 ## Docs
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - how the code works
-- [ROADMAP.md](ROADMAP.md) - what's planned next
+- [docs/PLANNED.md](docs/PLANNED.md) - what's being worked on

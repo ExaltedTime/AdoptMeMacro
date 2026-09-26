@@ -47,6 +47,8 @@ FOCUS_WINDOW_ON_ACTION = True  # click the Roblox window to focus it before acti
 CATCH_ENABLED = True           # catch need handler is live (set to False to disable)
 PET_ENABLED = False            # disable pet need handler (set to True to re-enable)
 CHOOSE_ENABLED = False         # disable choose need handler (set to True to re-enable)
+SAVE_NEW_NEEDS = False
+MATCH_ONLY_TOP_HALF = True
 
 # Timing (seconds)
 RESPAWN_KEY_DURATION = 0.05    # how long each respawn key is held
@@ -57,7 +59,7 @@ WALK_STEP_GAP = 0.1            # pause between steps in the alternating walk pat
 WALK_TOTAL_DURATION = 20.0     # total duration to keep walking back and forth
 UI_SETTLE = 0.5                # generic pause for UI to catch up
 FOCUS_DELAY = 0.3              # pause after focusing the window
-FOCUS_CLICK_SETTLE_DELAY = 0.2 # pause after the window-focus click
+FOCUS_CLICK_SETTLE_DELAY = 0.1 # pause after the window-focus click
 CLICK_MOVE_DURATION = 0.3      # mouse travel time for an ordinary click
 CLICK_SETTLE_DELAY = 0.2       # pause after moving the mouse, before clicking
 POST_CLICK_DELAY = 0.4         # pause after each click
@@ -71,7 +73,7 @@ CATCH_WAIT_AFTER_EQUIP = 2.0   # wait after equipping toy before throwing
 CATCH_EMOTE_DELAY = 10.0       # delay between throw clicks
 CATCH_CLICK_DELAY = 0.5        # delay between catch sequence clicks
 CATCH_THROW_COUNT = 3          # number of times the toy is thrown
-CATCH_SCROLL_AMOUNT = 5        # mouse wheel notches scrolled up before each throw
+CATCH_SCROLL_TIME = 3        # mouse wheel notches scrolled up before each throw
 PET_CIRCLE_DURATION = 10.0     # how long to make circles with mouse
 PET_CIRCLE_RADIUS = 100                # radius (px) of the circle traced around screen center
 PET_CIRCLE_START_MOVE_DURATION = 0.1   # time to move to the circle's starting point
@@ -300,9 +302,18 @@ def preprocess_icon(icon_img):
     return binary
 
 def compare_icons(icon1, icon2):
-    """Return a 0-1 similarity score between two icon images."""
+    """Return a 0-1 similarity score between two icon images.
+    If MATCH_ONLY_TOP_HALF is True, only compares the top half of the images.
+    """
     proc1 = cv2.resize(preprocess_icon(icon1), ICON_COMPARE_SIZE)
     proc2 = cv2.resize(preprocess_icon(icon2), ICON_COMPARE_SIZE)
+
+    # If MATCH_ONLY_TOP_HALF flag is set, crop to top half
+    if globals().get('MATCH_ONLY_TOP_HALF', False):
+        height = proc1.shape[0]
+        top_half = height // 2
+        proc1 = proc1[:top_half, :]
+        proc2 = proc2[:top_half, :]
 
     mse = np.mean((proc1.astype(float) - proc2.astype(float)) ** 2)
     mse_sim = 1.0 - (mse / (255 ** 2))
@@ -570,6 +581,7 @@ def refresh_button_mapping():
     positions = detect_buttons(save_debug=True)
     if not positions:
         print("[!] ERROR: No buttons detected!")
+        respawn_character()
         return False
 
     print(f"\n[!] DETECTED {len(positions)} BUTTON(S)")
@@ -724,10 +736,14 @@ class CatchNeedHandler(NeedHandler):
         print(f"[debug] waiting {CATCH_WAIT_AFTER_EQUIP}s before throwing...")
         wait_interruptible(CATCH_WAIT_AFTER_EQUIP)
 
-        # Scroll up then click empty space to throw, with a delay between throws
+        # Zoom in, to avoid focusing the pet on toy throw
+        pydirectinput.keyDown('i')
+        time.sleep(CATCH_SCROLL_TIME)
+        pydirectinput.keyUp('i')
+        
+        # Click empty space to throw, with a delay between throws
         for i in range(CATCH_THROW_COUNT):
             print(f"[debug] throw {i + 1}/{CATCH_THROW_COUNT}...")
-            scroll_wheel_up(*EMPTY_POS, CATCH_SCROLL_AMOUNT)
             simple_click(*EMPTY_POS)
             wait_interruptible(CATCH_EMOTE_DELAY)
 
@@ -758,6 +774,8 @@ class PetNeedHandler(NeedHandler):
         # button goes down already on the circle rather than jumping to it.
         pyautogui.moveTo(SCREEN_CENTER_X + PET_CIRCLE_RADIUS, SCREEN_CENTER_Y,
                           duration=PET_CIRCLE_START_MOVE_DURATION)
+        jitter_click(SCREEN_CENTEX_X, SCREEN_CENTER_Y)
+        '''
         pydirectinput.mouseDown()
         try:
             start_time = time.time()
@@ -773,6 +791,7 @@ class PetNeedHandler(NeedHandler):
             # Always release, even if StopRequested fires mid-circle -
             # otherwise the mouse button stays stuck held down in the game.
             pydirectinput.mouseUp()
+        '''
 
         print("[!] Pet complete!")
         return True
@@ -892,7 +911,7 @@ def get_special_need_handler(need_name):
     if need_name == "choose":
         return ChooseNeedHandler() if CHOOSE_ENABLED else None
     if need_name == 'ride':
-        RideNeedHandler()
+        return RideNeedHandler()
 
 def process_needs():
     """Detect needs on screen and resolve them one at a time: for each
@@ -925,12 +944,13 @@ def process_needs():
         matched_need, score = find_matching_need(icon_img)
 
         if not matched_need:
-            print(f"\n[!] NEW NEED (best score: {score:.4f})")
-            # prompt_rename_need() already saves the reference icon into
-            # NEEDS_DIR - that .png file is the only record needed for this
-            # need to be recognized next time, so there's nothing further to
-            # persist here.
-            prompt_rename_need(icon_img, idx)
+            if SAVE_NEW_NEEDS:
+                print(f"\n[!] NEW NEED (best score: {score:.4f})")
+                # prompt_rename_need() already saves the reference icon into
+                # NEEDS_DIR - that .png file is the only record needed for this
+                # need to be recognized next time, so there's nothing further to
+                # persist here.
+                prompt_rename_need(icon_img, idx)
             continue
 
         need_name = base_need_name(matched_need)

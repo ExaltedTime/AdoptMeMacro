@@ -45,7 +45,7 @@ SCREEN_CENTER_X, SCREEN_CENTER_Y = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2
 # Behavior flags
 FOCUS_WINDOW_ON_ACTION = True  # click the Roblox window to focus it before acting
 CATCH_ENABLED = True           # catch need handler is live (set to False to disable)
-PET_ENABLED = False            # disable pet need handler (set to True to re-enable)
+PET_ENABLED = True            # disable pet need handler (set to True to re-enable)
 CHOOSE_ENABLED = False         # disable choose need handler (set to True to re-enable)
 SAVE_NEW_NEEDS = False
 MATCH_ONLY_TOP_HALF = True
@@ -56,7 +56,7 @@ RESPAWN_WAIT = 4.0             # settle time after respawning, before it's usabl
 WALK_TO_BUTTONS_DURATION = 0.8 # time spent walking forward to reach the action buttons
 WALK_ALTERNATING_STEP = 1.0    # duration of each a/d press in alternating walk pattern
 WALK_STEP_GAP = 0.1            # pause between steps in the alternating walk pattern
-WALK_TOTAL_DURATION = 20.0     # total duration to keep walking back and forth
+WALK_TOTAL_DURATION = 35.0     # total duration to keep walking back and forth
 UI_SETTLE = 0.5                # generic pause for UI to catch up
 FOCUS_DELAY = 0.3              # pause after focusing the window
 FOCUS_CLICK_SETTLE_DELAY = 0.1 # pause after the window-focus click
@@ -756,7 +756,7 @@ class CatchNeedHandler(NeedHandler):
 
 class PetNeedHandler(NeedHandler):
     """The 'pet' need: click to focus the pet, then hold the mouse button
-    down and move it in a circle around the middle of the screen."""
+    down and move it up and down from the center of the screen."""
 
     def handle(self):
         print("[!] PET NEED")
@@ -766,33 +766,32 @@ class PetNeedHandler(NeedHandler):
         print("[debug] focusing pet...")
         jitter_click(*FOCUS_PET_POS)
         wait_interruptible(UI_SETTLE)
-
-        # Hold the mouse button down and trace a circle around the middle of the screen
-        print(f"[debug] holding mouse and circling for {PET_CIRCLE_DURATION}s...")
-
-        # Move to the circle's starting point before pressing down, so the
-        # button goes down already on the circle rather than jumping to it.
-        pyautogui.moveTo(SCREEN_CENTER_X + PET_CIRCLE_RADIUS, SCREEN_CENTER_Y,
-                          duration=PET_CIRCLE_START_MOVE_DURATION)
-        jitter_click(SCREEN_CENTEX_X, SCREEN_CENTER_Y)
-        '''
+        print(f"[debug] attempting to pet for {PET_CIRCLE_DURATION}s...")
+        # Move to starting position before pressing down
+        pydirectinput.moveTo(SCREEN_CENTER_X, SCREEN_CENTER_Y - PET_CIRCLE_RADIUS)
+        time.sleep(0.1)
+        # Click the center to focus
+        jitter_click(SCREEN_CENTER_X, SCREEN_CENTER_Y)
+        time.sleep(0.1)
+        # Hold down and move with incremental steps (much more reliable for games)
         pydirectinput.mouseDown()
         try:
             start_time = time.time()
-            elapsed = 0.0
-            while elapsed < PET_CIRCLE_DURATION:
-                check_running()  # inside a manual loop, not wait_interruptible - check explicitly
-                angle = (elapsed / PET_CIRCLE_DURATION) * 2 * np.pi
-                x = int(SCREEN_CENTER_X + PET_CIRCLE_RADIUS * np.cos(angle))
-                y = int(SCREEN_CENTER_Y + PET_CIRCLE_RADIUS * np.sin(angle))
-                pyautogui.moveTo(x, y, duration=PET_CIRCLE_STEP_MOVE_DURATION)
+            while True:
+                check_running()
                 elapsed = time.time() - start_time
+                if elapsed >= PET_CIRCLE_DURATION:
+                    break
+                # Move up and down in a sine wave centered on screen center
+                progress = elapsed / PET_CIRCLE_DURATION
+                angle = progress * 2 * np.pi
+                y = int(SCREEN_CENTER_Y + PET_CIRCLE_RADIUS * np.sin(angle))
+                # Use pydirectinput for better game compatibility
+                pydirectinput.moveTo(SCREEN_CENTER_X, y)
+                time.sleep(PET_CIRCLE_STEP_MOVE_DURATION)
         finally:
-            # Always release, even if StopRequested fires mid-circle -
-            # otherwise the mouse button stays stuck held down in the game.
+            # Always release, even if interrupted
             pydirectinput.mouseUp()
-        '''
-
         print("[!] Pet complete!")
         return True
 

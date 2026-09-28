@@ -49,6 +49,7 @@ PET_ENABLED = True            # disable pet need handler (set to True to re-enab
 CHOOSE_ENABLED = False         # disable choose need handler (set to True to re-enable)
 SAVE_NEW_NEEDS = False
 MATCH_ONLY_TOP_HALF = True
+PAYCHECK_RECEIVED = False      # set True once detect_paycheck() has dismissed the paycheck popup
 
 # Timing (seconds)
 RESPAWN_KEY_DURATION = 0.05    # how long each respawn key is held
@@ -99,6 +100,13 @@ FOCUS_PET_POS = (1114, 692)
 # since it's just a plain circle with no distinguishing icon. Given as (R, G, B).
 CHOOSE_BUTTON_COLOR = (181, 6, 254)
 CHOOSE_SLOW_MOVE_DURATION = 1.0  # deliberate, slow mouse travel to the found button
+
+# The paycheck popup's CASH OUT button, matched by exact color the same way
+# as CHOOSE_BUTTON_COLOR above. TODO: sample the real RGB from your own
+# screen - this is an uncalibrated placeholder and will not match yet.
+PAYCHECK_CASHOUT_COLOR = (0, 0, 0)
+PAYCHECK_DISMISS_POS_1 = (946, 767)
+PAYCHECK_DISMISS_POS_2 = (948, 625)
 
 # Ride need: positions for the backpack -> vehicles -> first vehicle -> equip
 # sequence, plus how long to hold each step.
@@ -982,6 +990,31 @@ def process_needs():
     return resolved
 
 # ============================================================================
+# PAYCHECK
+# ============================================================================
+
+def detect_paycheck():
+    """Detect the paycheck popup by its CASH OUT button's exact color and,
+    if present, dismiss it. Returns True if the popup was detected and
+    dismissed, False otherwise."""
+    global PAYCHECK_RECEIVED
+
+    img = grab_screen()
+    if find_exact_color(img, PAYCHECK_CASHOUT_COLOR) is None:
+        return False
+
+    print("[debug] paycheck popup detected, dismissing...")
+    jitter_click(*PAYCHECK_DISMISS_POS_1)
+    jitter_click(*PAYCHECK_DISMISS_POS_2)
+    PAYCHECK_RECEIVED = True
+    return True
+
+def unscrew():
+    """Runs once per cycle, right after check_stop(). Currently only checks
+    for the paycheck popup; more checks may be added here later."""
+    detect_paycheck()
+
+# ============================================================================
 # WORKFLOWS
 # ============================================================================
 
@@ -995,6 +1028,7 @@ def run_full_cycle():
         # process_needs() below is what brings Roblox to the front. Once
         # that succeeds, every wait from here on does check_running().
         check_stop()
+        unscrew()
         print("\n[debug] checking needs...")
         if process_needs():
             return

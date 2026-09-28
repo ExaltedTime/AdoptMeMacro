@@ -104,9 +104,9 @@ CHOOSE_SLOW_MOVE_DURATION = 1.0  # deliberate, slow mouse travel to the found bu
 # The paycheck popup's CASH OUT button, matched by exact color the same way
 # as CHOOSE_BUTTON_COLOR above. TODO: sample the real RGB from your own
 # screen - this is an uncalibrated placeholder and will not match yet.
-PAYCHECK_CASHOUT_COLOR = (0, 0, 0)
-PAYCHECK_DISMISS_POS_1 = (946, 767)
-PAYCHECK_DISMISS_POS_2 = (948, 625)
+PAYCHECK_CASHOUT_COLOR = (74, 198, 85)
+PAYCHECK_DISMISS_POS_1 = (946, 679)
+PAYCHECK_DISMISS_POS_2 = (948, 627)
 
 # Ride need: positions for the backpack -> vehicles -> first vehicle -> equip
 # sequence, plus how long to hold each step.
@@ -828,9 +828,41 @@ class ChooseNeedHandler(NeedHandler):
         print(f"[debug] found at {match}, moving there slowly...")
         slow_click(*match, duration=CHOOSE_SLOW_MOVE_DURATION)
         wait_interruptible(UI_SETTLE)
+        time.sleep(2)
+        jitter_click(*match)
 
+        
         print("[debug] clicking middle of screen...")
-        simple_click(SCREEN_CENTER_X, SCREEN_CENTER_Y)
+        slow_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
+        time.sleep(1)
+        pyautogui.moveTo(*EMPTY_POS, duration=CHOOSE_SLOW_MOVE_DURATION)
+        time.sleep(CLICK_SETTLE_DELAY)
+        pyautogui.moveTo(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
+        pydirectinput.click()
+        time.sleep(POST_CLICK_DELAY)
+
+        print(f"[debug] searching screen for color {CHOOSE_BUTTON_COLOR}...")
+        img = grab_screen()
+        match = find_exact_color(img, CHOOSE_BUTTON_COLOR)
+        if match is None:
+            print(f"[!] WARNING: no pixel matching {CHOOSE_BUTTON_COLOR} found on screen")
+            return False
+        print(f"[debug] found at {match}, moving there slowly...")
+        slow_click(*match, duration=CHOOSE_SLOW_MOVE_DURATION)
+        wait_interruptible(UI_SETTLE)
+        time.sleep(2)
+        jitter_click(*match)
+
+        
+        print("[debug] clicking middle of screen...")
+        slow_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
+        time.sleep(1)
+        pyautogui.moveTo(*EMPTY_POS, duration=CHOOSE_SLOW_MOVE_DURATION)
+        time.sleep(CLICK_SETTLE_DELAY)
+        pyautogui.moveTo(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
+        pydirectinput.click()
+        time.sleep(POST_CLICK_DELAY)
+        #pydirectinput.click()
 
         print("[!] Choose complete!")
         return True
@@ -1005,6 +1037,7 @@ def detect_paycheck():
 
     print("[debug] paycheck popup detected, dismissing...")
     jitter_click(*PAYCHECK_DISMISS_POS_1)
+    simple_click(*EMPTY_POS)
     jitter_click(*PAYCHECK_DISMISS_POS_2)
     PAYCHECK_RECEIVED = True
     return True

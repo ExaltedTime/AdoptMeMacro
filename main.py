@@ -53,8 +53,8 @@ CHOOSE_ENABLED = False         # disable choose need handler (set to True to re-
 SAVE_NEW_NEEDS = False
 MATCH_ONLY_TOP_HALF = True
 PAYCHECK_RECEIVED = False      # set True once detect_paycheck() has dismissed the paycheck popup
-BEACH_ENABLED = False          # disable beach need handler (set to True to enable)
-BORED_ENABLED = False          # disable bored need handler (set to True to enable)
+BEACH_ENABLED = True          # disable beach need handler (set to True to enable)
+BORED_ENABLED = True          # disable bored need handler (set to True to enable)
 
 # Timing (seconds)
 RESPAWN_KEY_DURATION = 0.05    # how long each respawn key is held
@@ -130,16 +130,16 @@ TELEPORT_CLICK_DELAY = 0.5        # pause between each step of the sequence
 TELEPORT_NURSERY_POS_1 = (817, 713)
 TELEPORT_NURSERY_POS_2 = (895, 705)
 TELEPORT_NURSERY_POS_3 = (1048, 658)
-TELEPORT_NURSERY_WAIT = 2.0       # wait after teleporting, before stepping back
+TELEPORT_NURSERY_WAIT = 5.0       # wait after teleporting, before stepping back
 TELEPORT_NURSERY_BACK_DURATION = 1.0  # how long to hold 's' afterward
 
 # Bored need: walk forward, then left, then wait it out at the nursery.
-BORED_WALK_FORWARD_DURATION = 25.0
+BORED_WALK_FORWARD_DURATION = 17.0
 BORED_WALK_LEFT_DURATION = 10.0
 BORED_WAIT_AFTER_WALK = 60.0
 
 # Beach need: walk left, then wait it out at the nursery.
-BEACH_WALK_LEFT_DURATION = 30.0
+BEACH_WALK_LEFT_DURATION = 27.0
 BEACH_WAIT_AFTER_WALK = 60.0
 
 # Window focus click (near top edge, right of center)
@@ -1026,6 +1026,7 @@ class BoredNeedHandler(NeedHandler):
         finally:
             pydirectinput.keyUp("w")
 
+        time.sleep(0.1)
         print(f"[debug] walking left for {BORED_WALK_LEFT_DURATION}s...")
         pydirectinput.keyDown("a")
         try:

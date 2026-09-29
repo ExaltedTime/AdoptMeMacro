@@ -36,6 +36,9 @@ DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
 Path(NEEDS_DIR).mkdir(exist_ok=True)
 Path(DEBUG_DIR).mkdir(exist_ok=True)
 
+RUN_LOG_PATH = os.path.join(DEBUG_DIR, "run_log.txt")      # appended to, never overwritten
+RUN_COUNTER_PATH = os.path.join(DEBUG_DIR, "run_counter.txt")  # holds the last-used run number
+
 pyautogui.FAILSAFE = True
 pydirectinput.FAILSAFE = True
 pydirectinput.PAUSE = 0.05
@@ -50,6 +53,8 @@ CHOOSE_ENABLED = False         # disable choose need handler (set to True to re-
 SAVE_NEW_NEEDS = False
 MATCH_ONLY_TOP_HALF = True
 PAYCHECK_RECEIVED = False      # set True once detect_paycheck() has dismissed the paycheck popup
+BEACH_ENABLED = False          # disable beach need handler (set to True to enable)
+BORED_ENABLED = False          # disable bored need handler (set to True to enable)
 
 # Timing (seconds)
 RESPAWN_KEY_DURATION = 0.05    # how long each respawn key is held
@@ -117,6 +122,25 @@ RIDE_VEHICLES_POS = (816, 804)
 RIDE_FIRST_VEHICLE_POS = (976, 708)
 RIDE_EQUIP_POS = (1062, 814)
 RIDE_WALK_DURATION = 40.0      # total time spent walking back and forth while riding
+
+# Teleport-to-nursery sequence, shared by the bored and beach need handlers:
+# open backpack -> category -> nursery -> teleport, then step back briefly
+# to clear the landing spot.
+TELEPORT_CLICK_DELAY = 0.5        # pause between each step of the sequence
+TELEPORT_NURSERY_POS_1 = (817, 713)
+TELEPORT_NURSERY_POS_2 = (895, 705)
+TELEPORT_NURSERY_POS_3 = (1048, 658)
+TELEPORT_NURSERY_WAIT = 2.0       # wait after teleporting, before stepping back
+TELEPORT_NURSERY_BACK_DURATION = 1.0  # how long to hold 's' afterward
+
+# Bored need: walk forward, then left, then wait it out at the nursery.
+BORED_WALK_FORWARD_DURATION = 25.0
+BORED_WALK_LEFT_DURATION = 10.0
+BORED_WAIT_AFTER_WALK = 60.0
+
+# Beach need: walk left, then wait it out at the nursery.
+BEACH_WALK_LEFT_DURATION = 30.0
+BEACH_WAIT_AFTER_WALK = 60.0
 
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75
@@ -296,6 +320,37 @@ def find_exact_color(img, rgb):
 # nothing gained from saving it to disk since it's never trusted across a
 # run anyway (screen layout can change between sessions).
 BUTTON_POSITIONS = {}
+
+# The run number of the currently executing workflow (run_workflow() or
+# run_workflow_loop()), set by next_run_number() at the start of each. Every
+# log_run_event() call tags its line with this, so entries from different
+# runs can be told apart in the shared RUN_LOG_PATH file.
+CURRENT_RUN_NUMBER = None
+
+# ============================================================================
+# LOGGING
+# ============================================================================
+
+def next_run_number():
+    """Return a fresh run number, persisted in RUN_COUNTER_PATH so numbers
+    stay unique across separate launches of the script, not just within one
+    session."""
+    try:
+        with open(RUN_COUNTER_PATH, "r") as f:
+            n = int(f.read().strip())
+    except (FileNotFoundError, ValueError):
+        n = 0
+    n += 1
+    with open(RUN_COUNTER_PATH, "w") as f:
+        f.write(str(n))
+    return n
+
+def log_run_event(message):
+    """Append one timestamped line to RUN_LOG_PATH, tagged with
+    CURRENT_RUN_NUMBER."""
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    with open(RUN_LOG_PATH, "a") as f:
+        f.write(f"[{timestamp}] [RUN {CURRENT_RUN_NUMBER}] {message}\n")
 
 # ============================================================================
 # ICON PROCESSING
@@ -895,10 +950,94 @@ class RideNeedHandler(NeedHandler):
         print("[!] Ride complete!")
         return True
 
+def teleport_to_nursery():
+    """Open the backpack and teleport to the nursery, then step back briefly
+    to clear the landing spot. Shared first step of BoredNeedHandler and
+    BeachNeedHandler below."""
+    print("[debug] opening backpack...")
+    pydirectinput.press('b')
+    wait_interruptible(TELEPORT_CLICK_DELAY)
+
+    print("[debug] navigating to nursery...")
+    jitter_click(*TELEPORT_NURSERY_POS_1)
+    wait_interruptible(TELEPORT_CLICK_DELAY)
+    jitter_click(*TELEPORT_NURSERY_POS_2)
+    wait_interruptible(TELEPORT_CLICK_DELAY)
+    jitter_click(*TELEPORT_NURSERY_POS_3)
+    wait_interruptible(TELEPORT_NURSERY_WAIT)
+
+    print("[debug] stepping back...")
+    pydirectinput.keyDown("s")
+    try:
+        wait_interruptible(TELEPORT_NURSERY_BACK_DURATION)
+    finally:
+        # Always release, even if StopRequested fires mid-step - otherwise
+        # "s" stays stuck held down in the game.
+        pydirectinput.keyUp("s")
+
+class BoredNeedHandler(NeedHandler):
+    """The 'bored' need: teleport to the nursery, walk forward then left for
+    a while, wait it out, then respawn (since, unlike every other special
+    need, this one leaves the character somewhere else on the map)."""
+
+    def handle(self):
+        print("[!] BORED NEED")
+        if not focus_roblox():
+            return False
+
+        teleport_to_nursery()
+
+        print(f"[debug] walking forward for {BORED_WALK_FORWARD_DURATION}s...")
+        pydirectinput.keyDown("w")
+        try:
+            wait_interruptible(BORED_WALK_FORWARD_DURATION)
+        finally:
+            pydirectinput.keyUp("w")
+
+        print(f"[debug] walking left for {BORED_WALK_LEFT_DURATION}s...")
+        pydirectinput.keyDown("a")
+        try:
+            wait_interruptible(BORED_WALK_LEFT_DURATION)
+        finally:
+            pydirectinput.keyUp("a")
+
+        print(f"[debug] waiting {BORED_WAIT_AFTER_WALK}s...")
+        wait_interruptible(BORED_WAIT_AFTER_WALK)
+
+        respawn_character()
+        print("[!] Bored complete!")
+        return True
+
+class BeachNeedHandler(NeedHandler):
+    """The 'beach' need: teleport to the nursery, walk left for a while,
+    wait it out, then respawn (since, unlike every other special need, this
+    one leaves the character somewhere else on the map)."""
+
+    def handle(self):
+        print("[!] BEACH NEED")
+        if not focus_roblox():
+            return False
+
+        teleport_to_nursery()
+
+        print(f"[debug] walking left for {BEACH_WALK_LEFT_DURATION}s...")
+        pydirectinput.keyDown("a")
+        try:
+            wait_interruptible(BEACH_WALK_LEFT_DURATION)
+        finally:
+            pydirectinput.keyUp("a")
+
+        print(f"[debug] waiting {BEACH_WAIT_AFTER_WALK}s...")
+        wait_interruptible(BEACH_WAIT_AFTER_WALK)
+
+        respawn_character()
+        print("[!] Beach complete!")
+        return True
+
 # Need names with dedicated handler logic above, rather than being a basic
 # at-home button click. "walk"/"walk2"/etc. are matched by prefix instead of
 # being listed here - see is_basic_need() / get_special_need_handler().
-SPECIAL_NEED_NAMES = {"catch", "pet", "choose", "ride"}
+SPECIAL_NEED_NAMES = {"catch", "pet", "choose", "ride", "bored", "beach"}
 
 def is_basic_need(need_name):
     """A basic need has no dedicated handler - it's satisfied by walking to
@@ -919,6 +1058,10 @@ def get_special_need_handler(need_name):
         return ChooseNeedHandler() if CHOOSE_ENABLED else None
     if need_name == 'ride':
         return RideNeedHandler()
+    if need_name == "bored":
+        return BoredNeedHandler() if BORED_ENABLED else None
+    if need_name == "beach":
+        return BeachNeedHandler() if BEACH_ENABLED else None
 
 def process_needs():
     """Detect needs on screen and resolve them one at a time: for each
@@ -963,6 +1106,8 @@ def process_needs():
         need_name = base_need_name(matched_need)
         print(f"\n[!] MATCHED: {need_name} (score: {score:.4f})")
         matched_needs.append(need_name)
+
+    log_run_event(f"detected: {', '.join(matched_needs) if matched_needs else 'none matched'}")
 
     if not matched_needs:
         return False
@@ -1037,12 +1182,15 @@ def run_full_cycle():
 
 def run_workflow():
     """Run a single cycle: wait for a need to appear, then handle it."""
-    global STOP_FLAG
+    global STOP_FLAG, CURRENT_RUN_NUMBER
     STOP_FLAG = False
+    CURRENT_RUN_NUMBER = next_run_number()
+    log_run_event("WORKFLOW started")
     print("\n" + "=" * 50)
-    print("[WORKFLOW] Starting")
+    print(f"[WORKFLOW] Starting (run {CURRENT_RUN_NUMBER})")
     print("=" * 50)
     run_full_cycle()
+    log_run_event("WORKFLOW done")
     print("\n[WORKFLOW] Done\n")
 
 def run_workflow_loop():
@@ -1052,10 +1200,12 @@ def run_workflow_loop():
     propagate on up to run_async()'s worker (via the bare `finally`, not
     `except`) so the GUI still reports [STOPPED] correctly; the finally
     just prints locally first."""
-    global STOP_FLAG
+    global STOP_FLAG, CURRENT_RUN_NUMBER
     STOP_FLAG = False
+    CURRENT_RUN_NUMBER = next_run_number()
+    log_run_event("LOOP started")
     print("\n" + "=" * 50)
-    print("[LOOP] Starting continuous workflow")
+    print(f"[LOOP] Starting continuous workflow (run {CURRENT_RUN_NUMBER})")
     print("=" * 50)
 
     # Respawn once up front so the loop always starts from a known state,
@@ -1070,6 +1220,7 @@ def run_workflow_loop():
             run_full_cycle()
             wait_interruptible(LOOP_DELAY)
     finally:
+        log_run_event("LOOP stopped")
         print("\n[LOOP] Stopped\n")
 
 # ============================================================================
@@ -1197,27 +1348,22 @@ class AdoptMeGUI:
         tk.Frame(btn_frame, bg=self.accent, height=1).pack(fill=tk.X, pady=2)
         tk.Label(btn_frame, text="Tests", font=("Courier", 9, "bold"), bg=self.bg, fg=self.accent).pack(anchor=tk.W)
 
-        btn_test_catch = tk.Button(btn_frame, text="[TEST] Catch", command=self.test_catch,
-                                    font=("Courier", 9), bg="#e74c3c", fg=self.fg, height=1, cursor="hand2")
-        btn_test_catch.pack(fill=tk.X, pady=2)
-        self.action_buttons.append(btn_test_catch)
-
-        # Pet stays behind PET_ENABLED, so this is its only way to run
-        # outside of the [TEST] button being pressed directly.
-        btn_test_pet = tk.Button(btn_frame, text="[TEST] Pet", command=self.test_pet,
-                                  font=("Courier", 9), bg="#e74c3c", fg=self.fg, height=1, cursor="hand2")
-        btn_test_pet.pack(fill=tk.X, pady=2)
-        self.action_buttons.append(btn_test_pet)
-
-        btn_test_ride = tk.Button(btn_frame, text="[TEST] Ride", command=self.test_ride,
-                                   font=("Courier", 9), bg="#e74c3c", fg=self.fg, height=1, cursor="hand2")
-        btn_test_ride.pack(fill=tk.X, pady=2)
-        self.action_buttons.append(btn_test_ride)
-
         btn_test_choose = tk.Button(btn_frame, text="[TEST] Choose", command=self.test_choose,
                                      font=("Courier", 9), bg="#e74c3c", fg=self.fg, height=1, cursor="hand2")
         btn_test_choose.pack(fill=tk.X, pady=2)
         self.action_buttons.append(btn_test_choose)
+
+        # Bored/beach stay behind their _ENABLED flags, so these are their
+        # only way to run outside of automatic need processing, same as choose.
+        btn_test_bored = tk.Button(btn_frame, text="[TEST] Bored", command=self.test_bored,
+                                    font=("Courier", 9), bg="#e74c3c", fg=self.fg, height=1, cursor="hand2")
+        btn_test_bored.pack(fill=tk.X, pady=2)
+        self.action_buttons.append(btn_test_bored)
+
+        btn_test_beach = tk.Button(btn_frame, text="[TEST] Beach", command=self.test_beach,
+                                    font=("Courier", 9), bg="#e74c3c", fg=self.fg, height=1, cursor="hand2")
+        btn_test_beach.pack(fill=tk.X, pady=2)
+        self.action_buttons.append(btn_test_beach)
 
         # Debug console
         debug_frame = tk.Frame(self.root, bg=self.bg)
@@ -1304,36 +1450,6 @@ class AdoptMeGUI:
     def run_workflow_loop(self):
         self.run_async(run_workflow_loop)
 
-    def test_catch(self):
-        """Run the catch handler on its own, outside the normal need-detection
-        flow - useful for testing it in isolation without waiting for a catch
-        icon to actually appear on screen."""
-        def test():
-            print("\n[TEST] Running catch handler...")
-            CatchNeedHandler().handle()
-            print("[TEST] Catch handler complete\n")
-        self.run_async(test)
-
-    def test_pet(self):
-        """Run the pet handler on its own, outside the normal need-detection
-        flow. Useful while PET_ENABLED = False, since the handler is fully
-        working code that's just not wired into automatic need processing yet."""
-        def test():
-            print("\n[TEST] Running pet handler...")
-            PetNeedHandler().handle()
-            print("[TEST] Pet handler complete\n")
-        self.run_async(test)
-
-    def test_ride(self):
-        """Run the ride handler on its own, outside the normal need-detection
-        flow - useful for testing it in isolation without waiting for a ride
-        icon to actually appear on screen."""
-        def test():
-            print("\n[TEST] Running ride handler...")
-            RideNeedHandler().handle()
-            print("[TEST] Ride handler complete\n")
-        self.run_async(test)
-
     def test_choose(self):
         """Run the choose handler on its own, outside the normal need-detection
         flow. Useful while CHOOSE_ENABLED = False, since the handler is fully
@@ -1342,6 +1458,26 @@ class AdoptMeGUI:
             print("\n[TEST] Running choose handler...")
             ChooseNeedHandler().handle()
             print("[TEST] Choose handler complete\n")
+        self.run_async(test)
+
+    def test_bored(self):
+        """Run the bored handler on its own, outside the normal need-detection
+        flow. Useful while BORED_ENABLED = False, since the handler is fully
+        working code that's just not wired into automatic need processing yet."""
+        def test():
+            print("\n[TEST] Running bored handler...")
+            BoredNeedHandler().handle()
+            print("[TEST] Bored handler complete\n")
+        self.run_async(test)
+
+    def test_beach(self):
+        """Run the beach handler on its own, outside the normal need-detection
+        flow. Useful while BEACH_ENABLED = False, since the handler is fully
+        working code that's just not wired into automatic need processing yet."""
+        def test():
+            print("\n[TEST] Running beach handler...")
+            BeachNeedHandler().handle()
+            print("[TEST] Beach handler complete\n")
         self.run_async(test)
 
     def stop(self):

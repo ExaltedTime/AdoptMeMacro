@@ -53,7 +53,7 @@ CHOOSE_ENABLED = False         # disable choose need handler (set to True to re-
 SAVE_NEW_NEEDS = False
 MATCH_ONLY_TOP_HALF = True
 PAYCHECK_RECEIVED = False      # set True once detect_paycheck() has dismissed the paycheck popup
-CAFE_ENABLED = False           # disable cafe need handler (set to True to enable)
+CAFE_ENABLED = True           # disable cafe need handler (set to True to enable)
 BEACH_ENABLED = True          # disable beach need handler (set to True to enable)
 BORED_ENABLED = True          # disable bored need handler (set to True to enable)
 
@@ -149,8 +149,8 @@ BEACH_WALK_LEFT_DURATION = 27.0
 BEACH_WAIT_AFTER_WALK = 60.0
 
 # Cafe need: hold 'a', then hold 's', at the dealership.
-CAFE_WALK_LEFT_DURATION = 3.0
-CAFE_WALK_BACK_DURATION = 15.0
+CAFE_WALK_LEFT_DURATION = 3.1
+CAFE_WALK_BACK_DURATION = 10.0
 
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75
@@ -1008,7 +1008,7 @@ def teleport_to(category_pos):
     wait_interruptible(TELEPORT_CLICK_DELAY)
     jitter_click(*GENERAL_TELEPORT_POS_3)
     wait_interruptible(TELEPORT_WAIT)
-
+    time.sleep(5)
     print("[debug] walking backward...")
     pydirectinput.keyDown("s")
     try:
@@ -1017,6 +1017,7 @@ def teleport_to(category_pos):
         # Always release, even if StopRequested fires mid-step - otherwise
         # "s" stays stuck held down in the game.
         pydirectinput.keyUp("s")
+    time.sleep(5)
 
 class BoredNeedHandler(NeedHandler):
     """The 'bored' need: teleport to the nursery, walk forward then left for
@@ -1103,7 +1104,8 @@ class CafeNeedHandler(NeedHandler):
             wait_interruptible(CAFE_WALK_BACK_DURATION)
         finally:
             pydirectinput.keyUp("s")
-
+            print(f"[debug] waitingfor {60}s...")
+        time.sleep(60)
         respawn_character()
         print("[!] Cafe complete!")
         return True

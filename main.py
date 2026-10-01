@@ -146,6 +146,10 @@ BEACH_WAIT_AFTER_WALK = 60.0
 CAFE_WALK_LEFT_DURATION = 3.0
 CAFE_WALK_BACK_DURATION = 15.0
 
+# Salon need: like cafe, but a shorter 'a' hold and forward instead of back.
+SALON_WALK_LEFT_DURATION = 2.5
+SALON_WALK_FORWARD_DURATION = 15.0
+
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75
 FOCUS_CLICK_Y = 5

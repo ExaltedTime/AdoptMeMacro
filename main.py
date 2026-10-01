@@ -53,9 +53,9 @@ CHOOSE_ENABLED = False         # disable choose need handler (set to True to re-
 SAVE_NEW_NEEDS = False
 MATCH_ONLY_TOP_HALF = True
 PAYCHECK_RECEIVED = False      # set True once detect_paycheck() has dismissed the paycheck popup
-BEACH_ENABLED = False          # disable beach need handler (set to True to enable)
-BORED_ENABLED = False          # disable bored need handler (set to True to enable)
 CAFE_ENABLED = False           # disable cafe need handler (set to True to enable)
+BEACH_ENABLED = True          # disable beach need handler (set to True to enable)
+BORED_ENABLED = True          # disable bored need handler (set to True to enable)
 
 # Timing (seconds)
 RESPAWN_KEY_DURATION = 0.05    # how long each respawn key is held
@@ -110,9 +110,9 @@ CHOOSE_SLOW_MOVE_DURATION = 1.0  # deliberate, slow mouse travel to the found bu
 # The paycheck popup's CASH OUT button, matched by exact color the same way
 # as CHOOSE_BUTTON_COLOR above. TODO: sample the real RGB from your own
 # screen - this is an uncalibrated placeholder and will not match yet.
-PAYCHECK_CASHOUT_COLOR = (0, 0, 0)
-PAYCHECK_DISMISS_POS_1 = (946, 767)
-PAYCHECK_DISMISS_POS_2 = (948, 625)
+PAYCHECK_CASHOUT_COLOR = (74, 198, 85)
+PAYCHECK_DISMISS_POS_1 = (946, 679)
+PAYCHECK_DISMISS_POS_2 = (948, 627)
 
 # Ride need: positions for the backpack -> vehicles -> first vehicle -> equip
 # sequence, plus how long to hold each step.
@@ -131,7 +131,7 @@ RIDE_WALK_DURATION = 40.0      # total time spent walking back and forth while r
 # teleport_to() as `category_pos`); everything else is always the same,
 # hence "general".
 TELEPORT_CLICK_DELAY = 0.5        # pause between each step of the sequence
-TELEPORT_WAIT = 2.0                # wait after the teleport click, for it to take effect
+TELEPORT_WAIT = 5.0                # wait after the teleport click, for it to take effect
 GENERAL_TELEPORT_POS_2 = (895, 705)
 GENERAL_TELEPORT_POS_3 = (1048, 658)
 TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing spot
@@ -140,12 +140,12 @@ TELEPORT_PETS_TAB_POS = (817, 713)       # nursery: pets tab
 TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
 
 # Bored need: walk forward, then left, then wait it out at the nursery.
-BORED_WALK_FORWARD_DURATION = 25.0
+BORED_WALK_FORWARD_DURATION = 17.0
 BORED_WALK_LEFT_DURATION = 10.0
 BORED_WAIT_AFTER_WALK = 60.0
 
 # Beach need: walk left, then wait it out at the nursery.
-BEACH_WALK_LEFT_DURATION = 30.0
+BEACH_WALK_LEFT_DURATION = 27.0
 BEACH_WAIT_AFTER_WALK = 60.0
 
 # Cafe need: hold 'a', then hold 's', at the dealership.
@@ -893,9 +893,41 @@ class ChooseNeedHandler(NeedHandler):
         print(f"[debug] found at {match}, moving there slowly...")
         slow_click(*match, duration=CHOOSE_SLOW_MOVE_DURATION)
         wait_interruptible(UI_SETTLE)
+        time.sleep(2)
+        jitter_click(*match)
 
+        
         print("[debug] clicking middle of screen...")
-        simple_click(SCREEN_CENTER_X, SCREEN_CENTER_Y)
+        slow_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
+        time.sleep(1)
+        pyautogui.moveTo(*EMPTY_POS, duration=CHOOSE_SLOW_MOVE_DURATION)
+        time.sleep(CLICK_SETTLE_DELAY)
+        pyautogui.moveTo(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
+        pydirectinput.click()
+        time.sleep(POST_CLICK_DELAY)
+
+        print(f"[debug] searching screen for color {CHOOSE_BUTTON_COLOR}...")
+        img = grab_screen()
+        match = find_exact_color(img, CHOOSE_BUTTON_COLOR)
+        if match is None:
+            print(f"[!] WARNING: no pixel matching {CHOOSE_BUTTON_COLOR} found on screen")
+            return False
+        print(f"[debug] found at {match}, moving there slowly...")
+        slow_click(*match, duration=CHOOSE_SLOW_MOVE_DURATION)
+        wait_interruptible(UI_SETTLE)
+        time.sleep(2)
+        jitter_click(*match)
+
+        
+        print("[debug] clicking middle of screen...")
+        slow_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
+        time.sleep(1)
+        pyautogui.moveTo(*EMPTY_POS, duration=CHOOSE_SLOW_MOVE_DURATION)
+        time.sleep(CLICK_SETTLE_DELAY)
+        pyautogui.moveTo(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
+        pydirectinput.click()
+        time.sleep(POST_CLICK_DELAY)
+        #pydirectinput.click()
 
         print("[!] Choose complete!")
         return True
@@ -1005,6 +1037,7 @@ class BoredNeedHandler(NeedHandler):
         finally:
             pydirectinput.keyUp("w")
 
+        time.sleep(0.1)
         print(f"[debug] walking left for {BORED_WALK_LEFT_DURATION}s...")
         pydirectinput.keyDown("a")
         try:
@@ -1193,6 +1226,7 @@ def detect_paycheck():
 
     print("[debug] paycheck popup detected, dismissing...")
     jitter_click(*PAYCHECK_DISMISS_POS_1)
+    simple_click(*EMPTY_POS)
     jitter_click(*PAYCHECK_DISMISS_POS_2)
     PAYCHECK_RECEIVED = True
     return True

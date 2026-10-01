@@ -104,9 +104,9 @@ CHOOSE_SLOW_MOVE_DURATION = 1.0  # deliberate, slow mouse travel to the found bu
 # The paycheck popup's CASH OUT button, matched by exact color the same way
 # as CHOOSE_BUTTON_COLOR above. TODO: sample the real RGB from your own
 # screen - this is an uncalibrated placeholder and will not match yet.
-PAYCHECK_CASHOUT_COLOR = (0, 0, 0)
-PAYCHECK_DISMISS_POS_1 = (946, 767)
-PAYCHECK_DISMISS_POS_2 = (948, 625)
+PAYCHECK_CASHOUT_COLOR = (74, 198, 85)
+PAYCHECK_DISMISS_POS_1 = (946, 679)
+PAYCHECK_DISMISS_POS_2 = (948, 627)
 
 # Ride need: positions for the backpack -> vehicles -> first vehicle -> equip
 # sequence, plus how long to hold each step.
@@ -125,7 +125,7 @@ RIDE_WALK_DURATION = 40.0      # total time spent walking back and forth while r
 # teleport_to() as `category_pos`); everything else is always the same,
 # hence "general".
 TELEPORT_CLICK_DELAY = 0.5        # pause between each step of the sequence
-TELEPORT_WAIT = 2.0                # wait after the teleport click, for it to take effect
+TELEPORT_WAIT = 5.0                # wait after the teleport click, for it to take effect
 GENERAL_TELEPORT_POS_2 = (895, 705)
 GENERAL_TELEPORT_POS_3 = (1048, 658)
 TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing spot
@@ -134,12 +134,12 @@ TELEPORT_PETS_TAB_POS = (817, 713)       # nursery: pets tab
 TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
 
 # Bored need: walk forward, then left, then wait it out at the nursery.
-BORED_WALK_FORWARD_DURATION = 25.0
+BORED_WALK_FORWARD_DURATION = 17.0
 BORED_WALK_LEFT_DURATION = 10.0
 BORED_WAIT_AFTER_WALK = 60.0
 
 # Beach need: walk left, then wait it out at the nursery.
-BEACH_WALK_LEFT_DURATION = 30.0
+BEACH_WALK_LEFT_DURATION = 27.0
 BEACH_WAIT_AFTER_WALK = 60.0
 
 # Cafe need: hold 'a', then hold 's', at the dealership.
@@ -886,9 +886,41 @@ class ChooseNeedHandler(NeedHandler):
         print(f"[debug] found at {match}, moving there slowly...")
         slow_click(*match, duration=CHOOSE_SLOW_MOVE_DURATION)
         wait_interruptible(UI_SETTLE)
+        time.sleep(2)
+        jitter_click(*match)
 
+        
         print("[debug] clicking middle of screen...")
-        simple_click(SCREEN_CENTER_X, SCREEN_CENTER_Y)
+        slow_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
+        time.sleep(1)
+        pyautogui.moveTo(*EMPTY_POS, duration=CHOOSE_SLOW_MOVE_DURATION)
+        time.sleep(CLICK_SETTLE_DELAY)
+        pyautogui.moveTo(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
+        pydirectinput.click()
+        time.sleep(POST_CLICK_DELAY)
+
+        print(f"[debug] searching screen for color {CHOOSE_BUTTON_COLOR}...")
+        img = grab_screen()
+        match = find_exact_color(img, CHOOSE_BUTTON_COLOR)
+        if match is None:
+            print(f"[!] WARNING: no pixel matching {CHOOSE_BUTTON_COLOR} found on screen")
+            return False
+        print(f"[debug] found at {match}, moving there slowly...")
+        slow_click(*match, duration=CHOOSE_SLOW_MOVE_DURATION)
+        wait_interruptible(UI_SETTLE)
+        time.sleep(2)
+        jitter_click(*match)
+
+        
+        print("[debug] clicking middle of screen...")
+        slow_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
+        time.sleep(1)
+        pyautogui.moveTo(*EMPTY_POS, duration=CHOOSE_SLOW_MOVE_DURATION)
+        time.sleep(CLICK_SETTLE_DELAY)
+        pyautogui.moveTo(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
+        pydirectinput.click()
+        time.sleep(POST_CLICK_DELAY)
+        #pydirectinput.click()
 
         print("[!] Choose complete!")
         return True
@@ -998,6 +1030,7 @@ class BoredNeedHandler(NeedHandler):
         finally:
             pydirectinput.keyUp("w")
 
+        time.sleep(0.1)
         print(f"[debug] walking left for {BORED_WALK_LEFT_DURATION}s...")
         pydirectinput.keyDown("a")
         try:
@@ -1122,7 +1155,7 @@ SPECIAL_NEED_HANDLER_CLASSES = {
 # here is still detected and matched, but logged and skipped (not resolved)
 # when it comes up, same as a _ENABLED flag used to do. "walk" covers every
 # need name that starts with "walk" (see is_basic_need() below).
-ENABLED_NEEDS = {"catch", "pet", "ride", "walk"}
+ENABLED_NEEDS = {"catch", "pet", "ride", "walk", "beach", "bored"}
 
 def is_basic_need(need_name):
     """A basic need has no dedicated handler - it's satisfied by walking to
@@ -1226,6 +1259,7 @@ def detect_paycheck():
 
     print("[debug] paycheck popup detected, dismissing...")
     jitter_click(*PAYCHECK_DISMISS_POS_1)
+    simple_click(*EMPTY_POS)
     jitter_click(*PAYCHECK_DISMISS_POS_2)
     PAYCHECK_RECEIVED = True
     return True

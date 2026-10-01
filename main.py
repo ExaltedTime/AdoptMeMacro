@@ -55,6 +55,7 @@ MATCH_ONLY_TOP_HALF = True
 PAYCHECK_RECEIVED = False      # set True once detect_paycheck() has dismissed the paycheck popup
 BEACH_ENABLED = False          # disable beach need handler (set to True to enable)
 BORED_ENABLED = False          # disable bored need handler (set to True to enable)
+CAFE_ENABLED = False           # disable cafe need handler (set to True to enable)
 
 # Timing (seconds)
 RESPAWN_KEY_DURATION = 0.05    # how long each respawn key is held
@@ -123,15 +124,20 @@ RIDE_FIRST_VEHICLE_POS = (976, 708)
 RIDE_EQUIP_POS = (1062, 814)
 RIDE_WALK_DURATION = 40.0      # total time spent walking back and forth while riding
 
-# Teleport-to-nursery sequence, shared by the bored and beach need handlers:
-# open backpack -> category -> nursery -> teleport, then step back briefly
-# to clear the landing spot.
+# Generic backpack-teleport sequence, shared by every teleport destination:
+# open backpack -> destination-specific icon -> two more fixed clicks that
+# confirm/execute the teleport -> wait for it to take effect. Only the first
+# click differs per destination (TELEPORT_NURSERY_POS / TELEPORT_DEALERSHIP_POS);
+# the other two are always the same, hence "general".
 TELEPORT_CLICK_DELAY = 0.5        # pause between each step of the sequence
-TELEPORT_NURSERY_POS_1 = (817, 713)
-TELEPORT_NURSERY_POS_2 = (895, 705)
-TELEPORT_NURSERY_POS_3 = (1048, 658)
-TELEPORT_NURSERY_WAIT = 2.0       # wait after teleporting, before stepping back
-TELEPORT_NURSERY_BACK_DURATION = 1.0  # how long to hold 's' afterward
+TELEPORT_WAIT = 2.0                # wait after the teleport click, for it to take effect
+GENERAL_TELEPORT_POS_2 = (895, 705)
+GENERAL_TELEPORT_POS_3 = (1048, 658)
+
+TELEPORT_NURSERY_POS = (817, 713)
+TELEPORT_NURSERY_BACK_DURATION = 1.0  # how long to hold 's' to clear the nursery's landing spot
+
+TELEPORT_DEALERSHIP_POS = (813, 810)
 
 # Bored need: walk forward, then left, then wait it out at the nursery.
 BORED_WALK_FORWARD_DURATION = 25.0
@@ -141,6 +147,10 @@ BORED_WAIT_AFTER_WALK = 60.0
 # Beach need: walk left, then wait it out at the nursery.
 BEACH_WALK_LEFT_DURATION = 30.0
 BEACH_WAIT_AFTER_WALK = 60.0
+
+# Cafe need: hold 'a', then hold 's', at the dealership.
+CAFE_WALK_LEFT_DURATION = 3.0
+CAFE_WALK_BACK_DURATION = 15.0
 
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75
@@ -951,21 +961,40 @@ class RideNeedHandler(NeedHandler):
         return True
 
 def teleport_to_nursery():
-    """Open the backpack and teleport to the nursery, then step back briefly
-    to clear the landing spot. Shared first step of BoredNeedHandler and
-    BeachNeedHandler below."""
+    """Open the backpack and teleport to the nursery. Just the teleport -
+    any need-specific follow-up (clearing the landing spot, walking, etc.)
+    is the caller's job."""
     print("[debug] opening backpack...")
     pydirectinput.press('b')
     wait_interruptible(TELEPORT_CLICK_DELAY)
 
     print("[debug] navigating to nursery...")
-    jitter_click(*TELEPORT_NURSERY_POS_1)
+    jitter_click(*TELEPORT_NURSERY_POS)
     wait_interruptible(TELEPORT_CLICK_DELAY)
-    jitter_click(*TELEPORT_NURSERY_POS_2)
+    jitter_click(*GENERAL_TELEPORT_POS_2)
     wait_interruptible(TELEPORT_CLICK_DELAY)
-    jitter_click(*TELEPORT_NURSERY_POS_3)
-    wait_interruptible(TELEPORT_NURSERY_WAIT)
+    jitter_click(*GENERAL_TELEPORT_POS_3)
+    wait_interruptible(TELEPORT_WAIT)
 
+def teleport_to_dealership():
+    """Open the backpack and teleport to the dealership. Just the teleport -
+    any need-specific follow-up is the caller's job."""
+    print("[debug] opening backpack...")
+    pydirectinput.press('b')
+    wait_interruptible(TELEPORT_CLICK_DELAY)
+
+    print("[debug] navigating to dealership...")
+    jitter_click(*TELEPORT_DEALERSHIP_POS)
+    wait_interruptible(TELEPORT_CLICK_DELAY)
+    jitter_click(*GENERAL_TELEPORT_POS_2)
+    wait_interruptible(TELEPORT_CLICK_DELAY)
+    jitter_click(*GENERAL_TELEPORT_POS_3)
+    wait_interruptible(TELEPORT_WAIT)
+
+def clear_nursery_landing():
+    """Step back briefly to clear the nursery's teleport landing spot.
+    Shared by BoredNeedHandler and BeachNeedHandler, which both teleport
+    there via teleport_to_nursery()."""
     print("[debug] stepping back...")
     pydirectinput.keyDown("s")
     try:
@@ -986,6 +1015,7 @@ class BoredNeedHandler(NeedHandler):
             return False
 
         teleport_to_nursery()
+        clear_nursery_landing()
 
         print(f"[debug] walking forward for {BORED_WALK_FORWARD_DURATION}s...")
         pydirectinput.keyDown("w")
@@ -1019,6 +1049,7 @@ class BeachNeedHandler(NeedHandler):
             return False
 
         teleport_to_nursery()
+        clear_nursery_landing()
 
         print(f"[debug] walking left for {BEACH_WALK_LEFT_DURATION}s...")
         pydirectinput.keyDown("a")
@@ -1034,10 +1065,40 @@ class BeachNeedHandler(NeedHandler):
         print("[!] Beach complete!")
         return True
 
+class CafeNeedHandler(NeedHandler):
+    """The 'cafe' need: teleport to the dealership, hold 'a' then 's' for a
+    while, then respawn (since, unlike every other special need, this one
+    leaves the character somewhere else on the map)."""
+
+    def handle(self):
+        print("[!] CAFE NEED")
+        if not focus_roblox():
+            return False
+
+        teleport_to_dealership()
+
+        print(f"[debug] walking left for {CAFE_WALK_LEFT_DURATION}s...")
+        pydirectinput.keyDown("a")
+        try:
+            wait_interruptible(CAFE_WALK_LEFT_DURATION)
+        finally:
+            pydirectinput.keyUp("a")
+
+        print(f"[debug] walking back for {CAFE_WALK_BACK_DURATION}s...")
+        pydirectinput.keyDown("s")
+        try:
+            wait_interruptible(CAFE_WALK_BACK_DURATION)
+        finally:
+            pydirectinput.keyUp("s")
+
+        respawn_character()
+        print("[!] Cafe complete!")
+        return True
+
 # Need names with dedicated handler logic above, rather than being a basic
 # at-home button click. "walk"/"walk2"/etc. are matched by prefix instead of
 # being listed here - see is_basic_need() / get_special_need_handler().
-SPECIAL_NEED_NAMES = {"catch", "pet", "choose", "ride", "bored", "beach"}
+SPECIAL_NEED_NAMES = {"catch", "pet", "choose", "ride", "bored", "beach", "cafe"}
 
 def is_basic_need(need_name):
     """A basic need has no dedicated handler - it's satisfied by walking to
@@ -1062,6 +1123,8 @@ def get_special_need_handler(need_name):
         return BoredNeedHandler() if BORED_ENABLED else None
     if need_name == "beach":
         return BeachNeedHandler() if BEACH_ENABLED else None
+    if need_name == "cafe":
+        return CafeNeedHandler() if CAFE_ENABLED else None
 
 def process_needs():
     """Detect needs on screen and resolve them one at a time: for each
@@ -1353,17 +1416,12 @@ class AdoptMeGUI:
         btn_test_choose.pack(fill=tk.X, pady=2)
         self.action_buttons.append(btn_test_choose)
 
-        # Bored/beach stay behind their _ENABLED flags, so these are their
-        # only way to run outside of automatic need processing, same as choose.
-        btn_test_bored = tk.Button(btn_frame, text="[TEST] Bored", command=self.test_bored,
-                                    font=("Courier", 9), bg="#e74c3c", fg=self.fg, height=1, cursor="hand2")
-        btn_test_bored.pack(fill=tk.X, pady=2)
-        self.action_buttons.append(btn_test_bored)
-
-        btn_test_beach = tk.Button(btn_frame, text="[TEST] Beach", command=self.test_beach,
-                                    font=("Courier", 9), bg="#e74c3c", fg=self.fg, height=1, cursor="hand2")
-        btn_test_beach.pack(fill=tk.X, pady=2)
-        self.action_buttons.append(btn_test_beach)
+        # Cafe stays behind CAFE_ENABLED, so this is its only way to run
+        # outside of automatic need processing, same as choose.
+        btn_test_cafe = tk.Button(btn_frame, text="[TEST] Cafe", command=self.test_cafe,
+                                   font=("Courier", 9), bg="#e74c3c", fg=self.fg, height=1, cursor="hand2")
+        btn_test_cafe.pack(fill=tk.X, pady=2)
+        self.action_buttons.append(btn_test_cafe)
 
         # Debug console
         debug_frame = tk.Frame(self.root, bg=self.bg)
@@ -1460,24 +1518,14 @@ class AdoptMeGUI:
             print("[TEST] Choose handler complete\n")
         self.run_async(test)
 
-    def test_bored(self):
-        """Run the bored handler on its own, outside the normal need-detection
-        flow. Useful while BORED_ENABLED = False, since the handler is fully
+    def test_cafe(self):
+        """Run the cafe handler on its own, outside the normal need-detection
+        flow. Useful while CAFE_ENABLED = False, since the handler is fully
         working code that's just not wired into automatic need processing yet."""
         def test():
-            print("\n[TEST] Running bored handler...")
-            BoredNeedHandler().handle()
-            print("[TEST] Bored handler complete\n")
-        self.run_async(test)
-
-    def test_beach(self):
-        """Run the beach handler on its own, outside the normal need-detection
-        flow. Useful while BEACH_ENABLED = False, since the handler is fully
-        working code that's just not wired into automatic need processing yet."""
-        def test():
-            print("\n[TEST] Running beach handler...")
-            BeachNeedHandler().handle()
-            print("[TEST] Beach handler complete\n")
+            print("\n[TEST] Running cafe handler...")
+            CafeNeedHandler().handle()
+            print("[TEST] Cafe handler complete\n")
         self.run_async(test)
 
     def stop(self):

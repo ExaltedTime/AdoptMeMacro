@@ -47,15 +47,9 @@ SCREEN_CENTER_X, SCREEN_CENTER_Y = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2
 
 # Behavior flags
 FOCUS_WINDOW_ON_ACTION = True  # click the Roblox window to focus it before acting
-CATCH_ENABLED = True           # catch need handler is live (set to False to disable)
-PET_ENABLED = True            # disable pet need handler (set to True to re-enable)
-CHOOSE_ENABLED = False         # disable choose need handler (set to True to re-enable)
 SAVE_NEW_NEEDS = False
 MATCH_ONLY_TOP_HALF = True
 PAYCHECK_RECEIVED = False      # set True once detect_paycheck() has dismissed the paycheck popup
-CAFE_ENABLED = True           # disable cafe need handler (set to True to enable)
-BEACH_ENABLED = True          # disable beach need handler (set to True to enable)
-BORED_ENABLED = True          # disable bored need handler (set to True to enable)
 
 # Timing (seconds)
 RESPAWN_KEY_DURATION = 0.05    # how long each respawn key is held
@@ -149,8 +143,8 @@ BEACH_WALK_LEFT_DURATION = 27.0
 BEACH_WAIT_AFTER_WALK = 60.0
 
 # Cafe need: hold 'a', then hold 's', at the dealership.
-CAFE_WALK_LEFT_DURATION = 3.1
-CAFE_WALK_BACK_DURATION = 10.0
+CAFE_WALK_LEFT_DURATION = 3.0
+CAFE_WALK_BACK_DURATION = 15.0
 
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75
@@ -459,10 +453,6 @@ def find_matching_need(icon_img):
         return best_match, best_score
     return None, best_score
 
-def base_need_name(matched_need):
-    """Strip the 'need_' prefix used when an icon was saved."""
-    return matched_need.split('_', 1)[1] if '_' in matched_need else matched_need
-
 def prompt_rename_need(icon_img, idx):
     """Save a new need icon (as high-contrast B/W) and ask the user to name it."""
     print("\n[!] NEW NEED DETECTED!")
@@ -470,12 +460,11 @@ def prompt_rename_need(icon_img, idx):
     cv2.imwrite(temp_path, preprocess_icon(icon_img))
 
     print("[!] Enter need name (hungry/thirsty/dirty/potty/sleepy/catch/walk/other): ", end="", flush=True)
-    need_name = input().strip().lower() or f"need_{idx}"
+    need_name = input().strip().lower() or f"unnamed_{idx}"
 
-    final_name = f"need_{need_name}"
-    os.rename(temp_path, os.path.join(NEEDS_DIR, f"{final_name}.png"))
-    print(f"[!] Saved: {final_name}")
-    return final_name
+    os.rename(temp_path, os.path.join(NEEDS_DIR, f"{need_name}.png"))
+    print(f"[!] Saved: {need_name}")
+    return need_name
 
 # ============================================================================
 # CLICKING
@@ -1110,10 +1099,61 @@ class CafeNeedHandler(NeedHandler):
         print("[!] Cafe complete!")
         return True
 
+class SalonNeedHandler(NeedHandler):
+    """The 'salon' need: like CafeNeedHandler, but a shorter 'a' hold and
+    forward instead of backward afterward."""
+
+    def handle(self):
+        print("[!] SALON NEED")
+        if not focus_roblox():
+            return False
+
+        teleport_to(TELEPORT_VEHICLES_TAB_POS)
+
+        print(f"[debug] walking left for {SALON_WALK_LEFT_DURATION}s...")
+        pydirectinput.keyDown("a")
+        try:
+            wait_interruptible(SALON_WALK_LEFT_DURATION)
+        finally:
+            pydirectinput.keyUp("a")
+
+        print(f"[debug] walking forward for {SALON_WALK_FORWARD_DURATION}s...")
+        pydirectinput.keyDown("w")
+        try:
+            wait_interruptible(SALON_WALK_FORWARD_DURATION)
+        finally:
+            pydirectinput.keyUp("w")
+
+        respawn_character()
+        print("[!] Salon complete!")
+        return True
+
 # Need names with dedicated handler logic above, rather than being a basic
 # at-home button click. "walk"/"walk2"/etc. are matched by prefix instead of
 # being listed here - see is_basic_need() / get_special_need_handler().
-SPECIAL_NEED_NAMES = {"catch", "pet", "choose", "ride", "bored", "beach", "cafe"}
+SPECIAL_NEED_NAMES = {"catch", "pet", "choose", "ride", "bored", "beach", "cafe", "salon"}
+
+# Handler class for each special need above. get_special_need_handler() uses
+# this plus ENABLED_NEEDS below to decide what to do with a detected special
+# need - one dict entry and one set membership, in one place, instead of a
+# dedicated _ENABLED boolean and if-branch per need.
+SPECIAL_NEED_HANDLER_CLASSES = {
+    "catch": CatchNeedHandler,
+    "pet": PetNeedHandler,
+    "choose": ChooseNeedHandler,
+    "ride": RideNeedHandler,
+    "bored": BoredNeedHandler,
+    "beach": BeachNeedHandler,
+    "cafe": CafeNeedHandler,
+    "salon": SalonNeedHandler,
+}
+
+# Special needs enabled for automatic processing - the single place that
+# decides whether a detected special need actually runs. A need not listed
+# here is still detected and matched, but logged and skipped (not resolved)
+# when it comes up, same as a _ENABLED flag used to do. "walk" covers every
+# need name that starts with "walk" (see is_basic_need() below).
+ENABLED_NEEDS = {"catch", "pet", "ride", "walk", "beach", "bored"}
 
 def is_basic_need(need_name):
     """A basic need has no dedicated handler - it's satisfied by walking to
@@ -1123,23 +1163,13 @@ def is_basic_need(need_name):
 def get_special_need_handler(need_name):
     """Return the handler for a need with dedicated logic. Only call this
     when is_basic_need(need_name) is False. Returns None if this need type
-    is currently disabled via its _ENABLED flag."""
+    is not currently enabled (see ENABLED_NEEDS)."""
     if need_name.startswith("walk"):
-        return WalkNeedHandler()
-    if need_name == "catch":
-        return CatchNeedHandler() if CATCH_ENABLED else None
-    if need_name == "pet":
-        return PetNeedHandler() if PET_ENABLED else None
-    if need_name == "choose":
-        return ChooseNeedHandler() if CHOOSE_ENABLED else None
-    if need_name == 'ride':
-        return RideNeedHandler()
-    if need_name == "bored":
-        return BoredNeedHandler() if BORED_ENABLED else None
-    if need_name == "beach":
-        return BeachNeedHandler() if BEACH_ENABLED else None
-    if need_name == "cafe":
-        return CafeNeedHandler() if CAFE_ENABLED else None
+        return WalkNeedHandler() if "walk" in ENABLED_NEEDS else None
+    if need_name not in ENABLED_NEEDS:
+        return None
+    handler_cls = SPECIAL_NEED_HANDLER_CLASSES.get(need_name)
+    return handler_cls() if handler_cls else None
 
 def process_needs():
     """Detect needs on screen and resolve them one at a time: for each
@@ -1169,9 +1199,9 @@ def process_needs():
         check_running()
 
         icon_img = extract_icon(full_img, cx, cy, radius)
-        matched_need, score = find_matching_need(icon_img)
+        need_name, score = find_matching_need(icon_img)
 
-        if not matched_need:
+        if not need_name:
             if SAVE_NEW_NEEDS:
                 print(f"\n[!] NEW NEED (best score: {score:.4f})")
                 # prompt_rename_need() already saves the reference icon into
@@ -1181,7 +1211,6 @@ def process_needs():
                 prompt_rename_need(icon_img, idx)
             continue
 
-        need_name = base_need_name(matched_need)
         print(f"\n[!] MATCHED: {need_name} (score: {score:.4f})")
         matched_needs.append(need_name)
 
@@ -1432,12 +1461,17 @@ class AdoptMeGUI:
         btn_test_choose.pack(fill=tk.X, pady=2)
         self.action_buttons.append(btn_test_choose)
 
-        # Cafe stays behind CAFE_ENABLED, so this is its only way to run
-        # outside of automatic need processing, same as choose.
+        # Cafe/salon stay out of ENABLED_NEEDS, so these are their only way
+        # to run outside of automatic need processing, same as choose.
         btn_test_cafe = tk.Button(btn_frame, text="[TEST] Cafe", command=self.test_cafe,
                                    font=("Courier", 9), bg="#e74c3c", fg=self.fg, height=1, cursor="hand2")
         btn_test_cafe.pack(fill=tk.X, pady=2)
         self.action_buttons.append(btn_test_cafe)
+
+        btn_test_salon = tk.Button(btn_frame, text="[TEST] Salon", command=self.test_salon,
+                                    font=("Courier", 9), bg="#e74c3c", fg=self.fg, height=1, cursor="hand2")
+        btn_test_salon.pack(fill=tk.X, pady=2)
+        self.action_buttons.append(btn_test_salon)
 
         # Debug console
         debug_frame = tk.Frame(self.root, bg=self.bg)
@@ -1526,8 +1560,9 @@ class AdoptMeGUI:
 
     def test_choose(self):
         """Run the choose handler on its own, outside the normal need-detection
-        flow. Useful while CHOOSE_ENABLED = False, since the handler is fully
-        working code that's just not wired into automatic need processing yet."""
+        flow. Useful while 'choose' is not in ENABLED_NEEDS, since the handler
+        is fully working code that's just not wired into automatic need
+        processing yet."""
         def test():
             print("\n[TEST] Running choose handler...")
             ChooseNeedHandler().handle()
@@ -1536,12 +1571,24 @@ class AdoptMeGUI:
 
     def test_cafe(self):
         """Run the cafe handler on its own, outside the normal need-detection
-        flow. Useful while CAFE_ENABLED = False, since the handler is fully
-        working code that's just not wired into automatic need processing yet."""
+        flow. Useful while 'cafe' is not in ENABLED_NEEDS, since the handler
+        is fully working code that's just not wired into automatic need
+        processing yet."""
         def test():
             print("\n[TEST] Running cafe handler...")
             CafeNeedHandler().handle()
             print("[TEST] Cafe handler complete\n")
+        self.run_async(test)
+
+    def test_salon(self):
+        """Run the salon handler on its own, outside the normal need-detection
+        flow. Useful while 'salon' is not in ENABLED_NEEDS, since the handler
+        is fully working code that's just not wired into automatic need
+        processing yet."""
+        def test():
+            print("\n[TEST] Running salon handler...")
+            SalonNeedHandler().handle()
+            print("[TEST] Salon handler complete\n")
         self.run_async(test)
 
     def stop(self):

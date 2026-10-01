@@ -134,7 +134,7 @@ TELEPORT_PETS_TAB_POS = (817, 713)       # nursery: pets tab
 TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
 
 # Bored need: walk forward, then left, then wait it out at the nursery.
-BORED_WALK_FORWARD_DURATION = 17.0
+BORED_WALK_FORWARD_DURATION = 16.0
 BORED_WALK_LEFT_DURATION = 10.0
 BORED_WAIT_AFTER_WALK = 60.0
 
@@ -143,7 +143,7 @@ BEACH_WALK_LEFT_DURATION = 27.0
 BEACH_WAIT_AFTER_WALK = 60.0
 
 # Cafe need: hold 'a', then hold 's', at the dealership.
-CAFE_WALK_LEFT_DURATION = 3.0
+CAFE_WALK_LEFT_DURATION = 3.1
 CAFE_WALK_BACK_DURATION = 15.0
 
 # Salon need: like cafe, but a shorter 'a' hold and forward instead of back.
@@ -1361,7 +1361,7 @@ class AdoptMeGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Adopt Me Macro")
-        self.root.geometry("380x650+1550+30")
+        self.root.geometry("380x650+1533+110")
         self.root.resizable(False, False)
         self.root.attributes('-topmost', True)
         self.root.attributes('-alpha', 0.95)

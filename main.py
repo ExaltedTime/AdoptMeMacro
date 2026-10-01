@@ -124,20 +124,20 @@ RIDE_FIRST_VEHICLE_POS = (976, 708)
 RIDE_EQUIP_POS = (1062, 814)
 RIDE_WALK_DURATION = 40.0      # total time spent walking back and forth while riding
 
-# Generic backpack-teleport sequence, shared by every teleport destination:
-# open backpack -> destination-specific icon -> two more fixed clicks that
-# confirm/execute the teleport -> wait for it to take effect. Only the first
-# click differs per destination (TELEPORT_NURSERY_POS / TELEPORT_DEALERSHIP_POS);
-# the other two are always the same, hence "general".
+# Backpack-teleport sequence, shared by every teleport destination: open
+# backpack -> category tab -> two more fixed clicks that confirm/execute
+# the teleport -> wait for it to take effect -> walk backward to clear the
+# landing spot. Only the category tab differs per destination (passed into
+# teleport_to() as `category_pos`); everything else is always the same,
+# hence "general".
 TELEPORT_CLICK_DELAY = 0.5        # pause between each step of the sequence
 TELEPORT_WAIT = 2.0                # wait after the teleport click, for it to take effect
 GENERAL_TELEPORT_POS_2 = (895, 705)
 GENERAL_TELEPORT_POS_3 = (1048, 658)
+TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing spot
 
-TELEPORT_NURSERY_POS = (817, 713)
-TELEPORT_NURSERY_BACK_DURATION = 1.0  # how long to hold 's' to clear the nursery's landing spot
-
-TELEPORT_DEALERSHIP_POS = (813, 810)
+TELEPORT_PETS_TAB_POS = (817, 713)       # nursery: pets tab
+TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
 
 # Bored need: walk forward, then left, then wait it out at the nursery.
 BORED_WALK_FORWARD_DURATION = 25.0
@@ -960,45 +960,27 @@ class RideNeedHandler(NeedHandler):
         print("[!] Ride complete!")
         return True
 
-def teleport_to_nursery():
-    """Open the backpack and teleport to the nursery. Just the teleport -
-    any need-specific follow-up (clearing the landing spot, walking, etc.)
-    is the caller's job."""
+def teleport_to(category_pos):
+    """Open the backpack and teleport via the given category tab
+    (TELEPORT_PETS_TAB_POS for the nursery, TELEPORT_VEHICLES_TAB_POS for
+    the dealership), then walk backward briefly to clear the landing spot.
+    Shared by every need that teleports somewhere (bored, beach, cafe)."""
     print("[debug] opening backpack...")
     pydirectinput.press('b')
     wait_interruptible(TELEPORT_CLICK_DELAY)
 
-    print("[debug] navigating to nursery...")
-    jitter_click(*TELEPORT_NURSERY_POS)
+    print("[debug] selecting category...")
+    jitter_click(*category_pos)
     wait_interruptible(TELEPORT_CLICK_DELAY)
     jitter_click(*GENERAL_TELEPORT_POS_2)
     wait_interruptible(TELEPORT_CLICK_DELAY)
     jitter_click(*GENERAL_TELEPORT_POS_3)
     wait_interruptible(TELEPORT_WAIT)
 
-def teleport_to_dealership():
-    """Open the backpack and teleport to the dealership. Just the teleport -
-    any need-specific follow-up is the caller's job."""
-    print("[debug] opening backpack...")
-    pydirectinput.press('b')
-    wait_interruptible(TELEPORT_CLICK_DELAY)
-
-    print("[debug] navigating to dealership...")
-    jitter_click(*TELEPORT_DEALERSHIP_POS)
-    wait_interruptible(TELEPORT_CLICK_DELAY)
-    jitter_click(*GENERAL_TELEPORT_POS_2)
-    wait_interruptible(TELEPORT_CLICK_DELAY)
-    jitter_click(*GENERAL_TELEPORT_POS_3)
-    wait_interruptible(TELEPORT_WAIT)
-
-def clear_nursery_landing():
-    """Step back briefly to clear the nursery's teleport landing spot.
-    Shared by BoredNeedHandler and BeachNeedHandler, which both teleport
-    there via teleport_to_nursery()."""
-    print("[debug] stepping back...")
+    print("[debug] walking backward...")
     pydirectinput.keyDown("s")
     try:
-        wait_interruptible(TELEPORT_NURSERY_BACK_DURATION)
+        wait_interruptible(TELEPORT_BACK_DURATION)
     finally:
         # Always release, even if StopRequested fires mid-step - otherwise
         # "s" stays stuck held down in the game.
@@ -1014,8 +996,7 @@ class BoredNeedHandler(NeedHandler):
         if not focus_roblox():
             return False
 
-        teleport_to_nursery()
-        clear_nursery_landing()
+        teleport_to(TELEPORT_PETS_TAB_POS)
 
         print(f"[debug] walking forward for {BORED_WALK_FORWARD_DURATION}s...")
         pydirectinput.keyDown("w")
@@ -1048,8 +1029,7 @@ class BeachNeedHandler(NeedHandler):
         if not focus_roblox():
             return False
 
-        teleport_to_nursery()
-        clear_nursery_landing()
+        teleport_to(TELEPORT_PETS_TAB_POS)
 
         print(f"[debug] walking left for {BEACH_WALK_LEFT_DURATION}s...")
         pydirectinput.keyDown("a")
@@ -1075,7 +1055,7 @@ class CafeNeedHandler(NeedHandler):
         if not focus_roblox():
             return False
 
-        teleport_to_dealership()
+        teleport_to(TELEPORT_VEHICLES_TAB_POS)
 
         print(f"[debug] walking left for {CAFE_WALK_LEFT_DURATION}s...")
         pydirectinput.keyDown("a")

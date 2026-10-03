@@ -126,7 +126,7 @@ RIDE_WALK_DURATION = 40.0      # total time spent walking back and forth while r
 # landing spot. Only the category tab differs per destination (passed into
 # teleport_to() as `category_pos`); everything else is always the same,
 # hence "general".
-TELEPORT_WAIT = 10.0               # wait after the teleport click, for it to take effect
+TELEPORT_WAIT = 5.0               # wait after the teleport click, for it to take effect
 TELEPORT_SETTLE_WAIT = 5.0         # wait after stepping back, for the landing to settle
 GENERAL_TELEPORT_POS_2 = (895, 705)
 GENERAL_TELEPORT_POS_3 = (1048, 658)
@@ -134,6 +134,7 @@ TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing sp
 
 TELEPORT_PETS_TAB_POS = (817, 713)       # nursery: pets tab
 TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
+TELEPORT_FOOD_TAB_POS = (753, 804)       # supermarket: food tab
 
 # Needs that teleport somewhere and walk (see TeleportWalkNeedHandler), then
 # wait for the need to clear. Each entry: where to teleport, and the
@@ -142,11 +143,11 @@ TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
 TELEPORT_WALK_NEEDS = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),)),
-    "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 0.5), ("a", 10.0))),
+    "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 1.2), ("a", 10.0))),
     "cafe":    dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 3.1), ("s", 15.0))),
     "salon":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 2.5), ("w", 15.0))),
-    "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 5.0), ("a", 5.0))),
-    "camping": dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 5.0), ("a", 5.0))),
+    "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 2.0), ("a", 6.5), ("s", 3.0))),
+    "camping": dict(teleport_pos=TELEPORT_FOOD_TAB_POS,     steps=(("w", 4.0), ("d", 25.0))),
 }
 NEED_GONE_MAX_WAIT = 60.0        # most a teleport need waits for its icon to disappear
 NEED_GONE_POLL_INTERVAL = 5.0    # how often to re-check for the icon during that wait
@@ -545,11 +546,12 @@ def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=N
             print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
             return
         wait_interruptible(min(poll_interval, remaining))
-        found_icons, full_img = detect_need_icons()
-        visible = [name for _, _, name, _ in identify_icons(found_icons, full_img)]
-        if need_name not in visible:
-            print(f"[debug] {need_name} cleared")
-            return
+        if False:
+            found_icons, full_img = detect_need_icons()
+            visible = [name for _, _, name, _ in identify_icons(found_icons, full_img)]
+            if need_name not in visible:
+                print(f"[debug] {need_name} cleared")
+                return
 
 # ============================================================================
 # CLICKING
@@ -816,7 +818,7 @@ def walk_alternating(direction_pair, total_duration, step_duration=WALK_ALTERNAT
         direction = direction_pair[direction_idx % 2]
         print(f"[debug] step {direction_idx + 1}: {direction} for {step_duration}s...")
         hold_key(direction, step_duration)
-        time.sleep(KEY_STEP_GAP)
+        wait_interruptible(KEY_STEP_GAP)
 
         direction_idx += 1
         elapsed = time.time() - start_time
@@ -970,18 +972,9 @@ class ChooseNeedHandler(NeedHandler):
         print(f"[debug] found at {match}, moving there slowly...")
         hover_click(*match, duration=CHOOSE_SLOW_MOVE_DURATION)
         wait_interruptible(UI_SETTLE)
-        wait_interruptible(CHOOSE_HOVER_WAIT)
-        hover_click(*match)
-
         
         print("[debug] clicking middle of screen...")
         hover_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
-        wait_interruptible(CHOOSE_DISMISS_WAIT)
-        hover_move(*EMPTY_POS, duration=CHOOSE_SLOW_MOVE_DURATION)
-        time.sleep(CLICK_SETTLE_DELAY)
-        hover_move(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
-        pydirectinput.click()
-        time.sleep(POST_CLICK_DELAY)
 
         print("[!] Choose complete!")
         return True
@@ -1074,7 +1067,7 @@ class TeleportWalkNeedHandler(NeedHandler):
 
         for i, (key, duration) in enumerate(self.config["steps"]):
             if i:
-                time.sleep(KEY_STEP_GAP)
+                time.sleep(KEY_STEP_GAP*20)
             print(f"[debug] holding {key} for {duration}s...")
             hold_key(key, duration)
 

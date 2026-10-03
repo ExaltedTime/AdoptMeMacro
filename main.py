@@ -579,15 +579,6 @@ def simple_click(x, y):
     pydirectinput.click()
     time.sleep(POST_CLICK_DELAY)
 
-def scroll_wheel_up(x, y, amount):
-    """Move to (x, y) and scroll the mouse wheel up by `amount` notches.
-    Uses pyautogui rather than pydirectinput - pydirectinput has no scroll
-    function of its own."""
-    pyautogui.moveTo(x, y, duration=CLICK_MOVE_DURATION)
-    time.sleep(CLICK_SETTLE_DELAY)
-    pyautogui.scroll(amount)
-    time.sleep(POST_CLICK_DELAY)
-
 def hover_move(x, y, duration=CLICK_MOVE_DURATION):
     """Move the mouse to (x, y) over `duration` seconds using SendInput
     (pydirectinput), then nudge it a couple of pixels back onto the target.

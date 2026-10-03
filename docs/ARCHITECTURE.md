@@ -97,7 +97,7 @@ character standing.
 - **NEED ICON DETECTION** - `detect_need_icons()`, `find_matching_need()`,
   `prompt_rename_need()`. See [Need-icon detection](#need-icon-detection).
 - **CLICKING** - `hover_click()`, `hover_move()`, `jitter_click()`, `simple_click()`,
-  `scroll_wheel_up()`, `wait_interruptible()`, `release_all_inputs()`. See
+  `wait_interruptible()`, `release_all_inputs()`. See
   [Click & input primitives](#click--input-primitives).
 - **BUTTON DETECTION** - `detect_buttons()`, `refresh_button_mapping()`,
   `click_basic_need_button()`. See [Button detection](#button-detection).
@@ -209,10 +209,6 @@ settle):
   (`JITTER_PIXELS`), clicks again. Used for real in-game action buttons,
   since a single perfectly-still click sometimes doesn't register.
 - **`simple_click()`** - one click, no jitter. Used for backpack/toy UI.
-- **`scroll_wheel_up()`** - moves to a point and scrolls up
-  (`CATCH_SCROLL_AMOUNT` notches) via `pyautogui.scroll()`, since
-  `pydirectinput` has no scroll function of its own. Used by the catch
-  need before each throw.
 
 `wait_interruptible(duration)` is the delay primitive nearly everything
 else is built on - see [Stopping & focus safety](#stopping--focus-safety).

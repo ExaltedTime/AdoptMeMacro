@@ -165,6 +165,8 @@ NEED_ICON_BLANK_HEIGHT = 0.15       # top-left UI cluster to ignore (height)
 NEED_ICON_BLANK_WIDTH = 0.20        # top-left UI cluster to ignore (width)
 NEED_ICON_MIN_AREA = 50
 NEED_ICON_MIN_CIRCULARITY = 0.6
+NEED_ICON_CLEAN_CIRCULARITY = 0.85  # below this the blob likely has a badge attached; re-fit the circle
+NEED_ICON_BADGE_MAX_AREA_RATIO = 1.5  # max blob area / inscribed-circle area for a badged icon
 
 # Need-icon matching (shape comparison, color-independent)
 ICON_MATCH_THRESHOLD = 0.92
@@ -405,6 +407,17 @@ def extract_icon(img, cx, cy, radius, padding=ICON_EXTRACT_PADDING):
     y0, y1 = max(0, cy - r), min(img.shape[0], cy + r)
     return img[y0:y1, x0:x1].copy()
 
+def inscribed_circle(contour, shape):
+    """Largest circle that fits inside a contour, as (cx, cy, radius), or None."""
+    x, y, bw, bh = cv2.boundingRect(contour)
+    blob = np.zeros((bh + 2, bw + 2), dtype=np.uint8)
+    cv2.drawContours(blob, [contour - np.array([x - 1, y - 1])], -1, 255, cv2.FILLED)
+    dist = cv2.distanceTransform(blob, cv2.DIST_L2, 5)
+    _, radius, _, (px, py) = cv2.minMaxLoc(dist)
+    if radius <= 0:
+        return None
+    return px + x - 1, py + y - 1, radius
+
 def detect_need_icons(save_debug=False):
     """Detect circular need icons at the top of the screen (any color)."""
     img = grab_screen()
@@ -427,8 +440,19 @@ def detect_need_icons(save_debug=False):
             continue
         (cx, cy), radius = cv2.minEnclosingCircle(c)
         circularity = area / (np.pi * radius * radius + 1e-6)
-        if circularity >= NEED_ICON_MIN_CIRCULARITY:
-            found.append((int(cx), int(cy), int(radius)))
+        if circularity < NEED_ICON_CLEAN_CIRCULARITY:
+            # A badge (e.g. favorite marker) stuck on the icon's edge bloats the
+            # blob and drags the enclosing circle off-center. Fall back to the
+            # largest inscribed circle, which ignores the small protrusion.
+            refined = inscribed_circle(c, mask.shape)
+            if refined is None:
+                continue
+            cx, cy, radius = refined
+            if area / (np.pi * radius * radius + 1e-6) > NEED_ICON_BADGE_MAX_AREA_RATIO:
+                continue
+        elif circularity < NEED_ICON_MIN_CIRCULARITY:
+            continue
+        found.append((int(cx), int(cy), int(radius)))
 
     if save_debug:
         debug_img = top_strip.copy()

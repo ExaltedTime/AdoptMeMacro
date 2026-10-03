@@ -1082,7 +1082,8 @@ DEBUG_HANDLERS = {"walk": WalkNeedHandler, **SPECIAL_NEED_HANDLER_CLASSES}
 # here is still detected and matched, but logged and skipped (not resolved)
 # when it comes up. "walk" covers every
 # need name that starts with "walk" (see is_basic_need() below).
-ENABLED_NEEDS = {"catch", "pet", "ride", "walk", "beach", "bored", "school", "cafe", "salon", "choose", "sick", "pizza"}
+ENABLED_NEEDS = {"catch", "pet", "ride", "walk", "cafe", "salon", "choose", "sick", "pizza"} 
+# camping, beach, bored and school are disabled
 
 def is_basic_need(need_name):
     """A basic need has no dedicated handler - it's satisfied by walking to

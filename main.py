@@ -150,6 +150,10 @@ CAFE_WALK_BACK_DURATION = 15.0
 SALON_WALK_LEFT_DURATION = 2.5
 SALON_WALK_FORWARD_DURATION = 15.0
 
+# School need: hold 'w' briefly, then hold 'a', at the nursery.
+SCHOOL_WALK_FORWARD_DURATION = 0.5
+SCHOOL_WALK_LEFT_DURATION = 10.0
+
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75
 FOCUS_CLICK_Y = 5
@@ -1156,10 +1160,41 @@ class SalonNeedHandler(NeedHandler):
         print("[!] Salon complete!")
         return True
 
+class SchoolNeedHandler(NeedHandler):
+    """The 'school' need: teleport to the nursery, hold 'w' briefly then 'a',
+    then respawn (since, unlike every other special need, this one leaves
+    the character somewhere else on the map)."""
+
+    def handle(self):
+        print("[!] SCHOOL NEED")
+        if not focus_roblox():
+            return False
+
+        teleport_to(TELEPORT_PETS_TAB_POS)
+
+        print(f"[debug] walking forward for {SCHOOL_WALK_FORWARD_DURATION}s...")
+        pydirectinput.keyDown("w")
+        try:
+            wait_interruptible(SCHOOL_WALK_FORWARD_DURATION)
+        finally:
+            pydirectinput.keyUp("w")
+
+        time.sleep(0.1)
+        print(f"[debug] walking left for {SCHOOL_WALK_LEFT_DURATION}s...")
+        pydirectinput.keyDown("a")
+        try:
+            wait_interruptible(SCHOOL_WALK_LEFT_DURATION)
+        finally:
+            pydirectinput.keyUp("a")
+
+        respawn_character()
+        print("[!] School complete!")
+        return True
+
 # Need names with dedicated handler logic above, rather than being a basic
 # at-home button click. "walk"/"walk2"/etc. are matched by prefix instead of
 # being listed here - see is_basic_need() / get_special_need_handler().
-SPECIAL_NEED_NAMES = {"catch", "pet", "choose", "ride", "bored", "beach", "cafe", "salon"}
+SPECIAL_NEED_NAMES = {"catch", "pet", "choose", "ride", "bored", "beach", "cafe", "salon", "school"}
 
 # Handler class for each special need above. get_special_need_handler() uses
 # this plus ENABLED_NEEDS below to decide what to do with a detected special
@@ -1174,6 +1209,7 @@ SPECIAL_NEED_HANDLER_CLASSES = {
     "beach": BeachNeedHandler,
     "cafe": CafeNeedHandler,
     "salon": SalonNeedHandler,
+    "school": SchoolNeedHandler,
 }
 
 # Special needs enabled for automatic processing - the single place that
@@ -1181,7 +1217,7 @@ SPECIAL_NEED_HANDLER_CLASSES = {
 # here is still detected and matched, but logged and skipped (not resolved)
 # when it comes up, same as a _ENABLED flag used to do. "walk" covers every
 # need name that starts with "walk" (see is_basic_need() below).
-ENABLED_NEEDS = {"catch", "pet", "ride", "walk", "beach", "bored"}
+ENABLED_NEEDS = {"catch", "pet", "ride", "walk", "beach", "bored", "school"}
 
 def is_basic_need(need_name):
     """A basic need has no dedicated handler - it's satisfied by walking to

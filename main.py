@@ -49,7 +49,7 @@ SCREEN_CENTER_X, SCREEN_CENTER_Y = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2
 # Behavior flags
 FOCUS_WINDOW_ON_ACTION = True  # click the Roblox window to focus it before acting
 SAVE_NEW_NEEDS = False
-MATCH_ONLY_TOP_HALF = True
+MATCH_ONLY_LEFT_HALF = True    # compare only the left half of each icon (a badge sits at its top right)
 PAYCHECK_RECEIVED = False      # set True once detect_paycheck() has dismissed the paycheck popup
 
 # Timing (seconds)
@@ -135,10 +135,12 @@ TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing sp
 TELEPORT_PETS_TAB_POS = (817, 713)       # nursery: pets tab
 TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
 TELEPORT_FOOD_TAB_POS = (753, 804)       # supermarket: food tab
+SICK_FINAL_CLICK_POS = (1045, 660)       # click after the sick need's walk
 
 # Needs that teleport somewhere and walk (see TeleportWalkNeedHandler), then
-# wait for the need to clear. Each entry: where to teleport, and the
-# (key, seconds) holds to perform in order. Pizza and camping durations are
+# wait for the need to clear. Each entry: where to teleport, the
+# (key, seconds) holds to perform in order, and optionally a `final_click`
+# position to click after the last hold. Pizza and camping durations are
 # placeholders until tuned.
 TELEPORT_WALK_NEEDS = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
@@ -148,9 +150,13 @@ TELEPORT_WALK_NEEDS = {
     "salon":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 2.5), ("w", 15.0))),
     "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 2.0), ("a", 6.5), ("s", 3.0))),
     "camping": dict(teleport_pos=TELEPORT_FOOD_TAB_POS,     steps=(("w", 4.0), ("d", 25.0))),
+    "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 1.2), ("d", 5.0), ("w", 2.0)),
+                    final_click=SICK_FINAL_CLICK_POS),
 }
 NEED_GONE_MAX_WAIT = 60.0        # most a teleport need waits for its icon to disappear
 NEED_GONE_POLL_INTERVAL = 5.0    # how often to re-check for the icon during that wait
+NEED_GONE_CONFIRMATIONS = 3      # consecutive checks that must all miss the icon before it counts as cleared
+NEED_GONE_CONFIRM_INTERVAL = 1.0 # pause between those confirming checks
 
 # Game key bindings
 KEY_BACKPACK = "b"
@@ -175,19 +181,23 @@ NEED_ICON_WIDTH_PERCENT = 0.70      # fraction of screen width searched, from th
                                      # keeps the GUI panel (docked top-right) out of frame
 NEED_ICON_BLANK_HEIGHT = 0.15       # top-left UI cluster to ignore (height)
 NEED_ICON_BLANK_WIDTH = 0.20        # top-left UI cluster to ignore (width)
-NEED_ICON_MIN_AREA = 50
-NEED_ICON_MIN_CIRCULARITY = 0.6
-NEED_ICON_CLEAN_CIRCULARITY = 0.85  # below this the blob likely has a badge attached; re-fit the circle
-NEED_ICON_BADGE_MAX_AREA_RATIO = 1.5  # max blob area / inscribed-circle area for a badged icon
+NEED_ICON_MIN_RADIUS = 24           # px, icon ring radius range searched for (Hough circles)
+NEED_ICON_MAX_RADIUS = 34
+NEED_ICON_MIN_DISTANCE = 40         # px, minimum spacing between two icon centers
+NEED_ICON_BLUR_KERNEL = 5           # median blur applied before circle detection
+NEED_ICON_HOUGH_EDGE = 100          # Hough: Canny upper edge threshold
+NEED_ICON_HOUGH_VOTES = 25          # Hough: accumulator votes needed to accept a circle
 CIRCULARITY_EPSILON = 1e-6          # avoids dividing by zero when scoring circularity
 PIXEL_MAX = 255                     # max value of an 8-bit pixel channel
 
 # Need-icon matching (shape comparison, color-independent)
-ICON_MATCH_THRESHOLD = 0.92
+ICON_MATCH_THRESHOLD = 0.93
 ICON_BW_THRESHOLD = 230            # only near-white pixels survive B/W conversion
 ICON_CLAHE_CLIP = 3.0
 ICON_CLAHE_TILE = (8, 8)
 ICON_COMPARE_SIZE = (32, 32)
+ICON_CROP_RADIUS = 28              # px, icon radius that saved/compared crops are cut at (plus ICON_EXTRACT_PADDING)
+ICON_SHIFT_TOLERANCE = 2           # px, how far off-center a detection may be and still match
 
 # Button detection (middle band of screen)
 BUTTON_BAND_Y = (0.40, 0.70)
@@ -214,17 +224,8 @@ DEBUG_BUTTON_LABEL_OFFSET = (-5, -15)      # px offset of the number label from 
 DEBUG_BUTTON_LABEL_SCALE = 0.5
 
 # Color ranges (HSV): lower, upper
-BLUE_RANGE = (np.array([95, 100, 100]), np.array([125, 255, 255]))
 PURPLE_RANGE = (np.array([130, 80, 80]), np.array([160, 255, 255]))
-RED_RANGE_1 = (np.array([0, 100, 100]), np.array([10, 255, 255]))
-RED_RANGE_2 = (np.array([170, 100, 100]), np.array([180, 255, 255]))
-YELLOW_RANGE = (np.array([15, 100, 100]), np.array([35, 255, 255]))
-GREEN_RANGE = (np.array([40, 80, 80]), np.array([80, 255, 255]))
-CYAN_RANGE = (np.array([85, 80, 80]), np.array([110, 255, 255]))
 WHITE_RANGE = (np.array([0, 0, 200]), np.array([180, 40, 255]))
-
-NEED_ICON_COLOR_RANGES = [BLUE_RANGE, PURPLE_RANGE, RED_RANGE_1, RED_RANGE_2,
-                           YELLOW_RANGE, GREEN_RANGE, CYAN_RANGE]
 
 # GUI
 GUI_GEOMETRY = "380x650+1533+110"   # size + position (docked top-right)
@@ -405,28 +406,18 @@ def preprocess_icon(icon_img):
     _, binary = cv2.threshold(enhanced, ICON_BW_THRESHOLD, PIXEL_MAX, cv2.THRESH_BINARY)
     return binary
 
-def compare_icons(icon1, icon2):
-    """Return a 0-1 similarity score between two icon images.
-    If MATCH_ONLY_TOP_HALF is True, only compares the top half of the images.
-    """
-    proc1 = cv2.resize(preprocess_icon(icon1), ICON_COMPARE_SIZE)
-    proc2 = cv2.resize(preprocess_icon(icon2), ICON_COMPARE_SIZE)
+def icon_signature(icon_img):
+    """Reduced, comparable form of an icon: preprocessed, resized to
+    ICON_COMPARE_SIZE, scaled to 0-1, and (if MATCH_ONLY_LEFT_HALF) cut down
+    to its left half so an overlapping event badge doesn't matter."""
+    proc = cv2.resize(preprocess_icon(icon_img), ICON_COMPARE_SIZE).astype(np.float32) / PIXEL_MAX
+    if MATCH_ONLY_LEFT_HALF:
+        proc = proc[:, :proc.shape[1] // 2]
+    return proc
 
-    # If MATCH_ONLY_TOP_HALF flag is set, crop to top half
-    if MATCH_ONLY_TOP_HALF:
-        height = proc1.shape[0]
-        top_half = height // 2
-        proc1 = proc1[:top_half, :]
-        proc2 = proc2[:top_half, :]
-
-    mse = np.mean((proc1.astype(float) - proc2.astype(float)) ** 2)
-    mse_sim = 1.0 - (mse / (PIXEL_MAX ** 2))
-
-    hist1 = cv2.normalize(cv2.calcHist([proc1], [0], None, [PIXEL_MAX + 1], [0, PIXEL_MAX + 1]), None).flatten()
-    hist2 = cv2.normalize(cv2.calcHist([proc2], [0], None, [PIXEL_MAX + 1], [0, PIXEL_MAX + 1]), None).flatten()
-    hist_sim = 1.0 / (1.0 + cv2.compareHist(hist1, hist2, cv2.HISTCMP_BHATTACHARYYA))
-
-    return (mse_sim + hist_sim) / 2.0
+def compare_signatures(sig1, sig2):
+    """Return a 0-1 similarity score (1 = identical) between two signatures."""
+    return 1.0 - float(np.mean((sig1 - sig2) ** 2))
 
 # ============================================================================
 # NEED ICON DETECTION
@@ -438,52 +429,23 @@ def extract_icon(img, cx, cy, radius, padding=ICON_EXTRACT_PADDING):
     y0, y1 = max(0, cy - r), min(img.shape[0], cy + r)
     return img[y0:y1, x0:x1].copy()
 
-def inscribed_circle(contour):
-    """Largest circle that fits inside a contour, as (cx, cy, radius), or None."""
-    x, y, bw, bh = cv2.boundingRect(contour)
-    blob = np.zeros((bh + 2, bw + 2), dtype=np.uint8)
-    cv2.drawContours(blob, [contour - np.array([x - 1, y - 1])], -1, PIXEL_MAX, cv2.FILLED)
-    dist = cv2.distanceTransform(blob, cv2.DIST_L2, 5)
-    _, radius, _, (px, py) = cv2.minMaxLoc(dist)
-    if radius <= 0:
-        return None
-    return px + x - 1, py + y - 1, radius
-
 def detect_need_icons(save_debug=False):
-    """Detect circular need icons at the top of the screen (any color)."""
+    """Detect the circular need icons at the top of the screen. Icons are
+    found by their round outline (Hough circles, within a fixed radius
+    range), not by color, so event badges overlapping an icon, differently
+    colored icons and busy backgrounds don't affect detection. Returns
+    ((cx, cy, radius) per icon, left to right) and the full screenshot."""
     img = grab_screen()
     h, w = img.shape[:2]
 
     top_strip = img[0:int(h * NEED_ICON_TOP_PERCENT), 0:int(w * NEED_ICON_WIDTH_PERCENT)].copy()
     top_strip[0:int(h * NEED_ICON_BLANK_HEIGHT), 0:int(w * NEED_ICON_BLANK_WIDTH)] = 0
 
-    hsv = cv2.cvtColor(top_strip, cv2.COLOR_BGR2HSV)
-    mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
-    for lower, upper in NEED_ICON_COLOR_RANGES:
-        mask = cv2.bitwise_or(mask, cv2.inRange(hsv, lower, upper))
-
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    found = []
-    for c in contours:
-        area = cv2.contourArea(c)
-        if area < NEED_ICON_MIN_AREA:
-            continue
-        (cx, cy), radius = cv2.minEnclosingCircle(c)
-        circularity = area / (np.pi * radius * radius + CIRCULARITY_EPSILON)
-        if circularity < NEED_ICON_CLEAN_CIRCULARITY:
-            # A badge (e.g. favorite marker) stuck on the icon's edge bloats the
-            # blob and drags the enclosing circle off-center. Fall back to the
-            # largest inscribed circle, which ignores the small protrusion.
-            refined = inscribed_circle(c)
-            if refined is None:
-                continue
-            cx, cy, radius = refined
-            if area / (np.pi * radius * radius + CIRCULARITY_EPSILON) > NEED_ICON_BADGE_MAX_AREA_RATIO:
-                continue
-        elif circularity < NEED_ICON_MIN_CIRCULARITY:
-            continue
-        found.append((int(cx), int(cy), int(radius)))
+    gray = cv2.medianBlur(cv2.cvtColor(top_strip, cv2.COLOR_BGR2GRAY), NEED_ICON_BLUR_KERNEL)
+    circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, dp=1, minDist=NEED_ICON_MIN_DISTANCE,
+                               param1=NEED_ICON_HOUGH_EDGE, param2=NEED_ICON_HOUGH_VOTES,
+                               minRadius=NEED_ICON_MIN_RADIUS, maxRadius=NEED_ICON_MAX_RADIUS)
+    found = [] if circles is None else sorted((int(x), int(y), int(r)) for x, y, r in circles[0])
 
     if save_debug:
         debug_img = top_strip.copy()
@@ -493,8 +455,17 @@ def detect_need_icons(save_debug=False):
 
     return found, img
 
-def find_matching_need(icon_img):
-    """Compare a detected icon against saved needs. Returns (name, score)."""
+def icon_variants(img, cx, cy):
+    """Crops of the icon centered within +/- ICON_SHIFT_TOLERANCE px of
+    (cx, cy), so a detection that's a pixel or two off-center still lines up
+    with the saved reference."""
+    shifts = range(-ICON_SHIFT_TOLERANCE, ICON_SHIFT_TOLERANCE + 1)
+    return [extract_icon(img, cx + dx, cy + dy, ICON_CROP_RADIUS) for dx in shifts for dy in shifts]
+
+def find_matching_need(icon_variants):
+    """Compare a detected icon (its icon_variants() crops) against the saved
+    needs, scoring each by its best-aligned variant. Returns (name, score)."""
+    live_signatures = [icon_signature(v) for v in icon_variants]
     need_files = sorted(f for f in os.listdir(NEEDS_DIR) if f.endswith('.png'))
     if not need_files:
         return None, 0.0
@@ -504,7 +475,8 @@ def find_matching_need(icon_img):
         saved_icon = cv2.imread(os.path.join(NEEDS_DIR, need_file))
         if saved_icon is None:
             continue
-        score = compare_icons(icon_img, saved_icon)
+        saved_signature = icon_signature(saved_icon)
+        score = max(compare_signatures(sig, saved_signature) for sig in live_signatures)
         if score > best_score:
             best_match, best_score = need_file[:-4], score
 
@@ -529,29 +501,36 @@ def identify_icons(found_icons, full_img):
     """Match each detected icon against the saved needs. Yields
     (index, icon_image, need_name_or_None, score) per icon, checking
     check_running() between icons."""
-    for idx, (cx, cy, radius) in enumerate(found_icons):
+    for idx, (cx, cy, _) in enumerate(found_icons):
         check_running()
-        icon_img = extract_icon(full_img, cx, cy, radius)
-        need_name, score = find_matching_need(icon_img)
+        icon_img = extract_icon(full_img, cx, cy, ICON_CROP_RADIUS)
+        need_name, score = find_matching_need(icon_variants(full_img, cx, cy))
         yield idx, icon_img, need_name, score
 
 def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=NEED_GONE_POLL_INTERVAL):
     """Wait for `need_name`'s icon to stop being detected, for at most
-    `max_wait` seconds - whichever happens first. Interruptible."""
+    `max_wait` seconds - whichever happens first. The icon must be missing
+    NEED_GONE_CONFIRMATIONS checks in a row (any sighting resets the count),
+    so a single missed detection can't end the wait early. Interruptible."""
     print(f"[debug] waiting up to {max_wait}s for {need_name} to clear...")
     deadline = time.time() + max_wait
+    misses = 0
     while True:
         remaining = deadline - time.time()
         if remaining <= 0:
             print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
             return
-        wait_interruptible(min(poll_interval, remaining))
-        if False:
-            found_icons, full_img = detect_need_icons()
-            visible = [name for _, _, name, _ in identify_icons(found_icons, full_img)]
-            if need_name not in visible:
-                print(f"[debug] {need_name} cleared")
-                return
+        wait_interruptible(min(NEED_GONE_CONFIRM_INTERVAL if misses else poll_interval, remaining))
+        found_icons, full_img = detect_need_icons()
+        visible = [name for _, _, name, _ in identify_icons(found_icons, full_img)]
+        if need_name in visible:
+            misses = 0
+            continue
+        misses += 1
+        print(f"[debug] {need_name} not detected ({misses}/{NEED_GONE_CONFIRMATIONS})")
+        if misses >= NEED_GONE_CONFIRMATIONS:
+            print(f"[debug] {need_name} cleared")
+            return
 
 # ============================================================================
 # CLICKING
@@ -1071,6 +1050,11 @@ class TeleportWalkNeedHandler(NeedHandler):
             print(f"[debug] holding {key} for {duration}s...")
             hold_key(key, duration)
 
+        final_click = self.config.get("final_click")
+        if final_click:
+            print(f"[debug] clicking {final_click}...")
+            hover_click(*final_click)
+
         wait_until_need_gone(self.name)
 
         print(f"[!] {self.name.capitalize()} complete!")
@@ -1096,7 +1080,7 @@ DEBUG_HANDLERS = {"walk": WalkNeedHandler, **SPECIAL_NEED_HANDLER_CLASSES}
 # here is still detected and matched, but logged and skipped (not resolved)
 # when it comes up. "walk" covers every
 # need name that starts with "walk" (see is_basic_need() below).
-ENABLED_NEEDS = {"catch", "pet", "ride", "walk", "beach", "bored", "school", "cafe", "salon", "choose"}
+ENABLED_NEEDS = {"catch", "pet", "ride", "walk", "beach", "bored", "school", "cafe", "salon", "choose", "sick"}
 
 def is_basic_need(need_name):
     """A basic need has no dedicated handler - it's satisfied by walking to

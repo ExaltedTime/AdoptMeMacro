@@ -17,7 +17,7 @@ import os, sys, time, random, threading
 from abc import ABC, abstractmethod
 from pathlib import Path
 import tkinter as tk
-from tkinter import scrolledtext
+from tkinter import scrolledtext, ttk
 
 import numpy as np
 import cv2
@@ -154,6 +154,12 @@ SALON_WALK_FORWARD_DURATION = 15.0
 # School need: hold 'w' briefly, then hold 'a', at the nursery.
 SCHOOL_WALK_FORWARD_DURATION = 0.5
 SCHOOL_WALK_LEFT_DURATION = 10.0
+
+# Pizza and camping needs: forward then left at the dealership (placeholder durations).
+PIZZA_WALK_FORWARD_DURATION = 5.0
+PIZZA_WALK_LEFT_DURATION = 5.0
+CAMPING_WALK_FORWARD_DURATION = 5.0
+CAMPING_WALK_LEFT_DURATION = 5.0
 
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75
@@ -536,7 +542,7 @@ def scroll_wheel_up(x, y, amount):
     pyautogui.scroll(amount)
     time.sleep(POST_CLICK_DELAY)
 
-def hover_move(x, y, duration):
+def hover_move(x, y, duration=CLICK_MOVE_DURATION):
     """Move the mouse to (x, y) over `duration` seconds using SendInput
     (pydirectinput), then nudge it a couple of pixels back onto the target.
     Roblox ignores pyautogui's SetCursorPos warps as hover movement and only
@@ -549,7 +555,7 @@ def hover_move(x, y, duration):
     pydirectinput.moveTo(x, y)
     time.sleep(CLICK_SETTLE_DELAY)
 
-def hover_click(x, y, duration):
+def hover_click(x, y, duration=CLICK_MOVE_DURATION):
     """hover_move() to (x, y), then click."""
     hover_move(x, y, duration)
     pydirectinput.click()
@@ -676,12 +682,12 @@ def detect_buttons(save_debug=False):
     return positions
 
 def click_button(button_x, button_y, need_name):
-    """Focus the game, then click a mapped need button with a jitter pattern."""
+    """Focus the game, then click a mapped need button with a hover click."""
     if not focus_roblox():
         return False
     time.sleep(FOCUS_DELAY)
     print(f"[debug] clicking {need_name} at ({button_x}, {button_y})")
-    jitter_click(button_x, button_y)
+    hover_click(button_x, button_y)
     return True
 
 def refresh_button_mapping():
@@ -828,17 +834,17 @@ class CatchNeedHandler(NeedHandler):
 
         # Navigate to toys
         print("[debug] opening toys...")
-        jitter_click(*CATCH_TOYS_POS)
+        hover_click(*CATCH_TOYS_POS)
         wait_interruptible(CATCH_CLICK_DELAY)
 
         # Click squeaky toy
         print("[debug] selecting squeaky toy...")
-        jitter_click(*CATCH_SQUEAKY_TOY_POS)
+        hover_click(*CATCH_SQUEAKY_TOY_POS)
         wait_interruptible(CATCH_CLICK_DELAY)
 
         # Equip the toy
         print("[debug] equipping toy...")
-        jitter_click(*CATCH_EQUIP_POS)
+        hover_click(*CATCH_EQUIP_POS)
         wait_interruptible(CATCH_CLICK_DELAY)
 
         # Close backpack with 'b' key
@@ -922,7 +928,7 @@ class ChooseNeedHandler(NeedHandler):
             return False
 
         print("[debug] focusing pet...")
-        jitter_click(*FOCUS_PET_POS)
+        hover_click(*FOCUS_PET_POS)
         wait_interruptible(UI_SETTLE)
 
         print(f"[debug] searching screen for color {CHOOSE_BUTTON_COLOR}...")
@@ -935,7 +941,7 @@ class ChooseNeedHandler(NeedHandler):
         hover_click(*match, duration=CHOOSE_SLOW_MOVE_DURATION)
         wait_interruptible(UI_SETTLE)
         time.sleep(2)
-        jitter_click(*match)
+        hover_click(*match)
 
         
         print("[debug] clicking middle of screen...")
@@ -957,7 +963,7 @@ class ChooseNeedHandler(NeedHandler):
         hover_click(*match, duration=CHOOSE_SLOW_MOVE_DURATION)
         wait_interruptible(UI_SETTLE)
         time.sleep(2)
-        jitter_click(*match)
+        hover_click(*match)
 
         
         print("[debug] clicking middle of screen...")
@@ -1012,15 +1018,15 @@ class RideNeedHandler(NeedHandler):
         wait_interruptible(CATCH_CLICK_DELAY)
 
         print("[debug] opening vehicles...")
-        jitter_click(*RIDE_VEHICLES_POS)
+        hover_click(*RIDE_VEHICLES_POS)
         wait_interruptible(CATCH_CLICK_DELAY)
 
         print("[debug] selecting first vehicle...")
-        jitter_click(*RIDE_FIRST_VEHICLE_POS)
+        hover_click(*RIDE_FIRST_VEHICLE_POS)
         wait_interruptible(CATCH_CLICK_DELAY)
 
         print("[debug] equipping vehicle...")
-        jitter_click(*RIDE_EQUIP_POS)
+        hover_click(*RIDE_EQUIP_POS)
         wait_interruptible(CATCH_CLICK_DELAY)
 
         print("[debug] closing backpack...")
@@ -1043,11 +1049,11 @@ def teleport_to(category_pos):
     wait_interruptible(TELEPORT_CLICK_DELAY)
 
     print("[debug] selecting category...")
-    jitter_click(*category_pos)
+    hover_click(*category_pos)
     wait_interruptible(TELEPORT_CLICK_DELAY)
-    jitter_click(*GENERAL_TELEPORT_POS_2)
+    hover_click(*GENERAL_TELEPORT_POS_2)
     wait_interruptible(TELEPORT_CLICK_DELAY)
-    jitter_click(*GENERAL_TELEPORT_POS_3)
+    hover_click(*GENERAL_TELEPORT_POS_3)
     wait_interruptible(TELEPORT_WAIT)
     time.sleep(5)
     print("[debug] walking backward...")
@@ -1211,10 +1217,70 @@ class SchoolNeedHandler(NeedHandler):
         print("[!] School complete!")
         return True
 
+class PizzaNeedHandler(NeedHandler):
+    """The 'pizza' need: teleport to the dealership, hold 'w' then 'a', then
+    respawn. Durations are placeholders until tuned."""
+
+    def handle(self):
+        print("[!] PIZZA NEED")
+        if not focus_roblox():
+            return False
+
+        teleport_to(TELEPORT_VEHICLES_TAB_POS)
+
+        print(f"[debug] walking forward for {PIZZA_WALK_FORWARD_DURATION}s...")
+        pydirectinput.keyDown("w")
+        try:
+            wait_interruptible(PIZZA_WALK_FORWARD_DURATION)
+        finally:
+            pydirectinput.keyUp("w")
+
+        time.sleep(0.1)
+        print(f"[debug] walking left for {PIZZA_WALK_LEFT_DURATION}s...")
+        pydirectinput.keyDown("a")
+        try:
+            wait_interruptible(PIZZA_WALK_LEFT_DURATION)
+        finally:
+            pydirectinput.keyUp("a")
+
+        respawn_character()
+        print("[!] Pizza complete!")
+        return True
+
+class CampingNeedHandler(NeedHandler):
+    """The 'camping' need: same movement as pizza for now (dealership, 'w'
+    then 'a', respawn), with its own placeholder durations."""
+
+    def handle(self):
+        print("[!] CAMPING NEED")
+        if not focus_roblox():
+            return False
+
+        teleport_to(TELEPORT_VEHICLES_TAB_POS)
+
+        print(f"[debug] walking forward for {CAMPING_WALK_FORWARD_DURATION}s...")
+        pydirectinput.keyDown("w")
+        try:
+            wait_interruptible(CAMPING_WALK_FORWARD_DURATION)
+        finally:
+            pydirectinput.keyUp("w")
+
+        time.sleep(0.1)
+        print(f"[debug] walking left for {CAMPING_WALK_LEFT_DURATION}s...")
+        pydirectinput.keyDown("a")
+        try:
+            wait_interruptible(CAMPING_WALK_LEFT_DURATION)
+        finally:
+            pydirectinput.keyUp("a")
+
+        respawn_character()
+        print("[!] Camping complete!")
+        return True
+
 # Need names with dedicated handler logic above, rather than being a basic
 # at-home button click. "walk"/"walk2"/etc. are matched by prefix instead of
 # being listed here - see is_basic_need() / get_special_need_handler().
-SPECIAL_NEED_NAMES = {"catch", "pet", "choose", "ride", "bored", "beach", "cafe", "salon", "school"}
+SPECIAL_NEED_NAMES = {"catch", "pet", "choose", "ride", "bored", "beach", "cafe", "salon", "school", "pizza", "camping"}
 
 # Handler class for each special need above. get_special_need_handler() uses
 # this plus ENABLED_NEEDS below to decide what to do with a detected special
@@ -1230,7 +1296,13 @@ SPECIAL_NEED_HANDLER_CLASSES = {
     "cafe": CafeNeedHandler,
     "salon": SalonNeedHandler,
     "school": SchoolNeedHandler,
+    "pizza": PizzaNeedHandler,
+    "camping": CampingNeedHandler,
 }
+
+# Every handler the GUI's Debug tab can run on its own: the special needs
+# above plus walk, which is matched by prefix and so isn't in the dict.
+DEBUG_HANDLERS = {"walk": WalkNeedHandler, **SPECIAL_NEED_HANDLER_CLASSES}
 
 # Special needs enabled for automatic processing - the single place that
 # decides whether a detected special need actually runs. A need not listed
@@ -1340,9 +1412,9 @@ def detect_paycheck():
         return False
 
     print("[debug] paycheck popup detected, dismissing...")
-    jitter_click(*PAYCHECK_DISMISS_POS_1)
+    hover_click(*PAYCHECK_DISMISS_POS_1)
     simple_click(*EMPTY_POS)
-    jitter_click(*PAYCHECK_DISMISS_POS_2)
+    hover_click(*PAYCHECK_DISMISS_POS_2)
     PAYCHECK_RECEIVED = True
     return True
 
@@ -1472,8 +1544,12 @@ class AdoptMeGUI:
         is deliberately excluded - it must stay clickable while something
         is running, since that's the whole point of it."""
         # Main buttons
-        btn_frame = tk.Frame(self.root, bg=self.bg)
-        btn_frame.pack(fill=tk.BOTH, expand=False, padx=8, pady=8)
+        notebook = ttk.Notebook(self.root)
+        notebook.pack(fill=tk.X, padx=8, pady=(8, 0))
+        btn_frame = tk.Frame(notebook, bg=self.bg)
+        debug_tab = tk.Frame(notebook, bg=self.bg)
+        notebook.add(btn_frame, text="Main")
+        notebook.add(debug_tab, text="Debug")
 
         self.action_buttons = []  # every button that starts a background task
 
@@ -1537,25 +1613,9 @@ class AdoptMeGUI:
         btn_respawn.pack(fill=tk.X, pady=2)
         self.action_buttons.append(btn_respawn)
 
-        tk.Frame(btn_frame, bg=self.accent, height=1).pack(fill=tk.X, pady=2)
-        tk.Label(btn_frame, text="Tests", font=("Courier", 9, "bold"), bg=self.bg, fg=self.accent).pack(anchor=tk.W)
-
-        btn_test_choose = tk.Button(btn_frame, text="[TEST] Choose", command=self.test_choose,
-                                     font=("Courier", 9), bg="#e74c3c", fg=self.fg, height=1, cursor="hand2")
-        btn_test_choose.pack(fill=tk.X, pady=2)
-        self.action_buttons.append(btn_test_choose)
-
-        # Cafe/salon stay out of ENABLED_NEEDS, so these are their only way
-        # to run outside of automatic need processing, same as choose.
-        btn_test_cafe = tk.Button(btn_frame, text="[TEST] Cafe", command=self.test_cafe,
-                                   font=("Courier", 9), bg="#e74c3c", fg=self.fg, height=1, cursor="hand2")
-        btn_test_cafe.pack(fill=tk.X, pady=2)
-        self.action_buttons.append(btn_test_cafe)
-
-        btn_test_salon = tk.Button(btn_frame, text="[TEST] Salon", command=self.test_salon,
-                                    font=("Courier", 9), bg="#e74c3c", fg=self.fg, height=1, cursor="hand2")
-        btn_test_salon.pack(fill=tk.X, pady=2)
-        self.action_buttons.append(btn_test_salon)
+        # Debug tab: one button per need handler, regardless of whether it's in
+        # ENABLED_NEEDS, so any handler can be run on its own.
+        self.build_debug_tab(debug_tab)
 
         # Debug console
         debug_frame = tk.Frame(self.root, bg=self.bg)
@@ -1642,37 +1702,27 @@ class AdoptMeGUI:
     def run_workflow_loop(self):
         self.run_async(run_workflow_loop)
 
-    def test_choose(self):
-        """Run the choose handler on its own, outside the normal need-detection
-        flow. Useful while 'choose' is not in ENABLED_NEEDS, since the handler
-        is fully working code that's just not wired into automatic need
-        processing yet."""
-        def test():
-            print("\n[TEST] Running choose handler...")
-            ChooseNeedHandler().handle()
-            print("[TEST] Choose handler complete\n")
-        self.run_async(test)
+    def build_debug_tab(self, parent):
+        """Fill the Debug tab with a two-column grid of [TEST] buttons, one
+        per entry in DEBUG_HANDLERS."""
+        tk.Label(parent, text="Run a need handler on its own", font=("Courier", 9, "bold"),
+                 bg=self.bg, fg=self.accent).grid(row=0, column=0, columnspan=2, sticky=tk.W, padx=4, pady=(4, 2))
+        for col in range(2):
+            parent.grid_columnconfigure(col, weight=1, uniform="debug")
+        for i, (name, handler_cls) in enumerate(DEBUG_HANDLERS.items()):
+            btn = tk.Button(parent, text=name.capitalize(),
+                            command=lambda n=name, c=handler_cls: self.test_handler(n, c),
+                            font=("Courier", 9), bg="#e74c3c", fg=self.fg, cursor="hand2")
+            btn.grid(row=1 + i // 2, column=i % 2, sticky=tk.EW, padx=2, pady=2)
+            self.action_buttons.append(btn)
 
-    def test_cafe(self):
-        """Run the cafe handler on its own, outside the normal need-detection
-        flow. Useful while 'cafe' is not in ENABLED_NEEDS, since the handler
-        is fully working code that's just not wired into automatic need
-        processing yet."""
+    def test_handler(self, name, handler_cls):
+        """Run one need handler on its own, outside the normal need-detection
+        flow, so it can be tried even when it isn't in ENABLED_NEEDS."""
         def test():
-            print("\n[TEST] Running cafe handler...")
-            CafeNeedHandler().handle()
-            print("[TEST] Cafe handler complete\n")
-        self.run_async(test)
-
-    def test_salon(self):
-        """Run the salon handler on its own, outside the normal need-detection
-        flow. Useful while 'salon' is not in ENABLED_NEEDS, since the handler
-        is fully working code that's just not wired into automatic need
-        processing yet."""
-        def test():
-            print("\n[TEST] Running salon handler...")
-            SalonNeedHandler().handle()
-            print("[TEST] Salon handler complete\n")
+            print(f"\n[TEST] Running {name} handler...")
+            handler_cls().handle()
+            print(f"[TEST] {name.capitalize()} handler complete\n")
         self.run_async(test)
 
     def stop(self):

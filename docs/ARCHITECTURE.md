@@ -95,7 +95,7 @@ character standing.
   [Need-icon matching](#need-icon-matching).
 - **NEED ICON DETECTION** - `detect_need_icons()`, `find_matching_need()`,
   `prompt_rename_need()`. See [Need-icon detection](#need-icon-detection).
-- **CLICKING** - `jitter_click()`, `simple_click()`, `slow_click()`,
+- **CLICKING** - `hover_click()`, `hover_move()`, `jitter_click()`, `simple_click()`, `slow_click()`,
   `scroll_wheel_up()`, `wait_interruptible()`, `release_all_inputs()`. See
   [Click & input primitives](#click--input-primitives).
 - **BUTTON DETECTION** - `detect_buttons()`, `refresh_button_mapping()`,
@@ -197,10 +197,14 @@ the buttons:
 
 ## Click & input primitives
 
-Three click styles, all built on the same shape (move → settle → click →
+Click styles, all built on the same shape (move → settle → click →
 settle):
 
-- **`jitter_click()`** - clicks, nudges the mouse a few random pixels
+- **`hover_click()`** / **`hover_move()`** - the default for everything in
+  game. Moves with SendInput (`pydirectinput`), nudges `HOVER_NUDGE_PIXELS`
+  and back so Roblox registers real mouse movement (hover), then clicks.
+  Roblox ignores `pyautogui`'s cursor warps as hover movement.
+- **`jitter_click()`** - only still used by the pet handler. Clicks, nudges the mouse a few random pixels
   (`JITTER_PIXELS`), clicks again. Used for real in-game action buttons,
   since a single perfectly-still click sometimes doesn't register.
 - **`simple_click()`** - one click, no jitter. Used for backpack/toy UI.
@@ -258,7 +262,7 @@ disabled special.
 
 `PET_ENABLED` and `CHOOSE_ENABLED` default to `False` - both handlers are
 fully implemented but not wired into automatic processing yet. Their
-`[TEST]` buttons in the GUI run them directly regardless of the flag.
+buttons on the GUI's Debug tab (one per handler) run them directly regardless of the flag.
 `CATCH_ENABLED` exists for the same purpose but defaults to `True`.
 
 ## Stopping & focus safety

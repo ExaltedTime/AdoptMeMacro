@@ -61,9 +61,8 @@ no-op as progress.
        respawning. A special need never walks to the buttons first; it
        acts from wherever the character already is.
    - If the need actually ran (a basic click, or an enabled special
-     handler), the character respawns immediately (handlers that already
-     respawn themselves - `respawns_itself = True`, i.e. the
-     teleport-and-walk needs - are not respawned a second time) - **before** the next
+     handler), the character respawns immediately (always done by
+     `process_needs()`, never by the handlers themselves) - **before** the next
      matched need is even looked at.
 6. `process_needs()` returns `True` if at least one need in the list
    actually ran, `False` otherwise (e.g. every match turned out to be a
@@ -236,7 +235,7 @@ that runs it directly regardless of `ENABLED_NEEDS`.
 | `pet` | `PetNeedHandler`: click to focus the pet, then hold the mouse down and trace a circle of radius `PET_CIRCLE_RADIUS` around screen center for `PET_CIRCLE_DURATION`. |
 | `choose` | `ChooseNeedHandler`: focus the pet, find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. *Not in `ENABLED_NEEDS` by default.* |
 | `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then backpack → vehicles → first vehicle → equip → close backpack, then `walk_alternating(("w", "s"), RIDE_WALK_DURATION)`. |
-| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, optionally wait, then respawn. Pizza and camping durations are placeholders. |
+| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` - wait up to `NEED_GONE_MAX_WAIT` (60s), polling every `NEED_GONE_POLL_INTERVAL`, ending early once the need's icon is no longer detected. `process_needs()` respawns afterwards. Pizza and camping durations are placeholders. |
 | `walk` (any name starting with it) | `WalkNeedHandler`: `walk_alternating(("a", "d"), WALK_TOTAL_DURATION)`. |
 
 Dispatch: `is_basic_need(name)` is true only for the names in

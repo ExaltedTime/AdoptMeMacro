@@ -57,9 +57,9 @@ RESPAWN_KEY_DURATION = 0.05    # how long each respawn key is held
 RESPAWN_WAIT = 4.0             # settle time after respawning, before it's usable
 WALK_TO_BUTTONS_DURATION = 0.8 # time spent walking forward to reach the action buttons
 WALK_ALTERNATING_STEP = 1.0    # duration of each a/d press in alternating walk pattern
-WALK_STEP_GAP = 0.1            # pause between steps in the alternating walk pattern
+KEY_STEP_GAP = 0.1             # pause between consecutive key holds (walk patterns, teleport-walk needs)
 WALK_TOTAL_DURATION = 35.0     # total duration to keep walking back and forth
-UI_SETTLE = 0.5                # generic pause for UI to catch up
+UI_SETTLE = 0.5                # generic pause for UI to catch up (between clicks in a sequence)
 FOCUS_DELAY = 0.3              # pause after focusing the window
 FOCUS_CLICK_SETTLE_DELAY = 0.1 # pause after the window-focus click
 CLICK_MOVE_DURATION = 0.3      # mouse travel time for an ordinary click
@@ -73,12 +73,11 @@ LOOP_DELAY = 2.0               # pause between iterations of the workflow loop
 STOP_CHECK_INTERVAL = 0.1      # granularity of the interruptible wait loop
 CATCH_WAIT_AFTER_EQUIP = 2.0   # wait after equipping toy before throwing
 CATCH_EMOTE_DELAY = 10.0       # delay between throw clicks
-CATCH_CLICK_DELAY = 0.5        # delay between catch sequence clicks
 CATCH_THROW_COUNT = 3          # number of times the toy is thrown
-CATCH_SCROLL_TIME = 3        # seconds the zoom-in key is held before throwing
+CATCH_ZOOM_DURATION = 3.0      # seconds the zoom-in key is held before throwing
 PET_CIRCLE_DURATION = 10.0     # how long to make circles with mouse
 PET_CIRCLE_RADIUS = 100                # radius (px) of the circle traced around screen center
-PET_CIRCLE_START_MOVE_DURATION = 0.1   # time to move to the circle's starting point
+PET_SETTLE_DELAY = 0.1                 # pause after each mouse move/click before the next pet step
 PET_CIRCLE_STEP_MOVE_DURATION = 0.05   # time for each small step around the circle
 ICON_EXTRACT_PADDING = 5       # px of padding added around a detected icon's radius
 
@@ -100,8 +99,9 @@ FOCUS_PET_POS = (1114, 692)
 # The 'choose' need's button is matched by its exact color rather than shape,
 # since it's just a plain circle with no distinguishing icon. Given as (R, G, B).
 CHOOSE_BUTTON_COLOR = (181, 6, 254)
-HOVER_NUDGE_PIXELS = 2          # hover_move() wiggle so Roblox registers real mouse movement
 CHOOSE_SLOW_MOVE_DURATION = 1.0  # deliberate, slow mouse travel to the found button
+CHOOSE_HOVER_WAIT = 2.0          # hover over the found button this long before the real click
+CHOOSE_DISMISS_WAIT = 1.0        # pause after the first center click, before the hover-and-click dismiss
 
 # The paycheck popup's CASH OUT button, matched by exact color the same way
 # as CHOOSE_BUTTON_COLOR above. TODO: sample the real RGB from your own
@@ -126,8 +126,8 @@ RIDE_WALK_DURATION = 40.0      # total time spent walking back and forth while r
 # landing spot. Only the category tab differs per destination (passed into
 # teleport_to() as `category_pos`); everything else is always the same,
 # hence "general".
-TELEPORT_CLICK_DELAY = 0.5        # pause between each step of the sequence
-TELEPORT_WAIT = 5.0                # wait after the teleport click, for it to take effect
+TELEPORT_WAIT = 10.0               # wait after the teleport click, for it to take effect
+TELEPORT_SETTLE_WAIT = 5.0         # wait after stepping back, for the landing to settle
 GENERAL_TELEPORT_POS_2 = (895, 705)
 GENERAL_TELEPORT_POS_3 = (1048, 658)
 TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing spot
@@ -135,20 +135,28 @@ TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing sp
 TELEPORT_PETS_TAB_POS = (817, 713)       # nursery: pets tab
 TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
 
-# Needs that teleport somewhere, walk, and then respawn (see
-# TeleportWalkNeedHandler). Each entry: where to teleport, the (key, seconds)
-# holds to perform in order, and an optional wait afterwards, in seconds.
-# Pizza and camping durations are placeholders until tuned.
+# Needs that teleport somewhere and walk (see TeleportWalkNeedHandler), then
+# wait for the need to clear. Each entry: where to teleport, and the
+# (key, seconds) holds to perform in order. Pizza and camping durations are
+# placeholders until tuned.
 TELEPORT_WALK_NEEDS = {
-    "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0)), wait_after=60.0),
-    "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),),             wait_after=60.0),
+    "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
+    "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),)),
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 0.5), ("a", 10.0))),
-    "cafe":    dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 3.1), ("s", 15.0)),  wait_after=60.0),
+    "cafe":    dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 3.1), ("s", 15.0))),
     "salon":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 2.5), ("w", 15.0))),
     "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 5.0), ("a", 5.0))),
     "camping": dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 5.0), ("a", 5.0))),
 }
-TELEPORT_WALK_STEP_GAP = 0.1   # pause between consecutive key holds in those needs
+NEED_GONE_MAX_WAIT = 60.0        # most a teleport need waits for its icon to disappear
+NEED_GONE_POLL_INTERVAL = 5.0    # how often to re-check for the icon during that wait
+
+# Game key bindings
+KEY_BACKPACK = "b"
+KEY_MOUNT = "e"
+KEY_ZOOM_IN = "i"
+MOVE_KEYS = ("w", "a", "s", "d")
+RESPAWN_KEYS = ("esc", "r", "enter")
 
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75
@@ -156,6 +164,9 @@ FOCUS_CLICK_Y = 5
 
 # Jitter click (click, nudge mouse a few pixels, click again)
 JITTER_PIXELS = 5
+
+# Hover move: wiggle so Roblox registers real mouse movement
+HOVER_NUDGE_PIXELS = 2
 
 # Need-icon detection (top strip of screen)
 NEED_ICON_TOP_PERCENT = 0.15        # fraction of screen height searched for icons
@@ -167,6 +178,8 @@ NEED_ICON_MIN_AREA = 50
 NEED_ICON_MIN_CIRCULARITY = 0.6
 NEED_ICON_CLEAN_CIRCULARITY = 0.85  # below this the blob likely has a badge attached; re-fit the circle
 NEED_ICON_BADGE_MAX_AREA_RATIO = 1.5  # max blob area / inscribed-circle area for a badged icon
+CIRCULARITY_EPSILON = 1e-6          # avoids dividing by zero when scoring circularity
+PIXEL_MAX = 255                     # max value of an 8-bit pixel channel
 
 # Need-icon matching (shape comparison, color-independent)
 ICON_MATCH_THRESHOLD = 0.92
@@ -211,6 +224,23 @@ WHITE_RANGE = (np.array([0, 0, 200]), np.array([180, 40, 255]))
 
 NEED_ICON_COLOR_RANGES = [BLUE_RANGE, PURPLE_RANGE, RED_RANGE_1, RED_RANGE_2,
                            YELLOW_RANGE, GREEN_RANGE, CYAN_RANGE]
+
+# GUI
+GUI_GEOMETRY = "380x650+1533+110"   # size + position (docked top-right)
+GUI_ALPHA = 0.95
+GUI_FONT = "Courier"
+GUI_BG = "#1a1a1a"
+GUI_ACCENT = "#0d7377"
+GUI_FG = "#fff"
+GUI_START_COLOR = "#2ecc71"
+GUI_STOP_COLOR = "#d62828"
+GUI_LOOP_COLOR = "#2980b9"
+GUI_RESPAWN_COLOR = "#8e44ad"
+GUI_TEST_COLOR = "#e74c3c"
+GUI_CONSOLE_BG = "#0a0a0a"
+GUI_CONSOLE_FG = "#00ff00"
+GUI_SQUARE_BUTTON_SIZE = 44         # px, start/stop buttons are square
+GUI_STATUS_HEIGHT = 25              # px
 
 STOP_FLAG = False
 
@@ -371,7 +401,7 @@ def preprocess_icon(icon_img):
     gray = cv2.cvtColor(icon_img, cv2.COLOR_BGR2GRAY)
     clahe = cv2.createCLAHE(clipLimit=ICON_CLAHE_CLIP, tileGridSize=ICON_CLAHE_TILE)
     enhanced = clahe.apply(gray)
-    _, binary = cv2.threshold(enhanced, ICON_BW_THRESHOLD, 255, cv2.THRESH_BINARY)
+    _, binary = cv2.threshold(enhanced, ICON_BW_THRESHOLD, PIXEL_MAX, cv2.THRESH_BINARY)
     return binary
 
 def compare_icons(icon1, icon2):
@@ -382,17 +412,17 @@ def compare_icons(icon1, icon2):
     proc2 = cv2.resize(preprocess_icon(icon2), ICON_COMPARE_SIZE)
 
     # If MATCH_ONLY_TOP_HALF flag is set, crop to top half
-    if globals().get('MATCH_ONLY_TOP_HALF', False):
+    if MATCH_ONLY_TOP_HALF:
         height = proc1.shape[0]
         top_half = height // 2
         proc1 = proc1[:top_half, :]
         proc2 = proc2[:top_half, :]
 
     mse = np.mean((proc1.astype(float) - proc2.astype(float)) ** 2)
-    mse_sim = 1.0 - (mse / (255 ** 2))
+    mse_sim = 1.0 - (mse / (PIXEL_MAX ** 2))
 
-    hist1 = cv2.normalize(cv2.calcHist([proc1], [0], None, [256], [0, 256]), None).flatten()
-    hist2 = cv2.normalize(cv2.calcHist([proc2], [0], None, [256], [0, 256]), None).flatten()
+    hist1 = cv2.normalize(cv2.calcHist([proc1], [0], None, [PIXEL_MAX + 1], [0, PIXEL_MAX + 1]), None).flatten()
+    hist2 = cv2.normalize(cv2.calcHist([proc2], [0], None, [PIXEL_MAX + 1], [0, PIXEL_MAX + 1]), None).flatten()
     hist_sim = 1.0 / (1.0 + cv2.compareHist(hist1, hist2, cv2.HISTCMP_BHATTACHARYYA))
 
     return (mse_sim + hist_sim) / 2.0
@@ -407,11 +437,11 @@ def extract_icon(img, cx, cy, radius, padding=ICON_EXTRACT_PADDING):
     y0, y1 = max(0, cy - r), min(img.shape[0], cy + r)
     return img[y0:y1, x0:x1].copy()
 
-def inscribed_circle(contour, shape):
+def inscribed_circle(contour):
     """Largest circle that fits inside a contour, as (cx, cy, radius), or None."""
     x, y, bw, bh = cv2.boundingRect(contour)
     blob = np.zeros((bh + 2, bw + 2), dtype=np.uint8)
-    cv2.drawContours(blob, [contour - np.array([x - 1, y - 1])], -1, 255, cv2.FILLED)
+    cv2.drawContours(blob, [contour - np.array([x - 1, y - 1])], -1, PIXEL_MAX, cv2.FILLED)
     dist = cv2.distanceTransform(blob, cv2.DIST_L2, 5)
     _, radius, _, (px, py) = cv2.minMaxLoc(dist)
     if radius <= 0:
@@ -439,16 +469,16 @@ def detect_need_icons(save_debug=False):
         if area < NEED_ICON_MIN_AREA:
             continue
         (cx, cy), radius = cv2.minEnclosingCircle(c)
-        circularity = area / (np.pi * radius * radius + 1e-6)
+        circularity = area / (np.pi * radius * radius + CIRCULARITY_EPSILON)
         if circularity < NEED_ICON_CLEAN_CIRCULARITY:
             # A badge (e.g. favorite marker) stuck on the icon's edge bloats the
             # blob and drags the enclosing circle off-center. Fall back to the
             # largest inscribed circle, which ignores the small protrusion.
-            refined = inscribed_circle(c, mask.shape)
+            refined = inscribed_circle(c)
             if refined is None:
                 continue
             cx, cy, radius = refined
-            if area / (np.pi * radius * radius + 1e-6) > NEED_ICON_BADGE_MAX_AREA_RATIO:
+            if area / (np.pi * radius * radius + CIRCULARITY_EPSILON) > NEED_ICON_BADGE_MAX_AREA_RATIO:
                 continue
         elif circularity < NEED_ICON_MIN_CIRCULARITY:
             continue
@@ -493,6 +523,33 @@ def prompt_rename_need(icon_img, idx):
     os.rename(temp_path, os.path.join(NEEDS_DIR, f"{need_name}.png"))
     print(f"[!] Saved: {need_name}")
     return need_name
+
+def identify_icons(found_icons, full_img):
+    """Match each detected icon against the saved needs. Yields
+    (index, icon_image, need_name_or_None, score) per icon, checking
+    check_running() between icons."""
+    for idx, (cx, cy, radius) in enumerate(found_icons):
+        check_running()
+        icon_img = extract_icon(full_img, cx, cy, radius)
+        need_name, score = find_matching_need(icon_img)
+        yield idx, icon_img, need_name, score
+
+def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=NEED_GONE_POLL_INTERVAL):
+    """Wait for `need_name`'s icon to stop being detected, for at most
+    `max_wait` seconds - whichever happens first. Interruptible."""
+    print(f"[debug] waiting up to {max_wait}s for {need_name} to clear...")
+    deadline = time.time() + max_wait
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
+            return
+        wait_interruptible(min(poll_interval, remaining))
+        found_icons, full_img = detect_need_icons()
+        visible = [name for _, _, name, _ in identify_icons(found_icons, full_img)]
+        if need_name not in visible:
+            print(f"[debug] {need_name} cleared")
+            return
 
 # ============================================================================
 # CLICKING
@@ -570,7 +627,7 @@ def release_all_inputs():
     more whenever a background task ends (run_async's worker finally block)
     as a last line of defense - a bug in a handler we haven't caught yet
     still shouldn't be able to leave an input stuck down in the game."""
-    for key in ("w", "a", "s", "d"):
+    for key in MOVE_KEYS:
         try:
             pydirectinput.keyUp(key)
         except Exception:
@@ -624,7 +681,7 @@ def detect_buttons(save_debug=False):
             rejected_radius += 1
             continue
 
-        circularity = area / (np.pi * radius * radius + 1e-6)
+        circularity = area / (np.pi * radius * radius + CIRCULARITY_EPSILON)
         if circularity < BUTTON_MIN_CIRCULARITY * BUTTON_LOOSE_CIRCULARITY_FACTOR:
             rejected_circularity += 1
             continue
@@ -719,7 +776,7 @@ def respawn_character():
     print("[debug] respawning...")
     if not focus_roblox_click():
         return
-    for key in ("esc", "r", "enter"):
+    for key in RESPAWN_KEYS:
         pydirectinput.keyDown(key)
         time.sleep(RESPAWN_KEY_DURATION)
         pydirectinput.keyUp(key)
@@ -762,7 +819,7 @@ def walk_alternating(direction_pair, total_duration, step_duration=WALK_ALTERNAT
         direction = direction_pair[direction_idx % 2]
         print(f"[debug] step {direction_idx + 1}: {direction} for {step_duration}s...")
         hold_key(direction, step_duration)
-        time.sleep(WALK_STEP_GAP)
+        time.sleep(KEY_STEP_GAP)
 
         direction_idx += 1
         elapsed = time.time() - start_time
@@ -783,9 +840,6 @@ class NeedHandler(ABC):
     """Reacts to one detected need that needs more than a basic button click.
     Subclass this to add a new such need behavior."""
 
-    # True if handle() already respawns the character by itself, so
-    # process_needs() must not respawn a second time.
-    respawns_itself = False
 
     @abstractmethod
     def handle(self):
@@ -810,35 +864,35 @@ class CatchNeedHandler(NeedHandler):
 
         # Open backpack with 'b' key
         print("[debug] opening backpack...")
-        pydirectinput.press('b')
-        wait_interruptible(CATCH_CLICK_DELAY)
+        pydirectinput.press(KEY_BACKPACK)
+        wait_interruptible(UI_SETTLE)
 
         # Navigate to toys
         print("[debug] opening toys...")
         hover_click(*CATCH_TOYS_POS)
-        wait_interruptible(CATCH_CLICK_DELAY)
+        wait_interruptible(UI_SETTLE)
 
         # Click squeaky toy
         print("[debug] selecting squeaky toy...")
         hover_click(*CATCH_SQUEAKY_TOY_POS)
-        wait_interruptible(CATCH_CLICK_DELAY)
+        wait_interruptible(UI_SETTLE)
 
         # Equip the toy
         print("[debug] equipping toy...")
         hover_click(*CATCH_EQUIP_POS)
-        wait_interruptible(CATCH_CLICK_DELAY)
+        wait_interruptible(UI_SETTLE)
 
         # Close backpack with 'b' key
         print("[debug] closing backpack...")
-        pydirectinput.press('b')
-        wait_interruptible(CATCH_CLICK_DELAY)
+        pydirectinput.press(KEY_BACKPACK)
+        wait_interruptible(UI_SETTLE)
 
         # Wait before throwing
         print(f"[debug] waiting {CATCH_WAIT_AFTER_EQUIP}s before throwing...")
         wait_interruptible(CATCH_WAIT_AFTER_EQUIP)
 
         # Zoom in, to avoid focusing the pet on toy throw
-        hold_key('i', CATCH_SCROLL_TIME)
+        hold_key(KEY_ZOOM_IN, CATCH_ZOOM_DURATION)
         
         # Click empty space to throw, with a delay between throws
         for i in range(CATCH_THROW_COUNT):
@@ -868,10 +922,10 @@ class PetNeedHandler(NeedHandler):
         print(f"[debug] attempting to pet for {PET_CIRCLE_DURATION}s...")
         # Move to starting position before pressing down
         pydirectinput.moveTo(SCREEN_CENTER_X, SCREEN_CENTER_Y - PET_CIRCLE_RADIUS)
-        time.sleep(0.1)
+        time.sleep(PET_SETTLE_DELAY)
         # Click the center to focus
         jitter_click(SCREEN_CENTER_X, SCREEN_CENTER_Y)
-        time.sleep(0.1)
+        time.sleep(PET_SETTLE_DELAY)
         # Hold down and move with incremental steps (much more reliable for games)
         pydirectinput.mouseDown()
         try:
@@ -919,13 +973,13 @@ class ChooseNeedHandler(NeedHandler):
         print(f"[debug] found at {match}, moving there slowly...")
         hover_click(*match, duration=CHOOSE_SLOW_MOVE_DURATION)
         wait_interruptible(UI_SETTLE)
-        wait_interruptible(2)
+        wait_interruptible(CHOOSE_HOVER_WAIT)
         hover_click(*match)
 
         
         print("[debug] clicking middle of screen...")
         hover_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
-        wait_interruptible(1)
+        wait_interruptible(CHOOSE_DISMISS_WAIT)
         hover_move(*EMPTY_POS, duration=CHOOSE_SLOW_MOVE_DURATION)
         time.sleep(CLICK_SETTLE_DELAY)
         hover_move(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
@@ -941,13 +995,13 @@ class ChooseNeedHandler(NeedHandler):
         print(f"[debug] found at {match}, moving there slowly...")
         hover_click(*match, duration=CHOOSE_SLOW_MOVE_DURATION)
         wait_interruptible(UI_SETTLE)
-        wait_interruptible(2)
+        wait_interruptible(CHOOSE_HOVER_WAIT)
         hover_click(*match)
 
         
         print("[debug] clicking middle of screen...")
         hover_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
-        wait_interruptible(1)
+        wait_interruptible(CHOOSE_DISMISS_WAIT)
         hover_move(*EMPTY_POS, duration=CHOOSE_SLOW_MOVE_DURATION)
         time.sleep(CLICK_SETTLE_DELAY)
         hover_move(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
@@ -972,7 +1026,7 @@ class RideNeedHandler(NeedHandler):
         hold_key("s", RIDE_BACKWARD_DURATION)
 
         print("[debug] pressing e...")
-        pydirectinput.press('e')
+        pydirectinput.press(KEY_MOUNT)
         wait_interruptible(RIDE_WAIT_AFTER_E)
 
         # Walk forward briefly after mounting, before opening the backpack
@@ -981,24 +1035,24 @@ class RideNeedHandler(NeedHandler):
 
         # Open backpack, select and equip the first vehicle
         print("[debug] opening backpack...")
-        pydirectinput.press('b')
-        wait_interruptible(CATCH_CLICK_DELAY)
+        pydirectinput.press(KEY_BACKPACK)
+        wait_interruptible(UI_SETTLE)
 
         print("[debug] opening vehicles...")
         hover_click(*RIDE_VEHICLES_POS)
-        wait_interruptible(CATCH_CLICK_DELAY)
+        wait_interruptible(UI_SETTLE)
 
         print("[debug] selecting first vehicle...")
         hover_click(*RIDE_FIRST_VEHICLE_POS)
-        wait_interruptible(CATCH_CLICK_DELAY)
+        wait_interruptible(UI_SETTLE)
 
         print("[debug] equipping vehicle...")
         hover_click(*RIDE_EQUIP_POS)
-        wait_interruptible(CATCH_CLICK_DELAY)
+        wait_interruptible(UI_SETTLE)
 
         print("[debug] closing backpack...")
-        pydirectinput.press('b')
-        wait_interruptible(CATCH_CLICK_DELAY)
+        pydirectinput.press(KEY_BACKPACK)
+        wait_interruptible(UI_SETTLE)
 
         # Walk back and forth (forward/backward, not left/right) while riding
         walk_alternating(("w", "s"), RIDE_WALK_DURATION)
@@ -1012,28 +1066,26 @@ def teleport_to(category_pos):
     the dealership), then walk backward briefly to clear the landing spot.
     Shared by every need that teleports somewhere (TeleportWalkNeedHandler)."""
     print("[debug] opening backpack...")
-    pydirectinput.press('b')
-    wait_interruptible(TELEPORT_CLICK_DELAY)
+    pydirectinput.press(KEY_BACKPACK)
+    wait_interruptible(UI_SETTLE)
 
     print("[debug] selecting category...")
     hover_click(*category_pos)
-    wait_interruptible(TELEPORT_CLICK_DELAY)
+    wait_interruptible(UI_SETTLE)
     hover_click(*GENERAL_TELEPORT_POS_2)
-    wait_interruptible(TELEPORT_CLICK_DELAY)
+    wait_interruptible(UI_SETTLE)
     hover_click(*GENERAL_TELEPORT_POS_3)
     wait_interruptible(TELEPORT_WAIT)
-    wait_interruptible(5)
     print("[debug] walking backward...")
     hold_key("s", TELEPORT_BACK_DURATION)
-    wait_interruptible(5)
+    wait_interruptible(TELEPORT_SETTLE_WAIT)
 
 class TeleportWalkNeedHandler(NeedHandler):
     """A need that teleports somewhere, holds a sequence of movement keys,
-    optionally waits it out, then respawns (since, unlike every other
-    special need, these leave the character somewhere else on the map).
-    What each one does is configured in TELEPORT_WALK_NEEDS."""
-
-    respawns_itself = True
+    then waits for the need to clear (see wait_until_need_gone()).
+    process_needs() respawns afterwards, since these leave the character
+    somewhere else on the map. What each one does is configured in
+    TELEPORT_WALK_NEEDS."""
 
     def __init__(self, name):
         self.name = name
@@ -1048,16 +1100,12 @@ class TeleportWalkNeedHandler(NeedHandler):
 
         for i, (key, duration) in enumerate(self.config["steps"]):
             if i:
-                time.sleep(TELEPORT_WALK_STEP_GAP)
+                time.sleep(KEY_STEP_GAP)
             print(f"[debug] holding {key} for {duration}s...")
             hold_key(key, duration)
 
-        wait_after = self.config.get("wait_after", 0)
-        if wait_after:
-            print(f"[debug] waiting {wait_after}s...")
-            wait_interruptible(wait_after)
+        wait_until_need_gone(self.name)
 
-        respawn_character()
         print(f"[!] {self.name.capitalize()} complete!")
         return True
 
@@ -1123,12 +1171,7 @@ def process_needs():
     print(f"[debug] found {len(found_icons)} icon(s)")
 
     matched_needs = []
-    for idx, (cx, cy, radius) in enumerate(found_icons):
-        check_running()
-
-        icon_img = extract_icon(full_img, cx, cy, radius)
-        need_name, score = find_matching_need(icon_img)
-
+    for idx, icon_img, need_name, score in identify_icons(found_icons, full_img):
         if not need_name:
             if SAVE_NEW_NEEDS:
                 print(f"\n[!] NEW NEED (best score: {score:.4f})")
@@ -1163,9 +1206,6 @@ def process_needs():
                 print(f"[debug] {need_name} is disabled, skipping")
                 continue
             handler.handle()
-            if handler.respawns_itself:
-                resolved = True
-                continue
 
         respawn_character()
         resolved = True
@@ -1288,14 +1328,14 @@ class AdoptMeGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Adopt Me Macro")
-        self.root.geometry("380x650+1533+110")
+        self.root.geometry(GUI_GEOMETRY)
         self.root.resizable(False, False)
         self.root.attributes('-topmost', True)
-        self.root.attributes('-alpha', 0.95)
+        self.root.attributes('-alpha', GUI_ALPHA)
 
-        self.bg = "#1a1a1a"
-        self.accent = "#0d7377"
-        self.fg = "#fff"
+        self.bg = GUI_BG
+        self.accent = GUI_ACCENT
+        self.fg = GUI_FG
         self.root.configure(bg=self.bg)
 
         self.create_ui()
@@ -1338,53 +1378,50 @@ class AdoptMeGUI:
         # font got bigger. The two side containers also fix their WIDTH (making
         # them equal squares); the center container only fixes height and
         # otherwise expands to fill the remaining width.
-        SQUARE_BUTTON_SIZE = 44  # px, short and square
         NO_BORDER = dict(bd=0, highlightthickness=0)  # flat edges, no default Tk bevel/focus ring
 
         main_row = tk.Frame(btn_frame, bg=self.bg)
         main_row.pack(fill=tk.X, pady=4)
 
-        start_container = tk.Frame(main_row, width=SQUARE_BUTTON_SIZE, height=SQUARE_BUTTON_SIZE, bg=self.bg)
+        start_container = tk.Frame(main_row, width=GUI_SQUARE_BUTTON_SIZE, height=GUI_SQUARE_BUTTON_SIZE, bg=self.bg)
         start_container.pack(side=tk.LEFT, padx=(0, 4))
         start_container.pack_propagate(False)
-
-        START_BUTTON_COLOR = "#2ecc71"
 
         # Single cycle: icon + "1" as plain button text (no overlay Label -
         # a Label placed on top of the button kept showing a visible seam/
         # box behind it despite matching colors, so this is just simpler).
         btn_start = tk.Button(start_container, text="\U0001F5041", command=self.run_workflow,
-                               font=("Courier", 14, "bold"), bg=START_BUTTON_COLOR, fg=self.fg,
+                               font=(GUI_FONT, 14, "bold"), bg=GUI_START_COLOR, fg=self.fg,
                                cursor="hand2", **NO_BORDER)
         btn_start.pack(fill=tk.BOTH, expand=True)
         self.action_buttons.append(btn_start)
 
         # Not added to action_buttons: must remain clickable while a workflow is running
-        stop_container = tk.Frame(main_row, width=SQUARE_BUTTON_SIZE, height=SQUARE_BUTTON_SIZE, bg=self.bg)
+        stop_container = tk.Frame(main_row, width=GUI_SQUARE_BUTTON_SIZE, height=GUI_SQUARE_BUTTON_SIZE, bg=self.bg)
         stop_container.pack(side=tk.RIGHT, padx=(4, 0))
         stop_container.pack_propagate(False)
 
         self.btn_stop = tk.Button(stop_container, text="■", command=self.stop,
-                                   font=("Courier", 16, "bold"), bg="#d62828", fg=self.fg,
+                                   font=(GUI_FONT, 16, "bold"), bg=GUI_STOP_COLOR, fg=self.fg,
                                    cursor="hand2", **NO_BORDER)
         self.btn_stop.pack(fill=tk.BOTH, expand=True)
 
-        loop_container = tk.Frame(main_row, height=SQUARE_BUTTON_SIZE, bg=self.bg)
+        loop_container = tk.Frame(main_row, height=GUI_SQUARE_BUTTON_SIZE, bg=self.bg)
         loop_container.pack(side=tk.LEFT, fill=tk.X, expand=True)
         loop_container.pack_propagate(False)
 
         btn_loop = tk.Button(loop_container, text="\U0001F504", command=self.run_workflow_loop,
-                              font=("Courier", 20, "bold"), bg="#2980b9", fg=self.fg,
+                              font=(GUI_FONT, 20, "bold"), bg=GUI_LOOP_COLOR, fg=self.fg,
                               cursor="hand2", **NO_BORDER)
         btn_loop.pack(fill=tk.BOTH, expand=True)
         self.action_buttons.append(btn_loop)
 
         tk.Frame(btn_frame, bg=self.accent, height=2).pack(fill=tk.X, pady=4)
 
-        tk.Label(btn_frame, text="Functions", font=("Courier", 9, "bold"), bg=self.bg, fg=self.accent).pack(anchor=tk.W)
+        tk.Label(btn_frame, text="Functions", font=(GUI_FONT, 9, "bold"), bg=self.bg, fg=self.accent).pack(anchor=tk.W)
 
         btn_respawn = tk.Button(btn_frame, text="Respawn", command=lambda: self.run_async(respawn_character),
-                                 font=("Courier", 9), bg="#8e44ad", fg=self.fg, height=1, cursor="hand2")
+                                 font=(GUI_FONT, 9), bg=GUI_RESPAWN_COLOR, fg=self.fg, height=1, cursor="hand2")
         btn_respawn.pack(fill=tk.X, pady=2)
         self.action_buttons.append(btn_respawn)
 
@@ -1396,17 +1433,17 @@ class AdoptMeGUI:
         debug_frame = tk.Frame(self.root, bg=self.bg)
         debug_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
 
-        tk.Label(debug_frame, text="Output", font=("Courier", 9, "bold"), bg=self.bg, fg=self.accent).pack(anchor=tk.W, pady=(0, 3))
+        tk.Label(debug_frame, text="Output", font=(GUI_FONT, 9, "bold"), bg=self.bg, fg=self.accent).pack(anchor=tk.W, pady=(0, 3))
 
-        self.debug_text = scrolledtext.ScrolledText(debug_frame, height=14, width=45, bg="#0a0a0a", fg="#00ff00",
-                                                     font=("Courier", 7), state=tk.DISABLED)
+        self.debug_text = scrolledtext.ScrolledText(debug_frame, height=14, width=45, bg=GUI_CONSOLE_BG, fg=GUI_CONSOLE_FG,
+                                                     font=(GUI_FONT, 7), state=tk.DISABLED)
         self.debug_text.pack(fill=tk.BOTH, expand=True)
 
         # Status bar
-        status = tk.Frame(self.root, bg=self.accent, height=25)
+        status = tk.Frame(self.root, bg=self.accent, height=GUI_STATUS_HEIGHT)
         status.pack(fill=tk.X, side=tk.BOTTOM)
         status.pack_propagate(False)
-        self.status = tk.Label(status, text="Ready", font=("Courier", 8), bg=self.accent, fg=self.fg)
+        self.status = tk.Label(status, text="Ready", font=(GUI_FONT, 8), bg=self.accent, fg=self.fg)
         self.status.pack(anchor=tk.W, padx=8, pady=3)
 
     def run_async(self, func):
@@ -1480,14 +1517,14 @@ class AdoptMeGUI:
     def build_debug_tab(self, parent):
         """Fill the Debug tab with a two-column grid of [TEST] buttons, one
         per entry in DEBUG_HANDLERS."""
-        tk.Label(parent, text="Run a need handler on its own", font=("Courier", 9, "bold"),
+        tk.Label(parent, text="Run a need handler on its own", font=(GUI_FONT, 9, "bold"),
                  bg=self.bg, fg=self.accent).grid(row=0, column=0, columnspan=2, sticky=tk.W, padx=4, pady=(4, 2))
         for col in range(2):
             parent.grid_columnconfigure(col, weight=1, uniform="debug")
         for i, (name, handler_cls) in enumerate(DEBUG_HANDLERS.items()):
             btn = tk.Button(parent, text=name.capitalize(),
                             command=lambda n=name, c=handler_cls: self.test_handler(n, c),
-                            font=("Courier", 9), bg="#e74c3c", fg=self.fg, cursor="hand2")
+                            font=(GUI_FONT, 9), bg=GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
             btn.grid(row=1 + i // 2, column=i % 2, sticky=tk.EW, padx=2, pady=2)
             self.action_buttons.append(btn)
 

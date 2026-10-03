@@ -99,6 +99,7 @@ FOCUS_PET_POS = (1114, 692)
 # The 'choose' need's button is matched by its exact color rather than shape,
 # since it's just a plain circle with no distinguishing icon. Given as (R, G, B).
 CHOOSE_BUTTON_COLOR = (181, 6, 254)
+HOVER_NUDGE_PIXELS = 2          # hover_move() wiggle so Roblox registers real mouse movement
 CHOOSE_SLOW_MOVE_DURATION = 1.0  # deliberate, slow mouse travel to the found button
 
 # The paycheck popup's CASH OUT button, matched by exact color the same way
@@ -535,6 +536,25 @@ def scroll_wheel_up(x, y, amount):
     pyautogui.scroll(amount)
     time.sleep(POST_CLICK_DELAY)
 
+def hover_move(x, y, duration):
+    """Move the mouse to (x, y) over `duration` seconds using SendInput
+    (pydirectinput), then nudge it a couple of pixels back onto the target.
+    Roblox ignores pyautogui's SetCursorPos warps as hover movement and only
+    reacts to real input events, so this is what makes a UI element register
+    as hovered before it's clicked."""
+    pydirectinput.moveTo(x, y, duration=duration)
+    time.sleep(CLICK_SETTLE_DELAY)
+    pydirectinput.moveTo(min(SCREEN_WIDTH, x + HOVER_NUDGE_PIXELS), y)
+    time.sleep(CLICK_SETTLE_DELAY)
+    pydirectinput.moveTo(x, y)
+    time.sleep(CLICK_SETTLE_DELAY)
+
+def hover_click(x, y, duration):
+    """hover_move() to (x, y), then click."""
+    hover_move(x, y, duration)
+    pydirectinput.click()
+    time.sleep(POST_CLICK_DELAY)
+
 def slow_click(x, y, duration):
     """Move the mouse to (x, y) deliberately slowly (over `duration` seconds,
     instead of the usual quick CLICK_MOVE_DURATION), then click. Used where
@@ -912,18 +932,18 @@ class ChooseNeedHandler(NeedHandler):
             print(f"[!] WARNING: no pixel matching {CHOOSE_BUTTON_COLOR} found on screen")
             return False
         print(f"[debug] found at {match}, moving there slowly...")
-        slow_click(*match, duration=CHOOSE_SLOW_MOVE_DURATION)
+        hover_click(*match, duration=CHOOSE_SLOW_MOVE_DURATION)
         wait_interruptible(UI_SETTLE)
         time.sleep(2)
         jitter_click(*match)
 
         
         print("[debug] clicking middle of screen...")
-        slow_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
+        hover_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
         time.sleep(1)
-        pyautogui.moveTo(*EMPTY_POS, duration=CHOOSE_SLOW_MOVE_DURATION)
+        hover_move(*EMPTY_POS, duration=CHOOSE_SLOW_MOVE_DURATION)
         time.sleep(CLICK_SETTLE_DELAY)
-        pyautogui.moveTo(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
+        hover_move(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
         pydirectinput.click()
         time.sleep(POST_CLICK_DELAY)
 
@@ -934,18 +954,18 @@ class ChooseNeedHandler(NeedHandler):
             print(f"[!] WARNING: no pixel matching {CHOOSE_BUTTON_COLOR} found on screen")
             return False
         print(f"[debug] found at {match}, moving there slowly...")
-        slow_click(*match, duration=CHOOSE_SLOW_MOVE_DURATION)
+        hover_click(*match, duration=CHOOSE_SLOW_MOVE_DURATION)
         wait_interruptible(UI_SETTLE)
         time.sleep(2)
         jitter_click(*match)
 
         
         print("[debug] clicking middle of screen...")
-        slow_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
+        hover_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
         time.sleep(1)
-        pyautogui.moveTo(*EMPTY_POS, duration=CHOOSE_SLOW_MOVE_DURATION)
+        hover_move(*EMPTY_POS, duration=CHOOSE_SLOW_MOVE_DURATION)
         time.sleep(CLICK_SETTLE_DELAY)
-        pyautogui.moveTo(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
+        hover_move(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
         pydirectinput.click()
         time.sleep(POST_CLICK_DELAY)
         #pydirectinput.click()

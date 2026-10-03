@@ -125,7 +125,7 @@ RIDE_WALK_DURATION = 40.0      # total time spent walking back and forth while r
 # teleport_to() as `category_pos`); everything else is always the same,
 # hence "general".
 TELEPORT_CLICK_DELAY = 0.5        # pause between each step of the sequence
-TELEPORT_WAIT = 5.0                # wait after the teleport click, for it to take effect
+TELEPORT_WAIT = 10              # wait after the teleport click, for it to take effect
 GENERAL_TELEPORT_POS_2 = (895, 705)
 GENERAL_TELEPORT_POS_3 = (1048, 658)
 TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing spot
@@ -143,7 +143,7 @@ BEACH_WALK_LEFT_DURATION = 27.0
 BEACH_WAIT_AFTER_WALK = 60.0
 
 # Cafe need: hold 'a', then hold 's', at the dealership.
-CAFE_WALK_LEFT_DURATION = 3.1
+CAFE_WALK_LEFT_DURATION = 3.2
 CAFE_WALK_BACK_DURATION = 15.0
 
 # Salon need: like cafe, but a shorter 'a' hold and forward instead of back.
@@ -151,7 +151,7 @@ SALON_WALK_LEFT_DURATION = 2.5
 SALON_WALK_FORWARD_DURATION = 15.0
 
 # School need: hold 'w' briefly, then hold 'a', at the nursery.
-SCHOOL_WALK_FORWARD_DURATION = 0.5
+SCHOOL_WALK_FORWARD_DURATION = 0.7
 SCHOOL_WALK_LEFT_DURATION = 10.0
 
 # Window focus click (near top edge, right of center)
@@ -1126,7 +1126,7 @@ class CafeNeedHandler(NeedHandler):
         finally:
             pydirectinput.keyUp("s")
             print(f"[debug] waitingfor {60}s...")
-        time.sleep(60)
+        wait_interruptible(60)
         respawn_character()
         print("[!] Cafe complete!")
         return True
@@ -1156,6 +1156,7 @@ class SalonNeedHandler(NeedHandler):
         finally:
             pydirectinput.keyUp("w")
 
+        wait_interruptible(60)
         respawn_character()
         print("[!] Salon complete!")
         return True
@@ -1217,7 +1218,7 @@ SPECIAL_NEED_HANDLER_CLASSES = {
 # here is still detected and matched, but logged and skipped (not resolved)
 # when it comes up, same as a _ENABLED flag used to do. "walk" covers every
 # need name that starts with "walk" (see is_basic_need() below).
-ENABLED_NEEDS = {"catch", "pet", "ride", "walk", "beach", "bored", "school"}
+ENABLED_NEEDS = {"catch", "pet", "ride", "walk", "beach", "bored", "school", "cafe", "salon"}
 
 def is_basic_need(need_name):
     """A basic need has no dedicated handler - it's satisfied by walking to

@@ -92,7 +92,7 @@ character standing.
 - **STATE** - `BUTTON_POSITIONS`, the in-memory cache of the
   last-detected action button positions. Never persisted to disk - see
   [Why there's no config file](#why-theres-no-config-file).
-- **ICON PROCESSING** - `preprocess_icon()` / `compare_icons()`. See
+- **ICON PROCESSING** - `preprocess_icon()` / `icon_signature()` / `compare_signatures()`. See
   [Need-icon matching](#need-icon-matching).
 - **NEED ICON DETECTION** - `detect_need_icons()`, `find_matching_need()`,
   `prompt_rename_need()`. See [Need-icon detection](#need-icon-detection).
@@ -111,8 +111,7 @@ character standing.
 
 ## Need-icon detection
 
-`detect_need_icons()` scans a region of the screen for circular icons of
-any color:
+`detect_need_icons()` scans a region of the screen for the round need icons:
 
 1. Crop to the top `NEED_ICON_TOP_PERCENT` (15%) of screen height and the
    left `NEED_ICON_WIDTH_PERCENT` (70%) of screen width. The width crop
@@ -124,18 +123,15 @@ any color:
    `NEED_ICON_BLANK_WIDTH`) where Roblox's own persistent UI cluster
    (chat, player list toggle, etc.) lives, so it's never mistaken for a
    need icon either.
-3. Build a combined mask from several HSV color ranges
-   (`NEED_ICON_COLOR_RANGES`: blue, purple, both red wraps, yellow, green,
-   cyan) - need icons can be almost any color, so this is deliberately
-   broad rather than tuned to one hue.
-4. Find contours in the mask, keep the ones large enough
-   (`NEED_ICON_MIN_AREA`) and round enough
-   (`NEED_ICON_MIN_CIRCULARITY = area / (π·r²)`) to plausibly be an icon
-   rather than noise.
+3. Find circles with a Hough transform (`NEED_ICON_MIN_RADIUS` to
+   `NEED_ICON_MAX_RADIUS`, at least `NEED_ICON_MIN_DISTANCE` apart) on the
+   blurred grayscale strip. Icons are found by their round outline, not
+   their color, so event badges overlapping an icon, differently colored
+   icons and busy backgrounds (grass, scenery) don't affect detection.
 
-Each surviving icon is cropped out of the full screenshot
-(`extract_icon()`, with `ICON_EXTRACT_PADDING` px of margin) and handed to
-`find_matching_need()`.
+Each detected icon is cropped out of the full screenshot at a fixed
+radius (`ICON_CROP_RADIUS` + `ICON_EXTRACT_PADDING` px of margin) and handed
+to `find_matching_need()`.
 
 ## Need-icon matching
 
@@ -150,18 +146,20 @@ crop to a high-contrast black & white image:
 3. Hard threshold (`ICON_BW_THRESHOLD`) - only near-white pixels survive,
    collapsing the icon to a black-and-white silhouette.
 
-`compare_icons()` then resizes both images to `ICON_COMPARE_SIZE` and
-combines two similarity measures, averaged:
+`icon_signature()` then resizes the result to `ICON_COMPARE_SIZE`, scales it
+to 0-1, and keeps only the **left half** (`MATCH_ONLY_LEFT_HALF`) so an
+event badge overlapping an icon's top right doesn't affect the match.
+`compare_signatures()` scores two signatures as `1 - mean squared
+difference`.
 
-- **MSE similarity** - `1 - (mean squared pixel difference / 255²)`, a
-  blunt pixel-by-pixel closeness score.
-- **Histogram similarity** - `1 / (1 + Bhattacharyya distance)` between the
-  two images' intensity histograms, which is more tolerant of small
-  shifts/rotations than raw pixel comparison.
+A detected center can be a pixel or two off, which matters at this
+resolution, so `icon_variants()` cuts the live icon out at every offset
+within `ICON_SHIFT_TOLERANCE` px and each saved need is scored by its
+best-aligned variant.
 
 `find_matching_need()` compares the new icon against every saved `.png` in
 `needs/` and keeps the best score. A best score below
-`ICON_MATCH_THRESHOLD` (0.92) means "not confident this is anything we've
+`ICON_MATCH_THRESHOLD` (0.93) means "not confident this is anything we've
 seen" and falls through to `prompt_rename_need()` instead.
 
 ## Button detection
@@ -231,7 +229,7 @@ that runs it directly regardless of `ENABLED_NEEDS`.
 | `pet` | `PetNeedHandler`: click to focus the pet, then hold the mouse down and trace a circle of radius `PET_CIRCLE_RADIUS` around screen center for `PET_CIRCLE_DURATION`. |
 | `choose` | `ChooseNeedHandler`: focus the pet, find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. *Not in `ENABLED_NEEDS` by default.* |
 | `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then backpack → vehicles → first vehicle → equip → close backpack, then `walk_alternating(("w", "s"), RIDE_WALK_DURATION)`. |
-| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` - wait up to `NEED_GONE_MAX_WAIT` (60s), polling every `NEED_GONE_POLL_INTERVAL`, ending early once the need's icon is no longer detected. `process_needs()` respawns afterwards. Pizza and camping durations are placeholders. |
+| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` - wait up to `NEED_GONE_MAX_WAIT` (60s), polling every `NEED_GONE_POLL_INTERVAL`, ending early once the need's icon has been missing `NEED_GONE_CONFIRMATIONS` (3) checks in a row (confirming checks `NEED_GONE_CONFIRM_INTERVAL` apart). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`). |
 | `walk` (any name starting with it) | `WalkNeedHandler`: `walk_alternating(("a", "d"), WALK_TOTAL_DURATION)`. |
 
 Dispatch: `is_basic_need(name)` is true only for the names in
@@ -344,11 +342,11 @@ next to each constant in `main.py` for exact values and rationale):
 | Behavior flags | `ENABLED_NEEDS`, `FOCUS_WINDOW_ON_ACTION` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `POST_NEED_CLICK_WAIT[_SHORT]`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL` |
 | Screen positions | `CATCH_*_POS`, `EMPTY_POS`, `FOCUS_PET_POS`, `RIDE_*_POS` |
-| Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN_AREA`, `NEED_ICON_MIN_CIRCULARITY` |
-| Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE` |
+| Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN/MAX_RADIUS`, `NEED_ICON_HOUGH_*` |
+| Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
-| Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE`, `BLUE_RANGE`, `RED_RANGE_1/2`, `YELLOW_RANGE`, `GREEN_RANGE`, `CYAN_RANGE` |
+| Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
 
 If detection isn't finding what you expect after changing screen
 resolution or Roblox's UI, check `debug/debug_needs.png` and

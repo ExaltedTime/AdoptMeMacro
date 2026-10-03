@@ -7,5 +7,4 @@
 
 # Known issues
 
-- [ ] Need icon breaks when said icons have badges indicating favorite items. (I plan to fix this by matching only the top half of the icon)
 - [ ] White screen of  death

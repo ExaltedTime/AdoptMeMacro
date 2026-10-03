@@ -152,7 +152,7 @@ SALON_WALK_LEFT_DURATION = 2.5
 SALON_WALK_FORWARD_DURATION = 15.0
 
 # School need: hold 'w' briefly, then hold 'a', at the nursery.
-SCHOOL_WALK_FORWARD_DURATION = 0.7
+SCHOOL_WALK_FORWARD_DURATION = 0.9
 SCHOOL_WALK_LEFT_DURATION = 10.0
 
 # Window focus click (near top edge, right of center)
@@ -503,7 +503,8 @@ def prompt_rename_need(icon_img, idx):
 # CLICKING
 # ============================================================================
 
-def jitter_click(x, y):
+def jitter_click(x, y, duration=0.1):
+    '''
     """Click at (x, y), nudge the mouse a few pixels, then click again."""
     pyautogui.moveTo(x, y, duration=CLICK_MOVE_DURATION)
     time.sleep(CLICK_SETTLE_DELAY)
@@ -517,6 +518,11 @@ def jitter_click(x, y):
     pydirectinput.moveTo(new_x, new_y, duration=CLICK_MOVE_DURATION)
     time.sleep(CLICK_SETTLE_DELAY)
 
+    pydirectinput.click()
+    time.sleep(POST_CLICK_DELAY)
+    '''
+    """hover_move() to (x, y), then click."""
+    hover_move(x, y, duration)
     pydirectinput.click()
     time.sleep(POST_CLICK_DELAY)
 
@@ -947,29 +953,6 @@ class ChooseNeedHandler(NeedHandler):
         pydirectinput.click()
         time.sleep(POST_CLICK_DELAY)
 
-        print(f"[debug] searching screen for color {CHOOSE_BUTTON_COLOR}...")
-        img = grab_screen()
-        match = find_exact_color(img, CHOOSE_BUTTON_COLOR)
-        if match is None:
-            print(f"[!] WARNING: no pixel matching {CHOOSE_BUTTON_COLOR} found on screen")
-            return False
-        print(f"[debug] found at {match}, moving there slowly...")
-        hover_click(*match, duration=CHOOSE_SLOW_MOVE_DURATION)
-        wait_interruptible(UI_SETTLE)
-        time.sleep(2)
-        jitter_click(*match)
-
-        
-        print("[debug] clicking middle of screen...")
-        hover_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
-        time.sleep(1)
-        hover_move(*EMPTY_POS, duration=CHOOSE_SLOW_MOVE_DURATION)
-        time.sleep(CLICK_SETTLE_DELAY)
-        hover_move(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
-        pydirectinput.click()
-        time.sleep(POST_CLICK_DELAY)
-        #pydirectinput.click()
-
         print("[!] Choose complete!")
         return True
 
@@ -1238,7 +1221,7 @@ SPECIAL_NEED_HANDLER_CLASSES = {
 # here is still detected and matched, but logged and skipped (not resolved)
 # when it comes up, same as a _ENABLED flag used to do. "walk" covers every
 # need name that starts with "walk" (see is_basic_need() below).
-ENABLED_NEEDS = {"catch", "pet", "ride", "walk", "beach", "bored", "school", "cafe", "salon"}
+ENABLED_NEEDS = {"catch", "pet", "ride", "walk", "beach", "bored", "school", "cafe", "salon", "choose"}
 
 def is_basic_need(need_name):
     """A basic need has no dedicated handler - it's satisfied by walking to

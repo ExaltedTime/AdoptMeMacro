@@ -127,7 +127,7 @@ RIDE_WALK_DURATION = 40.0      # total time spent walking back and forth while r
 # teleport_to() as `category_pos`); everything else is always the same,
 # hence "general".
 TELEPORT_WAIT = 5.0               # wait after the teleport click, for it to take effect
-TELEPORT_SETTLE_WAIT = 5.0         # wait after stepping back, for the landing to settle
+TELEPORT_SETTLE_WAIT = 7.0         # wait after stepping back, for the landing to settle
 GENERAL_TELEPORT_POS_2 = (895, 705)
 GENERAL_TELEPORT_POS_3 = (1048, 658)
 TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing spot
@@ -149,8 +149,8 @@ TELEPORT_WALK_NEEDS = {
     "cafe":    dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 3.1), ("s", 15.0))),
     "salon":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 2.5), ("w", 15.0))),
     "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 2.0), ("a", 6.5), ("s", 3.0))),
-    "camping": dict(teleport_pos=TELEPORT_FOOD_TAB_POS,     steps=(("w", 4.0), ("d", 25.0))),
-    "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 1.2), ("d", 5.0), ("w", 2.0)),
+    "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 0.1), ("d", 3.0), ("s", 2.2), ("d", 15.0), ("w",20.0))),
+    "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 5.0), ("w", 1.5)),
                     final_click=SICK_FINAL_CLICK_POS),
 }
 NEED_GONE_MAX_WAIT = 60.0        # most a teleport need waits for its icon to disappear
@@ -1046,12 +1046,14 @@ class TeleportWalkNeedHandler(NeedHandler):
 
         for i, (key, duration) in enumerate(self.config["steps"]):
             if i:
-                time.sleep(KEY_STEP_GAP*20)
+                time.sleep(KEY_STEP_GAP*40)
             print(f"[debug] holding {key} for {duration}s...")
             hold_key(key, duration)
 
         final_click = self.config.get("final_click")
         if final_click:
+            pydirectinput.press("e")
+            wait_interruptible(7)
             print(f"[debug] clicking {final_click}...")
             hover_click(*final_click)
 

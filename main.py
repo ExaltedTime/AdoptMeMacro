@@ -15,6 +15,7 @@
 
 import os, sys, time, random, threading
 from abc import ABC, abstractmethod
+from functools import partial
 from pathlib import Path
 import tkinter as tk
 from tkinter import scrolledtext, ttk
@@ -74,7 +75,7 @@ CATCH_WAIT_AFTER_EQUIP = 2.0   # wait after equipping toy before throwing
 CATCH_EMOTE_DELAY = 10.0       # delay between throw clicks
 CATCH_CLICK_DELAY = 0.5        # delay between catch sequence clicks
 CATCH_THROW_COUNT = 3          # number of times the toy is thrown
-CATCH_SCROLL_TIME = 3        # mouse wheel notches scrolled up before each throw
+CATCH_SCROLL_TIME = 3        # seconds the zoom-in key is held before throwing
 PET_CIRCLE_DURATION = 10.0     # how long to make circles with mouse
 PET_CIRCLE_RADIUS = 100                # radius (px) of the circle traced around screen center
 PET_CIRCLE_START_MOVE_DURATION = 0.1   # time to move to the circle's starting point
@@ -134,32 +135,20 @@ TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing sp
 TELEPORT_PETS_TAB_POS = (817, 713)       # nursery: pets tab
 TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
 
-# Bored need: walk forward, then left, then wait it out at the nursery.
-BORED_WALK_FORWARD_DURATION = 16.0
-BORED_WALK_LEFT_DURATION = 10.0
-BORED_WAIT_AFTER_WALK = 60.0
-
-# Beach need: walk left, then wait it out at the nursery.
-BEACH_WALK_LEFT_DURATION = 27.0
-BEACH_WAIT_AFTER_WALK = 60.0
-
-# Cafe need: hold 'a', then hold 's', at the dealership.
-CAFE_WALK_LEFT_DURATION = 3.1
-CAFE_WALK_BACK_DURATION = 15.0
-
-# Salon need: like cafe, but a shorter 'a' hold and forward instead of back.
-SALON_WALK_LEFT_DURATION = 2.5
-SALON_WALK_FORWARD_DURATION = 15.0
-
-# School need: hold 'w' briefly, then hold 'a', at the nursery.
-SCHOOL_WALK_FORWARD_DURATION = 0.5
-SCHOOL_WALK_LEFT_DURATION = 10.0
-
-# Pizza and camping needs: forward then left at the dealership (placeholder durations).
-PIZZA_WALK_FORWARD_DURATION = 5.0
-PIZZA_WALK_LEFT_DURATION = 5.0
-CAMPING_WALK_FORWARD_DURATION = 5.0
-CAMPING_WALK_LEFT_DURATION = 5.0
+# Needs that teleport somewhere, walk, and then respawn (see
+# TeleportWalkNeedHandler). Each entry: where to teleport, the (key, seconds)
+# holds to perform in order, and an optional wait afterwards, in seconds.
+# Pizza and camping durations are placeholders until tuned.
+TELEPORT_WALK_NEEDS = {
+    "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0)), wait_after=60.0),
+    "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),),             wait_after=60.0),
+    "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 0.5), ("a", 10.0))),
+    "cafe":    dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 3.1), ("s", 15.0)),  wait_after=60.0),
+    "salon":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 2.5), ("w", 15.0))),
+    "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 5.0), ("a", 5.0))),
+    "camping": dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 5.0), ("a", 5.0))),
+}
+TELEPORT_WALK_STEP_GAP = 0.1   # pause between consecutive key holds in those needs
 
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75
@@ -561,16 +550,6 @@ def hover_click(x, y, duration=CLICK_MOVE_DURATION):
     pydirectinput.click()
     time.sleep(POST_CLICK_DELAY)
 
-def slow_click(x, y, duration):
-    """Move the mouse to (x, y) deliberately slowly (over `duration` seconds,
-    instead of the usual quick CLICK_MOVE_DURATION), then click. Used where
-    jumping the mouse straight to the target might not register the same way
-    a slower, more human-like movement would."""
-    pyautogui.moveTo(x, y, duration=duration)
-    time.sleep(CLICK_SETTLE_DELAY)
-    pydirectinput.click()
-    time.sleep(POST_CLICK_DELAY)
-
 def wait_interruptible(duration):
     """Sleep for `duration`, in STOP_CHECK_INTERVAL chunks, checking
     check_running() between each chunk. Raises StopRequested or FocusLost
@@ -748,18 +727,22 @@ def respawn_character():
     wait_interruptible(RESPAWN_WAIT)
     print("[debug] respawn complete")
 
+def hold_key(key, duration):
+    """Hold `key` down for `duration` seconds (interruptibly). Always
+    releases the key, even if StopRequested/FocusLost fires mid-hold -
+    otherwise it would stay stuck held down in the game."""
+    pydirectinput.keyDown(key)
+    try:
+        wait_interruptible(duration)
+    finally:
+        pydirectinput.keyUp(key)
+
 def walk_to_buttons():
     """Walk forward from the respawn spot to where the action buttons are."""
     if not focus_roblox():
         return
     print("[debug] walking to buttons...")
-    pydirectinput.keyDown("w")
-    try:
-        wait_interruptible(WALK_TO_BUTTONS_DURATION)
-    finally:
-        # Always release the key, even if StopRequested fires mid-wait -
-        # otherwise "w" stays stuck held down in the game.
-        pydirectinput.keyUp("w")
+    hold_key("w", WALK_TO_BUTTONS_DURATION)
     wait_interruptible(UI_SETTLE)
     print("[debug] arrived at buttons")
 
@@ -778,13 +761,7 @@ def walk_alternating(direction_pair, total_duration, step_duration=WALK_ALTERNAT
     while elapsed < total_duration:
         direction = direction_pair[direction_idx % 2]
         print(f"[debug] step {direction_idx + 1}: {direction} for {step_duration}s...")
-        pydirectinput.keyDown(direction)
-        try:
-            wait_interruptible(step_duration)
-        finally:
-            # Always release, even if StopRequested fires mid-step - otherwise
-            # this direction key stays stuck held down in the game.
-            pydirectinput.keyUp(direction)
+        hold_key(direction, step_duration)
         time.sleep(WALK_STEP_GAP)
 
         direction_idx += 1
@@ -805,6 +782,10 @@ def walk_alternating(direction_pair, total_duration, step_duration=WALK_ALTERNAT
 class NeedHandler(ABC):
     """Reacts to one detected need that needs more than a basic button click.
     Subclass this to add a new such need behavior."""
+
+    # True if handle() already respawns the character by itself, so
+    # process_needs() must not respawn a second time.
+    respawns_itself = False
 
     @abstractmethod
     def handle(self):
@@ -857,9 +838,7 @@ class CatchNeedHandler(NeedHandler):
         wait_interruptible(CATCH_WAIT_AFTER_EQUIP)
 
         # Zoom in, to avoid focusing the pet on toy throw
-        pydirectinput.keyDown('i')
-        time.sleep(CATCH_SCROLL_TIME)
-        pydirectinput.keyUp('i')
+        hold_key('i', CATCH_SCROLL_TIME)
         
         # Click empty space to throw, with a delay between throws
         for i in range(CATCH_THROW_COUNT):
@@ -940,13 +919,13 @@ class ChooseNeedHandler(NeedHandler):
         print(f"[debug] found at {match}, moving there slowly...")
         hover_click(*match, duration=CHOOSE_SLOW_MOVE_DURATION)
         wait_interruptible(UI_SETTLE)
-        time.sleep(2)
+        wait_interruptible(2)
         hover_click(*match)
 
         
         print("[debug] clicking middle of screen...")
         hover_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
-        time.sleep(1)
+        wait_interruptible(1)
         hover_move(*EMPTY_POS, duration=CHOOSE_SLOW_MOVE_DURATION)
         time.sleep(CLICK_SETTLE_DELAY)
         hover_move(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
@@ -962,13 +941,13 @@ class ChooseNeedHandler(NeedHandler):
         print(f"[debug] found at {match}, moving there slowly...")
         hover_click(*match, duration=CHOOSE_SLOW_MOVE_DURATION)
         wait_interruptible(UI_SETTLE)
-        time.sleep(2)
+        wait_interruptible(2)
         hover_click(*match)
 
         
         print("[debug] clicking middle of screen...")
         hover_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
-        time.sleep(1)
+        wait_interruptible(1)
         hover_move(*EMPTY_POS, duration=CHOOSE_SLOW_MOVE_DURATION)
         time.sleep(CLICK_SETTLE_DELAY)
         hover_move(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
@@ -990,13 +969,7 @@ class RideNeedHandler(NeedHandler):
 
         # Step back before mounting
         print(f"[debug] stepping back for {RIDE_BACKWARD_DURATION}s...")
-        pydirectinput.keyDown("s")
-        try:
-            wait_interruptible(RIDE_BACKWARD_DURATION)
-        finally:
-            # Always release, even if StopRequested fires mid-step - otherwise
-            # "s" stays stuck held down in the game.
-            pydirectinput.keyUp("s")
+        hold_key("s", RIDE_BACKWARD_DURATION)
 
         print("[debug] pressing e...")
         pydirectinput.press('e')
@@ -1004,13 +977,7 @@ class RideNeedHandler(NeedHandler):
 
         # Walk forward briefly after mounting, before opening the backpack
         print(f"[debug] walking forward for {RIDE_FORWARD_DURATION}s...")
-        pydirectinput.keyDown("w")
-        try:
-            wait_interruptible(RIDE_FORWARD_DURATION)
-        finally:
-            # Always release, even if StopRequested fires mid-step - otherwise
-            # "w" stays stuck held down in the game.
-            pydirectinput.keyUp("w")
+        hold_key("w", RIDE_FORWARD_DURATION)
 
         # Open backpack, select and equip the first vehicle
         print("[debug] opening backpack...")
@@ -1043,7 +1010,7 @@ def teleport_to(category_pos):
     """Open the backpack and teleport via the given category tab
     (TELEPORT_PETS_TAB_POS for the nursery, TELEPORT_VEHICLES_TAB_POS for
     the dealership), then walk backward briefly to clear the landing spot.
-    Shared by every need that teleports somewhere (bored, beach, cafe)."""
+    Shared by every need that teleports somewhere (TeleportWalkNeedHandler)."""
     print("[debug] opening backpack...")
     pydirectinput.press('b')
     wait_interruptible(TELEPORT_CLICK_DELAY)
@@ -1055,249 +1022,54 @@ def teleport_to(category_pos):
     wait_interruptible(TELEPORT_CLICK_DELAY)
     hover_click(*GENERAL_TELEPORT_POS_3)
     wait_interruptible(TELEPORT_WAIT)
-    time.sleep(5)
+    wait_interruptible(5)
     print("[debug] walking backward...")
-    pydirectinput.keyDown("s")
-    try:
-        wait_interruptible(TELEPORT_BACK_DURATION)
-    finally:
-        # Always release, even if StopRequested fires mid-step - otherwise
-        # "s" stays stuck held down in the game.
-        pydirectinput.keyUp("s")
-    time.sleep(5)
+    hold_key("s", TELEPORT_BACK_DURATION)
+    wait_interruptible(5)
 
-class BoredNeedHandler(NeedHandler):
-    """The 'bored' need: teleport to the nursery, walk forward then left for
-    a while, wait it out, then respawn (since, unlike every other special
-    need, this one leaves the character somewhere else on the map)."""
+class TeleportWalkNeedHandler(NeedHandler):
+    """A need that teleports somewhere, holds a sequence of movement keys,
+    optionally waits it out, then respawns (since, unlike every other
+    special need, these leave the character somewhere else on the map).
+    What each one does is configured in TELEPORT_WALK_NEEDS."""
+
+    respawns_itself = True
+
+    def __init__(self, name):
+        self.name = name
+        self.config = TELEPORT_WALK_NEEDS[name]
 
     def handle(self):
-        print("[!] BORED NEED")
+        print(f"[!] {self.name.upper()} NEED")
         if not focus_roblox():
             return False
 
-        teleport_to(TELEPORT_PETS_TAB_POS)
+        teleport_to(self.config["teleport_pos"])
 
-        print(f"[debug] walking forward for {BORED_WALK_FORWARD_DURATION}s...")
-        pydirectinput.keyDown("w")
-        try:
-            wait_interruptible(BORED_WALK_FORWARD_DURATION)
-        finally:
-            pydirectinput.keyUp("w")
+        for i, (key, duration) in enumerate(self.config["steps"]):
+            if i:
+                time.sleep(TELEPORT_WALK_STEP_GAP)
+            print(f"[debug] holding {key} for {duration}s...")
+            hold_key(key, duration)
 
-        time.sleep(0.1)
-        print(f"[debug] walking left for {BORED_WALK_LEFT_DURATION}s...")
-        pydirectinput.keyDown("a")
-        try:
-            wait_interruptible(BORED_WALK_LEFT_DURATION)
-        finally:
-            pydirectinput.keyUp("a")
-
-        print(f"[debug] waiting {BORED_WAIT_AFTER_WALK}s...")
-        wait_interruptible(BORED_WAIT_AFTER_WALK)
+        wait_after = self.config.get("wait_after", 0)
+        if wait_after:
+            print(f"[debug] waiting {wait_after}s...")
+            wait_interruptible(wait_after)
 
         respawn_character()
-        print("[!] Bored complete!")
+        print(f"[!] {self.name.capitalize()} complete!")
         return True
 
-class BeachNeedHandler(NeedHandler):
-    """The 'beach' need: teleport to the nursery, walk left for a while,
-    wait it out, then respawn (since, unlike every other special need, this
-    one leaves the character somewhere else on the map)."""
-
-    def handle(self):
-        print("[!] BEACH NEED")
-        if not focus_roblox():
-            return False
-
-        teleport_to(TELEPORT_PETS_TAB_POS)
-
-        print(f"[debug] walking left for {BEACH_WALK_LEFT_DURATION}s...")
-        pydirectinput.keyDown("a")
-        try:
-            wait_interruptible(BEACH_WALK_LEFT_DURATION)
-        finally:
-            pydirectinput.keyUp("a")
-
-        print(f"[debug] waiting {BEACH_WAIT_AFTER_WALK}s...")
-        wait_interruptible(BEACH_WAIT_AFTER_WALK)
-
-        respawn_character()
-        print("[!] Beach complete!")
-        return True
-
-class CafeNeedHandler(NeedHandler):
-    """The 'cafe' need: teleport to the dealership, hold 'a' then 's' for a
-    while, then respawn (since, unlike every other special need, this one
-    leaves the character somewhere else on the map)."""
-
-    def handle(self):
-        print("[!] CAFE NEED")
-        if not focus_roblox():
-            return False
-
-        teleport_to(TELEPORT_VEHICLES_TAB_POS)
-
-        print(f"[debug] walking left for {CAFE_WALK_LEFT_DURATION}s...")
-        pydirectinput.keyDown("a")
-        try:
-            wait_interruptible(CAFE_WALK_LEFT_DURATION)
-        finally:
-            pydirectinput.keyUp("a")
-
-        print(f"[debug] walking back for {CAFE_WALK_BACK_DURATION}s...")
-        pydirectinput.keyDown("s")
-        try:
-            wait_interruptible(CAFE_WALK_BACK_DURATION)
-        finally:
-            pydirectinput.keyUp("s")
-            print(f"[debug] waitingfor {60}s...")
-        time.sleep(60)
-        respawn_character()
-        print("[!] Cafe complete!")
-        return True
-
-class SalonNeedHandler(NeedHandler):
-    """The 'salon' need: like CafeNeedHandler, but a shorter 'a' hold and
-    forward instead of backward afterward."""
-
-    def handle(self):
-        print("[!] SALON NEED")
-        if not focus_roblox():
-            return False
-
-        teleport_to(TELEPORT_VEHICLES_TAB_POS)
-
-        print(f"[debug] walking left for {SALON_WALK_LEFT_DURATION}s...")
-        pydirectinput.keyDown("a")
-        try:
-            wait_interruptible(SALON_WALK_LEFT_DURATION)
-        finally:
-            pydirectinput.keyUp("a")
-
-        print(f"[debug] walking forward for {SALON_WALK_FORWARD_DURATION}s...")
-        pydirectinput.keyDown("w")
-        try:
-            wait_interruptible(SALON_WALK_FORWARD_DURATION)
-        finally:
-            pydirectinput.keyUp("w")
-
-        respawn_character()
-        print("[!] Salon complete!")
-        return True
-
-class SchoolNeedHandler(NeedHandler):
-    """The 'school' need: teleport to the nursery, hold 'w' briefly then 'a',
-    then respawn (since, unlike every other special need, this one leaves
-    the character somewhere else on the map)."""
-
-    def handle(self):
-        print("[!] SCHOOL NEED")
-        if not focus_roblox():
-            return False
-
-        teleport_to(TELEPORT_PETS_TAB_POS)
-
-        print(f"[debug] walking forward for {SCHOOL_WALK_FORWARD_DURATION}s...")
-        pydirectinput.keyDown("w")
-        try:
-            wait_interruptible(SCHOOL_WALK_FORWARD_DURATION)
-        finally:
-            pydirectinput.keyUp("w")
-
-        time.sleep(0.1)
-        print(f"[debug] walking left for {SCHOOL_WALK_LEFT_DURATION}s...")
-        pydirectinput.keyDown("a")
-        try:
-            wait_interruptible(SCHOOL_WALK_LEFT_DURATION)
-        finally:
-            pydirectinput.keyUp("a")
-
-        respawn_character()
-        print("[!] School complete!")
-        return True
-
-class PizzaNeedHandler(NeedHandler):
-    """The 'pizza' need: teleport to the dealership, hold 'w' then 'a', then
-    respawn. Durations are placeholders until tuned."""
-
-    def handle(self):
-        print("[!] PIZZA NEED")
-        if not focus_roblox():
-            return False
-
-        teleport_to(TELEPORT_VEHICLES_TAB_POS)
-
-        print(f"[debug] walking forward for {PIZZA_WALK_FORWARD_DURATION}s...")
-        pydirectinput.keyDown("w")
-        try:
-            wait_interruptible(PIZZA_WALK_FORWARD_DURATION)
-        finally:
-            pydirectinput.keyUp("w")
-
-        time.sleep(0.1)
-        print(f"[debug] walking left for {PIZZA_WALK_LEFT_DURATION}s...")
-        pydirectinput.keyDown("a")
-        try:
-            wait_interruptible(PIZZA_WALK_LEFT_DURATION)
-        finally:
-            pydirectinput.keyUp("a")
-
-        respawn_character()
-        print("[!] Pizza complete!")
-        return True
-
-class CampingNeedHandler(NeedHandler):
-    """The 'camping' need: same movement as pizza for now (dealership, 'w'
-    then 'a', respawn), with its own placeholder durations."""
-
-    def handle(self):
-        print("[!] CAMPING NEED")
-        if not focus_roblox():
-            return False
-
-        teleport_to(TELEPORT_VEHICLES_TAB_POS)
-
-        print(f"[debug] walking forward for {CAMPING_WALK_FORWARD_DURATION}s...")
-        pydirectinput.keyDown("w")
-        try:
-            wait_interruptible(CAMPING_WALK_FORWARD_DURATION)
-        finally:
-            pydirectinput.keyUp("w")
-
-        time.sleep(0.1)
-        print(f"[debug] walking left for {CAMPING_WALK_LEFT_DURATION}s...")
-        pydirectinput.keyDown("a")
-        try:
-            wait_interruptible(CAMPING_WALK_LEFT_DURATION)
-        finally:
-            pydirectinput.keyUp("a")
-
-        respawn_character()
-        print("[!] Camping complete!")
-        return True
-
-# Need names with dedicated handler logic above, rather than being a basic
-# at-home button click. "walk"/"walk2"/etc. are matched by prefix instead of
-# being listed here - see is_basic_need() / get_special_need_handler().
-SPECIAL_NEED_NAMES = {"catch", "pet", "choose", "ride", "bored", "beach", "cafe", "salon", "school", "pizza", "camping"}
-
-# Handler class for each special need above. get_special_need_handler() uses
-# this plus ENABLED_NEEDS below to decide what to do with a detected special
-# need - one dict entry and one set membership, in one place, instead of a
-# dedicated _ENABLED boolean and if-branch per need.
+# Handler factory (class, or partial of one) for each special need.
+# get_special_need_handler() uses this plus ENABLED_NEEDS below to decide
+# what to do with a detected special need.
 SPECIAL_NEED_HANDLER_CLASSES = {
     "catch": CatchNeedHandler,
     "pet": PetNeedHandler,
     "choose": ChooseNeedHandler,
     "ride": RideNeedHandler,
-    "bored": BoredNeedHandler,
-    "beach": BeachNeedHandler,
-    "cafe": CafeNeedHandler,
-    "salon": SalonNeedHandler,
-    "school": SchoolNeedHandler,
-    "pizza": PizzaNeedHandler,
-    "camping": CampingNeedHandler,
+    **{name: partial(TeleportWalkNeedHandler, name) for name in TELEPORT_WALK_NEEDS},
 }
 
 # Every handler the GUI's Debug tab can run on its own: the special needs
@@ -1307,7 +1079,7 @@ DEBUG_HANDLERS = {"walk": WalkNeedHandler, **SPECIAL_NEED_HANDLER_CLASSES}
 # Special needs enabled for automatic processing - the single place that
 # decides whether a detected special need actually runs. A need not listed
 # here is still detected and matched, but logged and skipped (not resolved)
-# when it comes up, same as a _ENABLED flag used to do. "walk" covers every
+# when it comes up. "walk" covers every
 # need name that starts with "walk" (see is_basic_need() below).
 ENABLED_NEEDS = {"catch", "pet", "ride", "walk", "beach", "bored", "school"}
 
@@ -1391,6 +1163,9 @@ def process_needs():
                 print(f"[debug] {need_name} is disabled, skipping")
                 continue
             handler.handle()
+            if handler.respawns_itself:
+                resolved = True
+                continue
 
         respawn_character()
         resolved = True

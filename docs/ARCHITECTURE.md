@@ -53,15 +53,17 @@ no-op as progress.
        (`walk_to_buttons()`), refresh the button mapping
        (`refresh_button_mapping()`), click the one matching button
        (`click_basic_need_button()`).
-     - **Special** (catch, pet, choose, ride, or anything starting with
-       `"walk"`): `get_special_need_handler(need_name)` returns a handler
-       instance, or `None` if that need type is currently disabled
-       (`CATCH_ENABLED` / `PET_ENABLED` / `CHOOSE_ENABLED`) - a `None`
+     - **Special** (catch, pet, choose, ride, the teleport-and-walk needs,
+       or anything starting with `"walk"`): `get_special_need_handler(need_name)`
+       returns a handler instance, or `None` if that need type isn't in
+       `ENABLED_NEEDS` - a `None`
        result is logged and skipped, without walking anywhere or
        respawning. A special need never walks to the buttons first; it
        acts from wherever the character already is.
    - If the need actually ran (a basic click, or an enabled special
-     handler), the character respawns immediately - **before** the next
+     handler), the character respawns immediately (handlers that already
+     respawn themselves - `respawns_itself = True`, i.e. the
+     teleport-and-walk needs - are not respawned a second time) - **before** the next
      matched need is even looked at.
 6. `process_needs()` returns `True` if at least one need in the list
    actually ran, `False` otherwise (e.g. every match turned out to be a
@@ -95,7 +97,7 @@ character standing.
   [Need-icon matching](#need-icon-matching).
 - **NEED ICON DETECTION** - `detect_need_icons()`, `find_matching_need()`,
   `prompt_rename_need()`. See [Need-icon detection](#need-icon-detection).
-- **CLICKING** - `hover_click()`, `hover_move()`, `jitter_click()`, `simple_click()`, `slow_click()`,
+- **CLICKING** - `hover_click()`, `hover_move()`, `jitter_click()`, `simple_click()`,
   `scroll_wheel_up()`, `wait_interruptible()`, `release_all_inputs()`. See
   [Click & input primitives](#click--input-primitives).
 - **BUTTON DETECTION** - `detect_buttons()`, `refresh_button_mapping()`,
@@ -208,10 +210,6 @@ settle):
   (`JITTER_PIXELS`), clicks again. Used for real in-game action buttons,
   since a single perfectly-still click sometimes doesn't register.
 - **`simple_click()`** - one click, no jitter. Used for backpack/toy UI.
-- **`slow_click()`** - moves deliberately slowly (a caller-supplied
-  duration, e.g. `CHOOSE_SLOW_MOVE_DURATION`) instead of the usual quick
-  `CLICK_MOVE_DURATION`, for targets that don't register a snapped-in
-  click the same way.
 - **`scroll_wheel_up()`** - moves to a point and scrolls up
   (`CATCH_SCROLL_AMOUNT` notches) via `pyautogui.scroll()`, since
   `pydirectinput` has no scroll function of its own. Used by the catch
@@ -222,35 +220,30 @@ else is built on - see [Stopping & focus safety](#stopping--focus-safety).
 
 ## Need handlers
 
-**Currently active** (handler exists *and* enabled - these are the only
-needs the macro will act on by itself right now):
-
-- `hungry`, `thirsty`, `dirty`, `potty`, `sleepy` - basic, always on
-- `catch` - `CATCH_ENABLED = True`
-- `ride` - no flag, always on
-- `walk` - no flag, always on
-
-**Implemented but disabled** (handler exists, flag is off - a detected
-icon for these is logged and skipped, not resolved):
-
-- `pet` - `PET_ENABLED = False`
-- `choose` - `CHOOSE_ENABLED = False`
+Which special needs run automatically is decided by one set,
+`ENABLED_NEEDS`. A detected need that isn't in it is logged and skipped,
+not resolved. Currently enabled: `catch`, `pet`, `ride`, `walk`, `beach`,
+`bored`, `school`. Implemented but not enabled: `choose`, `cafe`, `salon`,
+`pizza`, `camping`. The basic needs (`hungry`, `thirsty`, `dirty`, `potty`,
+`sleepy`) are always on. The GUI's **Debug** tab has a button per handler
+that runs it directly regardless of `ENABLED_NEEDS`.
 
 | Need | How it's handled |
 |---|---|
 | `hungry` / `thirsty` | Basic. Walk to the buttons, click, wait `POST_NEED_CLICK_WAIT_SHORT` (10s). |
 | `dirty` / `potty` / `sleepy` / any unrecognized need | Basic. Walk to the buttons, click, wait `POST_NEED_CLICK_WAIT` (15s). |
 | `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → scroll up + click empty space, `CATCH_THROW_COUNT` (3) times, `CATCH_EMOTE_DELAY` apart → unequip. |
-| `pet` | `PetNeedHandler`: click to focus the pet, then hold the mouse down and trace a circle of radius `PET_CIRCLE_RADIUS` around screen center for `PET_CIRCLE_DURATION`. *Disabled by default (`PET_ENABLED`).* |
-| `choose` | `ChooseNeedHandler`: focus the pet, find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), move to it slowly and click, then click screen-center to dismiss the menu. *Disabled by default (`CHOOSE_ENABLED`).* |
+| `pet` | `PetNeedHandler`: click to focus the pet, then hold the mouse down and trace a circle of radius `PET_CIRCLE_RADIUS` around screen center for `PET_CIRCLE_DURATION`. |
+| `choose` | `ChooseNeedHandler`: focus the pet, find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. *Not in `ENABLED_NEEDS` by default.* |
 | `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then backpack → vehicles → first vehicle → equip → close backpack, then `walk_alternating(("w", "s"), RIDE_WALK_DURATION)`. |
+| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, optionally wait, then respawn. Pizza and camping durations are placeholders. |
 | `walk` (any name starting with it) | `WalkNeedHandler`: `walk_alternating(("a", "d"), WALK_TOTAL_DURATION)`. |
 
-Dispatch: `is_basic_need(name)` returns `False` for anything starting with
-`"walk"` or in `SPECIAL_NEED_NAMES = {"catch", "pet", "choose", "ride"}` -
-everything else is basic. `get_special_need_handler(name)` is only ever
-called for a non-basic name, and returns `None` if that need's `_ENABLED`
-flag is off.
+Dispatch: `is_basic_need(name)` is true only for the names in
+`BUTTON_NAMES`; everything else is special. `get_special_need_handler(name)`
+is only ever called for a non-basic name. It matches `"walk"` by prefix,
+looks anything else up in `SPECIAL_NEED_HANDLER_CLASSES`, and returns `None`
+if the need isn't in `ENABLED_NEEDS`.
 
 A basic need only counts as resolved (and only then triggers a respawn) if
 `refresh_button_mapping()` actually found buttons *and*
@@ -259,11 +252,6 @@ mapping - both return a bool for exactly this reason. If either fails (no
 buttons detected at all, or this particular one wasn't among them), the
 need is logged and skipped for this pass with no respawn, the same as a
 disabled special.
-
-`PET_ENABLED` and `CHOOSE_ENABLED` default to `False` - both handlers are
-fully implemented but not wired into automatic processing yet. Their
-buttons on the GUI's Debug tab (one per handler) run them directly regardless of the flag.
-`CATCH_ENABLED` exists for the same purpose but defaults to `True`.
 
 ## Stopping & focus safety
 
@@ -358,7 +346,7 @@ next to each constant in `main.py` for exact values and rationale):
 
 | Group | Examples |
 |---|---|
-| Behavior flags | `CATCH_ENABLED`, `PET_ENABLED`, `CHOOSE_ENABLED`, `FOCUS_WINDOW_ON_ACTION` |
+| Behavior flags | `ENABLED_NEEDS`, `FOCUS_WINDOW_ON_ACTION` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `POST_NEED_CLICK_WAIT[_SHORT]`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL` |
 | Screen positions | `CATCH_*_POS`, `EMPTY_POS`, `FOCUS_PET_POS`, `RIDE_*_POS` |
 | Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN_AREA`, `NEED_ICON_MIN_CIRCULARITY` |

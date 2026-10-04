@@ -1,10 +1,23 @@
 # Add next
 
-- [ ] Add `pet` to `ENABLED_NEEDS` once the pet handler's been tuned enough to trust in automatic processing
-- [ ] Add `choose` to `ENABLED_NEEDS` once the choose handler's been tuned enough to trust in automatic processing
-- [ ] A "task board" / pen-check flow (an earlier draft had placeholder coordinates for this - `TASK_BOARD_POS`/`READY_POS` - that were removed as unused; revisit if still wanted)
-- [ ] Add support for needs that require travel to a specific location
+- [ ] Fix the remaining teleport needs and separate out the seasonal needs(diving and puddle). Add a halloween toggle that changes the steps required for certain teleport needs
+- [ ] Add a 'setup' function to select the favorite filter in the backpack, disable trades and lock the house
+- [ ] Add disabling the ghost gallery popup to unscrew if the halloween toggle is on
+- [ ] Separate the code into multiple files
+- [ ] Add further debug functionality to pinpoint when things go wrong
+- [ ] Add functionality to rejoin if disconnected
+- [ ] Add auto-disabling needs if they aren't getting resolved, and auto-rejoin if too many are getting disabled
+- [ ] Start using the helicopter to get to places
+- [ ] Add auto money tree harvesting
+- [ ] Add auto lure collectro
+- [ ] Pet focusing for choose and pet sometimes breaks
+- [ ] Implement wait until gone for all needs, not just the teleport ones, and raise the timer on walk to 40sec 
 
 # Known issues
 
-- [ ] White screen of  death
+- [ ] Why is the walk need matched by prefix and handled differently from the other ones?
+
+# Expansion
+
+- [ ] Trade helper
+- [ ] Auto-pen/neon maker

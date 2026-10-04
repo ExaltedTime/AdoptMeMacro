@@ -1182,7 +1182,6 @@ def detect_paycheck():
 
     print("[debug] paycheck popup detected, dismissing...")
     hover_click(*PAYCHECK_DISMISS_POS_1)
-    simple_click(*EMPTY_POS)
     hover_click(*PAYCHECK_DISMISS_POS_2)
     PAYCHECK_RECEIVED = True
     return True

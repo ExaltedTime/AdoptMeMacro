@@ -11,7 +11,8 @@
 - [ ] Add auto money tree harvesting
 - [ ] Add auto lure collectro
 - [ ] Pet focusing for choose and pet sometimes breaks
-- [ ] Implement wait until gone for all needs, not just the teleport ones, and raise the timer on walk to 40sec 
+- [ ] Implement wait until gone for all needs, not just the teleport ones, and raise the timer on walk to 40sec
+- [ ] Add add an auto ghost gallery function if the halloween toggle is on. And also a toggle for whether you want ghost gallery to run
 
 # Known issues
 

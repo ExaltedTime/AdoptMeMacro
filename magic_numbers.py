@@ -169,8 +169,8 @@ RESPAWN_KEYS = ("esc", "r", "enter")
 # Lure/tree collection (GUI-only functions, not tied to a detected need)
 LURE_COLLECT_WALK_DURATION = 2.0  # hold 'a' this long before pressing KEY_INTERACT at the lure
 LURE_COLLECT_SETTLE_DELAY = 1.0   # wait this long between the two KEY_INTERACT presses at the lure
-LURE_NEW_POS_1 = (896, 707)       # the two backpack clicks that place a fresh lure - see set_new_lure()
-LURE_NEW_POS_2 = (1007, 803)
+LURE_NEW_POS_1 = (876, 711)       # the two backpack clicks that place a fresh lure - see set_new_lure()
+LURE_NEW_POS_2 = (978, 814)
 TREE_COLLECT_WALK_DURATION = 2.0  # hold 'd' this long before stepping back
 TREE_COLLECT_BACKWARD_DURATION = 1.0  # then hold 's' this long before pressing KEY_INTERACT at the money tree
 TREE_HARVEST_YIELD = 16           # money_collected added to the persisted total per tree_collect() call
@@ -185,10 +185,10 @@ LURE_RECOLLECT_INTERVAL = 4 * 60 * 60  # seconds (4 hours)
 # setup_game(): one-time, run via ensure_setup() - see GAME_CONFIG_PATH's
 # setup_done flag. Disabling trades isn't implemented yet.
 SETUP_LOCK_HOUSE_POS = (1112, 65)
-SETUP_BACKPACK_SETTINGS_POS = (953, 647)
-SETUP_SORT_MENU_POS = (1027, 906)
-SETUP_FAVORITES_POS = (1023, 1006)
-SETUP_CONFIRM_POS = (1047, 1131)
+SETUP_BACKPACK_SETTINGS_POS = (977, 646)
+SETUP_SORT_MENU_POS = (1031, 680)
+SETUP_FAVORITES_POS = (1023, 810)
+SETUP_CONFIRM_POS = (1047, 908)
 
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75

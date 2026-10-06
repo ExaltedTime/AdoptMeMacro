@@ -667,6 +667,7 @@ def lure_collect():
     wait_interruptible(LURE_COLLECT_SETTLE_DELAY)
     pydirectinput.press(KEY_INTERACT)
     set_new_lure()
+    respawn_character()
     print("[!] Lure collect complete!")
     return True
 
@@ -691,6 +692,7 @@ def tree_collect():
     print(f"[debug] stepping back for {TREE_COLLECT_BACKWARD_DURATION}s...")
     hold_key("s", TREE_COLLECT_BACKWARD_DURATION)
     pydirectinput.press(KEY_INTERACT)
+    respawn_character()
     print("[!] Tree collect complete!")
     return True
 
@@ -702,6 +704,7 @@ def setup_game():
     respawn_character()
     print("[debug] locking house...")
     hover_click(*SETUP_LOCK_HOUSE_POS)
+
     print("[debug] opening backpack...")
     pydirectinput.press(KEY_BACKPACK)
     wait_interruptible(UI_SETTLE)
@@ -719,6 +722,7 @@ def setup_game():
     wait_interruptible(UI_SETTLE)
     print("[debug] closing backpack...")
     pydirectinput.press(KEY_BACKPACK)
+
     print("[!] Setup complete!")
     return True
 
@@ -1157,7 +1161,6 @@ def run_workflow():
     print("\n" + "=" * 50)
     print(f"[WORKFLOW] Starting (run {CURRENT_RUN_NUMBER})")
     print("=" * 50)
-    ensure_setup()
     run_full_cycle()
     log_run_event("WORKFLOW done")
     print("\n[WORKFLOW] Done\n")

@@ -1070,19 +1070,18 @@ SPECIAL_NEED_HANDLER_CLASSES = {
     "pet": PetNeedHandler,
     "choose": ChooseNeedHandler,
     "ride": RideNeedHandler,
+    "walk": WalkNeedHandler,
     **{name: partial(TeleportWalkNeedHandler, name) for name in TELEPORT_WALK_NEEDS},
 }
 
-# Every handler the GUI's Debug tab can run on its own: the special needs
-# above plus walk, which is matched by prefix and so isn't in the dict.
-DEBUG_HANDLERS = {"walk": WalkNeedHandler, **SPECIAL_NEED_HANDLER_CLASSES}
+# Every handler the GUI's Debug tab can run on its own.
+DEBUG_HANDLERS = SPECIAL_NEED_HANDLER_CLASSES
 
 # Special needs enabled for automatic processing - the single place that
 # decides whether a detected special need actually runs. A need not listed
 # here is still detected and matched, but logged and skipped (not resolved)
-# when it comes up. "walk" covers every
-# need name that starts with "walk" (see is_basic_need() below).
-ENABLED_NEEDS = {"catch", "pet", "ride", "walk", "cafe", "salon", "choose", "sick", "pizza"} 
+# when it comes up.
+ENABLED_NEEDS = {"catch", "pet", "ride", "walk", "cafe", "salon", "choose", "sick", "pizza"}
 # camping, beach, bored and school are disabled
 
 def is_basic_need(need_name):
@@ -1094,8 +1093,6 @@ def get_special_need_handler(need_name):
     """Return the handler for a need with dedicated logic. Only call this
     when is_basic_need(need_name) is False. Returns None if this need type
     is not currently enabled (see ENABLED_NEEDS)."""
-    if need_name.startswith("walk"):
-        return WalkNeedHandler() if "walk" in ENABLED_NEEDS else None
     if need_name not in ENABLED_NEEDS:
         return None
     handler_cls = SPECIAL_NEED_HANDLER_CLASSES.get(need_name)

@@ -335,13 +335,6 @@ def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=N
 # CLICKING
 # ============================================================================
 
-def simple_click(x, y):
-    """Simple click without jitter."""
-    pyautogui.moveTo(x, y, duration=CLICK_MOVE_DURATION)
-    time.sleep(CLICK_SETTLE_DELAY)
-    pydirectinput.click()
-    time.sleep(POST_CLICK_DELAY)
-
 def hover_move(x, y, duration=CLICK_MOVE_DURATION):
     """Move the mouse to (x, y) over `duration` seconds using SendInput
     (pydirectinput), then nudge it a couple of pixels back onto the target.
@@ -664,12 +657,12 @@ class CatchNeedHandler(NeedHandler):
         # Click empty space to throw, with a delay between throws
         for i in range(CATCH_THROW_COUNT):
             print(f"[debug] throw {i + 1}/{CATCH_THROW_COUNT}...")
-            simple_click(*EMPTY_POS)
+            hover_click(*EMPTY_POS)
             wait_interruptible(CATCH_EMOTE_DELAY)
 
         # Unequip the toy
         print("[debug] unequipping toy...")
-        simple_click(*CATCH_UNEQUIP_POS)
+        hover_click(*CATCH_UNEQUIP_POS)
 
         print("[!] Catch complete!")
         return True

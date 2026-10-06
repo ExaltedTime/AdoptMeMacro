@@ -93,8 +93,8 @@ character standing.
   [Need-icon matching](#need-icon-matching).
 - **NEED ICON DETECTION** - `detect_need_icons()`, `find_matching_need()`,
   `prompt_rename_need()`. See [Need-icon detection](#need-icon-detection).
-- **CLICKING** - `hover_click()`, `hover_move()`, `simple_click()`,
-  `wait_interruptible()`, `release_all_inputs()`. See
+- **CLICKING** - `hover_click()`, `hover_move()`, `wait_interruptible()`,
+  `release_all_inputs()`. See
   [Click & input primitives](#click--input-primitives).
 - **BUTTON DETECTION** - `detect_buttons()`, `refresh_button_mapping()`,
   `click_need_button()`. See [Button detection](#button-detection).
@@ -212,15 +212,14 @@ the buttons:
 
 ## Click & input primitives
 
-Click styles, all built on the same shape (move → settle → click →
-settle):
-
-- **`hover_click()`** / **`hover_move()`** - the default for everything in
-  game. Moves with SendInput (`pydirectinput`), nudges `HOVER_NUDGE_PIXELS`
-  and back so Roblox registers real mouse movement (hover), then clicks.
-  Roblox ignores `pyautogui`'s cursor warps as hover movement.
-- **`simple_click()`** - one click, no wiggle. Used for the catch need's
-  throw-into-empty-space click and its final unequip click.
+Every click in the macro goes through **`hover_click()`** /
+**`hover_move()`**: moves with SendInput (`pydirectinput`), nudges
+`HOVER_NUDGE_PIXELS` and back so Roblox registers real mouse movement
+(hover), then clicks. Roblox ignores `pyautogui`'s cursor warps as hover
+movement, so this is what makes a click register reliably whether it's on
+a UI button or into empty game-world space (there used to be a separate
+`simple_click()` with no hover wiggle for the latter case, but it wasn't
+actually needed - `hover_click()` works fine there too, so it was dropped).
 
 `wait_interruptible(duration)` is the delay primitive nearly everything
 else is built on - see [Stopping & focus safety](#stopping--focus-safety).

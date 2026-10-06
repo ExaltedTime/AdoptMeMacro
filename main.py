@@ -13,10 +13,9 @@
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
-import os, sys, time, random, threading
+import os, sys, time, threading
 from abc import ABC, abstractmethod
 from functools import partial
-from pathlib import Path
 import tkinter as tk
 from tkinter import scrolledtext, ttk
 
@@ -27,224 +26,7 @@ import pyautogui
 import pydirectinput
 import pygetwindow as gw
 
-# ============================================================================
-# CONSTANTS
-# ============================================================================
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-NEEDS_DIR = os.path.join(SCRIPT_DIR, "needs")
-DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
-Path(NEEDS_DIR).mkdir(exist_ok=True)
-Path(DEBUG_DIR).mkdir(exist_ok=True)
-
-RUN_LOG_PATH = os.path.join(DEBUG_DIR, "run_log.txt")      # appended to, never overwritten
-RUN_COUNTER_PATH = os.path.join(DEBUG_DIR, "run_counter.txt")  # holds the last-used run number
-
-pyautogui.FAILSAFE = True
-pydirectinput.FAILSAFE = True
-pydirectinput.PAUSE = 0.05
-SCREEN_WIDTH, SCREEN_HEIGHT = pyautogui.size()
-SCREEN_CENTER_X, SCREEN_CENTER_Y = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2
-
-# Behavior flags
-FOCUS_WINDOW_ON_ACTION = True  # click the Roblox window to focus it before acting
-SAVE_NEW_NEEDS = False
-MATCH_ONLY_LEFT_HALF = True    # compare only the left half of each icon (a badge sits at its top right)
-PAYCHECK_RECEIVED = False      # set True once detect_paycheck() has dismissed the paycheck popup
-
-# Timing (seconds)
-RESPAWN_KEY_DURATION = 0.05    # how long each respawn key is held
-RESPAWN_WAIT = 4.0             # settle time after respawning, before it's usable
-WALK_TO_BUTTONS_DURATION = 0.8 # time spent walking forward to reach the action buttons
-WALK_ALTERNATING_STEP = 1.0    # duration of each a/d press in alternating walk pattern
-KEY_STEP_GAP = 0.1             # pause between consecutive key holds (walk patterns, teleport-walk needs)
-WALK_TOTAL_DURATION = 35.0     # total duration to keep walking back and forth
-UI_SETTLE = 0.5                # generic pause for UI to catch up (between clicks in a sequence)
-FOCUS_DELAY = 0.3              # pause after focusing the window
-FOCUS_CLICK_SETTLE_DELAY = 0.1 # pause after the window-focus click
-CLICK_MOVE_DURATION = 0.3      # mouse travel time for an ordinary click
-CLICK_SETTLE_DELAY = 0.2       # pause after moving the mouse, before clicking
-POST_CLICK_DELAY = 0.4         # pause after each click
-POST_NEED_CLICK_WAIT = 15      # pause after satisfying a need via button click
-POST_NEED_CLICK_WAIT_SHORT = 10  # shorter pause for needs that refill quickly
-SHORT_WAIT_NEED_NAMES = {"hungry", "thirsty"}  # basic needs that use the shorter wait above
-NEED_CHECK_RETRY_DELAY = 5.0   # pause before re-checking when no need was found
-LOOP_DELAY = 2.0               # pause between iterations of the workflow loop
-STOP_CHECK_INTERVAL = 0.1      # granularity of the interruptible wait loop
-CATCH_WAIT_AFTER_EQUIP = 2.0   # wait after equipping toy before throwing
-CATCH_EMOTE_DELAY = 10.0       # delay between throw clicks
-CATCH_THROW_COUNT = 3          # number of times the toy is thrown
-CATCH_ZOOM_DURATION = 3.0      # seconds the zoom-in key is held before throwing
-PET_CIRCLE_DURATION = 10.0     # how long to make circles with mouse
-PET_CIRCLE_RADIUS = 100                # radius (px) of the circle traced around screen center
-PET_SETTLE_DELAY = 0.1                 # pause after each mouse move/click before the next pet step
-PET_CIRCLE_STEP_MOVE_DURATION = 0.05   # time for each small step around the circle
-ICON_EXTRACT_PADDING = 5       # px of padding added around a detected icon's radius
-
-# Catch need positions (screen coordinates for the toy-throwing sequence;
-# opening/closing the backpack itself uses the 'b' key, not a click)
-CATCH_TOYS_POS = (754, 854)
-CATCH_SQUEAKY_TOY_POS = (976, 875)
-CATCH_EQUIP_POS = (1083, 980)
-CATCH_UNEQUIP_POS = (1054, 983)
-
-# A spot on screen that's just empty game world - no UI, no character menu.
-# Used as the "click into empty space" throw motion in catch.
-EMPTY_POS = (142, 233)
-
-# Click this to open the pet's interaction menu (pet/weather/feed/dress up/
-# tricks/pick up/ride/fly icons arranged around the pet).
-FOCUS_PET_POS = (1114, 692)
-
-# The 'choose' need's button is matched by its exact color rather than shape,
-# since it's just a plain circle with no distinguishing icon. Given as (R, G, B).
-CHOOSE_BUTTON_COLOR = (181, 6, 254)
-CHOOSE_SLOW_MOVE_DURATION = 1.0  # deliberate, slow mouse travel to the found button
-CHOOSE_HOVER_WAIT = 2.0          # hover over the found button this long before the real click
-CHOOSE_DISMISS_WAIT = 1.0        # pause after the first center click, before the hover-and-click dismiss
-
-# The paycheck popup's CASH OUT button, matched by exact color the same way
-# as CHOOSE_BUTTON_COLOR above. TODO: sample the real RGB from your own
-# screen - this is an uncalibrated placeholder and will not match yet.
-PAYCHECK_CASHOUT_COLOR = (74, 198, 85)
-PAYCHECK_DISMISS_POS_1 = (946, 679)
-PAYCHECK_DISMISS_POS_2 = (948, 627)
-
-# Ride need: positions for the backpack -> vehicles -> first vehicle -> equip
-# sequence, plus how long to hold each step.
-RIDE_BACKWARD_DURATION = 1.0   # step back before pressing e to mount
-RIDE_WAIT_AFTER_E = 5.0        # wait after e before opening the backpack
-RIDE_FORWARD_DURATION = 2.0    # walk forward briefly after mounting, before the backpack
-RIDE_VEHICLES_POS = (816, 804)
-RIDE_FIRST_VEHICLE_POS = (976, 708)
-RIDE_EQUIP_POS = (1062, 814)
-RIDE_WALK_DURATION = 40.0      # total time spent walking back and forth while riding
-
-# Backpack-teleport sequence, shared by every teleport destination: open
-# backpack -> category tab -> two more fixed clicks that confirm/execute
-# the teleport -> wait for it to take effect -> walk backward to clear the
-# landing spot. Only the category tab differs per destination (passed into
-# teleport_to() as `category_pos`); everything else is always the same,
-# hence "general".
-TELEPORT_WAIT = 5.0               # wait after the teleport click, for it to take effect
-TELEPORT_SETTLE_WAIT = 7.0         # wait after stepping back, for the landing to settle
-GENERAL_TELEPORT_POS_2 = (895, 705)
-GENERAL_TELEPORT_POS_3 = (1048, 658)
-TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing spot
-
-TELEPORT_PETS_TAB_POS = (817, 713)       # nursery: pets tab
-TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
-TELEPORT_FOOD_TAB_POS = (753, 804)       # supermarket: food tab
-SICK_FINAL_CLICK_POS = (1045, 660)       # click after the sick need's walk
-
-# Needs that teleport somewhere and walk (see TeleportWalkNeedHandler), then
-# wait for the need to clear. Each entry: where to teleport, the
-# (key, seconds) holds to perform in order, and optionally a `final_click`
-# position to click after the last hold. Pizza and camping durations are
-# placeholders until tuned.
-TELEPORT_WALK_NEEDS = {
-    "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
-    "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),)),
-    "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 1.2), ("a", 10.0))),
-    "cafe":    dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 3.1), ("s", 15.0))),
-    "salon":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 2.5), ("w", 15.0))),
-    "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 2.0), ("a", 6.5), ("s", 3.0))),
-    "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 0.1), ("d", 3.0), ("s", 2.2), ("d", 15.0), ("w",20.0))),
-    "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 5.0), ("w", 1.5)),
-                    final_click=SICK_FINAL_CLICK_POS),
-}
-NEED_GONE_MAX_WAIT = 60.0        # most a teleport need waits for its icon to disappear
-NEED_GONE_POLL_INTERVAL = 5.0    # how often to re-check for the icon during that wait
-NEED_GONE_CONFIRMATIONS = 3      # consecutive checks that must all miss the icon before it counts as cleared
-NEED_GONE_CONFIRM_INTERVAL = 1.0 # pause between those confirming checks
-
-# Game key bindings
-KEY_BACKPACK = "b"
-KEY_MOUNT = "e"
-KEY_ZOOM_IN = "i"
-MOVE_KEYS = ("w", "a", "s", "d")
-RESPAWN_KEYS = ("esc", "r", "enter")
-
-# Window focus click (near top edge, right of center)
-FOCUS_CLICK_X_PERCENT = 0.75
-FOCUS_CLICK_Y = 5
-
-# Jitter click (click, nudge mouse a few pixels, click again)
-JITTER_PIXELS = 5
-
-# Hover move: wiggle so Roblox registers real mouse movement
-HOVER_NUDGE_PIXELS = 2
-
-# Need-icon detection (top strip of screen)
-NEED_ICON_TOP_PERCENT = 0.15        # fraction of screen height searched for icons
-NEED_ICON_WIDTH_PERCENT = 0.70      # fraction of screen width searched, from the left edge -
-                                     # keeps the GUI panel (docked top-right) out of frame
-NEED_ICON_BLANK_HEIGHT = 0.15       # top-left UI cluster to ignore (height)
-NEED_ICON_BLANK_WIDTH = 0.20        # top-left UI cluster to ignore (width)
-NEED_ICON_MIN_RADIUS = 24           # px, icon ring radius range searched for (Hough circles)
-NEED_ICON_MAX_RADIUS = 34
-NEED_ICON_MIN_DISTANCE = 40         # px, minimum spacing between two icon centers
-NEED_ICON_BLUR_KERNEL = 5           # median blur applied before circle detection
-NEED_ICON_HOUGH_EDGE = 100          # Hough: Canny upper edge threshold
-NEED_ICON_HOUGH_VOTES = 25          # Hough: accumulator votes needed to accept a circle
-CIRCULARITY_EPSILON = 1e-6          # avoids dividing by zero when scoring circularity
-PIXEL_MAX = 255                     # max value of an 8-bit pixel channel
-
-# Need-icon matching (shape comparison, color-independent)
-ICON_MATCH_THRESHOLD = 0.93
-ICON_BW_THRESHOLD = 230            # only near-white pixels survive B/W conversion
-ICON_CLAHE_CLIP = 3.0
-ICON_CLAHE_TILE = (8, 8)
-ICON_COMPARE_SIZE = (32, 32)
-ICON_CROP_RADIUS = 28              # px, icon radius that saved/compared crops are cut at (plus ICON_EXTRACT_PADDING)
-ICON_SHIFT_TOLERANCE = 2           # px, how far off-center a detection may be and still match
-
-# Button detection (middle band of screen)
-BUTTON_BAND_Y = (0.40, 0.70)
-BUTTON_BAND_X = (0.25, 0.75)
-BUTTON_MIN_AREA = 150
-BUTTON_MIN_CIRCULARITY = 0.65
-BUTTON_MAX_COUNT = 5
-BUTTON_NAMES = ["hungry", "thirsty", "dirty", "potty", "sleepy"]
-BUTTON_LOOSE_AREA_FACTOR = 0.7         # how much looser than BUTTON_MIN_AREA a candidate may be
-BUTTON_MAX_AREA_FRACTION = 0.5         # reject a blob covering more than this fraction of the band
-BUTTON_MIN_RADIUS = 5                  # reject a candidate smaller than this radius (px)
-BUTTON_LOOSE_CIRCULARITY_FACTOR = 0.8  # how much looser than BUTTON_MIN_CIRCULARITY a candidate may be
-BUTTON_PURPLE_DILATE_ITERATIONS = 3    # dilation used to build the outline search zone
-BUTTON_PURPLE_ERODE_ITERATIONS = 1     # erosion used to build the outline search zone
-BUTTON_OUTLINE_PADDING = 3             # px of padding around a candidate when scoring its white outline
-
-# Debug drawing
-DEBUG_NEED_MARKER_COLOR = (0, 255, 0)      # BGR
-DEBUG_NEED_MARKER_THICKNESS = 2
-DEBUG_BUTTON_MARKER_COLOR = (0, 0, 255)    # BGR
-DEBUG_BUTTON_MARKER_RADIUS = 8
-DEBUG_BUTTON_MARKER_THICKNESS = 2
-DEBUG_BUTTON_LABEL_OFFSET = (-5, -15)      # px offset of the number label from its marker
-DEBUG_BUTTON_LABEL_SCALE = 0.5
-
-# Color ranges (HSV): lower, upper
-PURPLE_RANGE = (np.array([130, 80, 80]), np.array([160, 255, 255]))
-WHITE_RANGE = (np.array([0, 0, 200]), np.array([180, 40, 255]))
-
-# GUI
-GUI_GEOMETRY = "380x650+1533+110"   # size + position (docked top-right)
-GUI_ALPHA = 0.95
-GUI_FONT = "Courier"
-GUI_BG = "#1a1a1a"
-GUI_ACCENT = "#0d7377"
-GUI_FG = "#fff"
-GUI_START_COLOR = "#2ecc71"
-GUI_STOP_COLOR = "#d62828"
-GUI_LOOP_COLOR = "#2980b9"
-GUI_RESPAWN_COLOR = "#8e44ad"
-GUI_TEST_COLOR = "#e74c3c"
-GUI_CONSOLE_BG = "#0a0a0a"
-GUI_CONSOLE_FG = "#00ff00"
-GUI_SQUARE_BUTTON_SIZE = 44         # px, start/stop buttons are square
-GUI_STATUS_HEIGHT = 25              # px
-
-STOP_FLAG = False
+from magic_numbers import *
 
 class StopRequested(Exception):
     """Raised to unwind out of a running workflow when the user presses [STOP].
@@ -355,6 +137,10 @@ def find_exact_color(img, rgb):
 # ============================================================================
 # STATE
 # ============================================================================
+# This module's own mutable state, changed while the macro runs - everything
+# else (fixed config/tuning values) lives in magic_numbers.py instead.
+
+STOP_FLAG = False
 
 # Detected action-button screen positions, keyed by need name (e.g. "hungry").
 # Populated by refresh_button_mapping() each time the macro walks to the
@@ -507,11 +293,20 @@ def identify_icons(found_icons, full_img):
         need_name, score = find_matching_need(icon_variants(full_img, cx, cy))
         yield idx, icon_img, need_name, score
 
+def detected_need_names():
+    """One-shot snapshot: every need name currently detected on screen."""
+    found_icons, full_img = detect_need_icons()
+    return [name for _, _, name, _ in identify_icons(found_icons, full_img)]
+
 def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=NEED_GONE_POLL_INTERVAL):
     """Wait for `need_name`'s icon to stop being detected, for at most
     `max_wait` seconds - whichever happens first. The icon must be missing
     NEED_GONE_CONFIRMATIONS checks in a row (any sighting resets the count),
-    so a single missed detection can't end the wait early. Interruptible."""
+    so a single missed detection can't end the wait early. Each miss is
+    itself double-checked with one quick re-sample
+    (NEED_GONE_FLICKER_RECHECK_DELAY later) before it counts, since the
+    icon can flash for a frame - or briefly fail to detect against a busy
+    background - without the need actually having cleared. Interruptible."""
     print(f"[debug] waiting up to {max_wait}s for {need_name} to clear...")
     deadline = time.time() + max_wait
     misses = 0
@@ -521,11 +316,15 @@ def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=N
             print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
             return
         wait_interruptible(min(NEED_GONE_CONFIRM_INTERVAL if misses else poll_interval, remaining))
-        found_icons, full_img = detect_need_icons()
-        visible = [name for _, _, name, _ in identify_icons(found_icons, full_img)]
-        if need_name in visible:
+        if need_name in detected_need_names():
             misses = 0
             continue
+
+        wait_interruptible(NEED_GONE_FLICKER_RECHECK_DELAY)
+        if need_name in detected_need_names():
+            misses = 0
+            continue
+
         misses += 1
         print(f"[debug] {need_name} not detected ({misses}/{NEED_GONE_CONFIRMATIONS})")
         if misses >= NEED_GONE_CONFIRMATIONS:
@@ -535,36 +334,6 @@ def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=N
 # ============================================================================
 # CLICKING
 # ============================================================================
-
-def jitter_click(x, y, duration=0.1):
-    '''
-    """Click at (x, y), nudge the mouse a few pixels, then click again."""
-    pyautogui.moveTo(x, y, duration=CLICK_MOVE_DURATION)
-    time.sleep(CLICK_SETTLE_DELAY)
-    pydirectinput.click()
-    time.sleep(POST_CLICK_DELAY)
-
-    offset_x = random.randint(-JITTER_PIXELS, JITTER_PIXELS)
-    offset_y = random.randint(-JITTER_PIXELS, JITTER_PIXELS)
-    new_x = max(0, min(SCREEN_WIDTH, x + offset_x))
-    new_y = max(0, min(SCREEN_HEIGHT, y + offset_y))
-    pydirectinput.moveTo(new_x, new_y, duration=CLICK_MOVE_DURATION)
-    time.sleep(CLICK_SETTLE_DELAY)
-
-    pydirectinput.click()
-    time.sleep(POST_CLICK_DELAY)
-    '''
-    """hover_move() to (x, y), then click."""
-    hover_move(x, y, duration)
-    pydirectinput.click()
-    time.sleep(POST_CLICK_DELAY)
-
-def simple_click(x, y):
-    """Simple click without jitter."""
-    pyautogui.moveTo(x, y, duration=CLICK_MOVE_DURATION)
-    time.sleep(CLICK_SETTLE_DELAY)
-    pydirectinput.click()
-    time.sleep(POST_CLICK_DELAY)
 
 def hover_move(x, y, duration=CLICK_MOVE_DURATION):
     """Move the mouse to (x, y) over `duration` seconds using SendInput
@@ -709,7 +478,7 @@ def refresh_button_mapping():
     BUTTON_POSITIONS. Assumes the character is already at the buttons.
     Always clears any previous mapping first, even on failure, so a failed
     detection can never leave a stale (possibly wrong) position behind for
-    click_basic_need_button() to use."""
+    click_need_button() to use."""
     BUTTON_POSITIONS.clear()
 
     positions = detect_buttons(save_debug=True)
@@ -728,8 +497,8 @@ def refresh_button_mapping():
     print("\n[!] BUTTON MAPPING REFRESHED\n")
     return True
 
-def click_basic_need_button(need_name):
-    """Click the action button mapped to a basic need (see is_basic_need()).
+def click_need_button(need_name):
+    """Click the action button mapped to `need_name` (see ButtonNeedHandler).
     Assumes refresh_button_mapping() has already been called this cycle.
     Returns True if a mapped button was actually found and clicked, False
     otherwise - the caller must not treat this need as resolved (or
@@ -739,7 +508,8 @@ def click_basic_need_button(need_name):
         return False
     button_x, button_y = BUTTON_POSITIONS[need_name]
     print(f"[!] CLICKING: {need_name}")
-    click_button(button_x, button_y, need_name)
+    if not click_button(button_x, button_y, need_name):
+        return False
     wait_time = POST_NEED_CLICK_WAIT_SHORT if need_name in SHORT_WAIT_NEED_NAMES else POST_NEED_CLICK_WAIT
     print(f"[debug] waiting {wait_time}s before next action...")
     wait_interruptible(wait_time)
@@ -807,22 +577,34 @@ def walk_alternating(direction_pair, total_duration, step_duration=WALK_ALTERNAT
 # ============================================================================
 # NEED HANDLERS
 # ============================================================================
-# A need with no dedicated handler is a "basic" need (see is_basic_need()):
-# it's satisfied by walking to the action buttons and clicking the one that
-# matches its name - hungry/thirsty/dirty/potty/sleepy today, and any future
-# need the macro is taught that also works the same way. Needs with dedicated
-# logic (catch, pet, choose, ride, walk) get their own handler class below,
-# so each can be customized independently without touching the others.
+# Every need is handled the same way: look its name up in
+# NEED_HANDLER_CLASSES and call handle() on an instance of whatever's
+# registered there. Most needs (catch, pet, choose, ride, walk) get their
+# own dedicated class below; ButtonNeedHandler and TeleportWalkNeedHandler
+# instead cover several need names each via partial() (see
+# NEED_HANDLER_CLASSES), since those only differ by a name/config, not by
+# behavior.
 
 class NeedHandler(ABC):
-    """Reacts to one detected need that needs more than a basic button click.
-    Subclass this to add a new such need behavior."""
-
+    """Reacts to one detected need. Subclass this to add a new need."""
 
     @abstractmethod
     def handle(self):
         """Perform the action for this need. Return True if it was handled."""
         raise NotImplementedError
+
+class ButtonNeedHandler(NeedHandler):
+    """Walks to the action buttons and clicks the one matching `name`
+    (hungry/thirsty/dirty/potty/sleepy)."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def handle(self):
+        walk_to_buttons()
+        if not refresh_button_mapping():
+            return False
+        return click_need_button(self.name)
 
 class WalkNeedHandler(NeedHandler):
     """The 'walk' need is satisfied by walking left-right for a while."""
@@ -875,12 +657,12 @@ class CatchNeedHandler(NeedHandler):
         # Click empty space to throw, with a delay between throws
         for i in range(CATCH_THROW_COUNT):
             print(f"[debug] throw {i + 1}/{CATCH_THROW_COUNT}...")
-            simple_click(*EMPTY_POS)
+            hover_click(*EMPTY_POS)
             wait_interruptible(CATCH_EMOTE_DELAY)
 
         # Unequip the toy
         print("[debug] unequipping toy...")
-        simple_click(*CATCH_UNEQUIP_POS)
+        hover_click(*CATCH_UNEQUIP_POS)
 
         print("[!] Catch complete!")
         return True
@@ -895,14 +677,14 @@ class PetNeedHandler(NeedHandler):
             return False
 
         print("[debug] focusing pet...")
-        jitter_click(*FOCUS_PET_POS)
+        hover_click(*FOCUS_PET_POS, duration=PET_FOCUS_CLICK_DURATION)
         wait_interruptible(UI_SETTLE)
         print(f"[debug] attempting to pet for {PET_CIRCLE_DURATION}s...")
         # Move to starting position before pressing down
         pydirectinput.moveTo(SCREEN_CENTER_X, SCREEN_CENTER_Y - PET_CIRCLE_RADIUS)
         time.sleep(PET_SETTLE_DELAY)
         # Click the center to focus
-        jitter_click(SCREEN_CENTER_X, SCREEN_CENTER_Y)
+        hover_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=PET_FOCUS_CLICK_DURATION)
         time.sleep(PET_SETTLE_DELAY)
         # Hold down and move with incremental steps (much more reliable for games)
         pydirectinput.mouseDown()
@@ -1046,14 +828,14 @@ class TeleportWalkNeedHandler(NeedHandler):
 
         for i, (key, duration) in enumerate(self.config["steps"]):
             if i:
-                time.sleep(KEY_STEP_GAP*40)
+                wait_interruptible(TELEPORT_WALK_STEP_GAP)
             print(f"[debug] holding {key} for {duration}s...")
             hold_key(key, duration)
 
         final_click = self.config.get("final_click")
         if final_click:
             pydirectinput.press("e")
-            wait_interruptible(7)
+            wait_interruptible(SICK_CONFIRM_WAIT)
             print(f"[debug] clicking {final_click}...")
             hover_click(*final_click)
 
@@ -1062,58 +844,38 @@ class TeleportWalkNeedHandler(NeedHandler):
         print(f"[!] {self.name.capitalize()} complete!")
         return True
 
-# Handler factory (class, or partial of one) for each special need.
-# get_special_need_handler() uses this plus ENABLED_NEEDS below to decide
-# what to do with a detected special need.
-SPECIAL_NEED_HANDLER_CLASSES = {
+# Handler factory (class, or partial of one) for each need.
+# get_need_handler() uses this plus ENABLED_NEEDS (magic_numbers.py) to
+# decide what to do with a detected need.
+NEED_HANDLER_CLASSES = {
     "catch": CatchNeedHandler,
     "pet": PetNeedHandler,
     "choose": ChooseNeedHandler,
     "ride": RideNeedHandler,
+    "walk": WalkNeedHandler,
+    **{name: partial(ButtonNeedHandler, name) for name in BUTTON_NAMES},
     **{name: partial(TeleportWalkNeedHandler, name) for name in TELEPORT_WALK_NEEDS},
 }
 
-# Every handler the GUI's Debug tab can run on its own: the special needs
-# above plus walk, which is matched by prefix and so isn't in the dict.
-DEBUG_HANDLERS = {"walk": WalkNeedHandler, **SPECIAL_NEED_HANDLER_CLASSES}
+# Every handler the GUI's Debug tab can run on its own.
+DEBUG_HANDLERS = NEED_HANDLER_CLASSES
 
-# Special needs enabled for automatic processing - the single place that
-# decides whether a detected special need actually runs. A need not listed
-# here is still detected and matched, but logged and skipped (not resolved)
-# when it comes up. "walk" covers every
-# need name that starts with "walk" (see is_basic_need() below).
-ENABLED_NEEDS = {"catch", "pet", "ride", "walk", "cafe", "salon", "choose", "sick", "pizza"} 
-# camping, beach, bored and school are disabled
-
-def is_basic_need(need_name):
-    """A basic need has no dedicated handler - it's satisfied by walking to
-    the action buttons and clicking the one matching its name."""
-    return need_name in BUTTON_NAMES
-
-def get_special_need_handler(need_name):
-    """Return the handler for a need with dedicated logic. Only call this
-    when is_basic_need(need_name) is False. Returns None if this need type
-    is not currently enabled (see ENABLED_NEEDS)."""
-    if need_name.startswith("walk"):
-        return WalkNeedHandler() if "walk" in ENABLED_NEEDS else None
+def get_need_handler(need_name):
+    """Return the handler for a detected need, or None if it's not
+    currently enabled (see ENABLED_NEEDS) or the macro doesn't know it."""
     if need_name not in ENABLED_NEEDS:
         return None
-    handler_cls = SPECIAL_NEED_HANDLER_CLASSES.get(need_name)
+    handler_cls = NEED_HANDLER_CLASSES.get(need_name)
     return handler_cls() if handler_cls else None
 
 def process_needs():
-    """Detect needs on screen and resolve them one at a time: for each
-    matched need, walk to the buttons first only if it's a basic one
-    (hungry/thirsty/dirty/potty/sleepy, or any other need with no dedicated
-    handler - see is_basic_need()); otherwise its own handler runs directly
-    (catch, pet, choose, ride, walk). Either way, the character respawns
-    immediately after that single need is *actually* resolved, before
-    moving on to the next matched need - never batched, and never respawned
-    for a need that wasn't really handled (a disabled special, or a basic
-    need whose button wasn't found this pass - e.g. because
-    refresh_button_mapping() failed to detect any buttons at all). Returns
-    True if anything was actually resolved this check, False if there was
-    nothing to do."""
+    """Detect needs on screen and resolve them one at a time: each matched
+    need's handler runs via get_need_handler(), and the character respawns
+    immediately after it's *actually* resolved, before moving on to the
+    next matched need - never batched, and never respawned for a need that
+    wasn't really handled (disabled, unmapped, or its handler returned
+    False). Returns True if anything was actually resolved this check,
+    False if there was nothing to do."""
     if not focus_roblox_click():
         return False
 
@@ -1149,17 +911,13 @@ def process_needs():
     for need_name in matched_needs:
         check_running()
 
-        if is_basic_need(need_name):
-            walk_to_buttons()
-            if not refresh_button_mapping() or not click_basic_need_button(need_name):
-                print(f"[debug] could not resolve '{need_name}' this pass, skipping")
-                continue
-        else:
-            handler = get_special_need_handler(need_name)
-            if handler is None:
-                print(f"[debug] {need_name} is disabled, skipping")
-                continue
-            handler.handle()
+        handler = get_need_handler(need_name)
+        if handler is None:
+            print(f"[debug] {need_name} is disabled, skipping")
+            continue
+        if not handler.handle():
+            print(f"[debug] could not resolve '{need_name}' this pass, skipping")
+            continue
 
         respawn_character()
         resolved = True
@@ -1174,8 +932,6 @@ def detect_paycheck():
     """Detect the paycheck popup by its CASH OUT button's exact color and,
     if present, dismiss it. Returns True if the popup was detected and
     dismissed, False otherwise."""
-    global PAYCHECK_RECEIVED
-
     img = grab_screen()
     if find_exact_color(img, PAYCHECK_CASHOUT_COLOR) is None:
         return False
@@ -1183,7 +939,6 @@ def detect_paycheck():
     print("[debug] paycheck popup detected, dismissing...")
     hover_click(*PAYCHECK_DISMISS_POS_1)
     hover_click(*PAYCHECK_DISMISS_POS_2)
-    PAYCHECK_RECEIVED = True
     return True
 
 def unscrew():
@@ -1313,7 +1068,7 @@ class AdoptMeGUI:
         is running, since that's the whole point of it."""
         # Main buttons
         notebook = ttk.Notebook(self.root)
-        notebook.pack(fill=tk.X, padx=8, pady=(8, 0))
+        notebook.pack(fill=tk.X, padx=GUI_OUTER_PADDING, pady=(GUI_OUTER_PADDING, 0))
         btn_frame = tk.Frame(notebook, bg=self.bg)
         debug_tab = tk.Frame(notebook, bg=self.bg)
         notebook.add(btn_frame, text="Main")
@@ -1334,28 +1089,28 @@ class AdoptMeGUI:
         NO_BORDER = dict(bd=0, highlightthickness=0)  # flat edges, no default Tk bevel/focus ring
 
         main_row = tk.Frame(btn_frame, bg=self.bg)
-        main_row.pack(fill=tk.X, pady=4)
+        main_row.pack(fill=tk.X, pady=GUI_ROW_SPACING)
 
         start_container = tk.Frame(main_row, width=GUI_SQUARE_BUTTON_SIZE, height=GUI_SQUARE_BUTTON_SIZE, bg=self.bg)
-        start_container.pack(side=tk.LEFT, padx=(0, 4))
+        start_container.pack(side=tk.LEFT, padx=(0, GUI_ROW_SPACING))
         start_container.pack_propagate(False)
 
         # Single cycle: icon + "1" as plain button text (no overlay Label -
         # a Label placed on top of the button kept showing a visible seam/
         # box behind it despite matching colors, so this is just simpler).
         btn_start = tk.Button(start_container, text="\U0001F5041", command=self.run_workflow,
-                               font=(GUI_FONT, 14, "bold"), bg=GUI_START_COLOR, fg=self.fg,
+                               font=(GUI_FONT, GUI_START_ICON_FONT_SIZE, "bold"), bg=GUI_START_COLOR, fg=self.fg,
                                cursor="hand2", **NO_BORDER)
         btn_start.pack(fill=tk.BOTH, expand=True)
         self.action_buttons.append(btn_start)
 
         # Not added to action_buttons: must remain clickable while a workflow is running
         stop_container = tk.Frame(main_row, width=GUI_SQUARE_BUTTON_SIZE, height=GUI_SQUARE_BUTTON_SIZE, bg=self.bg)
-        stop_container.pack(side=tk.RIGHT, padx=(4, 0))
+        stop_container.pack(side=tk.RIGHT, padx=(GUI_ROW_SPACING, 0))
         stop_container.pack_propagate(False)
 
         self.btn_stop = tk.Button(stop_container, text="■", command=self.stop,
-                                   font=(GUI_FONT, 16, "bold"), bg=GUI_STOP_COLOR, fg=self.fg,
+                                   font=(GUI_FONT, GUI_STOP_ICON_FONT_SIZE, "bold"), bg=GUI_STOP_COLOR, fg=self.fg,
                                    cursor="hand2", **NO_BORDER)
         self.btn_stop.pack(fill=tk.BOTH, expand=True)
 
@@ -1364,18 +1119,20 @@ class AdoptMeGUI:
         loop_container.pack_propagate(False)
 
         btn_loop = tk.Button(loop_container, text="\U0001F504", command=self.run_workflow_loop,
-                              font=(GUI_FONT, 20, "bold"), bg=GUI_LOOP_COLOR, fg=self.fg,
+                              font=(GUI_FONT, GUI_LOOP_ICON_FONT_SIZE, "bold"), bg=GUI_LOOP_COLOR, fg=self.fg,
                               cursor="hand2", **NO_BORDER)
         btn_loop.pack(fill=tk.BOTH, expand=True)
         self.action_buttons.append(btn_loop)
 
-        tk.Frame(btn_frame, bg=self.accent, height=2).pack(fill=tk.X, pady=4)
+        tk.Frame(btn_frame, bg=self.accent, height=GUI_DIVIDER_HEIGHT).pack(fill=tk.X, pady=GUI_ROW_SPACING)
 
-        tk.Label(btn_frame, text="Functions", font=(GUI_FONT, 9, "bold"), bg=self.bg, fg=self.accent).pack(anchor=tk.W)
+        tk.Label(btn_frame, text="Functions", font=(GUI_FONT, GUI_SECTION_FONT_SIZE, "bold"),
+                 bg=self.bg, fg=self.accent).pack(anchor=tk.W)
 
         btn_respawn = tk.Button(btn_frame, text="Respawn", command=lambda: self.run_async(respawn_character),
-                                 font=(GUI_FONT, 9), bg=GUI_RESPAWN_COLOR, fg=self.fg, height=1, cursor="hand2")
-        btn_respawn.pack(fill=tk.X, pady=2)
+                                 font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=GUI_RESPAWN_COLOR, fg=self.fg,
+                                 height=GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
+        btn_respawn.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
         self.action_buttons.append(btn_respawn)
 
         # Debug tab: one button per need handler, regardless of whether it's in
@@ -1384,20 +1141,22 @@ class AdoptMeGUI:
 
         # Debug console
         debug_frame = tk.Frame(self.root, bg=self.bg)
-        debug_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+        debug_frame.pack(fill=tk.BOTH, expand=True, padx=GUI_OUTER_PADDING, pady=(0, GUI_OUTER_PADDING))
 
-        tk.Label(debug_frame, text="Output", font=(GUI_FONT, 9, "bold"), bg=self.bg, fg=self.accent).pack(anchor=tk.W, pady=(0, 3))
+        tk.Label(debug_frame, text="Output", font=(GUI_FONT, GUI_SECTION_FONT_SIZE, "bold"),
+                 bg=self.bg, fg=self.accent).pack(anchor=tk.W, pady=(0, GUI_LABEL_PADDING))
 
-        self.debug_text = scrolledtext.ScrolledText(debug_frame, height=14, width=45, bg=GUI_CONSOLE_BG, fg=GUI_CONSOLE_FG,
-                                                     font=(GUI_FONT, 7), state=tk.DISABLED)
+        self.debug_text = scrolledtext.ScrolledText(debug_frame, height=GUI_CONSOLE_HEIGHT, width=GUI_CONSOLE_WIDTH,
+                                                     bg=GUI_CONSOLE_BG, fg=GUI_CONSOLE_FG,
+                                                     font=(GUI_FONT, GUI_CONSOLE_FONT_SIZE), state=tk.DISABLED)
         self.debug_text.pack(fill=tk.BOTH, expand=True)
 
         # Status bar
         status = tk.Frame(self.root, bg=self.accent, height=GUI_STATUS_HEIGHT)
         status.pack(fill=tk.X, side=tk.BOTTOM)
         status.pack_propagate(False)
-        self.status = tk.Label(status, text="Ready", font=(GUI_FONT, 8), bg=self.accent, fg=self.fg)
-        self.status.pack(anchor=tk.W, padx=8, pady=3)
+        self.status = tk.Label(status, text="Ready", font=(GUI_FONT, GUI_STATUS_FONT_SIZE), bg=self.accent, fg=self.fg)
+        self.status.pack(anchor=tk.W, padx=GUI_OUTER_PADDING, pady=GUI_LABEL_PADDING)
 
     def run_async(self, func):
         """Run `func` on a background daemon thread so the GUI never freezes
@@ -1470,15 +1229,16 @@ class AdoptMeGUI:
     def build_debug_tab(self, parent):
         """Fill the Debug tab with a two-column grid of [TEST] buttons, one
         per entry in DEBUG_HANDLERS."""
-        tk.Label(parent, text="Run a need handler on its own", font=(GUI_FONT, 9, "bold"),
-                 bg=self.bg, fg=self.accent).grid(row=0, column=0, columnspan=2, sticky=tk.W, padx=4, pady=(4, 2))
+        tk.Label(parent, text="Run a need handler on its own", font=(GUI_FONT, GUI_SECTION_FONT_SIZE, "bold"),
+                 bg=self.bg, fg=self.accent).grid(row=0, column=0, columnspan=2, sticky=tk.W,
+                                                   padx=GUI_ROW_SPACING, pady=(GUI_ROW_SPACING, GUI_WIDGET_SPACING))
         for col in range(2):
             parent.grid_columnconfigure(col, weight=1, uniform="debug")
         for i, (name, handler_cls) in enumerate(DEBUG_HANDLERS.items()):
             btn = tk.Button(parent, text=name.capitalize(),
                             command=lambda n=name, c=handler_cls: self.test_handler(n, c),
-                            font=(GUI_FONT, 9), bg=GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
-            btn.grid(row=1 + i // 2, column=i % 2, sticky=tk.EW, padx=2, pady=2)
+                            font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
+            btn.grid(row=1 + i // 2, column=i % 2, sticky=tk.EW, padx=GUI_WIDGET_SPACING, pady=GUI_WIDGET_SPACING)
             self.action_buttons.append(btn)
 
     def test_handler(self, name, handler_cls):

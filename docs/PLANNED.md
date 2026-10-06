@@ -14,10 +14,6 @@
 - [ ] Implement wait until gone for all needs, not just the teleport ones, and raise the timer on walk to 40sec
 - [ ] Add add an auto ghost gallery function if the halloween toggle is on. And also a toggle for whether you want ghost gallery to run
 
-# Known issues
-
-- [ ] Why is the walk need matched by prefix and handled differently from the other ones?
-
 # Expansion
 
 - [ ] Trade helper

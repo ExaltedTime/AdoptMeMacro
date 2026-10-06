@@ -13,7 +13,7 @@
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
-import os, sys, time, random, threading
+import os, sys, time, threading
 from abc import ABC, abstractmethod
 from functools import partial
 from pathlib import Path
@@ -50,7 +50,6 @@ SCREEN_CENTER_X, SCREEN_CENTER_Y = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2
 FOCUS_WINDOW_ON_ACTION = True  # click the Roblox window to focus it before acting
 SAVE_NEW_NEEDS = False
 MATCH_ONLY_LEFT_HALF = True    # compare only the left half of each icon (a badge sits at its top right)
-PAYCHECK_RECEIVED = False      # set True once detect_paycheck() has dismissed the paycheck popup
 
 # Timing (seconds)
 RESPAWN_KEY_DURATION = 0.05    # how long each respawn key is held
@@ -76,9 +75,10 @@ CATCH_EMOTE_DELAY = 10.0       # delay between throw clicks
 CATCH_THROW_COUNT = 3          # number of times the toy is thrown
 CATCH_ZOOM_DURATION = 3.0      # seconds the zoom-in key is held before throwing
 PET_CIRCLE_DURATION = 10.0     # how long to make circles with mouse
-PET_CIRCLE_RADIUS = 100                # radius (px) of the circle traced around screen center
+PET_CIRCLE_RADIUS = 100                # amplitude (px) of the up/down sine motion around screen center
 PET_SETTLE_DELAY = 0.1                 # pause after each mouse move/click before the next pet step
 PET_CIRCLE_STEP_MOVE_DURATION = 0.05   # time for each small step around the circle
+PET_FOCUS_CLICK_DURATION = 0.1         # mouse travel time for the two focus clicks before petting starts
 ICON_EXTRACT_PADDING = 5       # px of padding added around a detected icon's radius
 
 # Catch need positions (screen coordinates for the toy-throwing sequence;
@@ -100,8 +100,6 @@ FOCUS_PET_POS = (1114, 692)
 # since it's just a plain circle with no distinguishing icon. Given as (R, G, B).
 CHOOSE_BUTTON_COLOR = (181, 6, 254)
 CHOOSE_SLOW_MOVE_DURATION = 1.0  # deliberate, slow mouse travel to the found button
-CHOOSE_HOVER_WAIT = 2.0          # hover over the found button this long before the real click
-CHOOSE_DISMISS_WAIT = 1.0        # pause after the first center click, before the hover-and-click dismiss
 
 # The paycheck popup's CASH OUT button, matched by exact color the same way
 # as CHOOSE_BUTTON_COLOR above. TODO: sample the real RGB from your own
@@ -131,10 +129,11 @@ TELEPORT_SETTLE_WAIT = 7.0         # wait after stepping back, for the landing t
 GENERAL_TELEPORT_POS_2 = (895, 705)
 GENERAL_TELEPORT_POS_3 = (1048, 658)
 TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing spot
+TELEPORT_WALK_STEP_GAP = 4.0      # pause between consecutive steps of a teleport-walk need's sequence
+SICK_CONFIRM_WAIT = 7.0           # wait after pressing 'e' and before the sick need's final click
 
 TELEPORT_PETS_TAB_POS = (817, 713)       # nursery: pets tab
 TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
-TELEPORT_FOOD_TAB_POS = (753, 804)       # supermarket: food tab
 SICK_FINAL_CLICK_POS = (1045, 660)       # click after the sick need's walk
 
 # Needs that teleport somewhere and walk (see TeleportWalkNeedHandler), then
@@ -168,9 +167,6 @@ RESPAWN_KEYS = ("esc", "r", "enter")
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75
 FOCUS_CLICK_Y = 5
-
-# Jitter click (click, nudge mouse a few pixels, click again)
-JITTER_PIXELS = 5
 
 # Hover move: wiggle so Roblox registers real mouse movement
 HOVER_NUDGE_PIXELS = 2
@@ -536,29 +532,6 @@ def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=N
 # CLICKING
 # ============================================================================
 
-def jitter_click(x, y, duration=0.1):
-    '''
-    """Click at (x, y), nudge the mouse a few pixels, then click again."""
-    pyautogui.moveTo(x, y, duration=CLICK_MOVE_DURATION)
-    time.sleep(CLICK_SETTLE_DELAY)
-    pydirectinput.click()
-    time.sleep(POST_CLICK_DELAY)
-
-    offset_x = random.randint(-JITTER_PIXELS, JITTER_PIXELS)
-    offset_y = random.randint(-JITTER_PIXELS, JITTER_PIXELS)
-    new_x = max(0, min(SCREEN_WIDTH, x + offset_x))
-    new_y = max(0, min(SCREEN_HEIGHT, y + offset_y))
-    pydirectinput.moveTo(new_x, new_y, duration=CLICK_MOVE_DURATION)
-    time.sleep(CLICK_SETTLE_DELAY)
-
-    pydirectinput.click()
-    time.sleep(POST_CLICK_DELAY)
-    '''
-    """hover_move() to (x, y), then click."""
-    hover_move(x, y, duration)
-    pydirectinput.click()
-    time.sleep(POST_CLICK_DELAY)
-
 def simple_click(x, y):
     """Simple click without jitter."""
     pyautogui.moveTo(x, y, duration=CLICK_MOVE_DURATION)
@@ -739,7 +712,8 @@ def click_basic_need_button(need_name):
         return False
     button_x, button_y = BUTTON_POSITIONS[need_name]
     print(f"[!] CLICKING: {need_name}")
-    click_button(button_x, button_y, need_name)
+    if not click_button(button_x, button_y, need_name):
+        return False
     wait_time = POST_NEED_CLICK_WAIT_SHORT if need_name in SHORT_WAIT_NEED_NAMES else POST_NEED_CLICK_WAIT
     print(f"[debug] waiting {wait_time}s before next action...")
     wait_interruptible(wait_time)
@@ -818,7 +792,6 @@ class NeedHandler(ABC):
     """Reacts to one detected need that needs more than a basic button click.
     Subclass this to add a new such need behavior."""
 
-
     @abstractmethod
     def handle(self):
         """Perform the action for this need. Return True if it was handled."""
@@ -895,14 +868,14 @@ class PetNeedHandler(NeedHandler):
             return False
 
         print("[debug] focusing pet...")
-        jitter_click(*FOCUS_PET_POS)
+        hover_click(*FOCUS_PET_POS, duration=PET_FOCUS_CLICK_DURATION)
         wait_interruptible(UI_SETTLE)
         print(f"[debug] attempting to pet for {PET_CIRCLE_DURATION}s...")
         # Move to starting position before pressing down
         pydirectinput.moveTo(SCREEN_CENTER_X, SCREEN_CENTER_Y - PET_CIRCLE_RADIUS)
         time.sleep(PET_SETTLE_DELAY)
         # Click the center to focus
-        jitter_click(SCREEN_CENTER_X, SCREEN_CENTER_Y)
+        hover_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=PET_FOCUS_CLICK_DURATION)
         time.sleep(PET_SETTLE_DELAY)
         # Hold down and move with incremental steps (much more reliable for games)
         pydirectinput.mouseDown()
@@ -1046,14 +1019,14 @@ class TeleportWalkNeedHandler(NeedHandler):
 
         for i, (key, duration) in enumerate(self.config["steps"]):
             if i:
-                time.sleep(KEY_STEP_GAP*40)
+                wait_interruptible(TELEPORT_WALK_STEP_GAP)
             print(f"[debug] holding {key} for {duration}s...")
             hold_key(key, duration)
 
         final_click = self.config.get("final_click")
         if final_click:
             pydirectinput.press("e")
-            wait_interruptible(7)
+            wait_interruptible(SICK_CONFIRM_WAIT)
             print(f"[debug] clicking {final_click}...")
             hover_click(*final_click)
 
@@ -1156,7 +1129,9 @@ def process_needs():
             if handler is None:
                 print(f"[debug] {need_name} is disabled, skipping")
                 continue
-            handler.handle()
+            if not handler.handle():
+                print(f"[debug] could not resolve '{need_name}' this pass, skipping")
+                continue
 
         respawn_character()
         resolved = True
@@ -1171,8 +1146,6 @@ def detect_paycheck():
     """Detect the paycheck popup by its CASH OUT button's exact color and,
     if present, dismiss it. Returns True if the popup was detected and
     dismissed, False otherwise."""
-    global PAYCHECK_RECEIVED
-
     img = grab_screen()
     if find_exact_color(img, PAYCHECK_CASHOUT_COLOR) is None:
         return False
@@ -1180,7 +1153,6 @@ def detect_paycheck():
     print("[debug] paycheck popup detected, dismissing...")
     hover_click(*PAYCHECK_DISMISS_POS_1)
     hover_click(*PAYCHECK_DISMISS_POS_2)
-    PAYCHECK_RECEIVED = True
     return True
 
 def unscrew():

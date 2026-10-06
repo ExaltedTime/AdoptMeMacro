@@ -642,11 +642,13 @@ def lure_collect():
     return True
 
 def tree_collect():
-    """Walk to the money tree and harvest it."""
+    """Walk to the money tree, step back to line up with it, then harvest it."""
     if not focus_roblox():
         return False
     print(f"[debug] walking to the money tree for {TREE_COLLECT_WALK_DURATION}s...")
     hold_key("d", TREE_COLLECT_WALK_DURATION)
+    print(f"[debug] stepping back for {TREE_COLLECT_BACKWARD_DURATION}s...")
+    hold_key("s", TREE_COLLECT_BACKWARD_DURATION)
     pydirectinput.press(KEY_INTERACT)
     print("[!] Tree collect complete!")
     return True

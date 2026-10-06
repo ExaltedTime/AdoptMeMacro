@@ -290,8 +290,9 @@ the GUI's **Functions** section (same pattern as **Respawn**). Both are
 early stubs: `lure_collect()` holds `a` for `LURE_COLLECT_WALK_DURATION`
 (2s), presses `KEY_INTERACT` (`e`), then a placeholder `pass` for whatever
 the lure's menu actually needs; `tree_collect()` holds `d` for
-`TREE_COLLECT_WALK_DURATION` (2s) and presses `KEY_INTERACT` - nothing
-more yet.
+`TREE_COLLECT_WALK_DURATION` (2s), then `s` for
+`TREE_COLLECT_BACKWARD_DURATION` (1s) to line up with the tree, then
+presses `KEY_INTERACT` - nothing more yet.
 
 ### Checking a need in parallel with movement
 

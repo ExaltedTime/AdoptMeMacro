@@ -4,8 +4,12 @@ Detailed technical walkthrough of `main.py`. This is for understanding or
 modifying the code - if you just want to run the macro, see the main
 [README](../README.md) instead.
 
-Everything lives in the one file, organized top to bottom as a sequence of
-`# === SECTION ===` blocks. This doc follows that same order.
+Almost everything lives in `main.py`, organized top to bottom as a sequence
+of `# === SECTION ===` blocks; this doc follows that same order. The one
+exception is `magic_numbers.py`, which holds every tunable constant (see
+[Configuration reference](#configuration-reference)) - `main.py` pulls
+them all in with `from magic_numbers import *` and refers to them by bare
+name everywhere else.
 
 ## The workflow lifecycle
 
@@ -46,29 +50,23 @@ no-op as progress.
    names (`matched_needs`), in the order they were detected.
 5. That list is then worked through **one need at a time**, and each one
    ends with its own respawn before moving to the next - nothing is
-   batched. For each `need_name`:
-   - `is_basic_need(need_name)` decides the path:
-     - **Basic** (hungry/thirsty/dirty/potty/sleepy, or any other need
-       name with no dedicated handler): walk to the action buttons
-       (`walk_to_buttons()`), refresh the button mapping
-       (`refresh_button_mapping()`), click the one matching button
-       (`click_basic_need_button()`).
-     - **Special** (catch, pet, choose, ride, the teleport-and-walk needs,
-       or anything starting with `"walk"`): `get_special_need_handler(need_name)`
-       returns a handler instance, or `None` if that need type isn't in
-       `ENABLED_NEEDS` - a `None`
-       result is logged and skipped, without walking anywhere or
-       respawning. A special need never walks to the buttons first; it
-       acts from wherever the character already is.
-   - If the need actually ran (a basic click, or an enabled special
-     handler), the character respawns immediately (always done by
-     `process_needs()`, never by the handlers themselves) - **before** the next
-     matched need is even looked at.
+   batched. For each `need_name`, `get_need_handler(need_name)` looks it up
+   in `NEED_HANDLER_CLASSES` and returns an instance, or `None` if that
+   need isn't in `ENABLED_NEEDS` - a `None` result is logged and skipped
+   without doing anything. Every need is handled the same way from here:
+   calling `.handle()` on whatever handler came back (see
+   [Need handlers](#need-handlers)).
+   - If `handle()` returns `True`, the character respawns immediately
+     (always done by `process_needs()`, never by the handler itself) -
+     **before** the next matched need is even looked at.
+   - If it returns `False` (the need wasn't actually resolved this pass -
+     e.g. no buttons detected, or a UI element `ChooseNeedHandler` needed
+     wasn't found), the need is logged and skipped with no respawn.
 6. `process_needs()` returns `True` if at least one need in the list
-   actually ran, `False` otherwise (e.g. every match turned out to be a
-   disabled special). A `False` return is what sends `run_full_cycle()`
-   back to waiting and re-checking instead of treating a no-op as
-   progress.
+   actually ran, `False` otherwise (e.g. every match turned out to be
+   disabled, or every handler that ran returned `False`). A `False` return
+   is what sends `run_full_cycle()` back to waiting and re-checking instead
+   of treating a no-op as progress.
 
 Respawning between every individual need - rather than once per cycle - is
 what keeps `walk_to_buttons()` reliable when multiple needs are detected
@@ -78,10 +76,6 @@ character standing.
 
 ## Code structure, top to bottom
 
-- **CONSTANTS** - every tunable number, timing, screen position, and color
-  range lives here in one place. See [Configuration reference](#configuration-reference)
-  below for the groups; exact values and their one-line rationale are in
-  the comments in `main.py` itself.
 - **`StopRequested` / `FocusLost` / `check_stop()` / `check_focus()` /
   `check_running()`** - see [Stopping & focus safety](#stopping--focus-safety).
 - **WINDOW FOCUS & SCREEN CAPTURE** - `focus_roblox()` / `focus_roblox_click()`
@@ -89,22 +83,26 @@ character standing.
   is; `grab_screen()` takes a screenshot via `mss`; `find_exact_color()`
   finds a button by its exact pixel color rather than its shape (used by
   the choose need, whose button has no distinguishing icon).
-- **STATE** - `BUTTON_POSITIONS`, the in-memory cache of the
-  last-detected action button positions. Never persisted to disk - see
-  [Why there's no config file](#why-theres-no-config-file).
+- **STATE** - this module's own mutable state: `STOP_FLAG`, and
+  `BUTTON_POSITIONS`, the in-memory cache of the last-detected action
+  button positions (never persisted to disk - see
+  [Why there's no config file](#why-theres-no-config-file)). Every fixed
+  config/tuning value lives in `magic_numbers.py` instead - see
+  [Configuration reference](#configuration-reference).
 - **ICON PROCESSING** - `preprocess_icon()` / `icon_signature()` / `compare_signatures()`. See
   [Need-icon matching](#need-icon-matching).
 - **NEED ICON DETECTION** - `detect_need_icons()`, `find_matching_need()`,
   `prompt_rename_need()`. See [Need-icon detection](#need-icon-detection).
-- **CLICKING** - `hover_click()`, `hover_move()`, `jitter_click()`, `simple_click()`,
+- **CLICKING** - `hover_click()`, `hover_move()`, `simple_click()`,
   `wait_interruptible()`, `release_all_inputs()`. See
   [Click & input primitives](#click--input-primitives).
 - **BUTTON DETECTION** - `detect_buttons()`, `refresh_button_mapping()`,
-  `click_basic_need_button()`. See [Button detection](#button-detection).
+  `click_need_button()`. See [Button detection](#button-detection).
 - **MOVEMENT** - `respawn_character()`, `walk_to_buttons()`,
   `walk_alternating()` (shared by the walk need, a/d, and the ride need,
   w/s - same pattern, different keys and duration passed in).
-- **NEED HANDLERS** - one class per special need. See [Need handlers](#need-handlers).
+- **NEED HANDLERS** - `NeedHandler` and one subclass per need (or per group
+  of needs, via `partial()`). See [Need handlers](#need-handlers).
 - **WORKFLOWS** - `run_full_cycle()`, `run_workflow()`, `run_workflow_loop()`.
   See [The workflow lifecycle](#the-workflow-lifecycle) above.
 - **GUI** - the `tkinter` control panel. See [GUI internals](#gui-internals).
@@ -162,6 +160,24 @@ best-aligned variant.
 `ICON_MATCH_THRESHOLD` (0.93) means "not confident this is anything we've
 seen" and falls through to `prompt_rename_need()` instead.
 
+## Waiting for a need to clear
+
+`wait_until_need_gone()` (used by `TeleportWalkNeedHandler` after its
+movement sequence) polls `detected_need_names()` - one fresh
+detect-and-match pass - every `NEED_GONE_POLL_INTERVAL` until the target
+need is missing `NEED_GONE_CONFIRMATIONS` times in a row (any sighting
+resets the count back to zero), up to `NEED_GONE_MAX_WAIT` total.
+
+Each individual miss is itself re-checked once, `NEED_GONE_FLICKER_RECHECK_DELAY`
+later, before it's allowed to count: the icon can drop out of a single
+detection pass for a frame (or against a momentarily busy background)
+without the need having actually cleared, and a bare miss-streak alone
+isn't enough to tell that apart from the real thing. This only guards
+against a one-frame flicker - a detection failure caused by a
+*sustained* background change (lighting, a different area of the map)
+behind the icon isn't something this re-check can fix, since it'll fail
+again on the immediate retry too.
+
 ## Button detection
 
 `detect_buttons()` finds the five purple, white-outlined action buttons
@@ -203,48 +219,48 @@ settle):
   game. Moves with SendInput (`pydirectinput`), nudges `HOVER_NUDGE_PIXELS`
   and back so Roblox registers real mouse movement (hover), then clicks.
   Roblox ignores `pyautogui`'s cursor warps as hover movement.
-- **`jitter_click()`** - only still used by the pet handler. Clicks, nudges the mouse a few random pixels
-  (`JITTER_PIXELS`), clicks again. Used for real in-game action buttons,
-  since a single perfectly-still click sometimes doesn't register.
-- **`simple_click()`** - one click, no jitter. Used for backpack/toy UI.
+- **`simple_click()`** - one click, no wiggle. Used for the catch need's
+  throw-into-empty-space click and its final unequip click.
 
 `wait_interruptible(duration)` is the delay primitive nearly everything
 else is built on - see [Stopping & focus safety](#stopping--focus-safety).
 
 ## Need handlers
 
-Which special needs run automatically is decided by one set,
-`ENABLED_NEEDS`. A detected need that isn't in it is logged and skipped,
-not resolved. Currently enabled: `catch`, `pet`, `ride`, `walk`, `beach`,
-`bored`, `school`. Implemented but not enabled: `choose`, `cafe`, `salon`,
-`pizza`, `camping`. The basic needs (`hungry`, `thirsty`, `dirty`, `potty`,
-`sleepy`) are always on. The GUI's **Debug** tab has a button per handler
-that runs it directly regardless of `ENABLED_NEEDS`.
+Every need - including hungry/thirsty/dirty/potty/sleepy - is resolved by
+a `NeedHandler` instance; there's no separate code path for any of them.
+`NEED_HANDLER_CLASSES` (in `main.py`, near `process_needs()`) is the
+factory: one dedicated class per need with real logic, plus
+`ButtonNeedHandler` and `TeleportWalkNeedHandler` registered once per name
+via `partial()` for the needs that only differ by a name/config
+(`BUTTON_NAMES` and `TELEPORT_WALK_NEEDS` respectively).
+
+Which needs actually run automatically is decided by one set,
+`ENABLED_NEEDS` (`magic_numbers.py`, the first thing defined in that
+file). A detected need that isn't in it is logged and skipped, not
+resolved. Currently enabled: `hungry`, `thirsty`, `dirty`, `potty`,
+`sleepy`, `catch`, `pet`, `ride`, `walk`, `cafe`, `salon`, `choose`,
+`sick`, `pizza`. Implemented but not enabled: `bored`, `beach`, `school`,
+`camping`. The GUI's **Debug** tab has a button per handler that runs it
+directly regardless of `ENABLED_NEEDS`.
 
 | Need | How it's handled |
 |---|---|
-| `hungry` / `thirsty` | Basic. Walk to the buttons, click, wait `POST_NEED_CLICK_WAIT_SHORT` (10s). |
-| `dirty` / `potty` / `sleepy` / any unrecognized need | Basic. Walk to the buttons, click, wait `POST_NEED_CLICK_WAIT` (15s). |
+| `hungry` / `thirsty` / `dirty` / `potty` / `sleepy` | `ButtonNeedHandler`: walk to the action buttons (`walk_to_buttons()`), refresh the button mapping (`refresh_button_mapping()`), click the matching one (`click_need_button()`). `hungry`/`thirsty` wait `POST_NEED_CLICK_WAIT_SHORT` (10s) after clicking; the other three wait `POST_NEED_CLICK_WAIT` (15s). |
 | `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → scroll up + click empty space, `CATCH_THROW_COUNT` (3) times, `CATCH_EMOTE_DELAY` apart → unequip. |
 | `pet` | `PetNeedHandler`: click to focus the pet, then hold the mouse down and trace a circle of radius `PET_CIRCLE_RADIUS` around screen center for `PET_CIRCLE_DURATION`. |
-| `choose` | `ChooseNeedHandler`: focus the pet, find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. *Not in `ENABLED_NEEDS` by default.* |
+| `choose` | `ChooseNeedHandler`: focus the pet, find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. |
 | `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then backpack → vehicles → first vehicle → equip → close backpack, then `walk_alternating(("w", "s"), RIDE_WALK_DURATION)`. |
-| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` - wait up to `NEED_GONE_MAX_WAIT` (60s), polling every `NEED_GONE_POLL_INTERVAL`, ending early once the need's icon has been missing `NEED_GONE_CONFIRMATIONS` (3) checks in a row (confirming checks `NEED_GONE_CONFIRM_INTERVAL` apart). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`). |
-| `walk` (any name starting with it) | `WalkNeedHandler`: `walk_alternating(("a", "d"), WALK_TOTAL_DURATION)`. |
+| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` - wait up to `NEED_GONE_MAX_WAIT` (60s), polling every `NEED_GONE_POLL_INTERVAL`, ending early once the need's icon has been missing `NEED_GONE_CONFIRMATIONS` (3) checks in a row (confirming checks `NEED_GONE_CONFIRM_INTERVAL` apart, each itself double-checked `NEED_GONE_FLICKER_RECHECK_DELAY` later before counting as a real miss - see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`). |
+| `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), WALK_TOTAL_DURATION)`. |
 
-Dispatch: `is_basic_need(name)` is true only for the names in
-`BUTTON_NAMES`; everything else is special. `get_special_need_handler(name)`
-is only ever called for a non-basic name. It matches `"walk"` by prefix,
-looks anything else up in `SPECIAL_NEED_HANDLER_CLASSES`, and returns `None`
-if the need isn't in `ENABLED_NEEDS`.
-
-A basic need only counts as resolved (and only then triggers a respawn) if
-`refresh_button_mapping()` actually found buttons *and*
-`click_basic_need_button()` found this specific need's button in that
-mapping - both return a bool for exactly this reason. If either fails (no
-buttons detected at all, or this particular one wasn't among them), the
-need is logged and skipped for this pass with no respawn, the same as a
-disabled special.
+A handler only counts as resolved (and only then triggers a respawn) if
+`handle()` returns `True`. `ButtonNeedHandler` returns `False` if
+`refresh_button_mapping()` found no buttons at all, or if this specific
+need's button wasn't among them; `ChooseNeedHandler` returns `False` if it
+can't find its exact-color button on screen. Either way the need is
+logged and skipped for this pass with no respawn, same as a disabled need
+- `process_needs()` doesn't distinguish between the two.
 
 ## Stopping & focus safety
 
@@ -334,8 +350,14 @@ knowing if you're modifying it:
 
 ## Configuration reference
 
-Everything in `CONSTANTS` falls into one of these groups (see the comments
-next to each constant in `main.py` for exact values and rationale):
+Every tunable number, timing, screen position and color range lives in
+`magic_numbers.py`, not `main.py` - it's the one file to edit for a moved
+button, a slower computer, or a different monitor. `main.py` does `from
+magic_numbers import *` and refers to everything there by bare name.
+`ENABLED_NEEDS` is the first thing defined in it, since it's the setting
+most likely to need editing. Everything else falls into one of these
+groups (see the comments next to each constant in `magic_numbers.py` for
+exact values and rationale):
 
 | Group | Examples |
 |---|---|
@@ -347,6 +369,7 @@ next to each constant in `main.py` for exact values and rationale):
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
+| GUI | colors/fonts (`GUI_BG`, `GUI_FONT`, ...) and layout spacing (`GUI_OUTER_PADDING`, `GUI_ROW_SPACING`, ...) for the `tkinter` panel |
 
 If detection isn't finding what you expect after changing screen
 resolution or Roblox's UI, check `debug/debug_needs.png` and

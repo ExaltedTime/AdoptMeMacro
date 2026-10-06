@@ -247,16 +247,15 @@ via `partial()` for the needs that only differ by a name/config
 
 Which needs actually run automatically is decided by one set,
 `ENABLED_NEEDS` (`magic_numbers.py`, the first thing defined in that
-file) - built from two separate groups, `ENABLED_BUTTON_AND_SPECIAL_NEEDS`
-and `ENABLED_TELEPORT_NEEDS`, kept apart because teleport-walk needs leave
-the map and run considerably longer than everything else, so toggling
-them is its own kind of decision. A detected need that isn't in the
-combined set is logged and skipped, not resolved. Currently enabled:
-`hungry`, `thirsty`, `dirty`, `potty`, `sleepy`, `catch`, `pet`, `ride`,
-`walk`, `choose` (button/special), plus `cafe`, `salon`, `sick`, `pizza`
-(teleport). Implemented but not enabled: `bored`, `beach`, `school`,
-`camping` (also teleport-walk needs). The GUI's **Debug** tab has a
-button per handler that runs it directly regardless of `ENABLED_NEEDS`.
+file). A detected need that isn't in it is logged and skipped, not
+resolved. Currently enabled: `hungry`, `thirsty`, `dirty`, `potty`,
+`sleepy`, `catch`, `pet`, `ride`, `walk`, `choose`, plus the
+teleport-walk needs `cafe`, `salon`, `sick`, `pizza` (called out with
+their own inline comment in the set literal, since they leave the map and
+run considerably longer than everything else). Implemented but not
+enabled: `bored`, `beach`, `school`, `camping` (also teleport-walk needs).
+The GUI's **Debug** tab has a button per handler that runs it directly
+regardless of `ENABLED_NEEDS`.
 
 Except for `catch` and `pet` - which always run their full fixed sequence
 precisely, with no early exit - every other need either waits for its
@@ -270,9 +269,9 @@ rather than a flat sleep after the fact.
 | `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → scroll up + click empty space, `CATCH_THROW_COUNT` (3) times, `CATCH_EMOTE_DELAY` apart → unequip. Always runs this exact sequence - no `wait_until_need_gone()` involved. |
 | `pet` | `PetNeedHandler`: click to focus the pet, then hold the mouse down and trace a circle of radius `PET_CIRCLE_RADIUS` around screen center for `PET_CIRCLE_DURATION`. Same as `catch` - always the full fixed duration. |
 | `choose` | `ChooseNeedHandler`: focus the pet, find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu, then `wait_until_need_gone("choose")`. |
-| `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then backpack → vehicles → first vehicle → equip → close backpack, then `walk_alternating(("w", "s"), RIDE_WALK_DURATION, need_name="ride")` - up to `RIDE_WALK_DURATION` (60s), ending early the moment "ride" is confirmed cleared (see below). |
+| `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then backpack → vehicles → first vehicle → equip → close backpack, then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT` (60s), ending early the moment "ride" is confirmed cleared (see below). |
 | `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`). |
-| `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), WALK_TOTAL_DURATION, need_name="walk")` - up to `WALK_TOTAL_DURATION` (60s), same early-exit as `ride` above. |
+| `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")` - up to `NEED_GONE_MAX_WAIT` (60s), same early-exit as `ride` above. |
 
 A handler only counts as resolved (and only then triggers a respawn) if
 `handle()` returns `True`. `ButtonNeedHandler` returns `False` if

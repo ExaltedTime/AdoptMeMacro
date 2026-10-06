@@ -14,18 +14,14 @@ import pydirectinput
 # ============================================================================
 # ENABLED NEEDS - the first thing to edit: which needs the macro acts on.
 # A need not listed here is still detected and matched, but logged and
-# skipped (not resolved) when it comes up. Kept as two separate groups -
-# teleport-walk needs leave the map and run considerably longer than
-# everything else, so toggling them is its own kind of decision.
+# skipped (not resolved) when it comes up.
 # ============================================================================
-ENABLED_BUTTON_AND_SPECIAL_NEEDS = {
+ENABLED_NEEDS = {
     "hungry", "thirsty", "dirty", "potty", "sleepy",  # button needs - always safe to leave on
     "catch", "pet", "ride", "walk", "choose",
+    "cafe", "salon", "sick", "pizza",  # teleport-walk needs
 }
-ENABLED_TELEPORT_NEEDS = {"cafe", "salon", "sick", "pizza"}
 # bored, beach, school and camping (also teleport-walk needs) are disabled
-
-ENABLED_NEEDS = ENABLED_BUTTON_AND_SPECIAL_NEEDS | ENABLED_TELEPORT_NEEDS
 
 # ============================================================================
 # PATHS
@@ -59,7 +55,6 @@ RESPAWN_WAIT = 4.0             # settle time after respawning, before it's usabl
 WALK_TO_BUTTONS_DURATION = 0.8 # time spent walking forward to reach the action buttons
 WALK_ALTERNATING_STEP = 1.0    # duration of each a/d press in alternating walk pattern
 KEY_STEP_GAP = 0.1             # pause between consecutive key holds (walk patterns, teleport-walk needs)
-WALK_TOTAL_DURATION = 60.0     # total duration to keep walking back and forth (unless need_name confirms gone first)
 UI_SETTLE = 0.5                # generic pause for UI to catch up (between clicks in a sequence)
 FOCUS_DELAY = 0.3              # pause after focusing the window
 FOCUS_CLICK_SETTLE_DELAY = 0.1 # pause after the window-focus click
@@ -114,7 +109,6 @@ RIDE_FORWARD_DURATION = 2.0    # walk forward briefly after mounting, before the
 RIDE_VEHICLES_POS = (816, 804)
 RIDE_FIRST_VEHICLE_POS = (976, 708)
 RIDE_EQUIP_POS = (1062, 814)
-RIDE_WALK_DURATION = 60.0      # total time spent walking back and forth while riding (unless need_name confirms gone first)
 
 # Backpack-teleport sequence, shared by every teleport destination: open
 # backpack -> category tab -> two more fixed clicks that confirm/execute
@@ -151,7 +145,8 @@ TELEPORT_WALK_NEEDS = {
     "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 5.0), ("w", 1.5)),
                     final_click=SICK_FINAL_CLICK_POS),
 }
-NEED_GONE_MAX_WAIT = 60.0        # most a teleport need waits for its icon to disappear
+NEED_GONE_MAX_WAIT = 60.0        # most wait_until_need_gone() ever waits for an icon to disappear -
+                                  # also reused as walk_alternating()'s total duration cap for walk/ride
 NEED_GONE_POLL_INTERVAL = 5.0    # how often to re-check for the icon during that wait
 NEED_GONE_CONFIRMATIONS = 3      # consecutive checks that must all miss the icon before it counts as cleared
 NEED_GONE_CONFIRM_INTERVAL = 1.0 # pause between those confirming checks
@@ -277,7 +272,7 @@ __all__ = [
     "SCREEN_WIDTH", "SCREEN_HEIGHT", "SCREEN_CENTER_X", "SCREEN_CENTER_Y",
     "FOCUS_WINDOW_ON_ACTION", "SAVE_NEW_NEEDS", "MATCH_ONLY_LEFT_HALF",
     "RESPAWN_KEY_DURATION", "RESPAWN_WAIT", "WALK_TO_BUTTONS_DURATION", "WALK_ALTERNATING_STEP",
-    "KEY_STEP_GAP", "WALK_TOTAL_DURATION", "UI_SETTLE", "FOCUS_DELAY", "FOCUS_CLICK_SETTLE_DELAY",
+    "KEY_STEP_GAP", "UI_SETTLE", "FOCUS_DELAY", "FOCUS_CLICK_SETTLE_DELAY",
     "CLICK_MOVE_DURATION", "CLICK_SETTLE_DELAY", "POST_CLICK_DELAY",
     "NEED_CHECK_RETRY_DELAY", "LOOP_DELAY",
     "STOP_CHECK_INTERVAL", "CATCH_WAIT_AFTER_EQUIP", "CATCH_EMOTE_DELAY", "CATCH_THROW_COUNT",
@@ -288,7 +283,7 @@ __all__ = [
     "CHOOSE_BUTTON_COLOR", "CHOOSE_SLOW_MOVE_DURATION",
     "PAYCHECK_CASHOUT_COLOR", "PAYCHECK_DISMISS_POS_1", "PAYCHECK_DISMISS_POS_2",
     "RIDE_BACKWARD_DURATION", "RIDE_WAIT_AFTER_E", "RIDE_FORWARD_DURATION", "RIDE_VEHICLES_POS",
-    "RIDE_FIRST_VEHICLE_POS", "RIDE_EQUIP_POS", "RIDE_WALK_DURATION",
+    "RIDE_FIRST_VEHICLE_POS", "RIDE_EQUIP_POS",
     "TELEPORT_WAIT", "TELEPORT_SETTLE_WAIT", "GENERAL_TELEPORT_POS_2", "GENERAL_TELEPORT_POS_3",
     "TELEPORT_BACK_DURATION", "TELEPORT_WALK_STEP_GAP", "SICK_CONFIRM_WAIT",
     "TELEPORT_PETS_TAB_POS", "TELEPORT_VEHICLES_TAB_POS", "TELEPORT_FOOD_TAB_POS", "SICK_FINAL_CLICK_POS",

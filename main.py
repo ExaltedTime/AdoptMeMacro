@@ -689,7 +689,7 @@ class WalkNeedHandler(NeedHandler):
 
     def handle(self):
         print("[!] WALK NEED")
-        walk_alternating(("a", "d"), WALK_TOTAL_DURATION, need_name="walk")
+        walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")
         return True
 
 class CatchNeedHandler(NeedHandler):
@@ -864,7 +864,7 @@ class RideNeedHandler(NeedHandler):
         wait_interruptible(UI_SETTLE)
 
         # Walk back and forth (forward/backward, not left/right) while riding
-        walk_alternating(("w", "s"), RIDE_WALK_DURATION, need_name="ride")
+        walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")
 
         print("[!] Ride complete!")
         return True

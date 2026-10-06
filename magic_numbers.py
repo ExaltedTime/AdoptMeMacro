@@ -19,9 +19,9 @@ import pydirectinput
 ENABLED_NEEDS = {
     "hungry", "thirsty", "dirty", "potty", "sleepy",  # button needs - always safe to leave on
     "catch", "pet", "ride", "walk", "choose",
-    "cafe", "salon", "sick", "pizza",  # teleport-walk needs
+    "cafe", "salon", "sick", "pizza", "school",  # teleport-walk needs
 }
-# bored, beach, school and camping (also teleport-walk needs) are disabled
+# bored, beach and camping (also teleport-walk needs) are disabled
 
 # ============================================================================
 # EVENT FLAGS
@@ -163,7 +163,7 @@ TELEPORT_WALK_NEEDS_NORMAL = {
 TELEPORT_WALK_NEEDS_HALLOWEEN = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),)),
-    "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 1.2), ("a", 10.0))),
+    "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 3), ("a", 8))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 0.1), ("d", 3.0), ("s", 2.2), ("d", 15.0), ("w",20.0))),
     "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 5.0), ("w", 1.5)),
                     final_click=SICK_FINAL_CLICK_POS),

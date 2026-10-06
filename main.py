@@ -306,19 +306,22 @@ def find_matching_need(icon_variants):
     """Compare a detected icon (its icon_variants() crops) against the saved
     needs, scoring each by its best-aligned variant. Returns (name, score)."""
     live_signatures = [icon_signature(v) for v in icon_variants]
-    need_files = sorted(f for f in os.listdir(NEEDS_DIR) if f.endswith('.png'))
+    # Recurses, so related icons can sit in subfolders (e.g. needs/weather/) -
+    # a need's name is just its file name, wherever it lives.
+    need_files = sorted(os.path.join(root, f) for root, _, files in os.walk(NEEDS_DIR)
+                        for f in files if f.endswith('.png'))
     if not need_files:
         return None, 0.0
 
     best_match, best_score = None, 0.0
     for need_file in need_files:
-        saved_icon = cv2.imread(os.path.join(NEEDS_DIR, need_file))
+        saved_icon = cv2.imread(need_file)
         if saved_icon is None:
             continue
         saved_signature = icon_signature(saved_icon)
         score = max(compare_signatures(sig, saved_signature) for sig in live_signatures)
         if score > best_score:
-            best_match, best_score = need_file[:-4], score
+            best_match, best_score = os.path.splitext(os.path.basename(need_file))[0], score
 
     if best_score >= ICON_MATCH_THRESHOLD:
         return best_match, best_score
@@ -1124,10 +1127,34 @@ def detect_paycheck():
     hover_click(*PAYCHECK_DISMISS_POS_2)
     return True
 
+def ghost_gallery():
+    """Halloween only (see HALLOWEEN): handles the ghost gallery popup.
+    NOT IMPLEMENTED YET - the comments below are the plan; for now this
+    does nothing."""
+    if GHOST_GALLERY_PLAY_MINIGAME:
+        # Play the minigame. Rough plan:
+        #   - detect that the ghost gallery is actually up (exact-color match
+        #     on a known button, like detect_paycheck() does for CASH OUT)
+        #   - play it (clicks/keys to be worked out), under check_running()
+        #     so [STOP] and focus loss still interrupt it
+        #   - dismiss whatever it leaves behind
+        # Probably wants its own timer in the persisted game config, like
+        # lure_timer/tree_timer, rather than running every single cycle.
+        pass
+    else:
+        # Just disable it. Rough plan: detect the popup the same way as the
+        # paycheck one (find_exact_color() on a button unique to it) and
+        # click its dismiss/close position(s), which will need new
+        # GHOST_GALLERY_* constants in magic_numbers.py.
+        pass
+
 def unscrew():
-    """Runs once per cycle, right after check_stop(). Currently only checks
-    for the paycheck popup; more checks may be added here later."""
+    """Runs once per cycle, right after check_stop(). Checks for the paycheck
+    popup and, during Halloween, handles the ghost gallery; more checks may
+    be added here later."""
     detect_paycheck()
+    if HALLOWEEN:
+        ghost_gallery()
 
 def side_quest():
     """Runs once per cycle, right after unscrew(), unless side_quest_enabled

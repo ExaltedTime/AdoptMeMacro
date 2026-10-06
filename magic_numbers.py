@@ -24,6 +24,16 @@ ENABLED_NEEDS = {
 # bored, beach, school and camping (also teleport-walk needs) are disabled
 
 # ============================================================================
+# EVENT FLAGS
+# ============================================================================
+# While HALLOWEEN is on, some teleport needs use different steps (see
+# TELEPORT_WALK_NEEDS_HALLOWEEN) and unscrew() also runs ghost_gallery().
+HALLOWEEN = True
+# Only matters while HALLOWEEN is on: True = ghost_gallery() plays the ghost
+# gallery minigame, False = it just disables (dismisses) the ghost gallery.
+GHOST_GALLERY_PLAY_MINIGAME = False
+
+# ============================================================================
 # PATHS
 # ============================================================================
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -135,7 +145,7 @@ SICK_FINAL_CLICK_POS = (1045, 660)       # click after the sick need's walk
 # (key, seconds) holds to perform in order, and optionally a `final_click`
 # position to click after the last hold. Pizza and camping durations are
 # placeholders until tuned.
-TELEPORT_WALK_NEEDS = {
+TELEPORT_WALK_NEEDS_NORMAL = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),)),
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 1.2), ("a", 10.0))),
@@ -143,9 +153,26 @@ TELEPORT_WALK_NEEDS = {
     "salon":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 2.5), ("w", 15.0))),
     "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 2.0), ("a", 6.5), ("s", 3.0))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 0.1), ("d", 3.0), ("s", 2.2), ("d", 15.0), ("w",20.0))),
+}
+
+# Used instead of the entry of the same name above while HALLOWEEN is on (Halloween
+# moves the nursery) - and "sick" only exists here, so it isn't a need at all
+# outside Halloween. bored/beach/school/camping are disabled in ENABLED_NEEDS
+# and their steps below are just copies of the normal ones until the real
+# Halloween steps are worked out.
+TELEPORT_WALK_NEEDS_HALLOWEEN = {
+    "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
+    "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),)),
+    "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 1.2), ("a", 10.0))),
+    "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 0.1), ("d", 3.0), ("s", 2.2), ("d", 15.0), ("w",20.0))),
     "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 5.0), ("w", 1.5)),
                     final_click=SICK_FINAL_CLICK_POS),
 }
+
+# The set actually used everywhere else (TeleportWalkNeedHandler and the
+# handler registry both read this).
+TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN \
+    else TELEPORT_WALK_NEEDS_NORMAL
 NEED_GONE_MAX_WAIT = 60.0        # most wait_until_need_gone() ever waits for an icon to disappear -
                                   # also reused as walk_alternating()'s total duration cap for walk/ride
 NEED_GONE_POLL_INTERVAL = 5.0    # how often to re-check for the icon during that wait
@@ -309,7 +336,7 @@ __all__ = [
     "TELEPORT_WAIT", "TELEPORT_SETTLE_WAIT", "GENERAL_TELEPORT_POS_2", "GENERAL_TELEPORT_POS_3",
     "TELEPORT_BACK_DURATION", "TELEPORT_WALK_STEP_GAP", "SICK_CONFIRM_WAIT",
     "TELEPORT_PETS_TAB_POS", "TELEPORT_VEHICLES_TAB_POS", "TELEPORT_FOOD_TAB_POS", "SICK_FINAL_CLICK_POS",
-    "TELEPORT_WALK_NEEDS",
+    "TELEPORT_WALK_NEEDS", "HALLOWEEN", "GHOST_GALLERY_PLAY_MINIGAME",
     "NEED_GONE_MAX_WAIT", "NEED_GONE_POLL_INTERVAL", "NEED_GONE_CONFIRMATIONS",
     "NEED_GONE_CONFIRM_INTERVAL", "NEED_GONE_FLICKER_RECHECK_DELAY", "NEED_WATCH_JOIN_TIMEOUT",
     "KEY_BACKPACK", "KEY_MOUNT", "KEY_INTERACT", "KEY_ZOOM_IN", "MOVE_KEYS", "RESPAWN_KEYS",

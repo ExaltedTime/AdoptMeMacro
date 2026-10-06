@@ -164,7 +164,9 @@ within `ICON_SHIFT_TOLERANCE` px and each saved need is scored by its
 best-aligned variant.
 
 `find_matching_need()` compares the new icon against every saved `.png` in
-`needs/` and keeps the best score. A best score below
+`needs/` - including subfolders, so related icons can be grouped (the
+seasonal `diving` and `puddle` icons live in `needs/weather/`); a need's
+name is just its file name, wherever it sits - and keeps the best score. A best score below
 `ICON_MATCH_THRESHOLD` (0.93) means "not confident this is anything we've
 seen" and falls through to `prompt_rename_need()` instead.
 
@@ -274,8 +276,22 @@ rather than a flat sleep after the fact.
 | `pet` | `PetNeedHandler`: click to focus the pet, then hold the mouse down and trace a circle of radius `PET_CIRCLE_RADIUS` around screen center for `PET_CIRCLE_DURATION`. Same as `catch` - always the full fixed duration. |
 | `choose` | `ChooseNeedHandler`: focus the pet, find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu, then `wait_until_need_gone("choose")`. |
 | `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then backpack → vehicles → first vehicle → equip → close backpack, then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT` (60s), ending early the moment "ride" is confirmed cleared (see below). |
-| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`). |
+| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`). Which table is used depends on `HALLOWEEN` - see below. |
 | `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")` - up to `NEED_GONE_MAX_WAIT` (60s), same early-exit as `ride` above. |
+
+**Halloween.** `HALLOWEEN` (`magic_numbers.py`, next to `ENABLED_NEEDS`) is
+a plain boolean. The teleport-walk steps live in two tables,
+`TELEPORT_WALK_NEEDS_NORMAL` and `TELEPORT_WALK_NEEDS_HALLOWEEN`;
+`TELEPORT_WALK_NEEDS` - the one `TeleportWalkNeedHandler` and the handler
+registry actually read - is the normal table with the Halloween entries laid
+over it while the flag is on. The Halloween table covers `bored`, `beach`,
+`school`, `camping` (Halloween moves the nursery; these stay disabled in
+`ENABLED_NEEDS`, and their Halloween steps are currently just copies of the
+normal ones) and `sick`, which *only* exists there - with `HALLOWEEN` off it
+has no steps and isn't a need at all. While the flag is on, `unscrew()` also
+calls `ghost_gallery()`, which will either play the ghost gallery minigame
+or just disable it depending on `GHOST_GALLERY_PLAY_MINIGAME`; both branches
+are comments-only stubs for now.
 
 A handler only counts as resolved (and only then triggers a respawn) if
 `handle()` returns `True`. `ButtonNeedHandler` returns `False` if
@@ -494,7 +510,7 @@ exact values and rationale):
 
 | Group | Examples |
 |---|---|
-| Behavior flags | `ENABLED_NEEDS`, `FOCUS_WINDOW_ON_ACTION` |
+| Behavior flags | `ENABLED_NEEDS`, `HALLOWEEN`, `GHOST_GALLERY_PLAY_MINIGAME`, `FOCUS_WINDOW_ON_ACTION` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `NEED_GONE_*` |
 | Screen positions | `CATCH_*_POS`, `EMPTY_POS`, `FOCUS_PET_POS`, `RIDE_*_POS`, `LURE_NEW_POS_*`, `SETUP_*_POS` |
 | Side quest / setup | `TREE_HARVEST_YIELD`, `MONEY_COLLECTED_TARGET`, `TREE_CHECK_INTERVAL`, `LURE_RECOLLECT_INTERVAL`, `LURE_COLLECT_*`, `TREE_COLLECT_*` |

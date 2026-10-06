@@ -189,11 +189,14 @@ def log_run_event(message):
 
 def load_game_config():
     """Load GAME_CONFIG_PATH, or these defaults if it doesn't exist yet
-    (first run, or deleted by hand to reset)."""
+    (first run, or reset via reset_game_config())."""
     defaults = {
         "money_collected": 0,
         "lure_timer": time.time(),  # due immediately on a fresh config
+        "tree_timer": time.time(),  # likewise
         "setup_done": False,
+        "setup_enabled": True,      # whether ensure_setup() is allowed to run at all
+        "side_quest_enabled": True, # whether side_quest() is allowed to run at all
     }
     try:
         with open(GAME_CONFIG_PATH, "r") as f:
@@ -206,6 +209,30 @@ def save_game_config(config):
     """Persist `config` (as returned by load_game_config()) to GAME_CONFIG_PATH."""
     with open(GAME_CONFIG_PATH, "w") as f:
         json.dump(config, f)
+
+# The GUI (Tk main thread) and the workflow (run_async's worker thread) both
+# write this file, so every change goes through update_game_config() /
+# reset_game_config() - a load-modify-save under one lock - rather than
+# holding a loaded dict across a long action and saving it afterwards,
+# which could silently undo a checkbox clicked in the meantime.
+GAME_CONFIG_LOCK = threading.Lock()
+
+def update_game_config(mutate):
+    """Load the config, call mutate(config) to change it in place, save it,
+    and return it - all atomically with respect to other callers."""
+    with GAME_CONFIG_LOCK:
+        config = load_game_config()
+        mutate(config)
+        save_game_config(config)
+        return config
+
+def reset_game_config():
+    """Delete GAME_CONFIG_PATH so the next load starts from the defaults."""
+    with GAME_CONFIG_LOCK:
+        try:
+            os.remove(GAME_CONFIG_PATH)
+        except FileNotFoundError:
+            pass
 
 # ============================================================================
 # ICON PROCESSING
@@ -1103,32 +1130,39 @@ def unscrew():
     detect_paycheck()
 
 def side_quest():
-    """Runs once per cycle, right after unscrew(): tends to the money tree
-    and the lure using state persisted in GAME_CONFIG_PATH.
-    money_collected only ever goes up (by TREE_HARVEST_YIELD per harvest,
-    until it reaches MONEY_COLLECTED_TARGET) - resetting it back down
-    means deleting GAME_CONFIG_PATH by hand."""
+    """Runs once per cycle, right after unscrew(), unless side_quest_enabled
+    is off in GAME_CONFIG_PATH: tends to the money tree and the lure using
+    state persisted there. The tree is checked at most once per
+    TREE_CHECK_INTERVAL, and money_collected only ever goes up (by
+    TREE_HARVEST_YIELD per harvest, until it reaches MONEY_COLLECTED_TARGET)
+    - resetting it back down means resetting the config. Each piece of
+    progress is saved the moment its action succeeds, so a stop partway
+    through doesn't lose it."""
     config = load_game_config()
+    if not config["side_quest_enabled"]:
+        return
+    now = time.time()
 
-    if config["money_collected"] < MONEY_COLLECTED_TARGET:
+    if config["money_collected"] < MONEY_COLLECTED_TARGET and now >= config["tree_timer"]:
         if tree_collect():
-            config["money_collected"] += TREE_HARVEST_YIELD
+            def harvested(c):
+                c["money_collected"] += TREE_HARVEST_YIELD
+                c["tree_timer"] = time.time() + TREE_CHECK_INTERVAL
+            update_game_config(harvested)
 
-    if time.time() >= config["lure_timer"]:
+    if now >= config["lure_timer"]:
         if lure_collect():
-            config["lure_timer"] = time.time() + LURE_RECOLLECT_INTERVAL
-
-    save_game_config(config)
+            update_game_config(lambda c: c.update(lure_timer=time.time() + LURE_RECOLLECT_INTERVAL))
 
 def ensure_setup():
-    """Run setup_game() once, the first time any workflow starts - skipped
-    on every later run once GAME_CONFIG_PATH's setup_done flag is set."""
+    """Run setup_game() once, the first time a workflow starts - skipped if
+    setup_enabled is off in GAME_CONFIG_PATH, or on every later run once its
+    setup_done flag is set."""
     config = load_game_config()
-    if config["setup_done"]:
+    if not config["setup_enabled"] or config["setup_done"]:
         return
     setup_game()
-    config["setup_done"] = True
-    save_game_config(config)
+    update_game_config(lambda c: c.update(setup_done=True))
 
 # ============================================================================
 # WORKFLOWS
@@ -1322,31 +1356,29 @@ class AdoptMeGUI:
         btn_respawn.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
         self.action_buttons.append(btn_respawn)
 
-        # These are all plain actions, not need handlers - only reachable
-        # here, never from ENABLED_NEEDS or the Debug tab.
-        btn_lure = tk.Button(btn_frame, text="Lure Collect", command=lambda: self.run_async(lure_collect),
-                              font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=GUI_RESPAWN_COLOR, fg=self.fg,
-                              height=GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
-        btn_lure.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
-        self.action_buttons.append(btn_lure)
-
-        btn_new_lure = tk.Button(btn_frame, text="Set New Lure", command=lambda: self.run_async(set_new_lure),
-                                  font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=GUI_RESPAWN_COLOR, fg=self.fg,
-                                  height=GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
-        btn_new_lure.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
-        self.action_buttons.append(btn_new_lure)
-
-        btn_tree = tk.Button(btn_frame, text="Tree Collect", command=lambda: self.run_async(tree_collect),
-                              font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=GUI_RESPAWN_COLOR, fg=self.fg,
-                              height=GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
-        btn_tree.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
-        self.action_buttons.append(btn_tree)
-
         btn_setup = tk.Button(btn_frame, text="Setup", command=lambda: self.run_async(setup_game),
                                font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=GUI_RESPAWN_COLOR, fg=self.fg,
                                height=GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
         btn_setup.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
         self.action_buttons.append(btn_setup)
+
+        # Persisted switches (see load_game_config()). Deliberately not in
+        # action_buttons: they must stay usable while a workflow is running,
+        # which is safe since update_game_config() is locked.
+        config = load_game_config()
+        self.config_flag_vars = {}
+        for label, key in (("Run setup", "setup_enabled"), ("Run side quest", "side_quest_enabled")):
+            var = tk.BooleanVar(value=config[key])
+            self.config_flag_vars[key] = var
+            tk.Checkbutton(btn_frame, text=label, variable=var,
+                           command=lambda k=key, v=var: self.set_config_flag(k, v.get()),
+                           font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=self.bg, fg=self.fg,
+                           selectcolor=self.bg, activebackground=self.bg, activeforeground=self.fg,
+                           anchor=tk.W, cursor="hand2").pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
+
+        tk.Button(btn_frame, text="Reset Config", command=self.reset_config,
+                  font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=GUI_STOP_COLOR, fg=self.fg,
+                  height=GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2").pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
 
         # Debug tab: one button per need handler, regardless of whether it's in
         # ENABLED_NEEDS, so any handler can be run on its own.
@@ -1438,6 +1470,21 @@ class AdoptMeGUI:
 
     def run_workflow_loop(self):
         self.run_async(run_workflow_loop)
+
+    def set_config_flag(self, key, value):
+        """Persist one of the config's on/off switches (a checkbox was clicked)."""
+        update_game_config(lambda c: c.update({key: value}))
+        print(f"[!] {key} = {value}")
+
+    def reset_config(self):
+        """Delete the persisted config (money collected, timers, setup done,
+        and the switches themselves all go back to their defaults) and
+        refresh the checkboxes to match."""
+        reset_game_config()
+        config = load_game_config()
+        for key, var in self.config_flag_vars.items():
+            var.set(config[key])
+        print("[!] Config reset to defaults")
 
     def build_debug_tab(self, parent):
         """Fill the Debug tab with a two-column grid of [TEST] buttons, one

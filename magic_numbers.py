@@ -166,7 +166,7 @@ KEY_ZOOM_IN = "i"
 MOVE_KEYS = ("w", "a", "s", "d")
 RESPAWN_KEYS = ("esc", "r", "enter")
 
-# Lure/tree collection (GUI-only functions, not tied to a detected need)
+# Lure/tree collection (run automatically by side_quest(), not tied to a detected need)
 LURE_COLLECT_WALK_DURATION = 2.0  # hold 'a' this long before pressing KEY_INTERACT at the lure
 LURE_COLLECT_SETTLE_DELAY = 1.0   # wait this long between the two KEY_INTERACT presses at the lure
 LURE_NEW_POS_1 = (876, 711)       # the two backpack clicks that place a fresh lure - see set_new_lure()
@@ -180,6 +180,7 @@ TREE_HARVEST_YIELD = 16           # money_collected added to the persisted total
 # money_collected only ever goes up here - resetting it means deleting
 # GAME_CONFIG_PATH by hand.
 MONEY_COLLECTED_TARGET = 200
+TREE_CHECK_INTERVAL = 10 * 60          # seconds (10 minutes) between tree harvests
 LURE_RECOLLECT_INTERVAL = 4 * 60 * 60  # seconds (4 hours)
 
 # setup_game(): one-time, run via ensure_setup() - see GAME_CONFIG_PATH's
@@ -314,7 +315,7 @@ __all__ = [
     "KEY_BACKPACK", "KEY_MOUNT", "KEY_INTERACT", "KEY_ZOOM_IN", "MOVE_KEYS", "RESPAWN_KEYS",
     "LURE_COLLECT_WALK_DURATION", "LURE_COLLECT_SETTLE_DELAY", "LURE_NEW_POS_1", "LURE_NEW_POS_2",
     "TREE_COLLECT_WALK_DURATION", "TREE_COLLECT_BACKWARD_DURATION", "TREE_HARVEST_YIELD",
-    "MONEY_COLLECTED_TARGET", "LURE_RECOLLECT_INTERVAL",
+    "MONEY_COLLECTED_TARGET", "TREE_CHECK_INTERVAL", "LURE_RECOLLECT_INTERVAL",
     "SETUP_LOCK_HOUSE_POS", "SETUP_BACKPACK_SETTINGS_POS", "SETUP_SORT_MENU_POS",
     "SETUP_FAVORITES_POS", "SETUP_CONFIRM_POS",
     "FOCUS_CLICK_X_PERCENT", "FOCUS_CLICK_Y", "HOVER_NUDGE_PIXELS",

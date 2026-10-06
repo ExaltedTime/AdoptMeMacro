@@ -18,9 +18,10 @@ import pydirectinput
 # ============================================================================
 ENABLED_NEEDS = {
     "hungry", "thirsty", "dirty", "potty", "sleepy",  # button needs - always safe to leave on
-    "catch", "pet", "ride", "walk", "cafe", "salon", "choose", "sick", "pizza",
+    "catch", "pet", "ride", "walk", "choose",
+    "cafe", "salon", "sick", "pizza",  # teleport-walk needs
 }
-# camping, beach, bored and school are disabled
+# bored, beach, school and camping (also teleport-walk needs) are disabled
 
 # ============================================================================
 # PATHS
@@ -54,16 +55,12 @@ RESPAWN_WAIT = 4.0             # settle time after respawning, before it's usabl
 WALK_TO_BUTTONS_DURATION = 0.8 # time spent walking forward to reach the action buttons
 WALK_ALTERNATING_STEP = 1.0    # duration of each a/d press in alternating walk pattern
 KEY_STEP_GAP = 0.1             # pause between consecutive key holds (walk patterns, teleport-walk needs)
-WALK_TOTAL_DURATION = 35.0     # total duration to keep walking back and forth
 UI_SETTLE = 0.5                # generic pause for UI to catch up (between clicks in a sequence)
 FOCUS_DELAY = 0.3              # pause after focusing the window
 FOCUS_CLICK_SETTLE_DELAY = 0.1 # pause after the window-focus click
 CLICK_MOVE_DURATION = 0.3      # mouse travel time for an ordinary click
 CLICK_SETTLE_DELAY = 0.2       # pause after moving the mouse, before clicking
 POST_CLICK_DELAY = 0.4         # pause after each click
-POST_NEED_CLICK_WAIT = 15      # pause after satisfying a need via button click
-POST_NEED_CLICK_WAIT_SHORT = 10  # shorter pause for needs that refill quickly
-SHORT_WAIT_NEED_NAMES = {"hungry", "thirsty"}  # button needs that use the shorter wait above
 NEED_CHECK_RETRY_DELAY = 5.0   # pause before re-checking when no need was found
 LOOP_DELAY = 2.0               # pause between iterations of the workflow loop
 STOP_CHECK_INTERVAL = 0.1      # granularity of the interruptible wait loop
@@ -112,7 +109,6 @@ RIDE_FORWARD_DURATION = 2.0    # walk forward briefly after mounting, before the
 RIDE_VEHICLES_POS = (816, 804)
 RIDE_FIRST_VEHICLE_POS = (976, 708)
 RIDE_EQUIP_POS = (1062, 814)
-RIDE_WALK_DURATION = 40.0      # total time spent walking back and forth while riding
 
 # Backpack-teleport sequence, shared by every teleport destination: open
 # backpack -> category tab -> two more fixed clicks that confirm/execute
@@ -149,20 +145,29 @@ TELEPORT_WALK_NEEDS = {
     "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 5.0), ("w", 1.5)),
                     final_click=SICK_FINAL_CLICK_POS),
 }
-NEED_GONE_MAX_WAIT = 60.0        # most a teleport need waits for its icon to disappear
+NEED_GONE_MAX_WAIT = 60.0        # most wait_until_need_gone() ever waits for an icon to disappear -
+                                  # also reused as walk_alternating()'s total duration cap for walk/ride
 NEED_GONE_POLL_INTERVAL = 5.0    # how often to re-check for the icon during that wait
 NEED_GONE_CONFIRMATIONS = 3      # consecutive checks that must all miss the icon before it counts as cleared
 NEED_GONE_CONFIRM_INTERVAL = 1.0 # pause between those confirming checks
 NEED_GONE_FLICKER_RECHECK_DELAY = 0.3  # before counting any single miss, re-sample this soon after -
                                         # the icon can flash for a frame (or briefly drop out against a
                                         # busy background) without the need actually having cleared
+NEED_WATCH_JOIN_TIMEOUT = 5.0    # most walk_alternating() waits for its background need-gone
+                                 # watcher thread to exit before moving on without it
 
 # Game key bindings
 KEY_BACKPACK = "b"
 KEY_MOUNT = "e"
+KEY_INTERACT = "e"             # same physical key as KEY_MOUNT, named for its other use: collecting/
+                                # harvesting (lure_collect(), tree_collect()) rather than mounting a vehicle
 KEY_ZOOM_IN = "i"
 MOVE_KEYS = ("w", "a", "s", "d")
 RESPAWN_KEYS = ("esc", "r", "enter")
+
+# Lure/tree collection (GUI-only functions, not tied to a detected need)
+LURE_COLLECT_WALK_DURATION = 2.0  # hold 'a' this long before pressing KEY_INTERACT at the lure
+TREE_COLLECT_WALK_DURATION = 2.0  # hold 'd' this long before pressing KEY_INTERACT at the money tree
 
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75
@@ -267,9 +272,9 @@ __all__ = [
     "SCREEN_WIDTH", "SCREEN_HEIGHT", "SCREEN_CENTER_X", "SCREEN_CENTER_Y",
     "FOCUS_WINDOW_ON_ACTION", "SAVE_NEW_NEEDS", "MATCH_ONLY_LEFT_HALF",
     "RESPAWN_KEY_DURATION", "RESPAWN_WAIT", "WALK_TO_BUTTONS_DURATION", "WALK_ALTERNATING_STEP",
-    "KEY_STEP_GAP", "WALK_TOTAL_DURATION", "UI_SETTLE", "FOCUS_DELAY", "FOCUS_CLICK_SETTLE_DELAY",
-    "CLICK_MOVE_DURATION", "CLICK_SETTLE_DELAY", "POST_CLICK_DELAY", "POST_NEED_CLICK_WAIT",
-    "POST_NEED_CLICK_WAIT_SHORT", "SHORT_WAIT_NEED_NAMES", "NEED_CHECK_RETRY_DELAY", "LOOP_DELAY",
+    "KEY_STEP_GAP", "UI_SETTLE", "FOCUS_DELAY", "FOCUS_CLICK_SETTLE_DELAY",
+    "CLICK_MOVE_DURATION", "CLICK_SETTLE_DELAY", "POST_CLICK_DELAY",
+    "NEED_CHECK_RETRY_DELAY", "LOOP_DELAY",
     "STOP_CHECK_INTERVAL", "CATCH_WAIT_AFTER_EQUIP", "CATCH_EMOTE_DELAY", "CATCH_THROW_COUNT",
     "CATCH_ZOOM_DURATION", "PET_CIRCLE_DURATION", "PET_CIRCLE_RADIUS", "PET_SETTLE_DELAY",
     "PET_CIRCLE_STEP_MOVE_DURATION", "PET_FOCUS_CLICK_DURATION", "ICON_EXTRACT_PADDING",
@@ -278,14 +283,15 @@ __all__ = [
     "CHOOSE_BUTTON_COLOR", "CHOOSE_SLOW_MOVE_DURATION",
     "PAYCHECK_CASHOUT_COLOR", "PAYCHECK_DISMISS_POS_1", "PAYCHECK_DISMISS_POS_2",
     "RIDE_BACKWARD_DURATION", "RIDE_WAIT_AFTER_E", "RIDE_FORWARD_DURATION", "RIDE_VEHICLES_POS",
-    "RIDE_FIRST_VEHICLE_POS", "RIDE_EQUIP_POS", "RIDE_WALK_DURATION",
+    "RIDE_FIRST_VEHICLE_POS", "RIDE_EQUIP_POS",
     "TELEPORT_WAIT", "TELEPORT_SETTLE_WAIT", "GENERAL_TELEPORT_POS_2", "GENERAL_TELEPORT_POS_3",
     "TELEPORT_BACK_DURATION", "TELEPORT_WALK_STEP_GAP", "SICK_CONFIRM_WAIT",
     "TELEPORT_PETS_TAB_POS", "TELEPORT_VEHICLES_TAB_POS", "TELEPORT_FOOD_TAB_POS", "SICK_FINAL_CLICK_POS",
     "TELEPORT_WALK_NEEDS",
     "NEED_GONE_MAX_WAIT", "NEED_GONE_POLL_INTERVAL", "NEED_GONE_CONFIRMATIONS",
-    "NEED_GONE_CONFIRM_INTERVAL", "NEED_GONE_FLICKER_RECHECK_DELAY",
-    "KEY_BACKPACK", "KEY_MOUNT", "KEY_ZOOM_IN", "MOVE_KEYS", "RESPAWN_KEYS",
+    "NEED_GONE_CONFIRM_INTERVAL", "NEED_GONE_FLICKER_RECHECK_DELAY", "NEED_WATCH_JOIN_TIMEOUT",
+    "KEY_BACKPACK", "KEY_MOUNT", "KEY_INTERACT", "KEY_ZOOM_IN", "MOVE_KEYS", "RESPAWN_KEYS",
+    "LURE_COLLECT_WALK_DURATION", "TREE_COLLECT_WALK_DURATION",
     "FOCUS_CLICK_X_PERCENT", "FOCUS_CLICK_Y", "HOVER_NUDGE_PIXELS",
     "NEED_ICON_TOP_PERCENT", "NEED_ICON_WIDTH_PERCENT", "NEED_ICON_BLANK_HEIGHT", "NEED_ICON_BLANK_WIDTH",
     "NEED_ICON_MIN_RADIUS", "NEED_ICON_MAX_RADIUS", "NEED_ICON_MIN_DISTANCE", "NEED_ICON_BLUR_KERNEL",

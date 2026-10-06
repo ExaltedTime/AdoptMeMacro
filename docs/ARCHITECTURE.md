@@ -101,6 +101,10 @@ character standing.
 - **MOVEMENT** - `respawn_character()`, `walk_to_buttons()`,
   `walk_alternating()` (shared by the walk need, a/d, and the ride need,
   w/s - same pattern, different keys and duration passed in).
+- **GUI-ONLY ACTIONS** - `lure_collect()`, `tree_collect()`: plain callable
+  actions, not tied to any detected need/icon, reachable only from the
+  GUI's Functions section (same as `respawn_character()`) - see the table
+  at the end of [Need handlers](#need-handlers).
 - **NEED HANDLERS** - `NeedHandler` and one subclass per need (or per group
   of needs, via `partial()`). See [Need handlers](#need-handlers).
 - **WORKFLOWS** - `run_full_cycle()`, `run_workflow()`, `run_workflow_loop()`.
@@ -162,21 +166,28 @@ seen" and falls through to `prompt_rename_need()` instead.
 
 ## Waiting for a need to clear
 
-`wait_until_need_gone()` (used by `TeleportWalkNeedHandler` after its
-movement sequence) polls `detected_need_names()` - one fresh
-detect-and-match pass - every `NEED_GONE_POLL_INTERVAL` until the target
-need is missing `NEED_GONE_CONFIRMATIONS` times in a row (any sighting
-resets the count back to zero), up to `NEED_GONE_MAX_WAIT` total.
+`wait_until_need_gone()` - used after a button click (`click_need_button()`),
+after `ChooseNeedHandler` dismisses its menu, and after
+`TeleportWalkNeedHandler`'s movement sequence - polls
+`detected_need_names()` (one fresh detect-and-match pass) every
+`NEED_GONE_POLL_INTERVAL` until the target need is missing
+`NEED_GONE_CONFIRMATIONS` times in a row (any sighting resets the count
+back to zero), up to `NEED_GONE_MAX_WAIT` total.
 
-Each individual miss is itself re-checked once, `NEED_GONE_FLICKER_RECHECK_DELAY`
-later, before it's allowed to count: the icon can drop out of a single
-detection pass for a frame (or against a momentarily busy background)
-without the need having actually cleared, and a bare miss-streak alone
-isn't enough to tell that apart from the real thing. This only guards
-against a one-frame flicker - a detection failure caused by a
-*sustained* background change (lighting, a different area of the map)
-behind the icon isn't something this re-check can fix, since it'll fail
-again on the immediate retry too.
+Each individual check goes through `_need_cleared()`, which re-samples
+once more, `NEED_GONE_FLICKER_RECHECK_DELAY` later, before a miss is
+allowed to count: the icon can drop out of a single detection pass for a
+frame (or against a momentarily busy background) without the need having
+actually cleared, and a bare miss-streak alone isn't enough to tell that
+apart from the real thing. This only guards against a one-frame flicker -
+a detection failure caused by a *sustained* background change (lighting,
+a different area of the map) behind the icon isn't something this
+re-check can fix, since it'll fail again on the immediate retry too.
+
+`_need_cleared()` is also what `_watch_need_gone()` uses - see
+[Checking a need in parallel with movement](#checking-a-need-in-parallel-with-movement)
+- so both the standalone wait and the background-thread version share the
+exact same debounce logic.
 
 ## Button detection
 
@@ -238,20 +249,29 @@ Which needs actually run automatically is decided by one set,
 `ENABLED_NEEDS` (`magic_numbers.py`, the first thing defined in that
 file). A detected need that isn't in it is logged and skipped, not
 resolved. Currently enabled: `hungry`, `thirsty`, `dirty`, `potty`,
-`sleepy`, `catch`, `pet`, `ride`, `walk`, `cafe`, `salon`, `choose`,
-`sick`, `pizza`. Implemented but not enabled: `bored`, `beach`, `school`,
-`camping`. The GUI's **Debug** tab has a button per handler that runs it
-directly regardless of `ENABLED_NEEDS`.
+`sleepy`, `catch`, `pet`, `ride`, `walk`, `choose`, plus the
+teleport-walk needs `cafe`, `salon`, `sick`, `pizza` (called out with
+their own inline comment in the set literal, since they leave the map and
+run considerably longer than everything else). Implemented but not
+enabled: `bored`, `beach`, `school`, `camping` (also teleport-walk needs).
+The GUI's **Debug** tab has a button per handler that runs it directly
+regardless of `ENABLED_NEEDS`.
+
+Except for `catch` and `pet` - which always run their full fixed sequence
+precisely, with no early exit - every other need either waits for its
+icon to actually clear (`wait_until_need_gone()`) instead of guessing how
+long that takes, or checks for that *while* still moving (see below),
+rather than a flat sleep after the fact.
 
 | Need | How it's handled |
 |---|---|
-| `hungry` / `thirsty` / `dirty` / `potty` / `sleepy` | `ButtonNeedHandler`: walk to the action buttons (`walk_to_buttons()`), refresh the button mapping (`refresh_button_mapping()`), click the matching one (`click_need_button()`). `hungry`/`thirsty` wait `POST_NEED_CLICK_WAIT_SHORT` (10s) after clicking; the other three wait `POST_NEED_CLICK_WAIT` (15s). |
-| `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → scroll up + click empty space, `CATCH_THROW_COUNT` (3) times, `CATCH_EMOTE_DELAY` apart → unequip. |
-| `pet` | `PetNeedHandler`: click to focus the pet, then hold the mouse down and trace a circle of radius `PET_CIRCLE_RADIUS` around screen center for `PET_CIRCLE_DURATION`. |
-| `choose` | `ChooseNeedHandler`: focus the pet, find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. |
-| `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then backpack → vehicles → first vehicle → equip → close backpack, then `walk_alternating(("w", "s"), RIDE_WALK_DURATION)`. |
-| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` - wait up to `NEED_GONE_MAX_WAIT` (60s), polling every `NEED_GONE_POLL_INTERVAL`, ending early once the need's icon has been missing `NEED_GONE_CONFIRMATIONS` (3) checks in a row (confirming checks `NEED_GONE_CONFIRM_INTERVAL` apart, each itself double-checked `NEED_GONE_FLICKER_RECHECK_DELAY` later before counting as a real miss - see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`). |
-| `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), WALK_TOTAL_DURATION)`. |
+| `hungry` / `thirsty` / `dirty` / `potty` / `sleepy` | `ButtonNeedHandler`: walk to the action buttons (`walk_to_buttons()`), refresh the button mapping (`refresh_button_mapping()`), click the matching one (`click_need_button()`), which then calls `wait_until_need_gone()` for that need name. |
+| `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → scroll up + click empty space, `CATCH_THROW_COUNT` (3) times, `CATCH_EMOTE_DELAY` apart → unequip. Always runs this exact sequence - no `wait_until_need_gone()` involved. |
+| `pet` | `PetNeedHandler`: click to focus the pet, then hold the mouse down and trace a circle of radius `PET_CIRCLE_RADIUS` around screen center for `PET_CIRCLE_DURATION`. Same as `catch` - always the full fixed duration. |
+| `choose` | `ChooseNeedHandler`: focus the pet, find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu, then `wait_until_need_gone("choose")`. |
+| `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then backpack → vehicles → first vehicle → equip → close backpack, then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT` (60s), ending early the moment "ride" is confirmed cleared (see below). |
+| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`). |
+| `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")` - up to `NEED_GONE_MAX_WAIT` (60s), same early-exit as `ride` above. |
 
 A handler only counts as resolved (and only then triggers a respawn) if
 `handle()` returns `True`. `ButtonNeedHandler` returns `False` if
@@ -260,6 +280,53 @@ need's button wasn't among them; `ChooseNeedHandler` returns `False` if it
 can't find its exact-color button on screen. Either way the need is
 logged and skipped for this pass with no respawn, same as a disabled need
 - `process_needs()` doesn't distinguish between the two.
+
+### GUI-only actions
+
+`lure_collect()` and `tree_collect()` aren't need handlers at all - they're
+plain functions, not registered anywhere in `NEED_HANDLER_CLASSES` or
+`ENABLED_NEEDS`, and the only way to run either is the matching button in
+the GUI's **Functions** section (same pattern as **Respawn**). Both are
+early stubs: `lure_collect()` holds `a` for `LURE_COLLECT_WALK_DURATION`
+(2s), presses `KEY_INTERACT` (`e`), then a placeholder `pass` for whatever
+the lure's menu actually needs; `tree_collect()` holds `d` for
+`TREE_COLLECT_WALK_DURATION` (2s) and presses `KEY_INTERACT` - nothing
+more yet.
+
+### Checking a need in parallel with movement
+
+`walk_alternating()` (used by `ride` and `walk`) takes an optional
+`need_name`. When given, it starts a background thread
+(`_watch_need_gone()`) that polls whether that need has cleared *while*
+the character is still alternating back and forth, instead of only
+checking once the full duration has elapsed - the main loop breaks out
+early (via a shared `threading.Event`) the moment the background thread
+confirms it, rather than always running the full `total_duration`. The
+background thread uses the same miss-confirmation as
+`wait_until_need_gone()` (`NEED_GONE_CONFIRMATIONS`, debounced by the
+shared `_need_cleared()` helper - see
+[Waiting for a need to clear](#waiting-for-a-need-to-clear)), just
+interleaved with the movement instead of run after it.
+
+This is the one place in the macro with real thread concurrency (every
+other background activity is the GUI's single `run_async()` worker
+thread). A second `threading.Event` tells the watcher to stop the instant
+the main loop exits for *any* reason - the duration elapsed, the need was
+confirmed cleared, or an exception (including `StopRequested`/
+`FocusLost`) is propagating out - via a `try`/`finally` around the
+movement loop, so the watcher thread is never left running past the
+function call that started it. The watcher itself must never let
+`StopRequested`/`FocusLost` escape uncaught: only the main thread's
+`check_running()` calls are allowed to unwind the workflow, so the
+watcher instead catches both and just returns quietly, relying on the
+main thread (which checks far more often, every `STOP_CHECK_INTERVAL`
+inside `hold_key()`) to notice a stop or focus loss first and signal the
+watcher to stop via the shared event. No input simulation
+(`pydirectinput`) ever happens on the watcher thread - it only takes
+screenshots and runs detection, each call independent and self-contained
+(a fresh `mss.MSS()` per screenshot, no shared mutable state with the
+main thread besides the two events), which is what makes running it
+alongside the movement safe.
 
 ## Stopping & focus safety
 
@@ -361,7 +428,7 @@ exact values and rationale):
 | Group | Examples |
 |---|---|
 | Behavior flags | `ENABLED_NEEDS`, `FOCUS_WINDOW_ON_ACTION` |
-| Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `POST_NEED_CLICK_WAIT[_SHORT]`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL` |
+| Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `NEED_GONE_*` |
 | Screen positions | `CATCH_*_POS`, `EMPTY_POS`, `FOCUS_PET_POS`, `RIDE_*_POS` |
 | Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN/MAX_RADIUS`, `NEED_ICON_HOUGH_*` |
 | Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |

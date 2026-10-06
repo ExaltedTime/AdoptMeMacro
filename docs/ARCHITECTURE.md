@@ -104,12 +104,10 @@ character standing.
 - **MOVEMENT** - `respawn_character()`, `walk_to_buttons()`,
   `walk_alternating()` (shared by the walk need, a/d, and the ride need,
   w/s - same pattern, different keys and duration passed in).
-- **GUI-ONLY ACTIONS** - `lure_collect()`, `set_new_lure()`, `tree_collect()`,
+- **SIDE ACTIONS** - `lure_collect()`, `set_new_lure()`, `tree_collect()`,
   `setup_game()`: plain callable actions, not tied to any detected
-  need/icon, reachable from the GUI's Functions section (same as
-  `respawn_character()`) and also auto-triggered by `side_quest()`/
-  `ensure_setup()` - see the table at the end of
-  [Need handlers](#need-handlers).
+  need/icon, run automatically by `side_quest()`/`ensure_setup()` - see
+  the end of [Need handlers](#need-handlers).
 - **NEED HANDLERS** - `NeedHandler` and one subclass per need (or per group
   of needs, via `partial()`). See [Need handlers](#need-handlers).
 - **WORKFLOWS** - `run_full_cycle()`, `run_workflow()`, `run_workflow_loop()`,
@@ -287,17 +285,16 @@ can't find its exact-color button on screen. Either way the need is
 logged and skipped for this pass with no respawn, same as a disabled need
 - `process_needs()` doesn't distinguish between the two.
 
-### GUI-only actions
+### Side actions
 
 None of `lure_collect()`, `set_new_lure()`, `tree_collect()` or
 `setup_game()` are need handlers - they're plain functions, not
-registered anywhere in `NEED_HANDLER_CLASSES` or `ENABLED_NEEDS`. Each
-has its own button in the GUI's **Functions** section (same pattern as
-**Respawn**) for testing on its own, and three of the four are also
-triggered automatically - see
-[Persisted game config](#persisted-game-config) for `side_quest()` (which
-calls `lure_collect()`/`tree_collect()`) and `ensure_setup()` (which calls
-`setup_game()`).
+registered anywhere in `NEED_HANDLER_CLASSES` or `ENABLED_NEEDS`. They're
+run automatically: `side_quest()` calls `lure_collect()`/`tree_collect()`
+and `ensure_setup()` calls `setup_game()` - see
+[Persisted game config](#persisted-game-config). Only **Setup** has a GUI
+button of its own (for testing it on its own); the lure and tree actions
+are only reachable through `side_quest()`.
 
 - **`lure_collect()`** - holds `a` for `LURE_COLLECT_WALK_DURATION` (2s),
   presses `KEY_INTERACT` (`e`) to collect the current lure's rewards,
@@ -409,28 +406,43 @@ actually on disk (so an old config missing a newer key still works), and
 
 - **`money_collected`** - how much `tree_collect()` has yielded so far,
   in `TREE_HARVEST_YIELD` (16) increments. Only ever goes up - there's no
-  code path that resets it, by design (see `side_quest()` below); reset
-  it by hand by deleting `debug/.config`.
-- **`lure_timer`** - the timestamp `lure_collect()` is next due. Defaults
-  to "due immediately" (`time.time()`) the first time the config is
-  created.
+  code path that lowers it, by design (see `side_quest()` below); the
+  GUI's **Reset Config** button puts it back to 0.
+- **`tree_timer`** / **`lure_timer`** - the timestamps `tree_collect()` /
+  `lure_collect()` are next due. Both default to "due immediately"
+  (`time.time()`) when the config is fresh.
 - **`setup_done`** - whether `setup_game()` has ever run (see
   `ensure_setup()` below).
+- **`setup_enabled`** / **`side_quest_enabled`** - on/off switches
+  (default on) for `ensure_setup()` and `side_quest()` respectively. Both
+  are checkboxes in the GUI, and can be flipped while a workflow runs.
 
-Two small functions read and update this file every cycle or at startup:
+Two small functions read and update this file:
 
 - **`side_quest()`** - called right after `unscrew()`, every cycle of
   `run_full_cycle()`'s loop (so on the same cadence as the paycheck
-  check). While `money_collected` is below `MONEY_COLLECTED_TARGET`
-  (200), it calls `tree_collect()` and adds `TREE_HARVEST_YIELD`. Once
-  `lure_timer` has passed, it calls `lure_collect()` and pushes
-  `lure_timer` another `LURE_RECOLLECT_INTERVAL` (4 hours) into the
-  future. Either action only updates its piece of the config if the
-  underlying call actually returned `True`.
-- **`ensure_setup()`** - called once at the top of `run_workflow()` and
-  `run_workflow_loop()` (before anything else happens). Runs
-  `setup_game()` and sets `setup_done` the first time ever; a no-op on
-  every call after that.
+  check); does nothing if `side_quest_enabled` is off. While
+  `money_collected` is below `MONEY_COLLECTED_TARGET` (200) *and*
+  `tree_timer` has passed, it calls `tree_collect()`, adds
+  `TREE_HARVEST_YIELD`, and pushes `tree_timer` `TREE_CHECK_INTERVAL`
+  (10 minutes) out. Once `lure_timer` has passed, it calls
+  `lure_collect()` and pushes `lure_timer` `LURE_RECOLLECT_INTERVAL` (4
+  hours) out. Each action only updates the config if the call actually
+  returned `True`, and does so immediately - so stopping partway through
+  doesn't lose progress already made.
+- **`ensure_setup()`** - called once at the top of `run_workflow_loop()`
+  (not `run_workflow()`), before anything else happens. Does nothing if
+  `setup_enabled` is off or `setup_done` is already set; otherwise runs
+  `setup_game()` and sets `setup_done`.
+
+The GUI (Tk's main thread) and the workflow (`run_async`'s worker thread)
+both write this file, so every change goes through
+`update_game_config(mutate)` - a load-modify-save under a lock - or
+`reset_game_config()` (deletes the file, so the next load is all defaults;
+the GUI then refreshes its checkboxes to match). `side_quest()` and
+`ensure_setup()` deliberately don't hold a loaded config across a long
+action and save it afterwards - that could silently undo a checkbox
+clicked in the meantime.
 
 ## GUI internals
 
@@ -485,7 +497,7 @@ exact values and rationale):
 | Behavior flags | `ENABLED_NEEDS`, `FOCUS_WINDOW_ON_ACTION` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `NEED_GONE_*` |
 | Screen positions | `CATCH_*_POS`, `EMPTY_POS`, `FOCUS_PET_POS`, `RIDE_*_POS`, `LURE_NEW_POS_*`, `SETUP_*_POS` |
-| Side quest / setup | `TREE_HARVEST_YIELD`, `MONEY_COLLECTED_TARGET`, `LURE_RECOLLECT_INTERVAL`, `LURE_COLLECT_*`, `TREE_COLLECT_*` |
+| Side quest / setup | `TREE_HARVEST_YIELD`, `MONEY_COLLECTED_TARGET`, `TREE_CHECK_INTERVAL`, `LURE_RECOLLECT_INTERVAL`, `LURE_COLLECT_*`, `TREE_COLLECT_*` |
 | Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN/MAX_RADIUS`, `NEED_ICON_HOUGH_*` |
 | Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |

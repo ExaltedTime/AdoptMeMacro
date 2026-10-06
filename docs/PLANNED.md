@@ -7,8 +7,6 @@
 - [ ] Add functionality to rejoin if disconnected
 - [ ] Add auto-disabling needs if they aren't getting resolved, and auto-rejoin if too many are getting disabled
 - [ ] Start using the helicopter to get to places
-- [ ] Add auto money tree harvesting (tree_collect() exists as a GUI-only stub - walks right and presses e, nothing more yet)
-- [ ] Add auto lure collector (lure_collect() exists as a GUI-only stub - walks left and presses e, then a placeholder `pass` for whatever comes after)
 - [ ] Pet focusing for choose and pet sometimes breaks
 - [ ] Add an auto ghost gallery function if the halloween toggle is on. And also a toggle for whether you want ghost gallery to run
 

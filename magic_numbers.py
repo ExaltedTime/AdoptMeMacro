@@ -34,6 +34,7 @@ Path(DEBUG_DIR).mkdir(exist_ok=True)
 
 RUN_LOG_PATH = os.path.join(DEBUG_DIR, "run_log.txt")      # appended to, never overwritten
 RUN_COUNTER_PATH = os.path.join(DEBUG_DIR, "run_counter.txt")  # holds the last-used run number
+GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")      # persisted game state - see load_game_config()
 
 # ============================================================================
 # SCREEN / INPUT SETUP
@@ -167,8 +168,27 @@ RESPAWN_KEYS = ("esc", "r", "enter")
 
 # Lure/tree collection (GUI-only functions, not tied to a detected need)
 LURE_COLLECT_WALK_DURATION = 2.0  # hold 'a' this long before pressing KEY_INTERACT at the lure
+LURE_COLLECT_SETTLE_DELAY = 1.0   # wait this long between the two KEY_INTERACT presses at the lure
+LURE_NEW_POS_1 = (896, 707)       # the two backpack clicks that place a fresh lure - see set_new_lure()
+LURE_NEW_POS_2 = (1007, 803)
 TREE_COLLECT_WALK_DURATION = 2.0  # hold 'd' this long before stepping back
 TREE_COLLECT_BACKWARD_DURATION = 1.0  # then hold 's' this long before pressing KEY_INTERACT at the money tree
+TREE_HARVEST_YIELD = 16           # money_collected added to the persisted total per tree_collect() call
+
+# side_quest(): how often to tend the money tree/lure, and the money_collected
+# target that pauses tree harvesting (see load_game_config()/save_game_config()).
+# money_collected only ever goes up here - resetting it means deleting
+# GAME_CONFIG_PATH by hand.
+MONEY_COLLECTED_TARGET = 200
+LURE_RECOLLECT_INTERVAL = 4 * 60 * 60  # seconds (4 hours)
+
+# setup_game(): one-time, run via ensure_setup() - see GAME_CONFIG_PATH's
+# setup_done flag. Disabling trades isn't implemented yet.
+SETUP_LOCK_HOUSE_POS = (1112, 65)
+SETUP_BACKPACK_SETTINGS_POS = (953, 647)
+SETUP_SORT_MENU_POS = (1027, 906)
+SETUP_FAVORITES_POS = (1023, 1006)
+SETUP_CONFIRM_POS = (1047, 1131)
 
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75
@@ -269,7 +289,7 @@ GUI_RESPAWN_BUTTON_HEIGHT = 1    # lines
 
 __all__ = [
     "ENABLED_NEEDS",
-    "SCRIPT_DIR", "NEEDS_DIR", "DEBUG_DIR", "RUN_LOG_PATH", "RUN_COUNTER_PATH",
+    "SCRIPT_DIR", "NEEDS_DIR", "DEBUG_DIR", "RUN_LOG_PATH", "RUN_COUNTER_PATH", "GAME_CONFIG_PATH",
     "SCREEN_WIDTH", "SCREEN_HEIGHT", "SCREEN_CENTER_X", "SCREEN_CENTER_Y",
     "FOCUS_WINDOW_ON_ACTION", "SAVE_NEW_NEEDS", "MATCH_ONLY_LEFT_HALF",
     "RESPAWN_KEY_DURATION", "RESPAWN_WAIT", "WALK_TO_BUTTONS_DURATION", "WALK_ALTERNATING_STEP",
@@ -292,7 +312,11 @@ __all__ = [
     "NEED_GONE_MAX_WAIT", "NEED_GONE_POLL_INTERVAL", "NEED_GONE_CONFIRMATIONS",
     "NEED_GONE_CONFIRM_INTERVAL", "NEED_GONE_FLICKER_RECHECK_DELAY", "NEED_WATCH_JOIN_TIMEOUT",
     "KEY_BACKPACK", "KEY_MOUNT", "KEY_INTERACT", "KEY_ZOOM_IN", "MOVE_KEYS", "RESPAWN_KEYS",
-    "LURE_COLLECT_WALK_DURATION", "TREE_COLLECT_WALK_DURATION", "TREE_COLLECT_BACKWARD_DURATION",
+    "LURE_COLLECT_WALK_DURATION", "LURE_COLLECT_SETTLE_DELAY", "LURE_NEW_POS_1", "LURE_NEW_POS_2",
+    "TREE_COLLECT_WALK_DURATION", "TREE_COLLECT_BACKWARD_DURATION", "TREE_HARVEST_YIELD",
+    "MONEY_COLLECTED_TARGET", "LURE_RECOLLECT_INTERVAL",
+    "SETUP_LOCK_HOUSE_POS", "SETUP_BACKPACK_SETTINGS_POS", "SETUP_SORT_MENU_POS",
+    "SETUP_FAVORITES_POS", "SETUP_CONFIRM_POS",
     "FOCUS_CLICK_X_PERCENT", "FOCUS_CLICK_Y", "HOVER_NUDGE_PIXELS",
     "NEED_ICON_TOP_PERCENT", "NEED_ICON_WIDTH_PERCENT", "NEED_ICON_BLANK_HEIGHT", "NEED_ICON_BLANK_WIDTH",
     "NEED_ICON_MIN_RADIUS", "NEED_ICON_MAX_RADIUS", "NEED_ICON_MIN_DISTANCE", "NEED_ICON_BLUR_KERNEL",

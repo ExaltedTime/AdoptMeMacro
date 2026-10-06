@@ -13,7 +13,7 @@
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
-import os, sys, time, threading
+import os, sys, time, threading, json
 from abc import ABC, abstractmethod
 from functools import partial
 import tkinter as tk
@@ -179,6 +179,33 @@ def log_run_event(message):
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     with open(RUN_LOG_PATH, "a") as f:
         f.write(f"[{timestamp}] [RUN {CURRENT_RUN_NUMBER}] {message}\n")
+
+# ============================================================================
+# GAME CONFIG
+# ============================================================================
+# Game state that needs to persist across separate launches of the script
+# (unlike BUTTON_POSITIONS/CURRENT_RUN_NUMBER above) - see side_quest() and
+# ensure_setup().
+
+def load_game_config():
+    """Load GAME_CONFIG_PATH, or these defaults if it doesn't exist yet
+    (first run, or deleted by hand to reset)."""
+    defaults = {
+        "money_collected": 0,
+        "lure_timer": time.time(),  # due immediately on a fresh config
+        "setup_done": False,
+    }
+    try:
+        with open(GAME_CONFIG_PATH, "r") as f:
+            config = json.load(f)
+    except (FileNotFoundError, ValueError):
+        return defaults
+    return {**defaults, **config}
+
+def save_game_config(config):
+    """Persist `config` (as returned by load_game_config()) to GAME_CONFIG_PATH."""
+    with open(GAME_CONFIG_PATH, "w") as f:
+        json.dump(config, f)
 
 # ============================================================================
 # ICON PROCESSING
@@ -630,15 +657,29 @@ def walk_alternating(direction_pair, total_duration, step_duration=WALK_ALTERNAT
 # Functions section (same as respawn_character()).
 
 def lure_collect():
-    """Walk to the lure and collect it. Placeholder for now - what actually
-    happens once the lure's menu is open isn't implemented yet."""
+    """Walk to the lure, collect its rewards, then set a new one
+    (set_new_lure())."""
     if not focus_roblox():
         return False
     print(f"[debug] walking to the lure for {LURE_COLLECT_WALK_DURATION}s...")
     hold_key("a", LURE_COLLECT_WALK_DURATION)
     pydirectinput.press(KEY_INTERACT)
-    pass  # TODO: collect the lure once its menu is open
+    wait_interruptible(LURE_COLLECT_SETTLE_DELAY)
+    pydirectinput.press(KEY_INTERACT)
+    set_new_lure()
     print("[!] Lure collect complete!")
+    return True
+
+def set_new_lure():
+    """Click the two backpack positions that place a fresh lure, once the
+    current one's rewards have been collected. Split out from
+    lure_collect() so the placement sequence alone can be tested/tuned
+    without walking to the old lure first."""
+    if not focus_roblox():
+        return False
+    hover_click(*LURE_NEW_POS_1)
+    hover_click(*LURE_NEW_POS_2)
+    print("[!] New lure set!")
     return True
 
 def tree_collect():
@@ -651,6 +692,34 @@ def tree_collect():
     hold_key("s", TREE_COLLECT_BACKWARD_DURATION)
     pydirectinput.press(KEY_INTERACT)
     print("[!] Tree collect complete!")
+    return True
+
+def setup_game():
+    """One-time setup: lock the house, then set the backpack's item filter
+    to favorites only. Disabling trades isn't implemented yet. Normally
+    run once via ensure_setup(); exposed here too so it can be tested on
+    its own."""
+    respawn_character()
+    print("[debug] locking house...")
+    hover_click(*SETUP_LOCK_HOUSE_POS)
+    print("[debug] opening backpack...")
+    pydirectinput.press(KEY_BACKPACK)
+    wait_interruptible(UI_SETTLE)
+    print("[debug] opening settings...")
+    hover_click(*SETUP_BACKPACK_SETTINGS_POS)
+    wait_interruptible(UI_SETTLE)
+    print("[debug] opening sort menu...")
+    hover_click(*SETUP_SORT_MENU_POS)
+    wait_interruptible(UI_SETTLE)
+    print("[debug] selecting favorites...")
+    hover_click(*SETUP_FAVORITES_POS)
+    wait_interruptible(UI_SETTLE)
+    print("[debug] confirming...")
+    hover_click(*SETUP_CONFIRM_POS)
+    wait_interruptible(UI_SETTLE)
+    print("[debug] closing backpack...")
+    pydirectinput.press(KEY_BACKPACK)
+    print("[!] Setup complete!")
     return True
 
 # ============================================================================
@@ -1029,6 +1098,34 @@ def unscrew():
     for the paycheck popup; more checks may be added here later."""
     detect_paycheck()
 
+def side_quest():
+    """Runs once per cycle, right after unscrew(): tends to the money tree
+    and the lure using state persisted in GAME_CONFIG_PATH.
+    money_collected only ever goes up (by TREE_HARVEST_YIELD per harvest,
+    until it reaches MONEY_COLLECTED_TARGET) - resetting it back down
+    means deleting GAME_CONFIG_PATH by hand."""
+    config = load_game_config()
+
+    if config["money_collected"] < MONEY_COLLECTED_TARGET:
+        if tree_collect():
+            config["money_collected"] += TREE_HARVEST_YIELD
+
+    if time.time() >= config["lure_timer"]:
+        if lure_collect():
+            config["lure_timer"] = time.time() + LURE_RECOLLECT_INTERVAL
+
+    save_game_config(config)
+
+def ensure_setup():
+    """Run setup_game() once, the first time any workflow starts - skipped
+    on every later run once GAME_CONFIG_PATH's setup_done flag is set."""
+    config = load_game_config()
+    if config["setup_done"]:
+        return
+    setup_game()
+    config["setup_done"] = True
+    save_game_config(config)
+
 # ============================================================================
 # WORKFLOWS
 # ============================================================================
@@ -1044,6 +1141,7 @@ def run_full_cycle():
         # that succeeds, every wait from here on does check_running().
         check_stop()
         unscrew()
+        side_quest()
         print("\n[debug] checking needs...")
         if process_needs():
             return
@@ -1059,6 +1157,7 @@ def run_workflow():
     print("\n" + "=" * 50)
     print(f"[WORKFLOW] Starting (run {CURRENT_RUN_NUMBER})")
     print("=" * 50)
+    ensure_setup()
     run_full_cycle()
     log_run_event("WORKFLOW done")
     print("\n[WORKFLOW] Done\n")
@@ -1077,6 +1176,8 @@ def run_workflow_loop():
     print("\n" + "=" * 50)
     print(f"[LOOP] Starting continuous workflow (run {CURRENT_RUN_NUMBER})")
     print("=" * 50)
+
+    ensure_setup()
 
     # Respawn once up front so the loop always starts from a known state,
     # regardless of wherever the character happened to be standing.
@@ -1218,19 +1319,31 @@ class AdoptMeGUI:
         btn_respawn.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
         self.action_buttons.append(btn_respawn)
 
-        # lure_collect()/tree_collect() are plain actions, not need handlers -
-        # only reachable here, never from ENABLED_NEEDS or the Debug tab.
+        # These are all plain actions, not need handlers - only reachable
+        # here, never from ENABLED_NEEDS or the Debug tab.
         btn_lure = tk.Button(btn_frame, text="Lure Collect", command=lambda: self.run_async(lure_collect),
                               font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=GUI_RESPAWN_COLOR, fg=self.fg,
                               height=GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
         btn_lure.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
         self.action_buttons.append(btn_lure)
 
+        btn_new_lure = tk.Button(btn_frame, text="Set New Lure", command=lambda: self.run_async(set_new_lure),
+                                  font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=GUI_RESPAWN_COLOR, fg=self.fg,
+                                  height=GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
+        btn_new_lure.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
+        self.action_buttons.append(btn_new_lure)
+
         btn_tree = tk.Button(btn_frame, text="Tree Collect", command=lambda: self.run_async(tree_collect),
                               font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=GUI_RESPAWN_COLOR, fg=self.fg,
                               height=GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
         btn_tree.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
         self.action_buttons.append(btn_tree)
+
+        btn_setup = tk.Button(btn_frame, text="Setup", command=lambda: self.run_async(setup_game),
+                               font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=GUI_RESPAWN_COLOR, fg=self.fg,
+                               height=GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
+        btn_setup.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
+        self.action_buttons.append(btn_setup)
 
         # Debug tab: one button per need handler, regardless of whether it's in
         # ENABLED_NEEDS, so any handler can be run on its own.

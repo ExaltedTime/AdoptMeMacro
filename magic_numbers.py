@@ -173,6 +173,8 @@ TELEPORT_WALK_NEEDS_HALLOWEEN = {
 # handler registry both read this).
 TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN \
     else TELEPORT_WALK_NEEDS_NORMAL
+NEED_STUCK_CHECKS = 5            # an enabled need detected on this many checks in a row is
+                                  # disabled for the rest of the run - see record_detected_needs()
 NEED_GONE_MAX_WAIT = 60.0        # most wait_until_need_gone() ever waits for an icon to disappear -
                                   # also reused as walk_alternating()'s total duration cap for walk/ride
 NEED_GONE_POLL_INTERVAL = 5.0    # how often to re-check for the icon during that wait
@@ -336,7 +338,7 @@ __all__ = [
     "TELEPORT_WAIT", "TELEPORT_SETTLE_WAIT", "GENERAL_TELEPORT_POS_2", "GENERAL_TELEPORT_POS_3",
     "TELEPORT_BACK_DURATION", "TELEPORT_WALK_STEP_GAP", "SICK_CONFIRM_WAIT",
     "TELEPORT_PETS_TAB_POS", "TELEPORT_VEHICLES_TAB_POS", "TELEPORT_FOOD_TAB_POS", "SICK_FINAL_CLICK_POS",
-    "TELEPORT_WALK_NEEDS", "HALLOWEEN", "GHOST_GALLERY_PLAY_MINIGAME",
+    "TELEPORT_WALK_NEEDS", "NEED_STUCK_CHECKS", "HALLOWEEN", "GHOST_GALLERY_PLAY_MINIGAME",
     "NEED_GONE_MAX_WAIT", "NEED_GONE_POLL_INTERVAL", "NEED_GONE_CONFIRMATIONS",
     "NEED_GONE_CONFIRM_INTERVAL", "NEED_GONE_FLICKER_RECHECK_DELAY", "NEED_WATCH_JOIN_TIMEOUT",
     "KEY_BACKPACK", "KEY_MOUNT", "KEY_INTERACT", "KEY_ZOOM_IN", "MOVE_KEYS", "RESPAWN_KEYS",

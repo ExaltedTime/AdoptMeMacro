@@ -47,7 +47,10 @@ no-op as progress.
    to name and save it) and is otherwise skipped this pass - it isn't
    "resolved," it's just been taught for next time.
 4. Every icon that *did* match is collected into an ordered list of need
-   names (`matched_needs`), in the order they were detected.
+   names (`matched_needs`), in the order they were detected. That list is
+   also handed to `record_detected_needs()` - on every check, including
+   ones that find nothing - which is what catches
+   [stuck needs](#stuck-needs).
 5. That list is then worked through **one need at a time**, and each one
    ends with its own respawn before moving to the next - nothing is
    batched. For each `need_name`, `get_need_handler(need_name)` looks it up
@@ -83,10 +86,12 @@ character standing.
   is; `grab_screen()` takes a screenshot via `mss`; `find_exact_color()`
   finds a button by its exact pixel color rather than its shape (used by
   the choose need, whose button has no distinguishing icon).
-- **STATE** - this module's own mutable state: `STOP_FLAG`, and
+- **STATE** - this module's own mutable state: `STOP_FLAG`;
   `BUTTON_POSITIONS`, the in-memory cache of the last-detected action
   button positions (never persisted to disk - see
-  [Persisted game config](#persisted-game-config)). Every fixed
+  [Persisted game config](#persisted-game-config)); and
+  `DETECTION_HISTORY` / `DISABLED_THIS_RUN`, which back
+  [Stuck needs](#stuck-needs). Every fixed
   config/tuning value lives in `magic_numbers.py` instead - see
   [Configuration reference](#configuration-reference).
 - **GAME CONFIG** - `load_game_config()`/`save_game_config()`: the state
@@ -293,6 +298,11 @@ calls `ghost_gallery()`, which will either play the ghost gallery minigame
 or just disable it depending on `GHOST_GALLERY_PLAY_MINIGAME`; both branches
 are comments-only stubs for now.
 
+Every cycle, `unscrew()` runs `rejoin_game()` first (nothing else works
+while disconnected), then the paycheck check, then `ghost_gallery()` if
+`HALLOWEEN` is on. `rejoin_game()` is a comments-only stub for now: the
+plan is to detect a disconnect, get back in, then respawn.
+
 A handler only counts as resolved (and only then triggers a respawn) if
 `handle()` returns `True`. `ButtonNeedHandler` returns `False` if
 `refresh_button_mapping()` found no buttons at all, or if this specific
@@ -300,6 +310,23 @@ need's button wasn't among them; `ChooseNeedHandler` returns `False` if it
 can't find its exact-color button on screen. Either way the need is
 logged and skipped for this pass with no respawn, same as a disabled need
 - `process_needs()` doesn't distinguish between the two.
+
+### Stuck needs
+
+`record_detected_needs()` saves the set of need names detected on each
+check into `DETECTION_HISTORY` (the last `NEED_STUCK_CHECKS` = 5 checks).
+If an *enabled* need turns up in all 5 of the most recent checks, it's
+stuck - it's supposed to be getting resolved, yet it never goes away - so
+it's added to `DISABLED_THIS_RUN` and `get_need_handler()` returns `None`
+for it from then on, same as a need that isn't in `ENABLED_NEEDS`. A single
+check without it, even one that detects nothing at all, breaks the streak.
+The check runs before the pass's handlers do, so the 5th straight
+detection disables the need without a 5th attempt.
+
+`DISABLED_THIS_RUN` lasts for the life of the process only - it isn't saved
+to the game config, so relaunching the script gives every need a fresh
+chance - while `DETECTION_HISTORY` is also emptied at the start of every
+workflow run, so a streak never spans a stop and restart.
 
 ### Side actions
 
@@ -512,6 +539,7 @@ exact values and rationale):
 |---|---|
 | Behavior flags | `ENABLED_NEEDS`, `HALLOWEEN`, `GHOST_GALLERY_PLAY_MINIGAME`, `FOCUS_WINDOW_ON_ACTION` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `NEED_GONE_*` |
+| Stuck needs | `NEED_STUCK_CHECKS` |
 | Screen positions | `CATCH_*_POS`, `EMPTY_POS`, `FOCUS_PET_POS`, `RIDE_*_POS`, `LURE_NEW_POS_*`, `SETUP_*_POS` |
 | Side quest / setup | `TREE_HARVEST_YIELD`, `MONEY_COLLECTED_TARGET`, `TREE_CHECK_INTERVAL`, `LURE_RECOLLECT_INTERVAL`, `LURE_COLLECT_*`, `TREE_COLLECT_*` |
 | Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN/MAX_RADIUS`, `NEED_ICON_HOUGH_*` |

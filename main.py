@@ -15,6 +15,7 @@
 
 import os, sys, time, threading, json
 from abc import ABC, abstractmethod
+from collections import deque
 from functools import partial
 import tkinter as tk
 from tkinter import scrolledtext, ttk
@@ -154,6 +155,17 @@ BUTTON_POSITIONS = {}
 # log_run_event() call tags its line with this, so entries from different
 # runs can be told apart in the shared RUN_LOG_PATH file.
 CURRENT_RUN_NUMBER = None
+
+# The set of need names detected on each of the last NEED_STUCK_CHECKS checks
+# (see record_detected_needs()) - emptied at the start of every workflow run,
+# so a streak never spans a stop and restart.
+DETECTION_HISTORY = deque(maxlen=NEED_STUCK_CHECKS)
+
+# Needs switched off for the rest of this launch of the script because they
+# kept showing up without ever clearing. Deliberately not persisted (unlike
+# the game config): relaunching the script gives every enabled need a fresh
+# chance.
+DISABLED_THIS_RUN = set()
 
 # ============================================================================
 # LOGGING
@@ -1048,11 +1060,28 @@ DEBUG_HANDLERS = NEED_HANDLER_CLASSES
 
 def get_need_handler(need_name):
     """Return the handler for a detected need, or None if it's not
-    currently enabled (see ENABLED_NEEDS) or the macro doesn't know it."""
-    if need_name not in ENABLED_NEEDS:
+    currently enabled (see ENABLED_NEEDS), was disabled for this run (see
+    record_detected_needs()), or the macro doesn't know it."""
+    if need_name not in ENABLED_NEEDS or need_name in DISABLED_THIS_RUN:
         return None
     handler_cls = NEED_HANDLER_CLASSES.get(need_name)
     return handler_cls() if handler_cls else None
+
+def record_detected_needs(detected):
+    """Save which needs were detected on this check, and disable (for the
+    rest of this run) any enabled need that's now been detected on each of
+    the last NEED_STUCK_CHECKS checks in a row - a need we're supposed to be
+    resolving that never goes away is stuck, and retrying it forever just
+    wastes time. A check where it's absent, even once, breaks the streak.
+    Call this for every check, including ones that detect nothing."""
+    DETECTION_HISTORY.append(set(detected))
+    if len(DETECTION_HISTORY) < NEED_STUCK_CHECKS:
+        return
+    stuck = set.intersection(*DETECTION_HISTORY) & (ENABLED_NEEDS - DISABLED_THIS_RUN)
+    for need_name in sorted(stuck):
+        DISABLED_THIS_RUN.add(need_name)
+        print(f"[!] {need_name} detected on {NEED_STUCK_CHECKS} checks in a row - disabling it for this run")
+        log_run_event(f"disabled for this run: {need_name} (stuck for {NEED_STUCK_CHECKS} checks)")
 
 def process_needs():
     """Detect needs on screen and resolve them one at a time: each matched
@@ -1068,6 +1097,7 @@ def process_needs():
     found_icons, full_img = detect_need_icons(save_debug=True)
     if not found_icons:
         print("[debug] no need icons detected")
+        record_detected_needs([])
         return False
 
     print(f"[debug] found {len(found_icons)} icon(s)")
@@ -1088,6 +1118,7 @@ def process_needs():
         matched_needs.append(need_name)
 
     log_run_event(f"detected: {', '.join(matched_needs) if matched_needs else 'none matched'}")
+    record_detected_needs(matched_needs)
 
     if not matched_needs:
         return False
@@ -1127,6 +1158,22 @@ def detect_paycheck():
     hover_click(*PAYCHECK_DISMISS_POS_2)
     return True
 
+def rejoin_game():
+    """Rejoins the game if we've been disconnected. NOT IMPLEMENTED YET -
+    the comments below are the plan; for now this does nothing."""
+    # Rough plan:
+    #   - detect that we're disconnected: Roblox puts up a dialog with a
+    #     reconnect/leave button (exact-color match on a known button, the way
+    #     detect_paycheck() finds CASH OUT), or the window title changes, or
+    #     the Roblox window is simply gone
+    #   - get back in: click the dialog's reconnect button, or relaunch the
+    #     game (e.g. via a roblox:// URI) and wait for it to load
+    #   - afterwards the character is somewhere unknown, so respawn and let
+    #     the usual cycle carry on
+    #   - once this exists, "too many needs disabled this run" (see
+    #     DISABLED_THIS_RUN) is a natural trigger for it too
+    pass
+
 def ghost_gallery():
     """Halloween only (see HALLOWEEN): handles the ghost gallery popup.
     NOT IMPLEMENTED YET - the comments below are the plan; for now this
@@ -1149,9 +1196,11 @@ def ghost_gallery():
         pass
 
 def unscrew():
-    """Runs once per cycle, right after check_stop(). Checks for the paycheck
-    popup and, during Halloween, handles the ghost gallery; more checks may
-    be added here later."""
+    """Runs once per cycle, right after check_stop(). Rejoins if we've been
+    disconnected (first, since nothing else works while disconnected), checks
+    for the paycheck popup and, during Halloween, handles the ghost gallery;
+    more checks may be added here later."""
+    rejoin_game()
     detect_paycheck()
     if HALLOWEEN:
         ghost_gallery()
@@ -1218,6 +1267,7 @@ def run_workflow():
     global STOP_FLAG, CURRENT_RUN_NUMBER
     STOP_FLAG = False
     CURRENT_RUN_NUMBER = next_run_number()
+    DETECTION_HISTORY.clear()
     log_run_event("WORKFLOW started")
     print("\n" + "=" * 50)
     print(f"[WORKFLOW] Starting (run {CURRENT_RUN_NUMBER})")
@@ -1236,6 +1286,7 @@ def run_workflow_loop():
     global STOP_FLAG, CURRENT_RUN_NUMBER
     STOP_FLAG = False
     CURRENT_RUN_NUMBER = next_run_number()
+    DETECTION_HISTORY.clear()
     log_run_event("LOOP started")
     print("\n" + "=" * 50)
     print(f"[LOOP] Starting continuous workflow (run {CURRENT_RUN_NUMBER})")

@@ -298,15 +298,22 @@ def detected_need_names():
     found_icons, full_img = detect_need_icons()
     return [name for _, _, name, _ in identify_icons(found_icons, full_img)]
 
+def _need_cleared(need_name):
+    """True if `need_name`'s icon is missing on two quick checks in a row
+    (NEED_GONE_FLICKER_RECHECK_DELAY apart) - the single-frame-flicker
+    guard shared by wait_until_need_gone() and _watch_need_gone() below."""
+    if need_name in detected_need_names():
+        return False
+    wait_interruptible(NEED_GONE_FLICKER_RECHECK_DELAY)
+    return need_name not in detected_need_names()
+
 def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=NEED_GONE_POLL_INTERVAL):
     """Wait for `need_name`'s icon to stop being detected, for at most
     `max_wait` seconds - whichever happens first. The icon must be missing
     NEED_GONE_CONFIRMATIONS checks in a row (any sighting resets the count),
-    so a single missed detection can't end the wait early. Each miss is
-    itself double-checked with one quick re-sample
-    (NEED_GONE_FLICKER_RECHECK_DELAY later) before it counts, since the
-    icon can flash for a frame - or briefly fail to detect against a busy
-    background - without the need actually having cleared. Interruptible."""
+    so a single missed detection can't end the wait early - see
+    _need_cleared() for how each individual check is itself debounced.
+    Interruptible."""
     print(f"[debug] waiting up to {max_wait}s for {need_name} to clear...")
     deadline = time.time() + max_wait
     misses = 0
@@ -316,12 +323,7 @@ def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=N
             print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
             return
         wait_interruptible(min(NEED_GONE_CONFIRM_INTERVAL if misses else poll_interval, remaining))
-        if need_name in detected_need_names():
-            misses = 0
-            continue
-
-        wait_interruptible(NEED_GONE_FLICKER_RECHECK_DELAY)
-        if need_name in detected_need_names():
+        if not _need_cleared(need_name):
             misses = 0
             continue
 
@@ -330,6 +332,32 @@ def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=N
         if misses >= NEED_GONE_CONFIRMATIONS:
             print(f"[debug] {need_name} cleared")
             return
+
+def _watch_need_gone(need_name, cleared_event, stop_event):
+    """Background-thread body for walk_alternating()'s optional `need_name`:
+    polls whether the need has cleared *while* the character is still
+    moving, using the same miss-confirmation (NEED_GONE_CONFIRMATIONS,
+    debounced by _need_cleared()) wait_until_need_gone() uses standalone -
+    just running alongside the movement instead of after it. Sets
+    `cleared_event` the moment it's confirmed. Exits quietly - without
+    raising - the instant `stop_event` is set (the walk ended on its own)
+    or STOP_FLAG/focus loss is noticed: only the main thread's
+    check_running() calls are allowed to unwind the workflow, so this
+    thread must never let StopRequested/FocusLost escape uncaught."""
+    misses = 0
+    try:
+        while not stop_event.is_set():
+            if stop_event.wait(NEED_GONE_CONFIRM_INTERVAL):
+                return
+            if not _need_cleared(need_name):
+                misses = 0
+                continue
+            misses += 1
+            if misses >= NEED_GONE_CONFIRMATIONS:
+                cleared_event.set()
+                return
+    except (StopRequested, FocusLost):
+        return
 
 # ============================================================================
 # CLICKING
@@ -498,11 +526,12 @@ def refresh_button_mapping():
     return True
 
 def click_need_button(need_name):
-    """Click the action button mapped to `need_name` (see ButtonNeedHandler).
-    Assumes refresh_button_mapping() has already been called this cycle.
-    Returns True if a mapped button was actually found and clicked, False
-    otherwise - the caller must not treat this need as resolved (or
-    respawn) on a False return."""
+    """Click the action button mapped to `need_name` (see ButtonNeedHandler),
+    then wait for its icon to actually clear (wait_until_need_gone()) rather
+    than guessing how long that takes. Assumes refresh_button_mapping() has
+    already been called this cycle. Returns True if a mapped button was
+    actually found and clicked, False otherwise - the caller must not treat
+    this need as resolved (or respawn) on a False return."""
     if need_name not in BUTTON_POSITIONS:
         print(f"[!] WARNING: no button mapped for '{need_name}'")
         return False
@@ -510,9 +539,7 @@ def click_need_button(need_name):
     print(f"[!] CLICKING: {need_name}")
     if not click_button(button_x, button_y, need_name):
         return False
-    wait_time = POST_NEED_CLICK_WAIT_SHORT if need_name in SHORT_WAIT_NEED_NAMES else POST_NEED_CLICK_WAIT
-    print(f"[debug] waiting {wait_time}s before next action...")
-    wait_interruptible(wait_time)
+    wait_until_need_gone(need_name)
     return True
 
 # ============================================================================
@@ -551,28 +578,78 @@ def walk_to_buttons():
     wait_interruptible(UI_SETTLE)
     print("[debug] arrived at buttons")
 
-def walk_alternating(direction_pair, total_duration, step_duration=WALK_ALTERNATING_STEP):
+def walk_alternating(direction_pair, total_duration, step_duration=WALK_ALTERNATING_STEP, need_name=None):
     """Alternate between the two given keys, holding each for `step_duration`,
-    for a total of `total_duration`. Shared by the walk need (a/d, left-right)
-    and the ride need (w/s, forward-back) - same pattern, different keys."""
+    for a total of `total_duration` - or less, if `need_name` is given and
+    confirmed gone first. Shared by the walk need (a/d, left-right) and the
+    ride need (w/s, forward-back) - same pattern, different keys.
+
+    When `need_name` is given, a background thread (_watch_need_gone())
+    polls for it clearing *while* the character is still moving, instead
+    of only checking once the movement finishes - the walk stops as soon
+    as that thread confirms it, rather than always running the full
+    total_duration."""
     print(f"[debug] walking alternating {direction_pair} pattern for {total_duration}s...")
     if not focus_roblox():
         return
 
-    direction_idx = 0
-    elapsed = 0.0
-    start_time = time.time()
+    cleared_event = threading.Event()
+    stop_event = threading.Event()
+    watcher = None
+    if need_name is not None:
+        watcher = threading.Thread(target=_watch_need_gone, args=(need_name, cleared_event, stop_event), daemon=True)
+        watcher.start()
 
-    while elapsed < total_duration:
-        direction = direction_pair[direction_idx % 2]
-        print(f"[debug] step {direction_idx + 1}: {direction} for {step_duration}s...")
-        hold_key(direction, step_duration)
-        wait_interruptible(KEY_STEP_GAP)
+    try:
+        direction_idx = 0
+        elapsed = 0.0
+        start_time = time.time()
 
-        direction_idx += 1
-        elapsed = time.time() - start_time
+        while elapsed < total_duration and not cleared_event.is_set():
+            direction = direction_pair[direction_idx % 2]
+            print(f"[debug] step {direction_idx + 1}: {direction} for {step_duration}s...")
+            hold_key(direction, step_duration)
+            wait_interruptible(KEY_STEP_GAP)
 
+            direction_idx += 1
+            elapsed = time.time() - start_time
+    finally:
+        stop_event.set()
+        if watcher is not None:
+            watcher.join(timeout=NEED_WATCH_JOIN_TIMEOUT)
+
+    if cleared_event.is_set():
+        print(f"[debug] {need_name} cleared, stopping early")
     print("[debug] alternating walk complete")
+
+# ============================================================================
+# GUI-ONLY ACTIONS
+# ============================================================================
+# Plain callable actions, not tied to any detected need/icon - not in
+# ENABLED_NEEDS or NEED_HANDLER_CLASSES, only reachable from the GUI's
+# Functions section (same as respawn_character()).
+
+def lure_collect():
+    """Walk to the lure and collect it. Placeholder for now - what actually
+    happens once the lure's menu is open isn't implemented yet."""
+    if not focus_roblox():
+        return False
+    print(f"[debug] walking to the lure for {LURE_COLLECT_WALK_DURATION}s...")
+    hold_key("a", LURE_COLLECT_WALK_DURATION)
+    pydirectinput.press(KEY_INTERACT)
+    pass  # TODO: collect the lure once its menu is open
+    print("[!] Lure collect complete!")
+    return True
+
+def tree_collect():
+    """Walk to the money tree and harvest it."""
+    if not focus_roblox():
+        return False
+    print(f"[debug] walking to the money tree for {TREE_COLLECT_WALK_DURATION}s...")
+    hold_key("d", TREE_COLLECT_WALK_DURATION)
+    pydirectinput.press(KEY_INTERACT)
+    print("[!] Tree collect complete!")
+    return True
 
 # ============================================================================
 # NEED HANDLERS
@@ -607,11 +684,12 @@ class ButtonNeedHandler(NeedHandler):
         return click_need_button(self.name)
 
 class WalkNeedHandler(NeedHandler):
-    """The 'walk' need is satisfied by walking left-right for a while."""
+    """The 'walk' need is satisfied by walking left-right for a while -
+    or less, the moment its icon is confirmed gone (see walk_alternating())."""
 
     def handle(self):
         print("[!] WALK NEED")
-        walk_alternating(("a", "d"), WALK_TOTAL_DURATION)
+        walk_alternating(("a", "d"), WALK_TOTAL_DURATION, need_name="walk")
         return True
 
 class CatchNeedHandler(NeedHandler):
@@ -713,7 +791,7 @@ class ChooseNeedHandler(NeedHandler):
     find the button with a distinctive exact color (it has no distinguishing
     icon, so shape detection doesn't apply here), move to it slowly rather
     than jumping straight there, click it, then click the middle of the
-    screen to dismiss the menu."""
+    screen to dismiss the menu, then wait for the icon to actually clear."""
 
     def handle(self):
         print("[!] CHOOSE NEED")
@@ -733,16 +811,19 @@ class ChooseNeedHandler(NeedHandler):
         print(f"[debug] found at {match}, moving there slowly...")
         hover_click(*match, duration=CHOOSE_SLOW_MOVE_DURATION)
         wait_interruptible(UI_SETTLE)
-        
+
         print("[debug] clicking middle of screen...")
         hover_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
+
+        wait_until_need_gone("choose")
 
         print("[!] Choose complete!")
         return True
 
 class RideNeedHandler(NeedHandler):
     """The 'ride' need: step back, mount a vehicle from the backpack, then
-    walk back and forth for a while astride it."""
+    walk back and forth for a while astride it - or less, the moment its
+    icon is confirmed gone (see walk_alternating())."""
 
     def handle(self):
         print("[!] RIDE NEED")
@@ -783,7 +864,7 @@ class RideNeedHandler(NeedHandler):
         wait_interruptible(UI_SETTLE)
 
         # Walk back and forth (forward/backward, not left/right) while riding
-        walk_alternating(("w", "s"), RIDE_WALK_DURATION)
+        walk_alternating(("w", "s"), RIDE_WALK_DURATION, need_name="ride")
 
         print("[!] Ride complete!")
         return True
@@ -1134,6 +1215,20 @@ class AdoptMeGUI:
                                  height=GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
         btn_respawn.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
         self.action_buttons.append(btn_respawn)
+
+        # lure_collect()/tree_collect() are plain actions, not need handlers -
+        # only reachable here, never from ENABLED_NEEDS or the Debug tab.
+        btn_lure = tk.Button(btn_frame, text="Lure Collect", command=lambda: self.run_async(lure_collect),
+                              font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=GUI_RESPAWN_COLOR, fg=self.fg,
+                              height=GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
+        btn_lure.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
+        self.action_buttons.append(btn_lure)
+
+        btn_tree = tk.Button(btn_frame, text="Tree Collect", command=lambda: self.run_async(tree_collect),
+                              font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=GUI_RESPAWN_COLOR, fg=self.fg,
+                              height=GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
+        btn_tree.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
+        self.action_buttons.append(btn_tree)
 
         # Debug tab: one button per need handler, regardless of whether it's in
         # ENABLED_NEEDS, so any handler can be run on its own.

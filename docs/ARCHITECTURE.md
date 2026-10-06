@@ -86,9 +86,12 @@ character standing.
 - **STATE** - this module's own mutable state: `STOP_FLAG`, and
   `BUTTON_POSITIONS`, the in-memory cache of the last-detected action
   button positions (never persisted to disk - see
-  [Why there's no config file](#why-theres-no-config-file)). Every fixed
+  [Persisted game config](#persisted-game-config)). Every fixed
   config/tuning value lives in `magic_numbers.py` instead - see
   [Configuration reference](#configuration-reference).
+- **GAME CONFIG** - `load_game_config()`/`save_game_config()`: the state
+  that *does* persist across separate launches of the script (unlike
+  `BUTTON_POSITIONS` above) - see [Persisted game config](#persisted-game-config).
 - **ICON PROCESSING** - `preprocess_icon()` / `icon_signature()` / `compare_signatures()`. See
   [Need-icon matching](#need-icon-matching).
 - **NEED ICON DETECTION** - `detect_need_icons()`, `find_matching_need()`,
@@ -101,13 +104,16 @@ character standing.
 - **MOVEMENT** - `respawn_character()`, `walk_to_buttons()`,
   `walk_alternating()` (shared by the walk need, a/d, and the ride need,
   w/s - same pattern, different keys and duration passed in).
-- **GUI-ONLY ACTIONS** - `lure_collect()`, `tree_collect()`: plain callable
-  actions, not tied to any detected need/icon, reachable only from the
-  GUI's Functions section (same as `respawn_character()`) - see the table
-  at the end of [Need handlers](#need-handlers).
+- **GUI-ONLY ACTIONS** - `lure_collect()`, `set_new_lure()`, `tree_collect()`,
+  `setup_game()`: plain callable actions, not tied to any detected
+  need/icon, reachable from the GUI's Functions section (same as
+  `respawn_character()`) and also auto-triggered by `side_quest()`/
+  `ensure_setup()` - see the table at the end of
+  [Need handlers](#need-handlers).
 - **NEED HANDLERS** - `NeedHandler` and one subclass per need (or per group
   of needs, via `partial()`). See [Need handlers](#need-handlers).
-- **WORKFLOWS** - `run_full_cycle()`, `run_workflow()`, `run_workflow_loop()`.
+- **WORKFLOWS** - `run_full_cycle()`, `run_workflow()`, `run_workflow_loop()`,
+  `side_quest()`, `ensure_setup()`.
   See [The workflow lifecycle](#the-workflow-lifecycle) above.
 - **GUI** - the `tkinter` control panel. See [GUI internals](#gui-internals).
 
@@ -283,15 +289,33 @@ logged and skipped for this pass with no respawn, same as a disabled need
 
 ### GUI-only actions
 
-`lure_collect()` and `tree_collect()` aren't need handlers at all - they're
-plain functions, not registered anywhere in `NEED_HANDLER_CLASSES` or
-`ENABLED_NEEDS`, and the only way to run either is the matching button in
-the GUI's **Functions** section (same pattern as **Respawn**). Both are
-early stubs: `lure_collect()` holds `a` for `LURE_COLLECT_WALK_DURATION`
-(2s), presses `KEY_INTERACT` (`e`), then a placeholder `pass` for whatever
-the lure's menu actually needs; `tree_collect()` holds `d` for
-`TREE_COLLECT_WALK_DURATION` (2s) and presses `KEY_INTERACT` - nothing
-more yet.
+None of `lure_collect()`, `set_new_lure()`, `tree_collect()` or
+`setup_game()` are need handlers - they're plain functions, not
+registered anywhere in `NEED_HANDLER_CLASSES` or `ENABLED_NEEDS`. Each
+has its own button in the GUI's **Functions** section (same pattern as
+**Respawn**) for testing on its own, and three of the four are also
+triggered automatically - see
+[Persisted game config](#persisted-game-config) for `side_quest()` (which
+calls `lure_collect()`/`tree_collect()`) and `ensure_setup()` (which calls
+`setup_game()`).
+
+- **`lure_collect()`** - holds `a` for `LURE_COLLECT_WALK_DURATION` (2s),
+  presses `KEY_INTERACT` (`e`) to collect the current lure's rewards,
+  waits `LURE_COLLECT_SETTLE_DELAY` (1s), presses `KEY_INTERACT` again,
+  then calls `set_new_lure()`.
+- **`set_new_lure()`** - clicks `LURE_NEW_POS_1` then `LURE_NEW_POS_2`,
+  the two backpack clicks that place a fresh lure. Split out from
+  `lure_collect()` specifically so this placement step can be tested and
+  tuned on its own, without walking to the old lure first each time.
+- **`tree_collect()`** - holds `d` for `TREE_COLLECT_WALK_DURATION` (2s),
+  then `s` for `TREE_COLLECT_BACKWARD_DURATION` (1s) to line up with the
+  tree, then presses `KEY_INTERACT`.
+- **`setup_game()`** - respawns, clicks `SETUP_LOCK_HOUSE_POS` to lock the
+  house, then opens the backpack and clicks through
+  `SETUP_BACKPACK_SETTINGS_POS` → `SETUP_SORT_MENU_POS` →
+  `SETUP_FAVORITES_POS` → `SETUP_CONFIRM_POS` to set its item filter to
+  favorites only, then closes the backpack. Disabling trades isn't
+  implemented yet.
 
 ### Checking a need in parallel with movement
 
@@ -368,14 +392,45 @@ that, and the unsafe tricks that exist (async-raising into another thread)
 can land mid-action and leave a key stuck down in the actual game, which
 is worse than the small delay this cooperative approach costs instead.
 
-## Why there's no config file
+## Persisted game config
 
-The only persistent state this macro has is the `needs/` folder (the
-learned reference icons). Button positions (`BUTTON_POSITIONS`) are
-detected fresh every single time the character walks to the buttons, so
-there's nothing gained by saving them to disk - they're never trusted
-across a run anyway, and a stale save would just be actively wrong if the
-screen resolution or Roblox's UI ever changed between sessions.
+`GAME_CONFIG_PATH` (`debug/.config`, a JSON file) is the macro's one piece
+of state that survives separate launches of the script - everything else
+either lives in `needs/` (the learned reference icons) or is cheap to
+redetect fresh, like `BUTTON_POSITIONS`: detected every single time the
+character walks to the buttons, so there's nothing gained by saving it -
+it's never trusted across a run anyway, and a stale save would just be
+actively wrong if the screen resolution or Roblox's UI ever changed
+between sessions.
+
+`load_game_config()` returns these defaults merged with whatever's
+actually on disk (so an old config missing a newer key still works), and
+`save_game_config()` overwrites the whole file:
+
+- **`money_collected`** - how much `tree_collect()` has yielded so far,
+  in `TREE_HARVEST_YIELD` (16) increments. Only ever goes up - there's no
+  code path that resets it, by design (see `side_quest()` below); reset
+  it by hand by deleting `debug/.config`.
+- **`lure_timer`** - the timestamp `lure_collect()` is next due. Defaults
+  to "due immediately" (`time.time()`) the first time the config is
+  created.
+- **`setup_done`** - whether `setup_game()` has ever run (see
+  `ensure_setup()` below).
+
+Two small functions read and update this file every cycle or at startup:
+
+- **`side_quest()`** - called right after `unscrew()`, every cycle of
+  `run_full_cycle()`'s loop (so on the same cadence as the paycheck
+  check). While `money_collected` is below `MONEY_COLLECTED_TARGET`
+  (200), it calls `tree_collect()` and adds `TREE_HARVEST_YIELD`. Once
+  `lure_timer` has passed, it calls `lure_collect()` and pushes
+  `lure_timer` another `LURE_RECOLLECT_INTERVAL` (4 hours) into the
+  future. Either action only updates its piece of the config if the
+  underlying call actually returned `True`.
+- **`ensure_setup()`** - called once at the top of `run_workflow()` and
+  `run_workflow_loop()` (before anything else happens). Runs
+  `setup_game()` and sets `setup_done` the first time ever; a no-op on
+  every call after that.
 
 ## GUI internals
 
@@ -429,7 +484,8 @@ exact values and rationale):
 |---|---|
 | Behavior flags | `ENABLED_NEEDS`, `FOCUS_WINDOW_ON_ACTION` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `NEED_GONE_*` |
-| Screen positions | `CATCH_*_POS`, `EMPTY_POS`, `FOCUS_PET_POS`, `RIDE_*_POS` |
+| Screen positions | `CATCH_*_POS`, `EMPTY_POS`, `FOCUS_PET_POS`, `RIDE_*_POS`, `LURE_NEW_POS_*`, `SETUP_*_POS` |
+| Side quest / setup | `TREE_HARVEST_YIELD`, `MONEY_COLLECTED_TARGET`, `LURE_RECOLLECT_INTERVAL`, `LURE_COLLECT_*`, `TREE_COLLECT_*` |
 | Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN/MAX_RADIUS`, `NEED_ICON_HOUGH_*` |
 | Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |

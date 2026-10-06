@@ -47,7 +47,10 @@ no-op as progress.
    to name and save it) and is otherwise skipped this pass - it isn't
    "resolved," it's just been taught for next time.
 4. Every icon that *did* match is collected into an ordered list of need
-   names (`matched_needs`), in the order they were detected.
+   names (`matched_needs`), in the order they were detected. That list is
+   also handed to `record_detected_needs()` - on every check, including
+   ones that find nothing - which is what catches
+   [stuck needs](#stuck-needs).
 5. That list is then worked through **one need at a time**, and each one
    ends with its own respawn before moving to the next - nothing is
    batched. For each `need_name`, `get_need_handler(need_name)` looks it up
@@ -83,10 +86,12 @@ character standing.
   is; `grab_screen()` takes a screenshot via `mss`; `find_exact_color()`
   finds a button by its exact pixel color rather than its shape (used by
   the choose need, whose button has no distinguishing icon).
-- **STATE** - this module's own mutable state: `STOP_FLAG`, and
+- **STATE** - this module's own mutable state: `STOP_FLAG`;
   `BUTTON_POSITIONS`, the in-memory cache of the last-detected action
   button positions (never persisted to disk - see
-  [Persisted game config](#persisted-game-config)). Every fixed
+  [Persisted game config](#persisted-game-config)); and
+  `DETECTION_HISTORY` / `DISABLED_THIS_RUN`, which back
+  [Stuck needs](#stuck-needs). Every fixed
   config/tuning value lives in `magic_numbers.py` instead - see
   [Configuration reference](#configuration-reference).
 - **GAME CONFIG** - `load_game_config()`/`save_game_config()`: the state
@@ -164,7 +169,9 @@ within `ICON_SHIFT_TOLERANCE` px and each saved need is scored by its
 best-aligned variant.
 
 `find_matching_need()` compares the new icon against every saved `.png` in
-`needs/` and keeps the best score. A best score below
+`needs/` - including subfolders, so related icons can be grouped (the
+seasonal `diving` and `puddle` icons live in `needs/weather/`); a need's
+name is just its file name, wherever it sits - and keeps the best score. A best score below
 `ICON_MATCH_THRESHOLD` (0.93) means "not confident this is anything we've
 seen" and falls through to `prompt_rename_need()` instead.
 
@@ -274,8 +281,27 @@ rather than a flat sleep after the fact.
 | `pet` | `PetNeedHandler`: click to focus the pet, then hold the mouse down and trace a circle of radius `PET_CIRCLE_RADIUS` around screen center for `PET_CIRCLE_DURATION`. Same as `catch` - always the full fixed duration. |
 | `choose` | `ChooseNeedHandler`: focus the pet, find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu, then `wait_until_need_gone("choose")`. |
 | `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then backpack → vehicles → first vehicle → equip → close backpack, then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT` (60s), ending early the moment "ride" is confirmed cleared (see below). |
-| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`). |
+| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`). Which table is used depends on `HALLOWEEN` - see below. |
 | `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")` - up to `NEED_GONE_MAX_WAIT` (60s), same early-exit as `ride` above. |
+
+**Halloween.** `HALLOWEEN` (`magic_numbers.py`, next to `ENABLED_NEEDS`) is
+a plain boolean. The teleport-walk steps live in two tables,
+`TELEPORT_WALK_NEEDS_NORMAL` and `TELEPORT_WALK_NEEDS_HALLOWEEN`;
+`TELEPORT_WALK_NEEDS` - the one `TeleportWalkNeedHandler` and the handler
+registry actually read - is the normal table with the Halloween entries laid
+over it while the flag is on. The Halloween table covers `bored`, `beach`,
+`school`, `camping` (Halloween moves the nursery; these stay disabled in
+`ENABLED_NEEDS`, and their Halloween steps are currently just copies of the
+normal ones) and `sick`, which *only* exists there - with `HALLOWEEN` off it
+has no steps and isn't a need at all. While the flag is on, `unscrew()` also
+calls `ghost_gallery()`, which will either play the ghost gallery minigame
+or just disable it depending on `GHOST_GALLERY_PLAY_MINIGAME`; both branches
+are comments-only stubs for now.
+
+Every cycle, `unscrew()` runs `rejoin_game()` first (nothing else works
+while disconnected), then the paycheck check, then `ghost_gallery()` if
+`HALLOWEEN` is on. `rejoin_game()` is a comments-only stub for now: the
+plan is to detect a disconnect, get back in, then respawn.
 
 A handler only counts as resolved (and only then triggers a respawn) if
 `handle()` returns `True`. `ButtonNeedHandler` returns `False` if
@@ -284,6 +310,23 @@ need's button wasn't among them; `ChooseNeedHandler` returns `False` if it
 can't find its exact-color button on screen. Either way the need is
 logged and skipped for this pass with no respawn, same as a disabled need
 - `process_needs()` doesn't distinguish between the two.
+
+### Stuck needs
+
+`record_detected_needs()` saves the set of need names detected on each
+check into `DETECTION_HISTORY` (the last `NEED_STUCK_CHECKS` = 5 checks).
+If an *enabled* need turns up in all 5 of the most recent checks, it's
+stuck - it's supposed to be getting resolved, yet it never goes away - so
+it's added to `DISABLED_THIS_RUN` and `get_need_handler()` returns `None`
+for it from then on, same as a need that isn't in `ENABLED_NEEDS`. A single
+check without it, even one that detects nothing at all, breaks the streak.
+The check runs before the pass's handlers do, so the 5th straight
+detection disables the need without a 5th attempt.
+
+`DISABLED_THIS_RUN` lasts for the life of the process only - it isn't saved
+to the game config, so relaunching the script gives every need a fresh
+chance - while `DETECTION_HISTORY` is also emptied at the start of every
+workflow run, so a streak never spans a stop and restart.
 
 ### Side actions
 
@@ -494,8 +537,9 @@ exact values and rationale):
 
 | Group | Examples |
 |---|---|
-| Behavior flags | `ENABLED_NEEDS`, `FOCUS_WINDOW_ON_ACTION` |
+| Behavior flags | `ENABLED_NEEDS`, `HALLOWEEN`, `GHOST_GALLERY_PLAY_MINIGAME`, `FOCUS_WINDOW_ON_ACTION` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `NEED_GONE_*` |
+| Stuck needs | `NEED_STUCK_CHECKS` |
 | Screen positions | `CATCH_*_POS`, `EMPTY_POS`, `FOCUS_PET_POS`, `RIDE_*_POS`, `LURE_NEW_POS_*`, `SETUP_*_POS` |
 | Side quest / setup | `TREE_HARVEST_YIELD`, `MONEY_COLLECTED_TARGET`, `TREE_CHECK_INTERVAL`, `LURE_RECOLLECT_INTERVAL`, `LURE_COLLECT_*`, `TREE_COLLECT_*` |
 | Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN/MAX_RADIUS`, `NEED_ICON_HOUGH_*` |

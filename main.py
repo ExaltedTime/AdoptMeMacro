@@ -196,8 +196,7 @@ def log_run_event(message):
 # GAME CONFIG
 # ============================================================================
 # Game state that needs to persist across separate launches of the script
-# (unlike BUTTON_POSITIONS/CURRENT_RUN_NUMBER above) - see side_quest() and
-# ensure_setup().
+# (unlike BUTTON_POSITIONS/CURRENT_RUN_NUMBER above) - see side_quest().
 
 def load_game_config():
     """Load GAME_CONFIG_PATH, or these defaults if it doesn't exist yet
@@ -206,8 +205,6 @@ def load_game_config():
         "money_collected": 0,
         "lure_timer": time.time(),  # due immediately on a fresh config
         "tree_timer": time.time(),  # likewise
-        "setup_done": False,
-        "setup_enabled": True,      # whether ensure_setup() is allowed to run at all
         "side_quest_enabled": True, # whether side_quest() is allowed to run at all
     }
     try:
@@ -739,10 +736,9 @@ def tree_collect():
     return True
 
 def setup_game():
-    """One-time setup: lock the house, then set the backpack's item filter
-    to favorites only. Disabling trades isn't implemented yet. Normally
-    run once via ensure_setup(); exposed here too so it can be tested on
-    its own."""
+    """Setup: lock the house, then set the backpack's item filter to
+    favorites only. Disabling trades isn't implemented yet. Not part of the
+    cycle - only run on demand (the GUI's Setup button)."""
     respawn_character()
     print("[debug] locking house...")
     hover_click(*SETUP_LOCK_HOUSE_POS)
@@ -778,6 +774,31 @@ def setup_game():
 # instead cover several need names each via partial() (see
 # NEED_HANDLER_CLASSES), since those only differ by a name/config, not by
 # behavior.
+
+def equip_favorite_vehicle():
+    """Open the backpack, select the first vehicle (the favorite, once
+    setup_game() has filtered the backpack to favorites) and equip it, then
+    close the backpack. Shared by ride and the helicopter step of
+    teleport-walk needs."""
+    print("[debug] opening backpack...")
+    pydirectinput.press(KEY_BACKPACK)
+    wait_interruptible(UI_SETTLE)
+
+    print("[debug] opening vehicles...")
+    hover_click(*RIDE_VEHICLES_POS)
+    wait_interruptible(UI_SETTLE)
+
+    print("[debug] selecting first vehicle...")
+    hover_click(*RIDE_FIRST_VEHICLE_POS)
+    wait_interruptible(UI_SETTLE)
+
+    print("[debug] equipping vehicle...")
+    hover_click(*RIDE_EQUIP_POS)
+    wait_interruptible(UI_SETTLE)
+
+    print("[debug] closing backpack...")
+    pydirectinput.press(KEY_BACKPACK)
+    wait_interruptible(UI_SETTLE)
 
 class NeedHandler(ABC):
     """Reacts to one detected need. Subclass this to add a new need."""
@@ -959,26 +980,11 @@ class RideNeedHandler(NeedHandler):
         print(f"[debug] walking forward for {RIDE_FORWARD_DURATION}s...")
         hold_key("w", RIDE_FORWARD_DURATION)
 
-        # Open backpack, select and equip the first vehicle
-        print("[debug] opening backpack...")
-        pydirectinput.press(KEY_BACKPACK)
-        wait_interruptible(UI_SETTLE)
+        equip_favorite_vehicle()
 
-        print("[debug] opening vehicles...")
-        hover_click(*RIDE_VEHICLES_POS)
-        wait_interruptible(UI_SETTLE)
-
-        print("[debug] selecting first vehicle...")
-        hover_click(*RIDE_FIRST_VEHICLE_POS)
-        wait_interruptible(UI_SETTLE)
-
-        print("[debug] equipping vehicle...")
-        hover_click(*RIDE_EQUIP_POS)
-        wait_interruptible(UI_SETTLE)
-
-        print("[debug] closing backpack...")
-        pydirectinput.press(KEY_BACKPACK)
-        wait_interruptible(UI_SETTLE)
+        # Hold r briefly before starting to move
+        print(f"[debug] holding {KEY_HELICOPTER} for {RIDE_R_HOLD_DURATION}s...")
+        hold_key(KEY_HELICOPTER, RIDE_R_HOLD_DURATION)
 
         # Walk back and forth (forward/backward, not left/right) while riding
         walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")
@@ -1011,7 +1017,10 @@ class TeleportWalkNeedHandler(NeedHandler):
     then waits for the need to clear (see wait_until_need_gone()).
     process_needs() respawns afterwards, since these leave the character
     somewhere else on the map. What each one does is configured in
-    TELEPORT_WALK_NEEDS."""
+    TELEPORT_WALK_NEEDS. An entry with `helicopter` set (default
+    HELICOPTER_REQUIRED) flies instead of walking: after teleporting it
+    steps forward, equips the favorite vehicle and holds r, and once the
+    steps have brought it to the destination it presses space."""
 
     def __init__(self, name):
         self.name = name
@@ -1024,11 +1033,23 @@ class TeleportWalkNeedHandler(NeedHandler):
 
         teleport_to(self.config["teleport_pos"])
 
+        helicopter = self.config.get("helicopter", HELICOPTER_REQUIRED)
+        if helicopter:
+            print(f"[debug] stepping forward for {HELICOPTER_FORWARD_DURATION}s...")
+            hold_key("w", HELICOPTER_FORWARD_DURATION)
+            equip_favorite_vehicle()
+            print(f"[debug] holding {KEY_HELICOPTER} for {HELICOPTER_HOLD_DURATION}s...")
+            hold_key(KEY_HELICOPTER, HELICOPTER_HOLD_DURATION)
+
         for i, (key, duration) in enumerate(self.config["steps"]):
             if i:
                 wait_interruptible(TELEPORT_WALK_STEP_GAP)
             print(f"[debug] holding {key} for {duration}s...")
             hold_key(key, duration)
+
+        if helicopter:
+            print("[debug] arrived, pressing space...")
+            pydirectinput.press(KEY_JUMP)
 
         final_click = self.config.get("final_click")
         if final_click:
@@ -1230,16 +1251,6 @@ def side_quest():
         if lure_collect():
             update_game_config(lambda c: c.update(lure_timer=time.time() + LURE_RECOLLECT_INTERVAL))
 
-def ensure_setup():
-    """Run setup_game() once, the first time a workflow starts - skipped if
-    setup_enabled is off in GAME_CONFIG_PATH, or on every later run once its
-    setup_done flag is set."""
-    config = load_game_config()
-    if not config["setup_enabled"] or config["setup_done"]:
-        return
-    setup_game()
-    update_game_config(lambda c: c.update(setup_done=True))
-
 # ============================================================================
 # WORKFLOWS
 # ============================================================================
@@ -1291,8 +1302,6 @@ def run_workflow_loop():
     print("\n" + "=" * 50)
     print(f"[LOOP] Starting continuous workflow (run {CURRENT_RUN_NUMBER})")
     print("=" * 50)
-
-    ensure_setup()
 
     # Respawn once up front so the loop always starts from a known state,
     # regardless of wherever the character happened to be standing.
@@ -1445,7 +1454,7 @@ class AdoptMeGUI:
         # which is safe since update_game_config() is locked.
         config = load_game_config()
         self.config_flag_vars = {}
-        for label, key in (("Run setup", "setup_enabled"), ("Run side quest", "side_quest_enabled")):
+        for label, key in (("Run side quest", "side_quest_enabled"),):
             var = tk.BooleanVar(value=config[key])
             self.config_flag_vars[key] = var
             tk.Checkbutton(btn_frame, text=label, variable=var,

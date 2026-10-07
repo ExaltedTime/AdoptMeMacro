@@ -111,12 +111,13 @@ character standing.
   w/s - same pattern, different keys and duration passed in).
 - **SIDE ACTIONS** - `lure_collect()`, `set_new_lure()`, `tree_collect()`,
   `setup_game()`: plain callable actions, not tied to any detected
-  need/icon, run automatically by `side_quest()`/`ensure_setup()` - see
-  the end of [Need handlers](#need-handlers).
+  need/icon. `lure_collect()`/`tree_collect()` are run automatically by
+  `side_quest()`; `setup_game()` is on-demand only - see the end of
+  [Need handlers](#need-handlers).
 - **NEED HANDLERS** - `NeedHandler` and one subclass per need (or per group
   of needs, via `partial()`). See [Need handlers](#need-handlers).
 - **WORKFLOWS** - `run_full_cycle()`, `run_workflow()`, `run_workflow_loop()`,
-  `side_quest()`, `ensure_setup()`.
+  `side_quest()`.
   See [The workflow lifecycle](#the-workflow-lifecycle) above.
 - **GUI** - the `tkinter` control panel. See [GUI internals](#gui-internals).
 
@@ -261,10 +262,10 @@ Which needs actually run automatically is decided by one set,
 file). A detected need that isn't in it is logged and skipped, not
 resolved. Currently enabled: `hungry`, `thirsty`, `dirty`, `potty`,
 `sleepy`, `catch`, `pet`, `ride`, `walk`, `choose`, plus the
-teleport-walk needs `cafe`, `salon`, `sick`, `pizza` (called out with
-their own inline comment in the set literal, since they leave the map and
-run considerably longer than everything else). Implemented but not
-enabled: `bored`, `beach`, `school`, `camping` (also teleport-walk needs).
+teleport-walk needs `cafe`, `salon`, `sick`, `pizza`, `school` (called out
+with their own inline comment in the set literal, since they leave the map
+and run considerably longer than everything else). Implemented but not
+enabled: `bored`, `beach`, `camping` (also teleport-walk needs).
 The GUI's **Debug** tab has a button per handler that runs it directly
 regardless of `ENABLED_NEEDS`.
 
@@ -280,9 +281,19 @@ rather than a flat sleep after the fact.
 | `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → scroll up + click empty space, `CATCH_THROW_COUNT` (3) times, `CATCH_EMOTE_DELAY` apart → unequip. Always runs this exact sequence - no `wait_until_need_gone()` involved. |
 | `pet` | `PetNeedHandler`: click to focus the pet, then hold the mouse down and trace a circle of radius `PET_CIRCLE_RADIUS` around screen center for `PET_CIRCLE_DURATION`. Same as `catch` - always the full fixed duration. |
 | `choose` | `ChooseNeedHandler`: focus the pet, find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu, then `wait_until_need_gone("choose")`. |
-| `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then backpack → vehicles → first vehicle → equip → close backpack, then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT` (60s), ending early the moment "ride" is confirmed cleared (see below). |
-| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`). Which table is used depends on `HALLOWEEN` - see below. |
+| `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then `equip_favorite_vehicle()` (backpack → vehicles → first vehicle → equip → close backpack), hold `r` (`KEY_HELICOPTER`) for `RIDE_R_HOLD_DURATION` (1s), then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT` (60s), ending early the moment "ride" is confirmed cleared (see below). |
+| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`), and `helicopter` (see below). Which table is used depends on `HALLOWEEN` - see below. |
 | `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")` - up to `NEED_GONE_MAX_WAIT` (60s), same early-exit as `ride` above. |
+
+**Helicopter.** A teleport-walk entry can fly instead of walk. `HELICOPTER_REQUIRED`
+(`magic_numbers.py`, default `False`) is the default for entries that don't
+say; an entry overrides it with `helicopter=True`/`False`. When on, after
+`teleport_to()` the handler holds `w` for `HELICOPTER_FORWARD_DURATION` (1s),
+calls `equip_favorite_vehicle()` (the same backpack sequence `ride` uses; the
+first vehicle is the favorite once `setup_game()` has filtered the backpack),
+holds `r` for `HELICOPTER_HOLD_DURATION` (4s), runs the entry's steps as
+usual, then presses space (`KEY_JUMP`) on arrival, before any `final_click`.
+Only the Halloween `bored`, `beach` and `camping` entries use it.
 
 **Halloween.** `HALLOWEEN` (`magic_numbers.py`, next to `ENABLED_NEEDS`) is
 a plain boolean. The teleport-walk steps live in two tables,
@@ -290,9 +301,10 @@ a plain boolean. The teleport-walk steps live in two tables,
 `TELEPORT_WALK_NEEDS` - the one `TeleportWalkNeedHandler` and the handler
 registry actually read - is the normal table with the Halloween entries laid
 over it while the flag is on. The Halloween table covers `bored`, `beach`,
-`school`, `camping` (Halloween moves the nursery; these stay disabled in
-`ENABLED_NEEDS`, and their Halloween steps are currently just copies of the
-normal ones) and `sick`, which *only* exists there - with `HALLOWEEN` off it
+`school`, `camping` (Halloween moves the nursery; `bored`, `beach` and `camping` stay
+disabled in `ENABLED_NEEDS`, and their Halloween steps are currently just
+copies of the normal ones plus the helicopter flag; `school` is enabled and
+has its own steps) and `sick`, which *only* exists there - with `HALLOWEEN` off it
 has no steps and isn't a need at all. While the flag is on, `unscrew()` also
 calls `ghost_gallery()`, which will either play the ghost gallery minigame
 or just disable it depending on `GHOST_GALLERY_PLAY_MINIGAME`; both branches
@@ -332,12 +344,12 @@ workflow run, so a streak never spans a stop and restart.
 
 None of `lure_collect()`, `set_new_lure()`, `tree_collect()` or
 `setup_game()` are need handlers - they're plain functions, not
-registered anywhere in `NEED_HANDLER_CLASSES` or `ENABLED_NEEDS`. They're
-run automatically: `side_quest()` calls `lure_collect()`/`tree_collect()`
-and `ensure_setup()` calls `setup_game()` - see
-[Persisted game config](#persisted-game-config). Only **Setup** has a GUI
-button of its own (for testing it on its own); the lure and tree actions
-are only reachable through `side_quest()`.
+registered anywhere in `NEED_HANDLER_CLASSES` or `ENABLED_NEEDS`.
+`side_quest()` runs `lure_collect()`/`tree_collect()` automatically - see
+[Persisted game config](#persisted-game-config). `setup_game()` is *not*
+part of any cycle or loop: it only runs when you press the GUI's **Setup**
+button (or call it yourself), and nothing tracks whether it has run. The
+lure and tree actions are only reachable through `side_quest()`.
 
 - **`lure_collect()`** - holds `a` for `LURE_COLLECT_WALK_DURATION` (2s),
   presses `KEY_INTERACT` (`e`) to collect the current lure's rewards,
@@ -454,13 +466,11 @@ actually on disk (so an old config missing a newer key still works), and
 - **`tree_timer`** / **`lure_timer`** - the timestamps `tree_collect()` /
   `lure_collect()` are next due. Both default to "due immediately"
   (`time.time()`) when the config is fresh.
-- **`setup_done`** - whether `setup_game()` has ever run (see
-  `ensure_setup()` below).
-- **`setup_enabled`** / **`side_quest_enabled`** - on/off switches
-  (default on) for `ensure_setup()` and `side_quest()` respectively. Both
-  are checkboxes in the GUI, and can be flipped while a workflow runs.
+- **`side_quest_enabled`** - on/off switch (default on) for
+  `side_quest()`. It's a checkbox in the GUI, and can be flipped while a
+  workflow runs.
 
-Two small functions read and update this file:
+During a run, this file is read and updated by:
 
 - **`side_quest()`** - called right after `unscrew()`, every cycle of
   `run_full_cycle()`'s loop (so on the same cadence as the paycheck
@@ -473,17 +483,13 @@ Two small functions read and update this file:
   hours) out. Each action only updates the config if the call actually
   returned `True`, and does so immediately - so stopping partway through
   doesn't lose progress already made.
-- **`ensure_setup()`** - called once at the top of `run_workflow_loop()`
-  (not `run_workflow()`), before anything else happens. Does nothing if
-  `setup_enabled` is off or `setup_done` is already set; otherwise runs
-  `setup_game()` and sets `setup_done`.
 
 The GUI (Tk's main thread) and the workflow (`run_async`'s worker thread)
 both write this file, so every change goes through
 `update_game_config(mutate)` - a load-modify-save under a lock - or
 `reset_game_config()` (deletes the file, so the next load is all defaults;
-the GUI then refreshes its checkboxes to match). `side_quest()` and
-`ensure_setup()` deliberately don't hold a loaded config across a long
+the GUI then refreshes its checkboxes to match). `side_quest()`
+deliberately doesn't hold a loaded config across a long
 action and save it afterwards - that could silently undo a checkbox
 clicked in the meantime.
 
@@ -537,7 +543,7 @@ exact values and rationale):
 
 | Group | Examples |
 |---|---|
-| Behavior flags | `ENABLED_NEEDS`, `HALLOWEEN`, `GHOST_GALLERY_PLAY_MINIGAME`, `FOCUS_WINDOW_ON_ACTION` |
+| Behavior flags | `ENABLED_NEEDS`, `HALLOWEEN`, `GHOST_GALLERY_PLAY_MINIGAME`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `NEED_GONE_*` |
 | Stuck needs | `NEED_STUCK_CHECKS` |
 | Screen positions | `CATCH_*_POS`, `EMPTY_POS`, `FOCUS_PET_POS`, `RIDE_*_POS`, `LURE_NEW_POS_*`, `SETUP_*_POS` |

@@ -19,9 +19,8 @@ import pydirectinput
 ENABLED_NEEDS = {
     "hungry", "thirsty", "dirty", "potty", "sleepy",  # button needs - always safe to leave on
     "catch", "pet", "ride", "walk", "choose",
-    "cafe", "salon", "sick", "pizza", "school",  # teleport-walk needs
+    "cafe", "salon", "sick", "pizza", "school", "beach", "camping", "bored",  # teleport-walk needs
 }
-# bored, beach and camping (also teleport-walk needs) are disabled
 
 # ============================================================================
 # EVENT FLAGS
@@ -158,7 +157,7 @@ TELEPORT_WALK_NEEDS_NORMAL = {
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 1.2), ("a", 10.0))),
     "cafe":    dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 3.1), ("s", 8.0), ("d", 2))),
     "salon":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 2.5), ("w", 15.0))),
-    "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 2.0), ("a", 6.5), ("s", 3.0))),
+    "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 2.0), ("a", 6.5), ("s", 3.0), ("w", 15.0))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 0.1), ("d", 3.0), ("s", 2.2), ("d", 15.0), ("w",20.0))),
 }
 
@@ -168,11 +167,10 @@ TELEPORT_WALK_NEEDS_NORMAL = {
 # and their steps below are just copies of the normal ones until the real
 # Halloween steps are worked out.
 TELEPORT_WALK_NEEDS_HALLOWEEN = {
-    "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0)), helicopter=True),
-    "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),), helicopter=True),
+    "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 7.7),), helicopter=True),
+    "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 20.0),), helicopter=True),
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 3), ("a", 8))),
-    "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 0.1), ("d", 3.0), ("s", 2.2), ("d", 15.0), ("w",20.0)),
-                    helicopter=True),
+    "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("s", 20),), helicopter=True),
     "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 5.0), ("w", 1.5)),
                     final_click=SICK_FINAL_CLICK_POS),
 }

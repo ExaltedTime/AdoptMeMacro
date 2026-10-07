@@ -120,6 +120,7 @@ RIDE_FORWARD_DURATION = 2.0    # walk forward briefly after mounting, before the
 RIDE_VEHICLES_POS = (816, 804)
 RIDE_FIRST_VEHICLE_POS = (976, 708)
 RIDE_EQUIP_POS = (1062, 814)
+RIDE_R_HOLD_DURATION = 1.0     # hold KEY_HELICOPTER this long after equipping, before walking back and forth
 
 # Backpack-teleport sequence, shared by every teleport destination: open
 # backpack -> category tab -> two more fixed clicks that confirm/execute
@@ -145,6 +146,12 @@ SICK_FINAL_CLICK_POS = (1045, 660)       # click after the sick need's walk
 # (key, seconds) holds to perform in order, and optionally a `final_click`
 # position to click after the last hold. Pizza and camping durations are
 # placeholders until tuned.
+# Whether a teleport-walk need flies by helicopter by default; an entry can
+# override it with `helicopter=True/False`. Only the Halloween bored, beach
+# and camping entries turn it on.
+HELICOPTER_REQUIRED = False
+HELICOPTER_FORWARD_DURATION = 1.0  # step forward this long after teleporting, before equipping
+HELICOPTER_HOLD_DURATION = 4.0     # then hold KEY_HELICOPTER this long
 TELEPORT_WALK_NEEDS_NORMAL = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),)),
@@ -161,10 +168,11 @@ TELEPORT_WALK_NEEDS_NORMAL = {
 # and their steps below are just copies of the normal ones until the real
 # Halloween steps are worked out.
 TELEPORT_WALK_NEEDS_HALLOWEEN = {
-    "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
-    "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),)),
+    "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0)), helicopter=True),
+    "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),), helicopter=True),
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 3), ("a", 8))),
-    "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 0.1), ("d", 3.0), ("s", 2.2), ("d", 15.0), ("w",20.0))),
+    "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 0.1), ("d", 3.0), ("s", 2.2), ("d", 15.0), ("w",20.0)),
+                    helicopter=True),
     "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 5.0), ("w", 1.5)),
                     final_click=SICK_FINAL_CLICK_POS),
 }
@@ -192,6 +200,8 @@ KEY_MOUNT = "e"
 KEY_INTERACT = "e"             # same physical key as KEY_MOUNT, named for its other use: collecting/
                                 # harvesting (lure_collect(), tree_collect()) rather than mounting a vehicle
 KEY_ZOOM_IN = "i"
+KEY_HELICOPTER = "r"           # held to fly the equipped helicopter (also held briefly by ride)
+KEY_JUMP = "space"
 MOVE_KEYS = ("w", "a", "s", "d")
 RESPAWN_KEYS = ("esc", "r", "enter")
 
@@ -212,8 +222,8 @@ MONEY_COLLECTED_TARGET = 200
 TREE_CHECK_INTERVAL = 10 * 60          # seconds (10 minutes) between tree harvests
 LURE_RECOLLECT_INTERVAL = 4 * 60 * 60  # seconds (4 hours)
 
-# setup_game(): one-time, run via ensure_setup() - see GAME_CONFIG_PATH's
-# setup_done flag. Disabling trades isn't implemented yet.
+# setup_game(): run on demand only (the GUI's Setup button), never by the cycle.
+# Disabling trades isn't implemented yet.
 SETUP_LOCK_HOUSE_POS = (1112, 65)
 SETUP_BACKPACK_SETTINGS_POS = (977, 646)
 SETUP_SORT_MENU_POS = (1031, 680)
@@ -334,14 +344,15 @@ __all__ = [
     "CHOOSE_BUTTON_COLOR", "CHOOSE_SLOW_MOVE_DURATION",
     "PAYCHECK_CASHOUT_COLOR", "PAYCHECK_DISMISS_POS_1", "PAYCHECK_DISMISS_POS_2",
     "RIDE_BACKWARD_DURATION", "RIDE_WAIT_AFTER_E", "RIDE_FORWARD_DURATION", "RIDE_VEHICLES_POS",
-    "RIDE_FIRST_VEHICLE_POS", "RIDE_EQUIP_POS",
+    "RIDE_FIRST_VEHICLE_POS", "RIDE_EQUIP_POS", "RIDE_R_HOLD_DURATION",
     "TELEPORT_WAIT", "TELEPORT_SETTLE_WAIT", "GENERAL_TELEPORT_POS_2", "GENERAL_TELEPORT_POS_3",
     "TELEPORT_BACK_DURATION", "TELEPORT_WALK_STEP_GAP", "SICK_CONFIRM_WAIT",
     "TELEPORT_PETS_TAB_POS", "TELEPORT_VEHICLES_TAB_POS", "TELEPORT_FOOD_TAB_POS", "SICK_FINAL_CLICK_POS",
-    "TELEPORT_WALK_NEEDS", "NEED_STUCK_CHECKS", "HALLOWEEN", "GHOST_GALLERY_PLAY_MINIGAME",
+    "TELEPORT_WALK_NEEDS", "HELICOPTER_REQUIRED", "HELICOPTER_FORWARD_DURATION", "HELICOPTER_HOLD_DURATION",
+    "NEED_STUCK_CHECKS", "HALLOWEEN", "GHOST_GALLERY_PLAY_MINIGAME",
     "NEED_GONE_MAX_WAIT", "NEED_GONE_POLL_INTERVAL", "NEED_GONE_CONFIRMATIONS",
     "NEED_GONE_CONFIRM_INTERVAL", "NEED_GONE_FLICKER_RECHECK_DELAY", "NEED_WATCH_JOIN_TIMEOUT",
-    "KEY_BACKPACK", "KEY_MOUNT", "KEY_INTERACT", "KEY_ZOOM_IN", "MOVE_KEYS", "RESPAWN_KEYS",
+    "KEY_BACKPACK", "KEY_MOUNT", "KEY_INTERACT", "KEY_ZOOM_IN", "KEY_HELICOPTER", "KEY_JUMP", "MOVE_KEYS", "RESPAWN_KEYS",
     "LURE_COLLECT_WALK_DURATION", "LURE_COLLECT_SETTLE_DELAY", "LURE_NEW_POS_1", "LURE_NEW_POS_2",
     "TREE_COLLECT_WALK_DURATION", "TREE_COLLECT_BACKWARD_DURATION", "TREE_HARVEST_YIELD",
     "MONEY_COLLECTED_TARGET", "TREE_CHECK_INTERVAL", "LURE_RECOLLECT_INTERVAL",

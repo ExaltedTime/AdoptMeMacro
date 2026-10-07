@@ -75,10 +75,10 @@ POST_CLICK_DELAY = 0.4         # pause after each click
 NEED_CHECK_RETRY_DELAY = 5.0   # pause before re-checking when no need was found
 LOOP_DELAY = 2.0               # pause between iterations of the workflow loop
 STOP_CHECK_INTERVAL = 0.1      # granularity of the interruptible wait loop
-CATCH_WAIT_AFTER_EQUIP = 2.0   # wait after equipping toy before throwing
-CATCH_EMOTE_DELAY = 10.0       # delay between throw clicks
+CATCH_WAIT_AFTER_EQUIP = 1.0   # wait after equipping toy before throwing
+CATCH_EMOTE_DELAY = 5.0       # delay between throw clicks
 CATCH_THROW_COUNT = 3          # number of times the toy is thrown
-CATCH_ZOOM_DURATION = 3.0      # seconds the zoom-in key is held before throwing
+CATCH_ZOOM_DURATION = 2.0      # seconds the zoom-in key is held before throwing
 PET_CIRCLE_DURATION = 10.0     # how long to make circles with mouse
 PET_CIRCLE_RADIUS = 100                # amplitude (px) of the up/down sine motion around screen center
 PET_SETTLE_DELAY = 0.1                 # pause after each mouse move/click before the next pet step
@@ -149,7 +149,7 @@ TELEPORT_WALK_NEEDS_NORMAL = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),)),
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 1.2), ("a", 10.0))),
-    "cafe":    dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 3.1), ("s", 15.0))),
+    "cafe":    dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 3.1), ("s", 8.0), ("d", 2))),
     "salon":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 2.5), ("w", 15.0))),
     "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 2.0), ("a", 6.5), ("s", 3.0))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 0.1), ("d", 3.0), ("s", 2.2), ("d", 15.0), ("w",20.0))),

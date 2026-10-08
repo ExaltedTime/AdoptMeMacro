@@ -84,9 +84,13 @@ def check_running():
 # WINDOW FOCUS & SCREEN CAPTURE
 # ============================================================================
 
+def roblox_windows():
+    """Every open window with 'roblox' in its title."""
+    return [w for w in gw.getAllWindows() if "roblox" in w.title.lower()]
+
 def focus_roblox():
     """Bring the Roblox window to the front (no click)."""
-    wins = [w for w in gw.getAllWindows() if "roblox" in w.title.lower()]
+    wins = roblox_windows()
     if not wins:
         print("[!] Roblox not found")
         return False
@@ -203,7 +207,7 @@ def log_run_event(message):
 # What the macro knows about how this run is going, written to STATUS_PATH by
 # write_status() so it can be checked without opening the GUI.
 RUN_STATS = {"run": None, "started": None, "cycles": 0, "last_detected": [], "resolved": {}, "failed": {},
-             "failures": 0, "recoveries": 0, "last_resolved": None, "last_failure": None}
+             "failures": 0, "recoveries": 0, "disconnects": 0, "last_resolved": None, "last_failure": None}
 
 OUTPUT_LOG_LOCK = threading.Lock()
 _output_at_line_start = True
@@ -272,7 +276,7 @@ def log_failure(reason, screenshot=True):
 def reset_run_stats():
     """Start the status counters afresh (a workflow was just started)."""
     RUN_STATS.update(run=CURRENT_RUN_NUMBER, started=time.strftime("%Y-%m-%d %H:%M:%S"), cycles=0,
-                     last_detected=[], resolved={}, failed={}, failures=0, recoveries=0,
+                     last_detected=[], resolved={}, failed={}, failures=0, recoveries=0, disconnects=0,
                      last_resolved=None, last_failure=None)
     write_status()
 
@@ -551,6 +555,16 @@ def wait_interruptible(duration):
         elapsed += sleep_chunk
     check_running()
 
+def wait_stoppable(duration):
+    """Like wait_interruptible() but only [STOP] interrupts it, not Roblox
+    losing focus. Used while the game is being closed and relaunched, when
+    there is no focused Roblox window to lose."""
+    end = time.time() + duration
+    while time.time() < end:
+        check_stop()
+        time.sleep(min(STOP_CHECK_INTERVAL, max(0.0, end - time.time())))
+    check_stop()
+
 def release_all_inputs():
     """Best-effort safety net: release every key this macro ever holds down,
     plus the mouse button. The try/finally blocks around each individual
@@ -558,7 +572,7 @@ def release_all_inputs():
     more whenever a background task ends (run_async's worker finally block)
     as a last line of defense - a bug in a handler we haven't caught yet
     still shouldn't be able to leave an input stuck down in the game."""
-    for key in MOVE_KEYS:
+    for key in (*MOVE_KEYS, KEY_HELICOPTER):
         try:
             pydirectinput.keyUp(key)
         except Exception:
@@ -779,11 +793,12 @@ def walk_alternating(direction_pair, total_duration, step_duration=WALK_ALTERNAT
     print("[debug] alternating walk complete")
 
 # ============================================================================
-# GUI-ONLY ACTIONS
+# SIDE ACTIONS
 # ============================================================================
 # Plain callable actions, not tied to any detected need/icon - not in
-# ENABLED_NEEDS or NEED_HANDLER_CLASSES, only reachable from the GUI's
-# Functions section (same as respawn_character()).
+# ENABLED_NEEDS or NEED_HANDLER_CLASSES. side_quest() runs lure_collect() and
+# tree_collect() on a timer; setup_game() and leave_and_rejoin() run from the
+# GUI's Functions section and from rejoin_game()'s recovery.
 
 def lure_collect():
     """Walk to the lure, collect its rewards, then set a new one
@@ -918,25 +933,15 @@ def run_deeplink(server=None):
         uri = f"roblox://navigation/share_links?code={server[1]}&type=Server"
     os.startfile(uri)
 
-def roblox_windows():
-    return [w for w in gw.getAllWindows() if "roblox" in w.title.lower()]
-
-def wait_stoppable(duration):
-    """Like wait_interruptible() but only [STOP] interrupts it, not Roblox
-    losing focus. Used while the game is being closed and relaunched, when
-    there is no focused Roblox window to lose."""
-    end = time.time() + duration
-    while time.time() < end:
-        check_stop()
-        time.sleep(min(STOP_CHECK_INTERVAL, max(0.0, end - time.time())))
-    check_stop()
-
-def close_roblox():
-    """Leave the game properly (esc, l, enter - only if the window is tall
-    enough for L to work), then kill any Roblox process still around and
-    wait REJOIN_CLOSE_WAIT. Nothing here needs Roblox to stay focused."""
+def close_roblox(clean_leave=True):
+    """Leave the game properly (esc, l, enter - only if `clean_leave`, and
+    only if the window is tall enough for L to work), then kill any Roblox
+    process still around and wait REJOIN_CLOSE_WAIT. Nothing here needs
+    Roblox to stay focused. `clean_leave` is off when the game is already
+    gone or showing the Disconnected dialog, where those keys do nothing
+    useful and Enter could press Reconnect."""
     windows = roblox_windows()
-    if windows and windows[0].height >= REJOIN_MIN_LEAVE_HEIGHT and focus_roblox():
+    if clean_leave and windows and windows[0].height >= REJOIN_MIN_LEAVE_HEIGHT and focus_roblox():
         print("[debug] leaving the game...")
         for key in REJOIN_LEAVE_KEYS:
             pydirectinput.press(key)
@@ -955,14 +960,15 @@ def play_button_visible(img):
     mask = exact_color_mask(box, REJOIN_PLAY_COLOR, REJOIN_PLAY_COLOR_TOLERANCE)
     return int(np.count_nonzero(mask)) >= REJOIN_PLAY_MIN_PIXELS
 
-def leave_and_rejoin():
+def leave_and_rejoin(clean_leave=True):
     """Close Roblox, relaunch the game through a deeplink (to the private
     server saved in the GUI, or a public one if none is saved), wait for it
     to load, click Play, wait REJOIN_AFTER_JOIN_WAIT and respawn - see the
     REJOIN_* settings. Retries the whole thing up to REJOIN_MAX_ATTEMPTS
-    times. GUI-only for now - nothing calls it yet (rejoin_game() is still a
-    stub). Returns True once back in the game, False if every attempt
-    failed (or the saved link isn't a valid private server link)."""
+    times. Run from the GUI's Leave & rejoin button and by rejoin_game().
+    Returns True once back in the game, False if every attempt failed (or
+    the saved link isn't a valid private server link). `clean_leave` is
+    passed on to close_roblox()."""
     link = load_game_config()["private_server_link"].strip()
     server = None
     if link:
@@ -975,7 +981,7 @@ def leave_and_rejoin():
 
     for attempt in range(1, REJOIN_MAX_ATTEMPTS + 1):
         print(f"[debug] rejoin attempt {attempt}/{REJOIN_MAX_ATTEMPTS}")
-        close_roblox()
+        close_roblox(clean_leave)
         run_deeplink(server)
 
         print("[debug] waiting for the Roblox window...")
@@ -1062,7 +1068,7 @@ def focus_pet(click_duration=CLICK_MOVE_DURATION):
     for x, y in blobs:
         print(f"[debug] focusing pet at ({x}, {y})...")
         hover_click(x, y, duration=click_duration)
-    wait_interruptible(4)
+    wait_interruptible(FOCUS_PET_MENU_WAIT)
     return True
 
 def equip_favorite_vehicle():
@@ -1216,7 +1222,7 @@ class PetNeedHandler(NeedHandler):
         return True
 
 class ChooseNeedHandler(NeedHandler):
-    """The 'choose' need: jitter-click to open the pet's interaction menu,
+    """The 'choose' need: focus_pet() to open the pet's interaction menu,
     find the button with a distinctive exact color (it has no distinguishing
     icon, so shape detection doesn't apply here), move to it slowly rather
     than jumping straight there, click it, then click the middle of the
@@ -1465,8 +1471,10 @@ def process_needs():
     return resolved
 
 # ============================================================================
-# PAYCHECK
+# PER-CYCLE CHECKS
 # ============================================================================
+# Run at the top of every cycle by unscrew() and side_quest(): popups to
+# dismiss, recovering the game when it's gone wrong, and the timed chores.
 
 def detect_paycheck():
     """Detect the paycheck popup by its CASH OUT button's exact color and,
@@ -1482,24 +1490,48 @@ def detect_paycheck():
     hover_click(*PAYCHECK_DISMISS_POS_2)
     return True
 
-def rejoin_game():
-    """Recover when the game needs it. Currently the one trigger is
-    DISABLED_NEEDS_REJOIN_THRESHOLD needs having been disabled for this run
-    (see record_detected_needs()): that many stuck needs means the game is
-    in a bad state, so rejoin it (leave_and_rejoin()), run setup_game(), and
-    clear the disabled set so every need gets a fresh chance. Returns True
-    if it recovered, False if nothing needed doing or the rejoin failed (the
-    disabled needs are kept, so the next cycle tries again).
+def detect_disconnect(img):
+    """True if the Roblox "Disconnected" dialog is on screen in `img`: most
+    of DISCONNECT_PANEL_BOX is the dialog's grey (the game behind it is
+    blurred, so nothing else on screen fills a box like that)."""
+    left, top, right, bottom = DISCONNECT_PANEL_BOX
+    mask = exact_color_mask(img[top:bottom, left:right], DISCONNECT_PANEL_COLOR, DISCONNECT_PANEL_TOLERANCE)
+    return np.count_nonzero(mask) / mask.size >= DISCONNECT_PANEL_MIN_FRACTION
 
-    Not implemented yet: detecting an actual disconnect (Roblox puts up a
-    dialog with a reconnect/leave button - an exact-color match on it, like
-    detect_paycheck() does for CASH OUT, or the window being gone) as a
-    second trigger for the same recovery."""
-    if len(DISABLED_THIS_RUN) < DISABLED_NEEDS_REJOIN_THRESHOLD:
+def rejoin_reason():
+    """Why the game needs rejoining right now, as (reason, clean_leave) for
+    leave_and_rejoin(), or None if it doesn't. In order: Roblox crashed (its
+    crash window is open), Roblox isn't running at all, the Disconnected
+    dialog is showing, or DISABLED_NEEDS_REJOIN_THRESHOLD needs have been
+    disabled for this run. clean_leave is False for the first three, where
+    there's no game to leave properly."""
+    if any(w.title == ROBLOX_CRASH_WINDOW_TITLE for w in gw.getAllWindows()):
+        return "Roblox crashed", False
+    if not roblox_windows():
+        return "Roblox isn't running", False
+    if detect_disconnect(grab_screen()):
+        return "disconnected from the game", False
+    if len(DISABLED_THIS_RUN) >= DISABLED_NEEDS_REJOIN_THRESHOLD:
+        return f"{len(DISABLED_THIS_RUN)} needs disabled ({', '.join(sorted(DISABLED_THIS_RUN))})", True
+    return None
+
+def rejoin_game():
+    """Recover when the game needs it (see rejoin_reason()): rejoin it
+    (leave_and_rejoin()), run setup_game() - the rejoin resets the game
+    settings it sets - and clear the disabled needs and their detection
+    history so every need gets a fresh chance. Returns True if it recovered,
+    False if nothing needed doing or the rejoin failed (the cause is still
+    there, so the next cycle tries again). The failure screenshot taken
+    first shows the Disconnected dialog and its error code, if that's why."""
+    reason = rejoin_reason()
+    if reason is None:
         return False
-    log_failure(f"{len(DISABLED_THIS_RUN)} needs disabled ({', '.join(sorted(DISABLED_THIS_RUN))}) - rejoining")
+    reason, clean_leave = reason
+    log_failure(f"{reason} - rejoining")
     RUN_STATS["recoveries"] += 1
-    if not leave_and_rejoin():
+    if not clean_leave:
+        RUN_STATS["disconnects"] += 1  # crashed, closed or disconnected, as opposed to stuck needs
+    if not leave_and_rejoin(clean_leave):
         log_failure("recovery: rejoin failed, will try again next cycle")
         return False
     setup_game()
@@ -1606,17 +1638,23 @@ def run_full_cycle():
         print(f"[debug] no needs found, waiting {NEED_CHECK_RETRY_DELAY}s...")
         wait_interruptible(NEED_CHECK_RETRY_DELAY)
 
-def run_workflow():
-    """Run a single cycle: wait for a need to appear, then handle it."""
+def start_run(label, description):
+    """Common start of run_workflow() and run_workflow_loop(): a fresh run
+    number, an emptied stuck-need history, fresh status counters, a line in
+    the run log and a banner in the console."""
     global STOP_FLAG, CURRENT_RUN_NUMBER
     STOP_FLAG = False
     CURRENT_RUN_NUMBER = next_run_number()
     DETECTION_HISTORY.clear()
     reset_run_stats()
-    log_run_event("WORKFLOW started")
+    log_run_event(f"{label} started")
     print("\n" + "=" * 50)
-    print(f"[WORKFLOW] Starting (run {CURRENT_RUN_NUMBER})")
+    print(f"[{label}] {description} (run {CURRENT_RUN_NUMBER})")
     print("=" * 50)
+
+def run_workflow():
+    """Run a single cycle: wait for a need to appear, then handle it."""
+    start_run("WORKFLOW", "Starting")
     run_full_cycle()
     log_run_event("WORKFLOW done")
     print("\n[WORKFLOW] Done\n")
@@ -1628,15 +1666,7 @@ def run_workflow_loop():
     propagate on up to run_async()'s worker (via the bare `finally`, not
     `except`) so the GUI still reports [STOPPED] correctly; the finally
     just prints locally first."""
-    global STOP_FLAG, CURRENT_RUN_NUMBER
-    STOP_FLAG = False
-    CURRENT_RUN_NUMBER = next_run_number()
-    DETECTION_HISTORY.clear()
-    reset_run_stats()
-    log_run_event("LOOP started")
-    print("\n" + "=" * 50)
-    print(f"[LOOP] Starting continuous workflow (run {CURRENT_RUN_NUMBER})")
-    print("=" * 50)
+    start_run("LOOP", "Starting continuous workflow")
 
     # Respawn once up front so the loop always starts from a known state,
     # regardless of wherever the character happened to be standing.
@@ -1658,9 +1688,12 @@ def run_workflow_loop():
 # ============================================================================
 
 class DebugCapture:
+    """Replaces sys.stdout for the lifetime of the GUI: everything printed
+    anywhere in the macro goes to the on-screen console and, via
+    log_output(), to OUTPUT_LOG_PATH."""
+
     def __init__(self, text_widget):
         self.text = text_widget
-        self.original_stdout = sys.stdout
 
     def write(self, msg):
         log_output(msg)
@@ -1672,9 +1705,6 @@ class DebugCapture:
 
     def flush(self):
         pass
-
-    def restore(self):
-        sys.stdout = self.original_stdout
 
 class AdoptMeGUI:
     def __init__(self, root):
@@ -1949,9 +1979,9 @@ class AdoptMeGUI:
             print("[!] Private server link saved")
 
     def reset_config(self):
-        """Delete the persisted config (money collected, timers, setup done,
-        and the switches themselves all go back to their defaults) and
-        refresh the checkboxes to match."""
+        """Delete the persisted config (money collected, timers and the
+        switches all go back to their defaults; the private server link is
+        kept) and refresh the checkboxes to match."""
         reset_game_config()
         config = load_game_config()
         for key, var in self.config_flag_vars.items():

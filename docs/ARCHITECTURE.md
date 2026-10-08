@@ -83,9 +83,10 @@ character standing.
   `check_running()`** - see [Stopping & focus safety](#stopping--focus-safety).
 - **WINDOW FOCUS & SCREEN CAPTURE** - `focus_roblox()` / `focus_roblox_click()`
   bring Roblox to the front; `is_roblox_focused()` checks whether it still
-  is; `grab_screen()` takes a screenshot via `mss`; `find_exact_color()`
-  finds a button by its exact pixel color rather than its shape (used by
-  the choose need, whose button has no distinguishing icon).
+  is; `roblox_windows()` lists the open Roblox windows; `grab_screen()`
+  takes a screenshot via `mss`; `exact_color_mask()` / `find_exact_color()`
+  find things by their exact pixel color rather than their shape (the
+  choose need's button, the popups and the Play button all work this way).
 - **STATE** - this module's own mutable state: `STOP_FLAG`;
   `BUTTON_POSITIONS`, the in-memory cache of the last-detected action
   button positions (never persisted to disk - see
@@ -94,6 +95,10 @@ character standing.
   [Stuck needs](#stuck-needs). Every fixed
   config/tuning value lives in `magic_numbers.py` instead - see
   [Configuration reference](#configuration-reference).
+- **LOGGING** - `next_run_number()` / `log_run_event()`, plus the
+  unattended-run tools `log_output()`, `save_failure_screenshot()`,
+  `log_failure()` and `write_status()` - see
+  [Debugging an unattended run](#debugging-an-unattended-run).
 - **GAME CONFIG** - `load_game_config()`/`save_game_config()`: the state
   that *does* persist across separate launches of the script (unlike
   `BUTTON_POSITIONS` above) - see [Persisted game config](#persisted-game-config).
@@ -102,7 +107,7 @@ character standing.
 - **NEED ICON DETECTION** - `detect_need_icons()`, `find_matching_need()`,
   `prompt_rename_need()`. See [Need-icon detection](#need-icon-detection).
 - **CLICKING** - `hover_click()`, `hover_move()`, `wait_interruptible()`,
-  `release_all_inputs()`. See
+  `wait_stoppable()`, `release_all_inputs()`. See
   [Click & input primitives](#click--input-primitives).
 - **BUTTON DETECTION** - `detect_buttons()`, `refresh_button_mapping()`,
   `click_need_button()`. See [Button detection](#button-detection).
@@ -110,15 +115,19 @@ character standing.
   `walk_alternating()` (shared by the walk need, a/d, and the ride need,
   w/s - same pattern, different keys and duration passed in).
 - **SIDE ACTIONS** - `lure_collect()`, `set_new_lure()`, `tree_collect()`,
-  `setup_game()`: plain callable actions, not tied to any detected
-  need/icon. `lure_collect()`/`tree_collect()` are run automatically by
-  `side_quest()`; `setup_game()` is on-demand only - see the end of
-  [Need handlers](#need-handlers).
+  `setup_game()`, `disable_trades()`, `leave_and_rejoin()`: plain callable
+  actions, not tied to any detected need/icon. `lure_collect()`/
+  `tree_collect()` are run automatically by `side_quest()`; `setup_game()`
+  and `leave_and_rejoin()` run from the GUI and from the automatic recovery
+  - see the end of [Need handlers](#need-handlers).
 - **NEED HANDLERS** - `NeedHandler` and one subclass per need (or per group
   of needs, via `partial()`). See [Need handlers](#need-handlers).
-- **WORKFLOWS** - `run_full_cycle()`, `run_workflow()`, `run_workflow_loop()`,
-  `side_quest()`.
-  See [The workflow lifecycle](#the-workflow-lifecycle) above.
+- **PER-CYCLE CHECKS** - `unscrew()` and what it runs: `rejoin_game()`
+  (with `rejoin_reason()` / `detect_disconnect()`), `ghost_gallery()`,
+  `detect_paycheck()`; and `side_quest()`.
+- **WORKFLOWS** - `run_full_cycle()`, `run_workflow()`, `run_workflow_loop()`
+  (both start via `start_run()`). See
+  [The workflow lifecycle](#the-workflow-lifecycle) above.
 - **GUI** - the `tkinter` control panel. See [GUI internals](#gui-internals).
 
 ## Need-icon detection
@@ -262,10 +271,10 @@ Which needs actually run automatically is decided by one set,
 file). A detected need that isn't in it is logged and skipped, not
 resolved. Currently enabled: `hungry`, `thirsty`, `dirty`, `potty`,
 `sleepy`, `catch`, `pet`, `ride`, `walk`, `choose`, plus the
-teleport-walk needs `cafe`, `salon`, `sick`, `pizza`, `school` (called out
-with their own inline comment in the set literal, since they leave the map
-and run considerably longer than everything else). Implemented but not
-enabled: `bored`, `beach`, `camping` (also teleport-walk needs).
+teleport-walk needs `cafe`, `salon`, `sick`, `pizza`, `school`, `beach`,
+`camping`, `bored` (called out with their own inline comment in the set
+literal, since they leave the map and run considerably longer than
+everything else).
 The GUI's **Debug** tab has a button per handler that runs it directly
 regardless of `ENABLED_NEEDS`.
 
@@ -311,10 +320,8 @@ a plain boolean. The teleport-walk steps live in two tables,
 `TELEPORT_WALK_NEEDS` - the one `TeleportWalkNeedHandler` and the handler
 registry actually read - is the normal table with the Halloween entries laid
 over it while the flag is on. The Halloween table covers `bored`, `beach`,
-`school`, `camping` (Halloween moves the nursery; `bored`, `beach` and `camping` stay
-disabled in `ENABLED_NEEDS`, and their Halloween steps are currently just
-copies of the normal ones plus the helicopter flag; `school` is enabled and
-has its own steps) and `sick`, which *only* exists there - with `HALLOWEEN` off it
+`school`, `camping` (Halloween moves the nursery, so each has its own steps
+there; `bored`, `beach` and `camping` also fly by helicopter) and `sick`, which *only* exists there - with `HALLOWEEN` off it
 has no steps and isn't a need at all. While the flag is on, `unscrew()` also
 calls `ghost_gallery()`, which will either play the ghost gallery minigame
 or just disable it depending on `GHOST_GALLERY_PLAY_MINIGAME`. The minigame
@@ -325,8 +332,7 @@ while disconnected), then `ghost_gallery()` if `HALLOWEEN` is on, then the
 paycheck check. The ghost gallery goes before the paycheck check because the
 popup's Yes button is the same green as the paycheck's CASH OUT button, so
 `detect_paycheck()` would mistake it for one. `rejoin_game()` is the
-automatic recovery - see [Stuck needs](#stuck-needs); detecting an actual
-disconnect as a second trigger for it isn't implemented yet.
+automatic recovery - see [Automatic recovery](#stuck-needs).
 
 **Disabling the ghost gallery.** `detect_ghost_gallery_popup()` recognises the
 "Ghost Gallery is starting soon! Teleport there now?" popup by its two
@@ -363,13 +369,22 @@ to the game config, so relaunching the script gives every need a fresh
 chance - while `DETECTION_HISTORY` is also emptied at the start of every
 workflow run, so a streak never spans a stop and restart.
 
-**Automatic recovery.** When `DISABLED_NEEDS_REJOIN_THRESHOLD` (4) needs have
-been disabled this way, the game is in a bad state, so the next cycle's
-`unscrew()` calls `rejoin_game()`, which runs `leave_and_rejoin()` (see
-[Side actions](#side-actions)), then `setup_game()`, then clears
-`DISABLED_THIS_RUN` and `DETECTION_HISTORY` so every need gets a fresh
-chance, and the workflow carries on. If the rejoin fails the disabled needs
-are kept, so the next cycle tries again.
+**Automatic recovery.** Every cycle `unscrew()` calls `rejoin_game()`, which
+asks `rejoin_reason()` whether the game needs rejoining. In order: Roblox's
+crash window (`ROBLOX_CRASH_WINDOW_TITLE`) is open; no Roblox window exists;
+the Disconnected dialog is showing (`detect_disconnect()`: at least
+`DISCONNECT_PANEL_MIN_FRACTION` of `DISCONNECT_PANEL_BOX` is the dialog's
+grey, `DISCONNECT_PANEL_COLOR` - the game behind it is blurred, so nothing
+else fills a box like that); or `DISABLED_NEEDS_REJOIN_THRESHOLD` (4) needs
+have been disabled as stuck. If so, it saves a failure screenshot (which
+shows the dialog and its error code), runs `leave_and_rejoin()` (see
+[Side actions](#side-actions)) - without the clean esc/l/enter leave for the
+first three reasons - then `setup_game()` (the rejoin resets the settings it
+sets), then clears `DISABLED_THIS_RUN` and `DETECTION_HISTORY` so every need
+gets a fresh chance, and the workflow carries on. If the rejoin fails the
+cause is still there, so the next cycle tries again. The disconnect check
+only runs once per cycle, so one that happens in the middle of a long
+handler is noticed when that handler finishes.
 
 ### Side actions
 
@@ -379,16 +394,19 @@ registered anywhere in `NEED_HANDLER_CLASSES` or `ENABLED_NEEDS`.
 `side_quest()` runs `lure_collect()`/`tree_collect()` automatically - see
 [Persisted game config](#persisted-game-config). `setup_game()` is *not*
 part of any cycle or loop: it only runs when you press the GUI's **Setup**
-button (or call it yourself), and nothing tracks whether it has run. The
+button and from the automatic recovery, and nothing tracks whether it has
+run. The
 lure and tree actions are only reachable through `side_quest()`.
 
-- **`leave_and_rejoin()`** - GUI-only for now (the **Leave & rejoin** button;
-  `rejoin_game()` doesn't call it yet). Modelled on how Natro Macro (a Bee
+- **`leave_and_rejoin()`** - the **Leave & rejoin** button, and what
+  `rejoin_game()` calls to recover. Modelled on how Natro Macro (a Bee
   Swarm Simulator macro) reconnects: close the game properly, relaunch it
   through a deeplink, and wait in stages by looking at the screen rather
   than for a fixed time. Up to `REJOIN_MAX_ATTEMPTS` (3) times:
-  1. `close_roblox()` - if the Roblox window is at least
-     `REJOIN_MIN_LEAVE_HEIGHT` tall (the L shortcut needs it) press
+  1. `close_roblox()` - if `clean_leave` (it's off when the game is gone or
+     showing the Disconnected dialog, where Enter could press Reconnect) and
+     the Roblox window is at least `REJOIN_MIN_LEAVE_HEIGHT` tall (the L
+     shortcut needs it) press
      `REJOIN_LEAVE_KEYS` (esc, l, enter), then `taskkill` every process in
      `ROBLOX_PROCESS_NAMES` and wait `REJOIN_CLOSE_WAIT` (relaunching sooner
      gives Roblox error 264).
@@ -622,7 +640,7 @@ exact values and rationale):
 | Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
 | Debug logging | `OUTPUT_LOG_PATH`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_SCREENSHOTS` |
-| Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `REJOIN_*`, `ROBLOX_*` |
+| Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `DISCONNECT_*`, `REJOIN_*`, `ROBLOX_*` |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
 | GUI | colors/fonts (`GUI_BG`, `GUI_FONT`, ...) and layout spacing (`GUI_OUTER_PADDING`, `GUI_ROW_SPACING`, ...) for the `tkinter` panel |
@@ -657,8 +675,9 @@ were away can be read back afterwards:
   and last failure. `RUN_STATS` holds the counters in memory.
 - **`debug_needs.png`** / **`debug_buttons.png`** - see below.
 
-A run that *stops* (a crash, Roblox losing focus) still ends the loop; the
-logs say why, but nothing restarts it yet.
+A run that *stops* (a crash, Roblox losing focus) ends the loop and stays
+stopped - deliberately, since losing focus means the computer is being used
+for something else. The logs say why.
 
 If detection isn't finding what you expect after changing screen
 resolution or Roblox's UI, check `debug/debug_needs.png` and

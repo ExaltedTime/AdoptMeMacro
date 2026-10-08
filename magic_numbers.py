@@ -121,6 +121,7 @@ FOCUS_PET_FRAME_GAP = 0.1            # seconds between the two screenshots
 FOCUS_PET_DIFF_THRESHOLD = 25        # per-pixel brightness change that counts as movement (0-255)
 FOCUS_PET_MERGE_KERNEL = 25          # px; changed pixels this close together merge into one blob
 FOCUS_PET_MIN_AREA = 150             # px^2; smaller blobs are noise, not the pet
+FOCUS_PET_MENU_WAIT = 4.0            # wait after the clicks, for the pet's menu to open
 
 # The 'choose' need's button is matched by its exact color rather than shape,
 # since it's just a plain circle with no distinguishing icon. Given as (R, G, B).
@@ -159,20 +160,19 @@ SICK_CONFIRM_WAIT = 7.0           # wait after pressing 'e' and before the sick 
 
 TELEPORT_PETS_TAB_POS = (817, 713)       # nursery: pets tab
 TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
-TELEPORT_FOOD_TAB_POS = (753, 804)       # supermarket: food tab
 SICK_FINAL_CLICK_POS = (1045, 660)       # click after the sick need's walk
 
-# Needs that teleport somewhere and walk (see TeleportWalkNeedHandler), then
-# wait for the need to clear. Each entry: where to teleport, the
-# (key, seconds) holds to perform in order, and optionally a `final_click`
-# position to click after the last hold. Pizza and camping durations are
-# placeholders until tuned.
 # Whether a teleport-walk need flies by helicopter by default; an entry can
 # override it with `helicopter=True/False`. Only the Halloween bored, beach
 # and camping entries turn it on.
 HELICOPTER_REQUIRED = False
 HELICOPTER_FORWARD_DURATION = 1.0  # step forward this long after teleporting, before equipping
 HELICOPTER_HOLD_DURATION = 4.0     # then hold KEY_HELICOPTER this long
+
+# Needs that teleport somewhere and walk (see TeleportWalkNeedHandler), then
+# wait for the need to clear. Each entry: where to teleport, the
+# (key, seconds) holds to perform in order, optionally a `final_click`
+# position to click after the last hold, and optionally `helicopter` (above).
 TELEPORT_WALK_NEEDS_NORMAL = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),)),
@@ -185,9 +185,7 @@ TELEPORT_WALK_NEEDS_NORMAL = {
 
 # Used instead of the entry of the same name above while HALLOWEEN is on (Halloween
 # moves the nursery) - and "sick" only exists here, so it isn't a need at all
-# outside Halloween. bored/beach/school/camping are disabled in ENABLED_NEEDS
-# and their steps below are just copies of the normal ones until the real
-# Halloween steps are worked out.
+# outside Halloween.
 TELEPORT_WALK_NEEDS_HALLOWEEN = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 7.7),), helicopter=True),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 20.0),), helicopter=True),
@@ -201,6 +199,7 @@ TELEPORT_WALK_NEEDS_HALLOWEEN = {
 # handler registry both read this).
 TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN \
     else TELEPORT_WALK_NEEDS_NORMAL
+
 DISABLED_NEEDS_REJOIN_THRESHOLD = 4  # this many needs disabled for the run (see NEED_STUCK_CHECKS) means something is
                                      # badly wrong: rejoin the game, run setup, and give every need a fresh chance
 NEED_STUCK_CHECKS = 5            # an enabled need detected on this many checks in a row is
@@ -244,8 +243,8 @@ MONEY_COLLECTED_TARGET = 200
 TREE_CHECK_INTERVAL = 10 * 60          # seconds (10 minutes) between tree harvests
 LURE_RECOLLECT_INTERVAL = 4 * 60 * 60  # seconds (4 hours)
 
-# setup_game(): run on demand only (the GUI's Setup button), never by the cycle.
-# Disabling trades isn't implemented yet.
+# setup_game(): run on demand (the GUI's Setup button) and by the automatic recovery
+# in rejoin_game(), never by the normal cycle.
 SETUP_LOCK_HOUSE_POS = (1112, 65)
 SETUP_BACKPACK_SETTINGS_POS = (977, 646)
 SETUP_SORT_MENU_POS = (1031, 680)
@@ -272,8 +271,9 @@ REJOIN_LEAVE_KEY_GAP = 0.25        # between those keys (Natro uses the same)
 REJOIN_MIN_LEAVE_HEIGHT = 500      # px; the L shortcut only works in a Roblox window at least this tall
 REJOIN_CLOSE_WAIT = 5.0            # after closing, before relaunching (relaunching too soon gives Roblox error 264)
 REJOIN_MAX_ATTEMPTS = 3            # close -> launch -> wait cycles before giving up
-REJOIN_WINDOW_TIMEOUT = 120.0      # most it waits for the Roblox window to appear after launching
-REJOIN_LOAD_TIMEOUT = 120.0        # most it waits for the game's Play popup after that
+REJOIN_WINDOW_TIMEOUT = 240.0      # most it waits for the Roblox window to appear after launching (Natro: 4 minutes,
+                                   # as Roblox may be installing an update first)
+REJOIN_LOAD_TIMEOUT = 180.0        # most it waits for the game's Play popup after that (Natro: 3 minutes)
 REJOIN_POLL_INTERVAL = 1.0         # how often it looks at the screen while waiting
 # The game has loaded once its green Play button is on screen around REJOIN_JOIN_POS.
 REJOIN_JOIN_POS = (910, 817)       # the Play button - clicked once it has loaded
@@ -283,6 +283,15 @@ REJOIN_PLAY_BOX = (120, 25)        # half width, half height of the area around 
 REJOIN_PLAY_MIN_PIXELS = 2000      # the button is ~15000 px of that color; fewer is something else
 REJOIN_PLAY_SETTLE = 1.0           # wait after the button appears, before clicking it
 REJOIN_AFTER_JOIN_WAIT = 15.0      # wait after clicking it, then the character respawns
+
+# The Roblox "Disconnected" dialog (a dark grey panel in the middle of the screen): it counts as
+# showing when most of DISCONNECT_PANEL_BOX is that one color - the game behind it is blurred,
+# so nothing else on screen fills a box like that. See detect_disconnect().
+DISCONNECT_PANEL_COLOR = (57, 59, 60)
+DISCONNECT_PANEL_TOLERANCE = 3
+DISCONNECT_PANEL_BOX = (760, 427, 1160, 677)   # left, top, right, bottom
+DISCONNECT_PANEL_MIN_FRACTION = 0.5
+ROBLOX_CRASH_WINDOW_TITLE = "Roblox Crash"
 
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75
@@ -383,10 +392,10 @@ GUI_RESPAWN_BUTTON_HEIGHT = 1    # lines
 
 __all__ = [
     "ENABLED_NEEDS",
-    "SCRIPT_DIR", "NEEDS_DIR", "DEBUG_DIR", "RUN_LOG_PATH", "RUN_COUNTER_PATH", "GAME_CONFIG_PATH",
+    "NEEDS_DIR", "DEBUG_DIR", "RUN_LOG_PATH", "RUN_COUNTER_PATH", "GAME_CONFIG_PATH",
     "OUTPUT_LOG_PATH", "FAILURE_DIR", "STATUS_PATH", "OUTPUT_LOG_MAX_BYTES", "MAX_FAILURE_SCREENSHOTS",
     "DISABLED_NEEDS_REJOIN_THRESHOLD",
-    "SCREEN_WIDTH", "SCREEN_HEIGHT", "SCREEN_CENTER_X", "SCREEN_CENTER_Y",
+    "SCREEN_WIDTH", "SCREEN_CENTER_X", "SCREEN_CENTER_Y",
     "FOCUS_WINDOW_ON_ACTION", "SAVE_NEW_NEEDS", "MATCH_ONLY_LEFT_HALF",
     "RESPAWN_KEY_DURATION", "RESPAWN_WAIT", "WALK_TO_BUTTONS_DURATION", "WALK_ALTERNATING_STEP",
     "KEY_STEP_GAP", "UI_SETTLE", "FOCUS_DELAY", "FOCUS_CLICK_SETTLE_DELAY",
@@ -397,14 +406,14 @@ __all__ = [
     "PET_CIRCLE_STEP_MOVE_DURATION", "PET_FOCUS_CLICK_DURATION", "ICON_EXTRACT_PADDING",
     "CATCH_TOYS_POS", "CATCH_SQUEAKY_TOY_POS", "CATCH_EQUIP_POS", "CATCH_UNEQUIP_POS",
     "EMPTY_POS", "FOCUS_PET_REGION_TOP_PERCENT", "FOCUS_PET_FRAME_GAP", "FOCUS_PET_DIFF_THRESHOLD",
-    "FOCUS_PET_MERGE_KERNEL", "FOCUS_PET_MIN_AREA",
+    "FOCUS_PET_MERGE_KERNEL", "FOCUS_PET_MIN_AREA", "FOCUS_PET_MENU_WAIT",
     "CHOOSE_BUTTON_COLOR", "CHOOSE_SLOW_MOVE_DURATION",
     "PAYCHECK_CASHOUT_COLOR", "PAYCHECK_DISMISS_POS_1", "PAYCHECK_DISMISS_POS_2",
     "RIDE_BACKWARD_DURATION", "RIDE_WAIT_AFTER_E", "RIDE_FORWARD_DURATION", "RIDE_VEHICLES_POS",
     "RIDE_FIRST_VEHICLE_POS", "RIDE_EQUIP_POS", "RIDE_R_HOLD_DURATION",
     "TELEPORT_WAIT", "TELEPORT_SETTLE_WAIT", "GENERAL_TELEPORT_POS_2", "GENERAL_TELEPORT_POS_3",
     "TELEPORT_BACK_DURATION", "TELEPORT_WALK_STEP_GAP", "SICK_CONFIRM_WAIT",
-    "TELEPORT_PETS_TAB_POS", "TELEPORT_VEHICLES_TAB_POS", "TELEPORT_FOOD_TAB_POS", "SICK_FINAL_CLICK_POS",
+    "TELEPORT_PETS_TAB_POS", "TELEPORT_VEHICLES_TAB_POS", "SICK_FINAL_CLICK_POS",
     "TELEPORT_WALK_NEEDS", "HELICOPTER_REQUIRED", "HELICOPTER_FORWARD_DURATION", "HELICOPTER_HOLD_DURATION",
     "NEED_STUCK_CHECKS", "HALLOWEEN", "GHOST_GALLERY_PLAY_MINIGAME",
     "GHOST_GALLERY_YES_COLOR", "GHOST_GALLERY_NO_COLOR", "GHOST_GALLERY_MIN_BUTTON_PIXELS",
@@ -414,6 +423,8 @@ __all__ = [
     "REJOIN_LOAD_TIMEOUT", "REJOIN_POLL_INTERVAL", "REJOIN_JOIN_POS", "REJOIN_PLAY_COLOR",
     "REJOIN_PLAY_COLOR_TOLERANCE", "REJOIN_PLAY_BOX", "REJOIN_PLAY_MIN_PIXELS", "REJOIN_PLAY_SETTLE",
     "REJOIN_AFTER_JOIN_WAIT",
+    "DISCONNECT_PANEL_COLOR", "DISCONNECT_PANEL_TOLERANCE", "DISCONNECT_PANEL_BOX",
+    "DISCONNECT_PANEL_MIN_FRACTION", "ROBLOX_CRASH_WINDOW_TITLE",
     "NEED_GONE_MAX_WAIT", "NEED_GONE_POLL_INTERVAL", "NEED_GONE_CONFIRMATIONS",
     "NEED_GONE_CONFIRM_INTERVAL", "NEED_GONE_FLICKER_RECHECK_DELAY", "NEED_WATCH_JOIN_TIMEOUT",
     "KEY_BACKPACK", "KEY_MOUNT", "KEY_INTERACT", "KEY_ZOOM_IN", "KEY_HELICOPTER", "KEY_JUMP", "MOVE_KEYS", "RESPAWN_KEYS",

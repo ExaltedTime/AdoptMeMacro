@@ -55,6 +55,11 @@ Path(DEBUG_DIR).mkdir(exist_ok=True)
 RUN_LOG_PATH = os.path.join(DEBUG_DIR, "run_log.txt")      # appended to, never overwritten
 RUN_COUNTER_PATH = os.path.join(DEBUG_DIR, "run_counter.txt")  # holds the last-used run number
 GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")      # persisted game state - see load_game_config()
+OUTPUT_LOG_PATH = os.path.join(DEBUG_DIR, "output.log")    # everything the macro prints, timestamped - see log_output()
+FAILURE_DIR = os.path.join(DEBUG_DIR, "failures")          # a screenshot per failure - see log_failure()
+STATUS_PATH = os.path.join(DEBUG_DIR, "status.json")       # live "is it alive and what's it doing" summary - see write_status()
+OUTPUT_LOG_MAX_BYTES = 5 * 1024 * 1024   # output.log moves to output.log.old (replacing the last one) past this size
+MAX_FAILURE_SCREENSHOTS = 40             # oldest are deleted beyond this many
 
 # ============================================================================
 # SCREEN / INPUT SETUP
@@ -62,8 +67,14 @@ GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")      # persisted game stat
 pyautogui.FAILSAFE = True
 pydirectinput.FAILSAFE = True
 pydirectinput.PAUSE = 0.05
-SCREEN_WIDTH, SCREEN_HEIGHT = pyautogui.size()
-SCREEN_CENTER_X, SCREEN_CENTER_Y = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2
+
+# Every position, size and screen region in this file was measured with the Roblox window maximized on
+# a 1920x1080 screen. The macro works in that "reference" space: grab_screen() crops the screenshot to
+# the Roblox window and scales it to this size, and clicks and mouse moves are scaled from it back onto
+# the window (see to_screen()). On a 1920x1080 screen with Roblox maximized nothing is scaled at all.
+REFERENCE_WIDTH, REFERENCE_HEIGHT = 1920, 1080
+REFERENCE_CENTER_X, REFERENCE_CENTER_Y = REFERENCE_WIDTH // 2, REFERENCE_HEIGHT // 2
+ROBLOX_RECT_TTL = 1.0   # seconds the Roblox window's position and size are remembered between lookups
 
 # Behavior flags
 FOCUS_WINDOW_ON_ACTION = True  # click the Roblox window to focus it before acting
@@ -116,6 +127,7 @@ FOCUS_PET_FRAME_GAP = 0.1            # seconds between the two screenshots
 FOCUS_PET_DIFF_THRESHOLD = 25        # per-pixel brightness change that counts as movement (0-255)
 FOCUS_PET_MERGE_KERNEL = 25          # px; changed pixels this close together merge into one blob
 FOCUS_PET_MIN_AREA = 150             # px^2; smaller blobs are noise, not the pet
+FOCUS_PET_MENU_WAIT = 4.0            # wait after the clicks, for the pet's menu to open
 
 # The 'choose' need's button is matched by its exact color rather than shape,
 # since it's just a plain circle with no distinguishing icon. Given as (R, G, B).
@@ -154,20 +166,19 @@ SICK_CONFIRM_WAIT = 7.0           # wait after pressing 'e' and before the sick 
 
 TELEPORT_PETS_TAB_POS = (817, 713)       # nursery: pets tab
 TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
-TELEPORT_FOOD_TAB_POS = (753, 804)       # supermarket: food tab
 SICK_FINAL_CLICK_POS = (1045, 660)       # click after the sick need's walk
 
-# Needs that teleport somewhere and walk (see TeleportWalkNeedHandler), then
-# wait for the need to clear. Each entry: where to teleport, the
-# (key, seconds) holds to perform in order, and optionally a `final_click`
-# position to click after the last hold. Pizza and camping durations are
-# placeholders until tuned.
 # Whether a teleport-walk need flies by helicopter by default; an entry can
 # override it with `helicopter=True/False`. Only the Halloween bored, beach
 # and camping entries turn it on.
 HELICOPTER_REQUIRED = False
 HELICOPTER_FORWARD_DURATION = 1.0  # step forward this long after teleporting, before equipping
 HELICOPTER_HOLD_DURATION = 4.0     # then hold KEY_HELICOPTER this long
+
+# Needs that teleport somewhere and walk (see TeleportWalkNeedHandler), then
+# wait for the need to clear. Each entry: where to teleport, the
+# (key, seconds) holds to perform in order, optionally a `final_click`
+# position to click after the last hold, and optionally `helicopter` (above).
 TELEPORT_WALK_NEEDS_NORMAL = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),)),
@@ -180,9 +191,7 @@ TELEPORT_WALK_NEEDS_NORMAL = {
 
 # Used instead of the entry of the same name above while HALLOWEEN is on (Halloween
 # moves the nursery) - and "sick" only exists here, so it isn't a need at all
-# outside Halloween. bored/beach/school/camping are disabled in ENABLED_NEEDS
-# and their steps below are just copies of the normal ones until the real
-# Halloween steps are worked out.
+# outside Halloween.
 TELEPORT_WALK_NEEDS_HALLOWEEN = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 7.7),), helicopter=True),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 20.0),), helicopter=True),
@@ -196,6 +205,9 @@ TELEPORT_WALK_NEEDS_HALLOWEEN = {
 # handler registry both read this).
 TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN \
     else TELEPORT_WALK_NEEDS_NORMAL
+
+DISABLED_NEEDS_REJOIN_THRESHOLD = 4  # this many needs disabled for the run (see NEED_STUCK_CHECKS) means something is
+                                     # badly wrong: rejoin the game, run setup, and give every need a fresh chance
 NEED_STUCK_CHECKS = 5            # an enabled need detected on this many checks in a row is
                                   # disabled for the rest of the run - see record_detected_needs()
 NEED_GONE_MAX_WAIT = 60.0        # most wait_until_need_gone() ever waits for an icon to disappear -
@@ -237,8 +249,8 @@ MONEY_COLLECTED_TARGET = 200
 TREE_CHECK_INTERVAL = 10 * 60          # seconds (10 minutes) between tree harvests
 LURE_RECOLLECT_INTERVAL = 4 * 60 * 60  # seconds (4 hours)
 
-# setup_game(): run on demand only (the GUI's Setup button), never by the cycle.
-# Disabling trades isn't implemented yet.
+# setup_game(): run on demand (the GUI's Setup button) and by the automatic recovery
+# in rejoin_game(), never by the normal cycle.
 SETUP_LOCK_HOUSE_POS = (1112, 65)
 SETUP_BACKPACK_SETTINGS_POS = (977, 646)
 SETUP_SORT_MENU_POS = (1031, 680)
@@ -264,9 +276,12 @@ REJOIN_LEAVE_KEYS = ("esc", "l", "enter")
 REJOIN_LEAVE_KEY_GAP = 0.25        # between those keys (Natro uses the same)
 REJOIN_MIN_LEAVE_HEIGHT = 500      # px; the L shortcut only works in a Roblox window at least this tall
 REJOIN_CLOSE_WAIT = 5.0            # after closing, before relaunching (relaunching too soon gives Roblox error 264)
+REJOIN_INTERVAL = 60 * 60          # while the loop runs, rejoin this often (seconds) even if nothing is wrong, to
+                                   # refresh a client that has been up a long time; also gives stuck needs a fresh chance
 REJOIN_MAX_ATTEMPTS = 3            # close -> launch -> wait cycles before giving up
-REJOIN_WINDOW_TIMEOUT = 120.0      # most it waits for the Roblox window to appear after launching
-REJOIN_LOAD_TIMEOUT = 120.0        # most it waits for the game's Play popup after that
+REJOIN_WINDOW_TIMEOUT = 240.0      # most it waits for the Roblox window to appear after launching (Natro: 4 minutes,
+                                   # as Roblox may be installing an update first)
+REJOIN_LOAD_TIMEOUT = 180.0        # most it waits for the game's Play popup after that (Natro: 3 minutes)
 REJOIN_POLL_INTERVAL = 1.0         # how often it looks at the screen while waiting
 # The game has loaded once its green Play button is on screen around REJOIN_JOIN_POS.
 REJOIN_JOIN_POS = (910, 817)       # the Play button - clicked once it has loaded
@@ -276,6 +291,15 @@ REJOIN_PLAY_BOX = (120, 25)        # half width, half height of the area around 
 REJOIN_PLAY_MIN_PIXELS = 2000      # the button is ~15000 px of that color; fewer is something else
 REJOIN_PLAY_SETTLE = 1.0           # wait after the button appears, before clicking it
 REJOIN_AFTER_JOIN_WAIT = 15.0      # wait after clicking it, then the character respawns
+
+# The Roblox "Disconnected" dialog (a dark grey panel in the middle of the screen): it counts as
+# showing when most of DISCONNECT_PANEL_BOX is that one color - the game behind it is blurred,
+# so nothing else on screen fills a box like that. See detect_disconnect().
+DISCONNECT_PANEL_COLOR = (57, 59, 60)
+DISCONNECT_PANEL_TOLERANCE = 3
+DISCONNECT_PANEL_BOX = (760, 427, 1160, 677)   # left, top, right, bottom
+DISCONNECT_PANEL_MIN_FRACTION = 0.5
+ROBLOX_CRASH_WINDOW_TITLE = "Roblox Crash"
 
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75
@@ -345,14 +369,13 @@ GUI_FONT = "Courier"
 GUI_BG = "#1a1a1a"
 GUI_ACCENT = "#0d7377"
 GUI_FG = "#fff"
-GUI_START_COLOR = "#2ecc71"
 GUI_STOP_COLOR = "#d62828"
 GUI_LOOP_COLOR = "#2980b9"
 GUI_RESPAWN_COLOR = "#8e44ad"
 GUI_TEST_COLOR = "#e74c3c"
 GUI_CONSOLE_BG = "#0a0a0a"
 GUI_CONSOLE_FG = "#00ff00"
-GUI_SQUARE_BUTTON_SIZE = 44         # px, start/stop buttons are square
+GUI_SQUARE_BUTTON_SIZE = 44         # px, the stop button is square (and the loop button as tall)
 GUI_STATUS_HEIGHT = 25              # px
 
 # GUI layout spacing
@@ -363,7 +386,6 @@ GUI_LABEL_PADDING = 3       # bottom pady under the "Output" label, and around t
 GUI_DIVIDER_HEIGHT = 2      # px, thickness of the horizontal divider line
 
 # GUI font sizes (family is GUI_FONT; weight is given at each call site)
-GUI_START_ICON_FONT_SIZE = 14
 GUI_STOP_ICON_FONT_SIZE = 16
 GUI_LOOP_ICON_FONT_SIZE = 20
 GUI_SECTION_FONT_SIZE = 9   # section headers, ordinary buttons/labels
@@ -376,8 +398,10 @@ GUI_RESPAWN_BUTTON_HEIGHT = 1    # lines
 
 __all__ = [
     "ENABLED_NEEDS",
-    "SCRIPT_DIR", "NEEDS_DIR", "DEBUG_DIR", "RUN_LOG_PATH", "RUN_COUNTER_PATH", "GAME_CONFIG_PATH",
-    "SCREEN_WIDTH", "SCREEN_HEIGHT", "SCREEN_CENTER_X", "SCREEN_CENTER_Y",
+    "NEEDS_DIR", "DEBUG_DIR", "RUN_LOG_PATH", "RUN_COUNTER_PATH", "GAME_CONFIG_PATH",
+    "OUTPUT_LOG_PATH", "FAILURE_DIR", "STATUS_PATH", "OUTPUT_LOG_MAX_BYTES", "MAX_FAILURE_SCREENSHOTS",
+    "DISABLED_NEEDS_REJOIN_THRESHOLD",
+    "REFERENCE_WIDTH", "REFERENCE_HEIGHT", "REFERENCE_CENTER_X", "REFERENCE_CENTER_Y", "ROBLOX_RECT_TTL",
     "FOCUS_WINDOW_ON_ACTION", "SAVE_NEW_NEEDS", "MATCH_ONLY_LEFT_HALF",
     "RESPAWN_KEY_DURATION", "RESPAWN_WAIT", "WALK_TO_BUTTONS_DURATION", "WALK_ALTERNATING_STEP",
     "KEY_STEP_GAP", "UI_SETTLE", "FOCUS_DELAY", "FOCUS_CLICK_SETTLE_DELAY",
@@ -388,23 +412,25 @@ __all__ = [
     "PET_CIRCLE_STEP_MOVE_DURATION", "PET_FOCUS_CLICK_DURATION", "ICON_EXTRACT_PADDING",
     "CATCH_TOYS_POS", "CATCH_SQUEAKY_TOY_POS", "CATCH_EQUIP_POS", "CATCH_UNEQUIP_POS",
     "EMPTY_POS", "FOCUS_PET_REGION_TOP_PERCENT", "FOCUS_PET_FRAME_GAP", "FOCUS_PET_DIFF_THRESHOLD",
-    "FOCUS_PET_MERGE_KERNEL", "FOCUS_PET_MIN_AREA",
+    "FOCUS_PET_MERGE_KERNEL", "FOCUS_PET_MIN_AREA", "FOCUS_PET_MENU_WAIT",
     "CHOOSE_BUTTON_COLOR", "CHOOSE_SLOW_MOVE_DURATION",
     "PAYCHECK_CASHOUT_COLOR", "PAYCHECK_DISMISS_POS_1", "PAYCHECK_DISMISS_POS_2",
     "RIDE_BACKWARD_DURATION", "RIDE_WAIT_AFTER_E", "RIDE_FORWARD_DURATION", "RIDE_VEHICLES_POS",
     "RIDE_FIRST_VEHICLE_POS", "RIDE_EQUIP_POS", "RIDE_R_HOLD_DURATION",
     "TELEPORT_WAIT", "TELEPORT_SETTLE_WAIT", "GENERAL_TELEPORT_POS_2", "GENERAL_TELEPORT_POS_3",
     "TELEPORT_BACK_DURATION", "TELEPORT_WALK_STEP_GAP", "SICK_CONFIRM_WAIT",
-    "TELEPORT_PETS_TAB_POS", "TELEPORT_VEHICLES_TAB_POS", "TELEPORT_FOOD_TAB_POS", "SICK_FINAL_CLICK_POS",
+    "TELEPORT_PETS_TAB_POS", "TELEPORT_VEHICLES_TAB_POS", "SICK_FINAL_CLICK_POS",
     "TELEPORT_WALK_NEEDS", "HELICOPTER_REQUIRED", "HELICOPTER_FORWARD_DURATION", "HELICOPTER_HOLD_DURATION",
     "NEED_STUCK_CHECKS", "HALLOWEEN", "GHOST_GALLERY_PLAY_MINIGAME",
     "GHOST_GALLERY_YES_COLOR", "GHOST_GALLERY_NO_COLOR", "GHOST_GALLERY_MIN_BUTTON_PIXELS",
     "GHOST_GALLERY_NO_MAX_DX", "GHOST_GALLERY_NO_MAX_DY", "GHOST_GALLERY_DONT_SHOW_POS", "GHOST_GALLERY_NO_POS",
     "ROBLOX_PLACE_ID", "ROBLOX_PROCESS_NAMES", "REJOIN_LEAVE_KEYS", "REJOIN_LEAVE_KEY_GAP",
-    "REJOIN_MIN_LEAVE_HEIGHT", "REJOIN_CLOSE_WAIT", "REJOIN_MAX_ATTEMPTS", "REJOIN_WINDOW_TIMEOUT",
+    "REJOIN_MIN_LEAVE_HEIGHT", "REJOIN_CLOSE_WAIT", "REJOIN_INTERVAL", "REJOIN_MAX_ATTEMPTS", "REJOIN_WINDOW_TIMEOUT",
     "REJOIN_LOAD_TIMEOUT", "REJOIN_POLL_INTERVAL", "REJOIN_JOIN_POS", "REJOIN_PLAY_COLOR",
     "REJOIN_PLAY_COLOR_TOLERANCE", "REJOIN_PLAY_BOX", "REJOIN_PLAY_MIN_PIXELS", "REJOIN_PLAY_SETTLE",
     "REJOIN_AFTER_JOIN_WAIT",
+    "DISCONNECT_PANEL_COLOR", "DISCONNECT_PANEL_TOLERANCE", "DISCONNECT_PANEL_BOX",
+    "DISCONNECT_PANEL_MIN_FRACTION", "ROBLOX_CRASH_WINDOW_TITLE",
     "NEED_GONE_MAX_WAIT", "NEED_GONE_POLL_INTERVAL", "NEED_GONE_CONFIRMATIONS",
     "NEED_GONE_CONFIRM_INTERVAL", "NEED_GONE_FLICKER_RECHECK_DELAY", "NEED_WATCH_JOIN_TIMEOUT",
     "KEY_BACKPACK", "KEY_MOUNT", "KEY_INTERACT", "KEY_ZOOM_IN", "KEY_HELICOPTER", "KEY_JUMP", "MOVE_KEYS", "RESPAWN_KEYS",
@@ -429,11 +455,11 @@ __all__ = [
     "DEBUG_BUTTON_MARKER_RADIUS", "DEBUG_BUTTON_MARKER_THICKNESS", "DEBUG_BUTTON_LABEL_OFFSET",
     "DEBUG_BUTTON_LABEL_SCALE",
     "PURPLE_RANGE", "WHITE_RANGE",
-    "GUI_GEOMETRY", "GUI_ALPHA", "GUI_FONT", "GUI_BG", "GUI_ACCENT", "GUI_FG", "GUI_START_COLOR",
+    "GUI_GEOMETRY", "GUI_ALPHA", "GUI_FONT", "GUI_BG", "GUI_ACCENT", "GUI_FG",
     "GUI_STOP_COLOR", "GUI_LOOP_COLOR", "GUI_RESPAWN_COLOR", "GUI_TEST_COLOR", "GUI_CONSOLE_BG",
     "GUI_CONSOLE_FG", "GUI_SQUARE_BUTTON_SIZE", "GUI_STATUS_HEIGHT",
     "GUI_OUTER_PADDING", "GUI_ROW_SPACING", "GUI_WIDGET_SPACING", "GUI_LABEL_PADDING", "GUI_DIVIDER_HEIGHT",
-    "GUI_START_ICON_FONT_SIZE", "GUI_STOP_ICON_FONT_SIZE", "GUI_LOOP_ICON_FONT_SIZE",
+    "GUI_STOP_ICON_FONT_SIZE", "GUI_LOOP_ICON_FONT_SIZE",
     "GUI_SECTION_FONT_SIZE", "GUI_STATUS_FONT_SIZE", "GUI_CONSOLE_FONT_SIZE",
     "GUI_CONSOLE_HEIGHT", "GUI_CONSOLE_WIDTH", "GUI_RESPAWN_BUTTON_HEIGHT",
 ]

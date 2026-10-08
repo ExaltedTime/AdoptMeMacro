@@ -13,15 +13,12 @@ name everywhere else.
 
 ## The workflow lifecycle
 
-At the top level, exactly two things ever run:
+The only thing that runs is **`run_workflow_loop()`** (the GUI's loop
+button): it respawns once up front (so the loop always starts from a known,
+on-the-ground state), then repeats `run_full_cycle()` forever, pausing
+`LOOP_DELAY` seconds between cycles, until stopped.
 
-- **`run_workflow()`** - a single pass: wait for a resolvable need, resolve
-  it, done.
-- **`run_workflow_loop()`** - respawns once up front (so the loop always
-  starts from a known, on-the-ground state), then repeats `run_full_cycle()`
-  forever, pausing `LOOP_DELAY` seconds between cycles, until stopped.
-
-Both are built on **`run_full_cycle()`**, which is a tight retry loop:
+**`run_full_cycle()`** is a tight retry loop:
 
 ```
 while True:
@@ -83,9 +80,10 @@ character standing.
   `check_running()`** - see [Stopping & focus safety](#stopping--focus-safety).
 - **WINDOW FOCUS & SCREEN CAPTURE** - `focus_roblox()` / `focus_roblox_click()`
   bring Roblox to the front; `is_roblox_focused()` checks whether it still
-  is; `grab_screen()` takes a screenshot via `mss`; `find_exact_color()`
-  finds a button by its exact pixel color rather than its shape (used by
-  the choose need, whose button has no distinguishing icon).
+  is; `roblox_windows()` lists the open Roblox windows; `grab_screen()`
+  takes a screenshot via `mss`; `exact_color_mask()` / `find_exact_color()`
+  find things by their exact pixel color rather than their shape (the
+  choose need's button, the popups and the Play button all work this way).
 - **STATE** - this module's own mutable state: `STOP_FLAG`;
   `BUTTON_POSITIONS`, the in-memory cache of the last-detected action
   button positions (never persisted to disk - see
@@ -94,6 +92,10 @@ character standing.
   [Stuck needs](#stuck-needs). Every fixed
   config/tuning value lives in `magic_numbers.py` instead - see
   [Configuration reference](#configuration-reference).
+- **LOGGING** - `next_run_number()` / `log_run_event()`, plus the
+  unattended-run tools `log_output()`, `save_failure_screenshot()`,
+  `log_failure()` and `write_status()` - see
+  [Debugging an unattended run](#debugging-an-unattended-run).
 - **GAME CONFIG** - `load_game_config()`/`save_game_config()`: the state
   that *does* persist across separate launches of the script (unlike
   `BUTTON_POSITIONS` above) - see [Persisted game config](#persisted-game-config).
@@ -102,7 +104,7 @@ character standing.
 - **NEED ICON DETECTION** - `detect_need_icons()`, `find_matching_need()`,
   `prompt_rename_need()`. See [Need-icon detection](#need-icon-detection).
 - **CLICKING** - `hover_click()`, `hover_move()`, `wait_interruptible()`,
-  `release_all_inputs()`. See
+  `wait_stoppable()`, `release_all_inputs()`. See
   [Click & input primitives](#click--input-primitives).
 - **BUTTON DETECTION** - `detect_buttons()`, `refresh_button_mapping()`,
   `click_need_button()`. See [Button detection](#button-detection).
@@ -110,16 +112,51 @@ character standing.
   `walk_alternating()` (shared by the walk need, a/d, and the ride need,
   w/s - same pattern, different keys and duration passed in).
 - **SIDE ACTIONS** - `lure_collect()`, `set_new_lure()`, `tree_collect()`,
-  `setup_game()`: plain callable actions, not tied to any detected
-  need/icon. `lure_collect()`/`tree_collect()` are run automatically by
-  `side_quest()`; `setup_game()` is on-demand only - see the end of
-  [Need handlers](#need-handlers).
+  `setup_game()`, `disable_trades()`, `leave_and_rejoin()`: plain callable
+  actions, not tied to any detected need/icon. `lure_collect()`/
+  `tree_collect()` are run automatically by `side_quest()`; `setup_game()`
+  and `leave_and_rejoin()` run from the GUI and from the automatic recovery
+  - see the end of [Need handlers](#need-handlers).
 - **NEED HANDLERS** - `NeedHandler` and one subclass per need (or per group
   of needs, via `partial()`). See [Need handlers](#need-handlers).
-- **WORKFLOWS** - `run_full_cycle()`, `run_workflow()`, `run_workflow_loop()`,
-  `side_quest()`.
-  See [The workflow lifecycle](#the-workflow-lifecycle) above.
+- **PER-CYCLE CHECKS** - `unscrew()` and what it runs: `rejoin_game()`
+  (with `rejoin_reason()` / `detect_disconnect()`), `ghost_gallery()`,
+  `detect_paycheck()`; and `side_quest()`.
+- **WORKFLOWS** - `run_full_cycle()` and `run_workflow_loop()`. See
+  [The workflow lifecycle](#the-workflow-lifecycle) above.
 - **GUI** - the `tkinter` control panel. See [GUI internals](#gui-internals).
+
+## Window & coordinates
+
+Every position, pixel size and screen region in `magic_numbers.py` was
+measured with the Roblox window maximized on a 1920x1080 screen
+(`REFERENCE_WIDTH` x `REFERENCE_HEIGHT`). The macro works entirely in that
+"reference" space and converts at exactly two points, so nothing else needs to
+know the real window size:
+
+- **`grab_screen()`** takes a screenshot of the whole monitor
+  (`grab_full_screen()`), crops it to the Roblox window (`roblox_rect()`) and
+  scales it to the reference size. Every detection - icons, buttons, popups,
+  the Play button, the pet - and every position they return is therefore in
+  reference space.
+- **`to_screen(x, y)`** maps a reference-space position onto the real window.
+  `hover_move()` (so every click), the pet's mouse circle and the focus click
+  all go through it.
+
+`roblox_rect()` reads the Roblox window's position and size (`roblox_window()`
+prefers the window titled exactly "Roblox", so a browser tab that mentions it
+isn't picked) and clips it to the monitor, which trims the few pixels of
+invisible border a maximized window reports. The whole monitor is used when
+there's no usable window (not running, minimized). It's remembered for
+`ROBLOX_RECT_TTL` seconds, and `focus_roblox()` forgets it. On a 1920x1080
+screen with Roblox maximized the rectangle is the whole screen, so nothing is
+cropped or scaled; on another resolution or a smaller window everything
+scales. Distances measured in pixels (icon radii, the `GHOST_GALLERY_NO_MAX_*`
+offsets, ...) are reference pixels, so they scale too. Scaling assumes the same
+aspect ratio and a window that fills its area - a non-maximized window's title
+bar and borders are counted as part of it, so expect small errors there.
+`save_failure_screenshot()` is the one thing that captures the whole screen
+instead, to show what else was on it.
 
 ## Need-icon detection
 
@@ -262,10 +299,10 @@ Which needs actually run automatically is decided by one set,
 file). A detected need that isn't in it is logged and skipped, not
 resolved. Currently enabled: `hungry`, `thirsty`, `dirty`, `potty`,
 `sleepy`, `catch`, `pet`, `ride`, `walk`, `choose`, plus the
-teleport-walk needs `cafe`, `salon`, `sick`, `pizza`, `school` (called out
-with their own inline comment in the set literal, since they leave the map
-and run considerably longer than everything else). Implemented but not
-enabled: `bored`, `beach`, `camping` (also teleport-walk needs).
+teleport-walk needs `cafe`, `salon`, `sick`, `pizza`, `school`, `beach`,
+`camping`, `bored` (called out with their own inline comment in the set
+literal, since they leave the map and run considerably longer than
+everything else).
 The GUI's **Debug** tab has a button per handler that runs it directly
 regardless of `ENABLED_NEEDS`.
 
@@ -311,10 +348,8 @@ a plain boolean. The teleport-walk steps live in two tables,
 `TELEPORT_WALK_NEEDS` - the one `TeleportWalkNeedHandler` and the handler
 registry actually read - is the normal table with the Halloween entries laid
 over it while the flag is on. The Halloween table covers `bored`, `beach`,
-`school`, `camping` (Halloween moves the nursery; `bored`, `beach` and `camping` stay
-disabled in `ENABLED_NEEDS`, and their Halloween steps are currently just
-copies of the normal ones plus the helicopter flag; `school` is enabled and
-has its own steps) and `sick`, which *only* exists there - with `HALLOWEEN` off it
+`school`, `camping` (Halloween moves the nursery, so each has its own steps
+there; `bored`, `beach` and `camping` also fly by helicopter) and `sick`, which *only* exists there - with `HALLOWEEN` off it
 has no steps and isn't a need at all. While the flag is on, `unscrew()` also
 calls `ghost_gallery()`, which will either play the ghost gallery minigame
 or just disable it depending on `GHOST_GALLERY_PLAY_MINIGAME`. The minigame
@@ -324,9 +359,8 @@ Every cycle, `unscrew()` runs `rejoin_game()` first (nothing else works
 while disconnected), then `ghost_gallery()` if `HALLOWEEN` is on, then the
 paycheck check. The ghost gallery goes before the paycheck check because the
 popup's Yes button is the same green as the paycheck's CASH OUT button, so
-`detect_paycheck()` would mistake it for one. `rejoin_game()` is a
-comments-only stub for now: the plan is to detect a disconnect, get back in
-(`leave_and_rejoin()` below is the start of that), then respawn.
+`detect_paycheck()` would mistake it for one. `rejoin_game()` is the
+automatic recovery - see [Automatic recovery](#stuck-needs).
 
 **Disabling the ghost gallery.** `detect_ghost_gallery_popup()` recognises the
 "Ghost Gallery is starting soon! Teleport there now?" popup by its two
@@ -363,6 +397,32 @@ to the game config, so relaunching the script gives every need a fresh
 chance - while `DETECTION_HISTORY` is also emptied at the start of every
 workflow run, so a streak never spans a stop and restart.
 
+**Automatic recovery.** Every cycle `unscrew()` calls `rejoin_game()`, which
+asks `rejoin_reason()` whether the game needs rejoining. In order:
+
+1. *Disconnect* - Roblox's crash window (`ROBLOX_CRASH_WINDOW_TITLE`) is open;
+   no Roblox window exists; or the Disconnected dialog is showing
+   (`detect_disconnect()`: at least `DISCONNECT_PANEL_MIN_FRACTION` of
+   `DISCONNECT_PANEL_BOX` is the dialog's grey, `DISCONNECT_PANEL_COLOR` - the
+   game behind it is blurred, so nothing else fills a box like that).
+2. *Stuck* - `DISABLED_NEEDS_REJOIN_THRESHOLD` (4) needs have been disabled as
+   stuck.
+3. *Scheduled* - it has been `REJOIN_INTERVAL` (an hour) since the last
+   rejoin (`LAST_REJOIN`, set when the loop starts and by every successful
+   `leave_and_rejoin()`): a refresh of a client that has been up a long time.
+
+If so, it runs `leave_and_rejoin()` (see [Side actions](#side-actions)) -
+without the clean esc/l/enter leave for a disconnect, since there's no game
+to leave - then `setup_game()` (the rejoin resets the settings it sets), then
+clears `DISABLED_THIS_RUN` and `DETECTION_HISTORY` so every need gets a fresh
+chance, and the workflow carries on. A disconnect or stuck recovery counts as
+a failure: `log_failure()` saves a screenshot first, which shows the dialog
+and its error code. A scheduled rejoin isn't one: it's a line in the run log,
+counted in `scheduled_rejoins`. If the rejoin fails the cause is still
+there, so the next cycle tries again. The check only runs once per cycle, so
+a disconnect in the middle of a long handler is noticed when that handler
+finishes.
+
 ### Side actions
 
 None of `lure_collect()`, `set_new_lure()`, `tree_collect()` or
@@ -371,16 +431,19 @@ registered anywhere in `NEED_HANDLER_CLASSES` or `ENABLED_NEEDS`.
 `side_quest()` runs `lure_collect()`/`tree_collect()` automatically - see
 [Persisted game config](#persisted-game-config). `setup_game()` is *not*
 part of any cycle or loop: it only runs when you press the GUI's **Setup**
-button (or call it yourself), and nothing tracks whether it has run. The
+button and from the automatic recovery, and nothing tracks whether it has
+run. The
 lure and tree actions are only reachable through `side_quest()`.
 
-- **`leave_and_rejoin()`** - GUI-only for now (the **Leave & rejoin** button;
-  `rejoin_game()` doesn't call it yet). Modelled on how Natro Macro (a Bee
+- **`leave_and_rejoin()`** - the **Leave & rejoin** button, and what
+  `rejoin_game()` calls to recover. Modelled on how Natro Macro (a Bee
   Swarm Simulator macro) reconnects: close the game properly, relaunch it
   through a deeplink, and wait in stages by looking at the screen rather
   than for a fixed time. Up to `REJOIN_MAX_ATTEMPTS` (3) times:
-  1. `close_roblox()` - if the Roblox window is at least
-     `REJOIN_MIN_LEAVE_HEIGHT` tall (the L shortcut needs it) press
+  1. `close_roblox()` - if `clean_leave` (it's off when the game is gone or
+     showing the Disconnected dialog, where Enter could press Reconnect) and
+     the Roblox window is at least `REJOIN_MIN_LEAVE_HEIGHT` tall (the L
+     shortcut needs it) press
      `REJOIN_LEAVE_KEYS` (esc, l, enter), then `taskkill` every process in
      `ROBLOX_PROCESS_NAMES` and wait `REJOIN_CLOSE_WAIT` (relaunching sooner
      gives Roblox error 264).
@@ -481,7 +544,7 @@ loop).
 
 One exception: the very first check at the top of `run_full_cycle()`'s
 retry loop uses `check_stop()` alone, not `check_running()`. That's
-deliberate - the moment you click **[START]**/**[LOOP]** in the Python
+deliberate - the moment you click **[LOOP]** in the Python
 GUI, *that* window has focus, not Roblox. `process_needs()` is what brings
 Roblox to the front a moment later; requiring focus before that first
 attempt would make the buttons non-functional. Every checkpoint after that
@@ -567,26 +630,20 @@ knowing if you're modifying it:
   same path back to a usable UI. `[STOP]` is deliberately excluded from
   `action_buttons`, since it must stay clickable while something is
   running.
-- **The main row** (start/loop/stop) gives all three buttons their own
+- **The main row** (loop/stop) gives both buttons their own
   fixed-pixel-**height** `Frame` container (`pack_propagate(False)`),
   rather than relying on `Button`'s own `width`/`height` (character
   units) - those scale inconsistently across different font sizes, and an
   unconstrained button's natural height grows with its font, which is
   what broke the row's alignment the first two times a font size changed.
-  The two side containers fix both width and height (making them equal
-  squares); the center container fixes only height and otherwise expands
+  The stop container fixes both width and height (making it a square); the
+  loop container fixes only height and otherwise expands
   (`fill=tk.X, expand=True`) to fill the remaining width. Fixing height on
-  all three individually, rather than letting the center one inherit it
-  from its siblings, is what keeps the row aligned regardless of any
-  future font size change to any one of them.
+  both individually, rather than letting the loop one inherit it from the
+  stop one, is what keeps the row aligned regardless of any future font
+  size change to either.
 - Every button in that row is created with `bd=0, highlightthickness=0` to
   flatten Tk's default border/focus-ring rendering.
-- **The single-cycle button's label** is plain button text
-  (`"\U0001F5041"`, the refresh icon followed by "1") rather than a
-  separate overlay widget - an earlier version tried layering a `Label`
-  with `place()` on top of the icon for a cleaner look, but Tk's border
-  rendering kept showing a visible seam/box behind it even with matching
-  fill colors, so plain text turned out simpler and more reliable.
 - **`DebugCapture`** redirects `sys.stdout` into the on-screen console
   (`self.debug_text`) for the lifetime of the GUI, so every `print()`
   anywhere in the macro shows up there automatically.
@@ -605,6 +662,7 @@ exact values and rationale):
 | Group | Examples |
 |---|---|
 | Behavior flags | `ENABLED_NEEDS`, `HALLOWEEN`, `GHOST_GALLERY_PLAY_MINIGAME`, `GHOST_GALLERY_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
+| Window / coordinates | `REFERENCE_WIDTH`, `REFERENCE_HEIGHT`, `REFERENCE_CENTER_X/Y`, `ROBLOX_RECT_TTL` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `NEED_GONE_*` |
 | Stuck needs | `NEED_STUCK_CHECKS` |
 | Pet focusing | `FOCUS_PET_REGION_TOP_PERCENT`, `FOCUS_PET_FRAME_GAP`, `FOCUS_PET_DIFF_THRESHOLD`, `FOCUS_PET_MERGE_KERNEL`, `FOCUS_PET_MIN_AREA` |
@@ -613,9 +671,46 @@ exact values and rationale):
 | Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN/MAX_RADIUS`, `NEED_ICON_HOUGH_*` |
 | Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
+| Debug logging | `OUTPUT_LOG_PATH`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_SCREENSHOTS` |
+| Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `DISCONNECT_*`, `REJOIN_*`, `ROBLOX_*` |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
 | GUI | colors/fonts (`GUI_BG`, `GUI_FONT`, ...) and layout spacing (`GUI_OUTER_PADDING`, `GUI_ROW_SPACING`, ...) for the `tkinter` panel |
+
+## Debugging an unattended run
+
+Everything below is in `debug/` (git-ignored) so a run that broke while you
+were away can be read back afterwards:
+
+- **`output.log`** - everything the macro prints (the same as the GUI
+  console), one timestamped line each, appended to across runs. `log_output()`
+  is called by `DebugCapture`, so this only exists while the GUI is up. Past
+  `OUTPUT_LOG_MAX_BYTES` (5 MB) it moves to `output.log.old`, replacing the
+  previous one.
+- **`run_log.txt`** - the short version: one tagged line per notable event
+  (needs detected, resolved with how long they took, popups dismissed,
+  recoveries, stops, failures). Start here to see roughly what happened.
+- **`failures/`** - `log_failure(reason)` saves a screenshot of the whole
+  screen named with the time, run number and reason, and also prints the
+  reason, writes it to `run_log.txt` and counts it in the status file. It's
+  called when a handler can't resolve a need, a need is still showing after
+  `NEED_GONE_MAX_WAIT`, a need is disabled as stuck, a recovery starts or
+  fails, Roblox loses focus and stops the run, and when the run crashes (the
+  full traceback is in `output.log`). It never raises, since it runs while
+  something else is already wrong. The oldest screenshots beyond
+  `MAX_FAILURE_SCREENSHOTS` (40) are deleted.
+- **`status.json`** - rewritten every cycle and on every failure/resolved
+  need (`write_status()`): the run number and start time, time of the last
+  update (if that's old, the macro is stuck or dead), cycle count, the needs
+  last detected, how many of each need were resolved or failed, the needs
+  currently disabled, the number of recoveries, disconnects and scheduled
+  rejoins, and the last resolved need
+  and last failure. `RUN_STATS` holds the counters in memory.
+- **`debug_needs.png`** / **`debug_buttons.png`** - see below.
+
+A run that *stops* (a crash, Roblox losing focus) ends the loop and stays
+stopped - deliberately, since losing focus means the computer is being used
+for something else. The logs say why.
 
 If detection isn't finding what you expect after changing screen
 resolution or Roblox's UI, check `debug/debug_needs.png` and

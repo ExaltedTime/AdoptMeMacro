@@ -13,7 +13,7 @@
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
-import os, sys, re, time, threading, json, subprocess
+import os, sys, re, time, threading, json, subprocess, traceback
 from abc import ABC, abstractmethod
 from collections import deque
 from functools import partial
@@ -84,16 +84,28 @@ def check_running():
 # WINDOW FOCUS & SCREEN CAPTURE
 # ============================================================================
 
+def roblox_windows():
+    """Every open window with 'roblox' in its title."""
+    return [w for w in gw.getAllWindows() if "roblox" in w.title.lower()]
+
+def roblox_window():
+    """The Roblox game window: the one titled exactly "Roblox" if there is
+    one (so a browser tab that merely mentions Roblox isn't picked), else the
+    first window with 'roblox' in its title, else None."""
+    wins = roblox_windows()
+    return next((w for w in wins if w.title == "Roblox"), wins[0] if wins else None)
+
 def focus_roblox():
     """Bring the Roblox window to the front (no click)."""
-    wins = [w for w in gw.getAllWindows() if "roblox" in w.title.lower()]
-    if not wins:
+    global _ROBLOX_RECT
+    w = roblox_window()
+    if w is None:
         print("[!] Roblox not found")
         return False
-    w = wins[0]
     if w.isMinimized:
         w.restore()
     w.activate()
+    _ROBLOX_RECT = None  # it may have just moved or changed size
     time.sleep(FOCUS_DELAY)
     return True
 
@@ -109,17 +121,65 @@ def focus_roblox_click():
         return True
     if not focus_roblox():
         return False
-    click_x = int(SCREEN_WIDTH * FOCUS_CLICK_X_PERCENT)
-    pyautogui.moveTo(click_x, FOCUS_CLICK_Y)
+    pyautogui.moveTo(*to_screen(REFERENCE_WIDTH * FOCUS_CLICK_X_PERCENT, FOCUS_CLICK_Y))
     pydirectinput.click()
     time.sleep(FOCUS_CLICK_SETTLE_DELAY)
     return True
 
-def grab_screen():
-    """Screenshot the primary monitor as a BGR numpy array."""
+# (time looked up, rect) of the last roblox_rect() answer - see ROBLOX_RECT_TTL.
+_ROBLOX_RECT = None
+
+def roblox_rect():
+    """(left, top, width, height), in screen pixels, of the Roblox window
+    clipped to the primary monitor - a maximized window reports a few pixels
+    of invisible border past the screen edges, which this trims, so a
+    maximized window on a 1920x1080 screen is exactly (0, 0, 1920, 1080).
+    The whole monitor if there's no usable Roblox window (not running,
+    minimized). Remembered for ROBLOX_RECT_TTL seconds."""
+    global _ROBLOX_RECT
+    now = time.time()
+    if _ROBLOX_RECT and now - _ROBLOX_RECT[0] < ROBLOX_RECT_TTL:
+        return _ROBLOX_RECT[1]
+    screen_w, screen_h = pyautogui.size()
+    rect = (0, 0, screen_w, screen_h)
+    try:
+        w = roblox_window()
+        if w is not None and not w.isMinimized:
+            left, top = max(w.left, 0), max(w.top, 0)
+            right, bottom = min(w.left + w.width, screen_w), min(w.top + w.height, screen_h)
+            if right > left and bottom > top:
+                rect = (left, top, right - left, bottom - top)
+    except Exception:
+        pass  # the window closed while it was being measured - use the whole monitor
+    _ROBLOX_RECT = (now, rect)
+    return rect
+
+def to_screen(x, y):
+    """Turn a position in the reference space every constant and every
+    detection uses (REFERENCE_WIDTH x REFERENCE_HEIGHT) into the screen
+    pixel it is on in the Roblox window right now."""
+    left, top, width, height = roblox_rect()
+    return int(left + x * width / REFERENCE_WIDTH), int(top + y * height / REFERENCE_HEIGHT)
+
+def grab_full_screen():
+    """Screenshot the whole primary monitor as a BGR numpy array."""
     with mss.MSS() as sct:
         shot = np.array(sct.grab(sct.monitors[1]))
     return cv2.cvtColor(shot, cv2.COLOR_BGRA2BGR)
+
+def grab_screen():
+    """Screenshot of the Roblox window as a BGR numpy array, scaled to the
+    reference size (REFERENCE_WIDTH x REFERENCE_HEIGHT) so every detection
+    and position works on the same pixels whatever the window or monitor
+    size. Unchanged from a plain screenshot when Roblox is maximized on a
+    1920x1080 screen."""
+    img = grab_full_screen()
+    left, top, width, height = roblox_rect()
+    if (left, top, width, height) != (0, 0, img.shape[1], img.shape[0]):
+        img = img[top:top + height, left:left + width]
+    if img.shape[1] != REFERENCE_WIDTH or img.shape[0] != REFERENCE_HEIGHT:
+        img = cv2.resize(img, (REFERENCE_WIDTH, REFERENCE_HEIGHT), interpolation=cv2.INTER_AREA)
+    return img
 
 def exact_color_mask(img, rgb, tolerance=0):
     """Mask of every pixel in `img` (BGR, as grab_screen() returns) that
@@ -151,6 +211,11 @@ STOP_FLAG = False
 # send_macro_window_to_back(). None when running without the GUI.
 MACRO_WINDOW = None
 
+# When the game was last (re)joined: set when the loop starts and by every
+# successful leave_and_rejoin(); rejoin_reason() schedules the next hourly
+# refresh REJOIN_INTERVAL after it. None until then.
+LAST_REJOIN = None
+
 # Detected action-button screen positions, keyed by need name (e.g. "hungry").
 # Populated by refresh_button_mapping() each time the macro walks to the
 # buttons, so this is a same-run cache, not persisted state - there's
@@ -158,8 +223,7 @@ MACRO_WINDOW = None
 # run anyway (screen layout can change between sessions).
 BUTTON_POSITIONS = {}
 
-# The run number of the currently executing workflow (run_workflow() or
-# run_workflow_loop()), set by next_run_number() at the start of each. Every
+# The run number of the currently executing workflow (run_workflow_loop()), set by next_run_number() at the start of each. Every
 # log_run_event() call tags its line with this, so entries from different
 # runs can be told apart in the shared RUN_LOG_PATH file.
 CURRENT_RUN_NUMBER = None
@@ -199,6 +263,82 @@ def log_run_event(message):
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     with open(RUN_LOG_PATH, "a") as f:
         f.write(f"[{timestamp}] [RUN {CURRENT_RUN_NUMBER}] {message}\n")
+
+# What the macro knows about how this run is going, written to STATUS_PATH by
+# write_status() so it can be checked without opening the GUI.
+RUN_STATS = {"run": None, "started": None, "cycles": 0, "last_detected": [], "resolved": {}, "failed": {},
+             "failures": 0, "recoveries": 0, "disconnects": 0, "scheduled_rejoins": 0, "last_resolved": None, "last_failure": None}
+
+OUTPUT_LOG_LOCK = threading.Lock()
+_output_at_line_start = True
+
+def log_output(text):
+    """Append `text` (whatever was just printed) to OUTPUT_LOG_PATH, with a
+    timestamp at the start of every line. Called by DebugCapture, so it's
+    everything the GUI console shows, kept on disk. Never raises. Past
+    OUTPUT_LOG_MAX_BYTES the file moves to output.log.old first."""
+    global _output_at_line_start
+    try:
+        with OUTPUT_LOG_LOCK:
+            if os.path.exists(OUTPUT_LOG_PATH) and os.path.getsize(OUTPUT_LOG_PATH) > OUTPUT_LOG_MAX_BYTES:
+                os.replace(OUTPUT_LOG_PATH, OUTPUT_LOG_PATH + ".old")
+            with open(OUTPUT_LOG_PATH, "a", encoding="utf-8") as f:
+                for piece in text.splitlines(keepends=True):
+                    if _output_at_line_start:
+                        f.write(time.strftime("[%Y-%m-%d %H:%M:%S] "))
+                    f.write(piece)
+                    _output_at_line_start = piece.endswith("\n")
+    except OSError:
+        pass
+
+def save_failure_screenshot(reason):
+    """Save a screenshot of the whole screen to FAILURE_DIR, named with the
+    time, run number and `reason`, and delete the oldest beyond
+    MAX_FAILURE_SCREENSHOTS. Returns the file name, or None if it couldn't
+    (never raises - it's called while something else is already going wrong)."""
+    try:
+        os.makedirs(FAILURE_DIR, exist_ok=True)
+        slug = re.sub(r"[^a-z0-9]+", "_", reason.lower()).strip("_")[:40]
+        name = f"{time.strftime('%Y%m%d_%H%M%S')}_run{CURRENT_RUN_NUMBER}_{slug}.png"
+        cv2.imwrite(os.path.join(FAILURE_DIR, name), grab_full_screen())  # the whole screen, to see what has focus too
+        for old in sorted(os.listdir(FAILURE_DIR))[:-MAX_FAILURE_SCREENSHOTS]:
+            os.remove(os.path.join(FAILURE_DIR, old))
+        return name
+    except Exception as e:
+        print(f"[!] couldn't save a failure screenshot: {e}")
+        return None
+
+def write_status():
+    """Write RUN_STATS, the currently disabled needs and the time to
+    STATUS_PATH (replacing it atomically). Never raises."""
+    try:
+        status = {**RUN_STATS, "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
+                  "disabled_needs": sorted(DISABLED_THIS_RUN)}
+        tmp = STATUS_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(status, f, indent=2)
+        os.replace(tmp, STATUS_PATH)
+    except (OSError, TypeError):
+        pass
+
+def log_failure(reason, screenshot=True):
+    """Record that something went wrong: print it, add it to the run log,
+    save a screenshot of what was on screen, and note it in the status
+    file. Doesn't change what the macro does next."""
+    shot = save_failure_screenshot(reason) if screenshot else None
+    detail = f"{reason}" + (f" (screenshot: failures/{shot})" if shot else "")
+    print(f"[!] FAILURE: {detail}")
+    log_run_event(f"FAILURE: {detail}")
+    RUN_STATS["failures"] += 1
+    RUN_STATS["last_failure"] = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "reason": reason, "screenshot": shot}
+    write_status()
+
+def reset_run_stats():
+    """Start the status counters afresh (a workflow was just started)."""
+    RUN_STATS.update(run=CURRENT_RUN_NUMBER, started=time.strftime("%Y-%m-%d %H:%M:%S"), cycles=0,
+                     last_detected=[], resolved={}, failed={}, failures=0, recoveries=0, disconnects=0, scheduled_rejoins=0,
+                     last_resolved=None, last_failure=None)
+    write_status()
 
 # ============================================================================
 # GAME CONFIG
@@ -400,6 +540,7 @@ def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=N
         remaining = deadline - time.time()
         if remaining <= 0:
             print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
+            log_failure(f"{need_name} still showing after {max_wait}s")
             return
         wait_interruptible(min(NEED_GONE_CONFIRM_INTERVAL if misses else poll_interval, remaining))
         if not _need_cleared(need_name):
@@ -443,14 +584,16 @@ def _watch_need_gone(need_name, cleared_event, stop_event):
 # ============================================================================
 
 def hover_move(x, y, duration=CLICK_MOVE_DURATION):
-    """Move the mouse to (x, y) over `duration` seconds using SendInput
+    """Move the mouse to (x, y) - a reference-space position, see to_screen() -
+    over `duration` seconds using SendInput
     (pydirectinput), then nudge it a couple of pixels back onto the target.
     Roblox ignores pyautogui's SetCursorPos warps as hover movement and only
     reacts to real input events, so this is what makes a UI element register
     as hovered before it's clicked."""
+    x, y = to_screen(x, y)
     pydirectinput.moveTo(x, y, duration=duration)
     time.sleep(CLICK_SETTLE_DELAY)
-    pydirectinput.moveTo(min(SCREEN_WIDTH, x + HOVER_NUDGE_PIXELS), y)
+    pydirectinput.moveTo(min(pyautogui.size()[0] - 1, x + HOVER_NUDGE_PIXELS), y)
     time.sleep(CLICK_SETTLE_DELAY)
     pydirectinput.moveTo(x, y)
     time.sleep(CLICK_SETTLE_DELAY)
@@ -474,6 +617,16 @@ def wait_interruptible(duration):
         elapsed += sleep_chunk
     check_running()
 
+def wait_stoppable(duration):
+    """Like wait_interruptible() but only [STOP] interrupts it, not Roblox
+    losing focus. Used while the game is being closed and relaunched, when
+    there is no focused Roblox window to lose."""
+    end = time.time() + duration
+    while time.time() < end:
+        check_stop()
+        time.sleep(min(STOP_CHECK_INTERVAL, max(0.0, end - time.time())))
+    check_stop()
+
 def release_all_inputs():
     """Best-effort safety net: release every key this macro ever holds down,
     plus the mouse button. The try/finally blocks around each individual
@@ -481,7 +634,7 @@ def release_all_inputs():
     more whenever a background task ends (run_async's worker finally block)
     as a last line of defense - a bug in a handler we haven't caught yet
     still shouldn't be able to leave an input stuck down in the game."""
-    for key in MOVE_KEYS:
+    for key in (*MOVE_KEYS, KEY_HELICOPTER):
         try:
             pydirectinput.keyUp(key)
         except Exception:
@@ -702,11 +855,12 @@ def walk_alternating(direction_pair, total_duration, step_duration=WALK_ALTERNAT
     print("[debug] alternating walk complete")
 
 # ============================================================================
-# GUI-ONLY ACTIONS
+# SIDE ACTIONS
 # ============================================================================
 # Plain callable actions, not tied to any detected need/icon - not in
-# ENABLED_NEEDS or NEED_HANDLER_CLASSES, only reachable from the GUI's
-# Functions section (same as respawn_character()).
+# ENABLED_NEEDS or NEED_HANDLER_CLASSES. side_quest() runs lure_collect() and
+# tree_collect() on a timer; setup_game() and leave_and_rejoin() run from the
+# GUI's Functions section and from rejoin_game()'s recovery.
 
 def lure_collect():
     """Walk to the lure, collect its rewards, then set a new one
@@ -841,25 +995,15 @@ def run_deeplink(server=None):
         uri = f"roblox://navigation/share_links?code={server[1]}&type=Server"
     os.startfile(uri)
 
-def roblox_windows():
-    return [w for w in gw.getAllWindows() if "roblox" in w.title.lower()]
-
-def wait_stoppable(duration):
-    """Like wait_interruptible() but only [STOP] interrupts it, not Roblox
-    losing focus. Used while the game is being closed and relaunched, when
-    there is no focused Roblox window to lose."""
-    end = time.time() + duration
-    while time.time() < end:
-        check_stop()
-        time.sleep(min(STOP_CHECK_INTERVAL, max(0.0, end - time.time())))
-    check_stop()
-
-def close_roblox():
-    """Leave the game properly (esc, l, enter - only if the window is tall
-    enough for L to work), then kill any Roblox process still around and
-    wait REJOIN_CLOSE_WAIT. Nothing here needs Roblox to stay focused."""
-    windows = roblox_windows()
-    if windows and windows[0].height >= REJOIN_MIN_LEAVE_HEIGHT and focus_roblox():
+def close_roblox(clean_leave=True):
+    """Leave the game properly (esc, l, enter - only if `clean_leave`, and
+    only if the window is tall enough for L to work), then kill any Roblox
+    process still around and wait REJOIN_CLOSE_WAIT. Nothing here needs
+    Roblox to stay focused. `clean_leave` is off when the game is already
+    gone or showing the Disconnected dialog, where those keys do nothing
+    useful and Enter could press Reconnect."""
+    window = roblox_window()
+    if clean_leave and window is not None and window.height >= REJOIN_MIN_LEAVE_HEIGHT and focus_roblox():
         print("[debug] leaving the game...")
         for key in REJOIN_LEAVE_KEYS:
             pydirectinput.press(key)
@@ -878,14 +1022,16 @@ def play_button_visible(img):
     mask = exact_color_mask(box, REJOIN_PLAY_COLOR, REJOIN_PLAY_COLOR_TOLERANCE)
     return int(np.count_nonzero(mask)) >= REJOIN_PLAY_MIN_PIXELS
 
-def leave_and_rejoin():
+def leave_and_rejoin(clean_leave=True):
     """Close Roblox, relaunch the game through a deeplink (to the private
     server saved in the GUI, or a public one if none is saved), wait for it
     to load, click Play, wait REJOIN_AFTER_JOIN_WAIT and respawn - see the
     REJOIN_* settings. Retries the whole thing up to REJOIN_MAX_ATTEMPTS
-    times. GUI-only for now - nothing calls it yet (rejoin_game() is still a
-    stub). Returns True once back in the game, False if every attempt
-    failed (or the saved link isn't a valid private server link)."""
+    times. Run from the GUI's Leave & rejoin button and by rejoin_game().
+    Returns True once back in the game, False if every attempt failed (or
+    the saved link isn't a valid private server link). `clean_leave` is
+    passed on to close_roblox()."""
+    global LAST_REJOIN
     link = load_game_config()["private_server_link"].strip()
     server = None
     if link:
@@ -898,7 +1044,7 @@ def leave_and_rejoin():
 
     for attempt in range(1, REJOIN_MAX_ATTEMPTS + 1):
         print(f"[debug] rejoin attempt {attempt}/{REJOIN_MAX_ATTEMPTS}")
-        close_roblox()
+        close_roblox(clean_leave)
         run_deeplink(server)
 
         print("[debug] waiting for the Roblox window...")
@@ -930,6 +1076,7 @@ def leave_and_rejoin():
         print(f"[debug] waiting {REJOIN_AFTER_JOIN_WAIT}s, then respawning...")
         wait_stoppable(REJOIN_AFTER_JOIN_WAIT)
         respawn_character()
+        LAST_REJOIN = time.time()
         print("[!] Rejoin complete!")
         return True
 
@@ -985,7 +1132,7 @@ def focus_pet(click_duration=CLICK_MOVE_DURATION):
     for x, y in blobs:
         print(f"[debug] focusing pet at ({x}, {y})...")
         hover_click(x, y, duration=click_duration)
-    wait_interruptible(4)
+    wait_interruptible(FOCUS_PET_MENU_WAIT)
     return True
 
 def equip_favorite_vehicle():
@@ -1111,10 +1258,10 @@ class PetNeedHandler(NeedHandler):
         wait_interruptible(UI_SETTLE)
         print(f"[debug] attempting to pet for {PET_CIRCLE_DURATION}s...")
         # Move to starting position before pressing down
-        pydirectinput.moveTo(SCREEN_CENTER_X, SCREEN_CENTER_Y - PET_CIRCLE_RADIUS)
+        pydirectinput.moveTo(*to_screen(REFERENCE_CENTER_X, REFERENCE_CENTER_Y - PET_CIRCLE_RADIUS))
         time.sleep(PET_SETTLE_DELAY)
         # Click the center to focus
-        hover_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=PET_FOCUS_CLICK_DURATION)
+        hover_click(REFERENCE_CENTER_X, REFERENCE_CENTER_Y, duration=PET_FOCUS_CLICK_DURATION)
         time.sleep(PET_SETTLE_DELAY)
         # Hold down and move with incremental steps (much more reliable for games)
         pydirectinput.mouseDown()
@@ -1128,9 +1275,9 @@ class PetNeedHandler(NeedHandler):
                 # Move up and down in a sine wave centered on screen center
                 progress = elapsed / PET_CIRCLE_DURATION
                 angle = progress * 2 * np.pi
-                y = int(SCREEN_CENTER_Y + PET_CIRCLE_RADIUS * np.sin(angle))
+                y = int(REFERENCE_CENTER_Y + PET_CIRCLE_RADIUS * np.sin(angle))
                 # Use pydirectinput for better game compatibility
-                pydirectinput.moveTo(SCREEN_CENTER_X, y)
+                pydirectinput.moveTo(*to_screen(REFERENCE_CENTER_X, y))
                 time.sleep(PET_CIRCLE_STEP_MOVE_DURATION)
         finally:
             # Always release, even if interrupted
@@ -1139,7 +1286,7 @@ class PetNeedHandler(NeedHandler):
         return True
 
 class ChooseNeedHandler(NeedHandler):
-    """The 'choose' need: jitter-click to open the pet's interaction menu,
+    """The 'choose' need: focus_pet() to open the pet's interaction menu,
     find the button with a distinctive exact color (it has no distinguishing
     icon, so shape detection doesn't apply here), move to it slowly rather
     than jumping straight there, click it, then click the middle of the
@@ -1166,7 +1313,7 @@ class ChooseNeedHandler(NeedHandler):
         wait_interruptible(UI_SETTLE)
 
         print("[debug] clicking middle of screen...")
-        hover_click(SCREEN_CENTER_X, SCREEN_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
+        hover_click(REFERENCE_CENTER_X, REFERENCE_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
 
         wait_until_need_gone("choose")
 
@@ -1317,7 +1464,8 @@ def record_detected_needs(detected):
     for need_name in sorted(stuck):
         DISABLED_THIS_RUN.add(need_name)
         print(f"[!] {need_name} detected on {NEED_STUCK_CHECKS} checks in a row - disabling it for this run")
-        log_run_event(f"disabled for this run: {need_name} (stuck for {NEED_STUCK_CHECKS} checks)")
+        log_failure(f"{need_name} stuck for {NEED_STUCK_CHECKS} checks - disabled for this run "
+                    f"({len(DISABLED_THIS_RUN)} disabled now: {', '.join(sorted(DISABLED_THIS_RUN))})")
 
 def process_needs():
     """Detect needs on screen and resolve them one at a time: each matched
@@ -1354,6 +1502,7 @@ def process_needs():
         matched_needs.append(need_name)
 
     log_run_event(f"detected: {', '.join(matched_needs) if matched_needs else 'none matched'}")
+    RUN_STATS["last_detected"] = matched_needs
     record_detected_needs(matched_needs)
 
     if not matched_needs:
@@ -1368,18 +1517,28 @@ def process_needs():
         if handler is None:
             print(f"[debug] {need_name} is disabled, skipping")
             continue
+        started = time.time()
         if not handler.handle():
             print(f"[debug] could not resolve '{need_name}' this pass, skipping")
+            RUN_STATS["failed"][need_name] = RUN_STATS["failed"].get(need_name, 0) + 1
+            log_failure(f"{need_name} handler could not resolve it")
             continue
 
         respawn_character()
         resolved = True
+        seconds = time.time() - started
+        RUN_STATS["resolved"][need_name] = RUN_STATS["resolved"].get(need_name, 0) + 1
+        RUN_STATS["last_resolved"] = {"need": need_name, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+        log_run_event(f"resolved: {need_name} ({seconds:.0f}s)")
+        write_status()
 
     return resolved
 
 # ============================================================================
-# PAYCHECK
+# PER-CYCLE CHECKS
 # ============================================================================
+# Run at the top of every cycle by unscrew() and side_quest(): popups to
+# dismiss, recovering the game when it's gone wrong, and the timed chores.
 
 def detect_paycheck():
     """Detect the paycheck popup by its CASH OUT button's exact color and,
@@ -1390,25 +1549,73 @@ def detect_paycheck():
         return False
 
     print("[debug] paycheck popup detected, dismissing...")
+    log_run_event("paycheck popup dismissed")
     hover_click(*PAYCHECK_DISMISS_POS_1)
     hover_click(*PAYCHECK_DISMISS_POS_2)
     return True
 
+def detect_disconnect(img):
+    """True if the Roblox "Disconnected" dialog is on screen in `img`: most
+    of DISCONNECT_PANEL_BOX is the dialog's grey (the game behind it is
+    blurred, so nothing else on screen fills a box like that)."""
+    left, top, right, bottom = DISCONNECT_PANEL_BOX
+    mask = exact_color_mask(img[top:bottom, left:right], DISCONNECT_PANEL_COLOR, DISCONNECT_PANEL_TOLERANCE)
+    return np.count_nonzero(mask) / mask.size >= DISCONNECT_PANEL_MIN_FRACTION
+
+def rejoin_reason():
+    """Why the game needs rejoining right now, as (kind, reason) - or None if
+    it doesn't. In order of priority:
+      "disconnect" - Roblox crashed (its crash window is open), isn't
+          running, or is showing the Disconnected dialog;
+      "stuck" - DISABLED_NEEDS_REJOIN_THRESHOLD needs have been disabled
+          for this run;
+      "scheduled" - it has been REJOIN_INTERVAL since the last rejoin (see
+          LAST_REJOIN)."""
+    if any(w.title == ROBLOX_CRASH_WINDOW_TITLE for w in gw.getAllWindows()):
+        return "disconnect", "Roblox crashed"
+    if not roblox_windows():
+        return "disconnect", "Roblox isn't running"
+    if detect_disconnect(grab_screen()):
+        return "disconnect", "disconnected from the game"
+    if len(DISABLED_THIS_RUN) >= DISABLED_NEEDS_REJOIN_THRESHOLD:
+        return "stuck", f"{len(DISABLED_THIS_RUN)} needs disabled ({', '.join(sorted(DISABLED_THIS_RUN))})"
+    if LAST_REJOIN is not None and time.time() - LAST_REJOIN >= REJOIN_INTERVAL:
+        return "scheduled", f"{REJOIN_INTERVAL / 3600:g} hour(s) since the last rejoin"
+    return None
+
 def rejoin_game():
-    """Rejoins the game if we've been disconnected. NOT IMPLEMENTED YET -
-    the comments below are the plan; for now this does nothing."""
-    # Rough plan:
-    #   - detect that we're disconnected: Roblox puts up a dialog with a
-    #     reconnect/leave button (exact-color match on a known button, the way
-    #     detect_paycheck() finds CASH OUT), or the window title changes, or
-    #     the Roblox window is simply gone
-    #   - get back in: click the dialog's reconnect button, or relaunch the
-    #     game (e.g. via a roblox:// URI) and wait for it to load
-    #   - afterwards the character is somewhere unknown, so respawn and let
-    #     the usual cycle carry on
-    #   - once this exists, "too many needs disabled this run" (see
-    #     DISABLED_THIS_RUN) is a natural trigger for it too
-    pass
+    """Recover when the game needs it (see rejoin_reason()): rejoin it
+    (leave_and_rejoin()), run setup_game() - the rejoin resets the game
+    settings it sets - and clear the disabled needs and their detection
+    history so every need gets a fresh chance. Returns True if it recovered,
+    False if nothing needed doing or the rejoin failed (the cause is still
+    there, so the next cycle tries again). Everything but the scheduled
+    rejoin is a failure: it's logged with a screenshot, which shows the
+    Disconnected dialog and its error code if that's why. The clean esc/l/
+    enter leave is skipped when the game is already gone."""
+    found = rejoin_reason()
+    if found is None:
+        return False
+    kind, reason = found
+    if kind == "scheduled":
+        print(f"[!] {reason} - rejoining")
+        log_run_event(f"scheduled rejoin: {reason}")
+        RUN_STATS["scheduled_rejoins"] += 1
+    else:
+        log_failure(f"{reason} - rejoining")
+        RUN_STATS["recoveries"] += 1
+        if kind == "disconnect":
+            RUN_STATS["disconnects"] += 1
+    if not leave_and_rejoin(clean_leave=(kind != "disconnect")):
+        log_failure("recovery: rejoin failed, will try again next cycle")
+        return False
+    setup_game()
+    DISABLED_THIS_RUN.clear()
+    DETECTION_HISTORY.clear()
+    log_run_event("recovery complete: rejoined, setup run, disabled needs cleared")
+    print("[!] Recovery complete - carrying on")
+    write_status()
+    return True
 
 def detect_ghost_gallery_popup(img):
     """True if the "Ghost Gallery is starting soon! Teleport there now?"
@@ -1440,6 +1647,7 @@ def ghost_gallery():
     if not detect_ghost_gallery_popup(grab_screen()):
         return False
     print("[debug] ghost gallery popup detected, dismissing...")
+    log_run_event("ghost gallery popup dismissed")
     hover_click(*GHOST_GALLERY_DONT_SHOW_POS)   # "Do not show again this session"
     hover_click(*GHOST_GALLERY_NO_POS)
     return True
@@ -1490,11 +1698,13 @@ def run_full_cycle():
     between checks whenever none are found, until something is detected and
     handled."""
     while True:
-        # check_stop() only, not check_running() - clicking [START]/[LOOP]
+        # check_stop() only, not check_running() - clicking [LOOP]
         # in this Python GUI is what has focus at this exact instant, and
         # process_needs() below is what brings Roblox to the front. Once
         # that succeeds, every wait from here on does check_running().
         check_stop()
+        RUN_STATS["cycles"] += 1
+        write_status()
         unscrew()
         side_quest()
         print("\n[debug] checking needs...")
@@ -1503,20 +1713,6 @@ def run_full_cycle():
         print(f"[debug] no needs found, waiting {NEED_CHECK_RETRY_DELAY}s...")
         wait_interruptible(NEED_CHECK_RETRY_DELAY)
 
-def run_workflow():
-    """Run a single cycle: wait for a need to appear, then handle it."""
-    global STOP_FLAG, CURRENT_RUN_NUMBER
-    STOP_FLAG = False
-    CURRENT_RUN_NUMBER = next_run_number()
-    DETECTION_HISTORY.clear()
-    log_run_event("WORKFLOW started")
-    print("\n" + "=" * 50)
-    print(f"[WORKFLOW] Starting (run {CURRENT_RUN_NUMBER})")
-    print("=" * 50)
-    run_full_cycle()
-    log_run_event("WORKFLOW done")
-    print("\n[WORKFLOW] Done\n")
-
 def run_workflow_loop():
     """Respawn once, then repeat the workflow continuously. The only way this
     loop ever ends is via a stop request - there's no other exit condition,
@@ -1524,10 +1720,12 @@ def run_workflow_loop():
     propagate on up to run_async()'s worker (via the bare `finally`, not
     `except`) so the GUI still reports [STOPPED] correctly; the finally
     just prints locally first."""
-    global STOP_FLAG, CURRENT_RUN_NUMBER
+    global STOP_FLAG, CURRENT_RUN_NUMBER, LAST_REJOIN
     STOP_FLAG = False
     CURRENT_RUN_NUMBER = next_run_number()
     DETECTION_HISTORY.clear()
+    reset_run_stats()
+    LAST_REJOIN = time.time()  # the hourly rejoin counts from here
     log_run_event("LOOP started")
     print("\n" + "=" * 50)
     print(f"[LOOP] Starting continuous workflow (run {CURRENT_RUN_NUMBER})")
@@ -1553,11 +1751,15 @@ def run_workflow_loop():
 # ============================================================================
 
 class DebugCapture:
+    """Replaces sys.stdout for the lifetime of the GUI: everything printed
+    anywhere in the macro goes to the on-screen console and, via
+    log_output(), to OUTPUT_LOG_PATH."""
+
     def __init__(self, text_widget):
         self.text = text_widget
-        self.original_stdout = sys.stdout
 
     def write(self, msg):
+        log_output(msg)
         self.text.config(state=tk.NORMAL)
         self.text.insert(tk.END, msg)
         self.text.see(tk.END)
@@ -1566,9 +1768,6 @@ class DebugCapture:
 
     def flush(self):
         pass
-
-    def restore(self):
-        sys.stdout = self.original_stdout
 
 class AdoptMeGUI:
     def __init__(self, root):
@@ -1616,33 +1815,20 @@ class AdoptMeGUI:
 
         self.action_buttons = []  # every button that starts a background task
 
-        # One row: [START] (single cycle, square) on the left, [LOOP] (continuous
-        # workflow) expanding to fill the center, [STOP] (square) on the right.
-        # All three sit in their own fixed-HEIGHT container (pack_propagate(False))
-        # so they're always the same height regardless of font metrics - a
+        # One row: [LOOP] (the continuous workflow) expanding to fill the left,
+        # [STOP] (square) on the right. Both sit in their own fixed-HEIGHT
+        # container (pack_propagate(False)) so they're always the same height
+        # regardless of font metrics - a
         # Button's own width/height (character units) don't scale consistently
         # across font sizes, and an unconstrained button's natural height grows
         # with its font size, which is what broke this row last time the icon
-        # font got bigger. The two side containers also fix their WIDTH (making
-        # them equal squares); the center container only fixes height and
-        # otherwise expands to fill the remaining width.
+        # font got bigger. The stop container also fixes its WIDTH (making it a
+        # square); the loop container only fixes height and otherwise expands
+        # to fill the remaining width.
         NO_BORDER = dict(bd=0, highlightthickness=0)  # flat edges, no default Tk bevel/focus ring
 
         main_row = tk.Frame(btn_frame, bg=self.bg)
         main_row.pack(fill=tk.X, pady=GUI_ROW_SPACING)
-
-        start_container = tk.Frame(main_row, width=GUI_SQUARE_BUTTON_SIZE, height=GUI_SQUARE_BUTTON_SIZE, bg=self.bg)
-        start_container.pack(side=tk.LEFT, padx=(0, GUI_ROW_SPACING))
-        start_container.pack_propagate(False)
-
-        # Single cycle: icon + "1" as plain button text (no overlay Label -
-        # a Label placed on top of the button kept showing a visible seam/
-        # box behind it despite matching colors, so this is just simpler).
-        btn_start = tk.Button(start_container, text="\U0001F5041", command=self.run_workflow,
-                               font=(GUI_FONT, GUI_START_ICON_FONT_SIZE, "bold"), bg=GUI_START_COLOR, fg=self.fg,
-                               cursor="hand2", **NO_BORDER)
-        btn_start.pack(fill=tk.BOTH, expand=True)
-        self.action_buttons.append(btn_start)
 
         # Not added to action_buttons: must remain clickable while a workflow is running
         stop_container = tk.Frame(main_row, width=GUI_SQUARE_BUTTON_SIZE, height=GUI_SQUARE_BUTTON_SIZE, bg=self.bg)
@@ -1793,13 +1979,16 @@ class AdoptMeGUI:
                 # StopRequested is itself an Exception subclass, so if the
                 # broad handler came first it would catch this too and
                 # misreport a clean stop as "[ERROR]".
+                log_run_event("stopped by the user")
                 final_status = "[STOPPED]"
             except FocusLost:
                 # Same reasoning as StopRequested above - must come before
                 # the generic Exception handler.
+                log_failure("stopped: Roblox lost focus")
                 final_status = "[STOPPED: Roblox not focused]"
             except Exception as e:
-                print(f"\n[ERROR] {e}")
+                print(f"\n[ERROR] {e}\n{traceback.format_exc()}")
+                log_failure(f"crashed: {type(e).__name__}: {e}")
                 final_status = "[ERROR]"
             finally:
                 release_all_inputs()  # last line of defense against stuck keys/mouse
@@ -1821,9 +2010,6 @@ class AdoptMeGUI:
             btn.config(state=state)
         self.status.config(text="Running..." if running else (status_text or "Ready"))
 
-    def run_workflow(self):
-        self.run_async(run_workflow)
-
     def run_workflow_loop(self):
         self.run_async(run_workflow_loop)
 
@@ -1840,9 +2026,9 @@ class AdoptMeGUI:
             print("[!] Private server link saved")
 
     def reset_config(self):
-        """Delete the persisted config (money collected, timers, setup done,
-        and the switches themselves all go back to their defaults) and
-        refresh the checkboxes to match."""
+        """Delete the persisted config (money collected, timers and the
+        switches all go back to their defaults; the private server link is
+        kept) and refresh the checkboxes to match."""
         reset_game_config()
         config = load_game_config()
         for key, var in self.config_flag_vars.items():

@@ -813,6 +813,7 @@ def focus_pet(click_duration=CLICK_MOVE_DURATION):
     for x, y in blobs:
         print(f"[debug] focusing pet at ({x}, {y})...")
         hover_click(x, y, duration=click_duration)
+    wait_interruptible(4)
     return True
 
 def equip_favorite_vehicle():

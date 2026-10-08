@@ -78,7 +78,7 @@ CATCH_WAIT_AFTER_EQUIP = 1.0   # wait after equipping toy before throwing
 CATCH_EMOTE_DELAY = 5.0       # delay between throw clicks
 CATCH_THROW_COUNT = 3          # number of times the toy is thrown
 CATCH_ZOOM_DURATION = 2.0      # seconds the zoom-in key is held before throwing
-PET_CIRCLE_DURATION = 10.0     # how long to make circles with mouse
+PET_CIRCLE_DURATION = 8.0     # how long to make circles with mouse
 PET_CIRCLE_RADIUS = 100                # amplitude (px) of the up/down sine motion around screen center
 PET_SETTLE_DELAY = 0.1                 # pause after each mouse move/click before the next pet step
 PET_CIRCLE_STEP_MOVE_DURATION = 0.05   # time for each small step around the circle
@@ -155,7 +155,7 @@ TELEPORT_WALK_NEEDS_NORMAL = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),)),
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 1.2), ("a", 10.0))),
-    "cafe":    dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 3.1), ("s", 8.0), ("d", 2))),
+    "cafe":    dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 3.1), ("s", 8.0), ("d", 4))),
     "salon":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 2.5), ("w", 15.0))),
     "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 2.0), ("a", 6.5), ("s", 3.0), ("w", 15.0))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 0.1), ("d", 3.0), ("s", 2.2), ("d", 15.0), ("w",20.0))),
@@ -169,7 +169,7 @@ TELEPORT_WALK_NEEDS_NORMAL = {
 TELEPORT_WALK_NEEDS_HALLOWEEN = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 7.7),), helicopter=True),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 20.0),), helicopter=True),
-    "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 3), ("a", 8))),
+    "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.8), ("a", 10))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("s", 20),), helicopter=True),
     "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 5.0), ("w", 1.5)),
                     final_click=SICK_FINAL_CLICK_POS),

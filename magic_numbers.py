@@ -254,14 +254,28 @@ SETUP_TRADES_SETTING_POS = (1029, 549)
 SETUP_TRADES_NO_ONE_POS = (1028, 604)
 SETUP_TRADES_CLOSE_POS = (1121, 358)
 
-# leave_and_rejoin(): esc, l, enter leaves the game; the blue Play button on the
-# screen it lands on is then found by exact color.
+# leave_and_rejoin(), modelled on how Natro Macro (a Bee Swarm Simulator macro) reconnects: close
+# Roblox properly (esc, l, enter, then kill any leftover process), start the game again through a
+# roblox:// deeplink - to the private server whose link is saved in the GUI, else a public server -
+# then wait in stages, checking the screen, instead of waiting a fixed time and hoping.
+ROBLOX_PLACE_ID = 920587237
+ROBLOX_PROCESS_NAMES = ("RobloxPlayerBeta.exe", "RobloxCrashHandler.exe")  # killed after leaving
 REJOIN_LEAVE_KEYS = ("esc", "l", "enter")
-REJOIN_AFTER_LEAVE_WAIT = 10.0     # wait after leaving, for the Roblox menu to appear
-REJOIN_PLAY_COLOR = (74, 114, 255)
-REJOIN_LOAD_WAIT = 60.0            # wait after clicking Play, for the game to load
-REJOIN_JOIN_POS = (910, 817)       # clicked once it has loaded
-REJOIN_AFTER_JOIN_WAIT = 15.0      # wait after that click, then the character respawns
+REJOIN_LEAVE_KEY_GAP = 0.25        # between those keys (Natro uses the same)
+REJOIN_MIN_LEAVE_HEIGHT = 500      # px; the L shortcut only works in a Roblox window at least this tall
+REJOIN_CLOSE_WAIT = 5.0            # after closing, before relaunching (relaunching too soon gives Roblox error 264)
+REJOIN_MAX_ATTEMPTS = 3            # close -> launch -> wait cycles before giving up
+REJOIN_WINDOW_TIMEOUT = 120.0      # most it waits for the Roblox window to appear after launching
+REJOIN_LOAD_TIMEOUT = 120.0        # most it waits for the game's Play popup after that
+REJOIN_POLL_INTERVAL = 1.0         # how often it looks at the screen while waiting
+# The game has loaded once its green Play button is on screen around REJOIN_JOIN_POS.
+REJOIN_JOIN_POS = (910, 817)       # the Play button - clicked once it has loaded
+REJOIN_PLAY_COLOR = (74, 198, 85)  # same green as PAYCHECK_CASHOUT_COLOR
+REJOIN_PLAY_COLOR_TOLERANCE = 3    # per channel, in case of compression/scaling
+REJOIN_PLAY_BOX = (120, 25)        # half width, half height of the area around REJOIN_JOIN_POS checked for it
+REJOIN_PLAY_MIN_PIXELS = 2000      # the button is ~15000 px of that color; fewer is something else
+REJOIN_PLAY_SETTLE = 1.0           # wait after the button appears, before clicking it
+REJOIN_AFTER_JOIN_WAIT = 15.0      # wait after clicking it, then the character respawns
 
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75
@@ -386,8 +400,11 @@ __all__ = [
     "NEED_STUCK_CHECKS", "HALLOWEEN", "GHOST_GALLERY_PLAY_MINIGAME",
     "GHOST_GALLERY_YES_COLOR", "GHOST_GALLERY_NO_COLOR", "GHOST_GALLERY_MIN_BUTTON_PIXELS",
     "GHOST_GALLERY_NO_MAX_DX", "GHOST_GALLERY_NO_MAX_DY", "GHOST_GALLERY_DONT_SHOW_POS", "GHOST_GALLERY_NO_POS",
-    "REJOIN_LEAVE_KEYS", "REJOIN_AFTER_LEAVE_WAIT",
-    "REJOIN_PLAY_COLOR", "REJOIN_LOAD_WAIT", "REJOIN_JOIN_POS", "REJOIN_AFTER_JOIN_WAIT",
+    "ROBLOX_PLACE_ID", "ROBLOX_PROCESS_NAMES", "REJOIN_LEAVE_KEYS", "REJOIN_LEAVE_KEY_GAP",
+    "REJOIN_MIN_LEAVE_HEIGHT", "REJOIN_CLOSE_WAIT", "REJOIN_MAX_ATTEMPTS", "REJOIN_WINDOW_TIMEOUT",
+    "REJOIN_LOAD_TIMEOUT", "REJOIN_POLL_INTERVAL", "REJOIN_JOIN_POS", "REJOIN_PLAY_COLOR",
+    "REJOIN_PLAY_COLOR_TOLERANCE", "REJOIN_PLAY_BOX", "REJOIN_PLAY_MIN_PIXELS", "REJOIN_PLAY_SETTLE",
+    "REJOIN_AFTER_JOIN_WAIT",
     "NEED_GONE_MAX_WAIT", "NEED_GONE_POLL_INTERVAL", "NEED_GONE_CONFIRMATIONS",
     "NEED_GONE_CONFIRM_INTERVAL", "NEED_GONE_FLICKER_RECHECK_DELAY", "NEED_WATCH_JOIN_TIMEOUT",
     "KEY_BACKPACK", "KEY_MOUNT", "KEY_INTERACT", "KEY_ZOOM_IN", "KEY_HELICOPTER", "KEY_JUMP", "MOVE_KEYS", "RESPAWN_KEYS",

@@ -254,19 +254,14 @@ SETUP_TRADES_SETTING_POS = (1029, 549)
 SETUP_TRADES_NO_ONE_POS = (1028, 604)
 SETUP_TRADES_CLOSE_POS = (1121, 358)
 
-# leave_and_rejoin(): esc, l, enter leaves the game; OCR then looks for the game's
-# name on the screen it lands on, the blue Play button is found by exact color.
+# leave_and_rejoin(): esc, l, enter leaves the game; the blue Play button on the
+# screen it lands on is then found by exact color.
 REJOIN_LEAVE_KEYS = ("esc", "l", "enter")
 REJOIN_AFTER_LEAVE_WAIT = 10.0     # wait after leaving, for the Roblox menu to appear
-REJOIN_GAME_TEXT = "Adopt Me!"
-REJOIN_AFTER_CLICK_WAIT = 5.0      # wait after clicking the game's name, for its page to load
 REJOIN_PLAY_COLOR = (74, 114, 255)
 REJOIN_LOAD_WAIT = 60.0            # wait after clicking Play, for the game to load
 REJOIN_JOIN_POS = (910, 817)       # clicked once it has loaded
 REJOIN_AFTER_JOIN_WAIT = 15.0      # wait after that click, then the character respawns
-TESSERACT_CMD = None               # path to tesseract.exe if it isn't on PATH, e.g.
-                                   # r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-TEXT_MIN_CONFIDENCE = 60           # Tesseract confidence (0-100) each word needs to count
 
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75
@@ -391,8 +386,8 @@ __all__ = [
     "NEED_STUCK_CHECKS", "HALLOWEEN", "GHOST_GALLERY_PLAY_MINIGAME",
     "GHOST_GALLERY_YES_COLOR", "GHOST_GALLERY_NO_COLOR", "GHOST_GALLERY_MIN_BUTTON_PIXELS",
     "GHOST_GALLERY_NO_MAX_DX", "GHOST_GALLERY_NO_MAX_DY", "GHOST_GALLERY_DONT_SHOW_POS", "GHOST_GALLERY_NO_POS",
-    "REJOIN_LEAVE_KEYS", "REJOIN_AFTER_LEAVE_WAIT", "REJOIN_GAME_TEXT", "REJOIN_AFTER_CLICK_WAIT",
-    "REJOIN_PLAY_COLOR", "REJOIN_LOAD_WAIT", "REJOIN_JOIN_POS", "REJOIN_AFTER_JOIN_WAIT", "TESSERACT_CMD", "TEXT_MIN_CONFIDENCE",
+    "REJOIN_LEAVE_KEYS", "REJOIN_AFTER_LEAVE_WAIT",
+    "REJOIN_PLAY_COLOR", "REJOIN_LOAD_WAIT", "REJOIN_JOIN_POS", "REJOIN_AFTER_JOIN_WAIT",
     "NEED_GONE_MAX_WAIT", "NEED_GONE_POLL_INTERVAL", "NEED_GONE_CONFIRMATIONS",
     "NEED_GONE_CONFIRM_INTERVAL", "NEED_GONE_FLICKER_RECHECK_DELAY", "NEED_WATCH_JOIN_TIMEOUT",
     "KEY_BACKPACK", "KEY_MOUNT", "KEY_INTERACT", "KEY_ZOOM_IN", "KEY_HELICOPTER", "KEY_JUMP", "MOVE_KEYS", "RESPAWN_KEYS",

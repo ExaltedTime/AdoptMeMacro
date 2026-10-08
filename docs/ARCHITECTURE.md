@@ -380,8 +380,9 @@ lure and tree actions are only reachable through `side_quest()`.
   ("Adopt Me!") on screen with OCR (`find_text()`, which needs `pytesseract`
   and the Tesseract program) and clicks it, waits `REJOIN_AFTER_CLICK_WAIT`,
   clicks the Play button found by its exact color (`REJOIN_PLAY_COLOR`), then
-  waits `REJOIN_LOAD_WAIT` (60s). Returns `False` without clicking further if
-  the text or the button isn't found.
+  waits `REJOIN_LOAD_WAIT` (60s), clicks `REJOIN_JOIN_POS`, waits
+  `REJOIN_AFTER_JOIN_WAIT` (15s) and respawns. Returns `False` without
+  clicking further if the text or the button isn't found.
 - **`lure_collect()`** - holds `a` for `LURE_COLLECT_WALK_DURATION` (2s),
   presses `KEY_INTERACT` (`e`) to collect the current lure's rewards,
   waits `LURE_COLLECT_SETTLE_DELAY` (1s), presses `KEY_INTERACT` again,
@@ -397,8 +398,14 @@ lure and tree actions are only reachable through `side_quest()`.
   house, then opens the backpack and clicks through
   `SETUP_BACKPACK_SETTINGS_POS` → `SETUP_SORT_MENU_POS` →
   `SETUP_FAVORITES_POS` → `SETUP_CONFIRM_POS` to set its item filter to
-  favorites only, then closes the backpack. Disabling trades isn't
-  implemented yet.
+  favorites only, then closes the backpack and calls `disable_trades()`.
+- **`disable_trades()`** - sends the macro window to the back
+  (`send_macro_window_to_back()`; the always-on-top panel covers the settings
+  gear), clicks the six `SETUP_TRADES_*` positions (settings → settings menu →
+  interaction tab → trading setting → "no one" → close) and brings the
+  window back in a `finally`, so a stop mid-way can't leave it buried. The
+  worker thread can't touch Tk directly, so `MACRO_WINDOW` (the GUI) runs
+  the two window changes on Tk's thread via `run_on_ui_thread()`.
 
 ### Checking a need in parallel with movement
 

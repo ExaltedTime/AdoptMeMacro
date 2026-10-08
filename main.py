@@ -171,6 +171,11 @@ def find_text(img, phrase):
 
 STOP_FLAG = False
 
+# The GUI object (set by AdoptMeGUI), so macro code running on the worker
+# thread can send the macro window to the back and bring it up again - see
+# send_macro_window_to_back(). None when running without the GUI.
+MACRO_WINDOW = None
+
 # Detected action-button screen positions, keyed by need name (e.g. "hungry").
 # Populated by refresh_button_mapping() each time the macro walks to the
 # buttons, so this is a same-run cache, not persisted state - there's
@@ -764,9 +769,9 @@ def tree_collect():
     return True
 
 def setup_game():
-    """Setup: lock the house, then set the backpack's item filter to
-    favorites only. Disabling trades isn't implemented yet. Not part of the
-    cycle - only run on demand (the GUI's Setup button)."""
+    """Setup: lock the house, set the backpack's item filter to favorites
+    only, then disable trades (disable_trades()). Not part of the cycle -
+    only run on demand (the GUI's Setup button)."""
     respawn_character()
     print("[debug] locking house...")
     hover_click(*SETUP_LOCK_HOUSE_POS)
@@ -788,14 +793,55 @@ def setup_game():
     wait_interruptible(UI_SETTLE)
     print("[debug] closing backpack...")
     pydirectinput.press(KEY_BACKPACK)
+    wait_interruptible(UI_SETTLE)
+
+    disable_trades()
 
     print("[!] Setup complete!")
+    return True
+
+def send_macro_window_to_back():
+    """Drop the macro's own window behind everything (it's normally
+    always-on-top and covers part of the Roblox UI). Safe to call from the
+    worker thread: the change runs on Tk's thread and this waits for it."""
+    if MACRO_WINDOW is not None:
+        MACRO_WINDOW.run_on_ui_thread(MACRO_WINDOW.send_to_back)
+
+def bring_macro_window_to_front():
+    """Undo send_macro_window_to_back()."""
+    if MACRO_WINDOW is not None:
+        MACRO_WINDOW.run_on_ui_thread(MACRO_WINDOW.bring_to_front)
+
+def disable_trades():
+    """Set the game's trade setting to "no one". The macro window covers the
+    settings gear, so it's sent to the back for the duration and always
+    brought back, even if the run is stopped partway."""
+    print("[debug] sending the macro window to the back...")
+    send_macro_window_to_back()
+    try:
+        wait_interruptible(UI_SETTLE)
+        if not focus_roblox():
+            return False
+        for label, pos in (("settings", SETUP_TRADES_SETTINGS_POS),
+                           ("settings menu", SETUP_TRADES_MENU_POS),
+                           ("interaction tab", SETUP_TRADES_INTERACTION_TAB_POS),
+                           ("trading setting", SETUP_TRADES_SETTING_POS),
+                           ("no one", SETUP_TRADES_NO_ONE_POS),
+                           ("closing settings", SETUP_TRADES_CLOSE_POS)):
+            print(f"[debug] {label}...")
+            hover_click(*pos)
+            wait_interruptible(UI_SETTLE)
+    finally:
+        print("[debug] bringing the macro window back...")
+        bring_macro_window_to_front()
+    print("[!] Trades disabled!")
     return True
 
 def leave_and_rejoin():
     """Leave the game (esc, l, enter), find "Adopt Me!" on the screen it
     drops back to with OCR and click it, click the blue Play button (by its
-    exact color), then wait REJOIN_LOAD_WAIT for the game to load. GUI-only
+    exact color), wait REJOIN_LOAD_WAIT for the game to load, click
+    REJOIN_JOIN_POS, wait REJOIN_AFTER_JOIN_WAIT and respawn. GUI-only
     for now - nothing calls it yet (rejoin_game() is still a stub). Returns
     False if the text or the button couldn't be found, True otherwise."""
     if not focus_roblox():
@@ -823,6 +869,11 @@ def leave_and_rejoin():
 
     print(f"[debug] waiting {REJOIN_LOAD_WAIT}s for the game to load...")
     wait_interruptible(REJOIN_LOAD_WAIT)
+    hover_click(*REJOIN_JOIN_POS)
+
+    print(f"[debug] waiting {REJOIN_AFTER_JOIN_WAIT}s, then respawning...")
+    wait_interruptible(REJOIN_AFTER_JOIN_WAIT)
+    respawn_character()
     print("[!] Rejoin complete!")
     return True
 
@@ -1462,6 +1513,8 @@ class DebugCapture:
 
 class AdoptMeGUI:
     def __init__(self, root):
+        global MACRO_WINDOW
+        MACRO_WINDOW = self
         self.root = root
         self.root.title("Adopt Me Macro")
         self.root.geometry(GUI_GEOMETRY)
@@ -1615,6 +1668,28 @@ class AdoptMeGUI:
         status.pack_propagate(False)
         self.status = tk.Label(status, text="Ready", font=(GUI_FONT, GUI_STATUS_FONT_SIZE), bg=self.accent, fg=self.fg)
         self.status.pack(anchor=tk.W, padx=GUI_OUTER_PADDING, pady=GUI_LABEL_PADDING)
+
+    def send_to_back(self):
+        """Stop being always-on-top and drop behind other windows."""
+        self.root.attributes('-topmost', False)
+        self.root.lower()
+
+    def bring_to_front(self):
+        """Always-on-top again, as at startup."""
+        self.root.attributes('-topmost', True)
+        self.root.lift()
+
+    def run_on_ui_thread(self, func, timeout=5.0):
+        """Run `func` on Tk's own thread (Tk isn't safe to touch from the
+        worker thread) and wait until it has run, or `timeout` seconds."""
+        done = threading.Event()
+        def call():
+            try:
+                func()
+            finally:
+                done.set()
+        self.root.after(0, call)
+        done.wait(timeout)
 
     def run_async(self, func):
         """Run `func` on a background daemon thread so the GUI never freezes

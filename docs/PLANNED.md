@@ -1,6 +1,6 @@
 # Add next
 
-- [ ] Add a 'setup' function to select the favorite filter in the backpack, disable trades and lock the house (setup_game() does the favorites filter and the house lock, and is run on demand only, not by the cycle; disabling trades is still to do)
+- [x] Add a 'setup' function (done: setup_game() does the favorites filter, the house lock and disabling trades, and is run on demand only, not by the cycle)
 - [ ] Add further debug functionality to pinpoint when things go wrong
 - [ ] Add functionality to rejoin if disconnected, and do that if too many needs(4) are disabled (leave_and_rejoin() exists as a GUI-only function; detecting a disconnect and calling it automatically is still to do)
 - [ ] Start using the helicopter to get to places (the optional helicopter step exists for teleport-walk needs and is on for Halloween bored/beach/camping; the timings still need tuning and the other destinations could use it)

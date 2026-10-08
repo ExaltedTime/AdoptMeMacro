@@ -317,13 +317,26 @@ copies of the normal ones plus the helicopter flag; `school` is enabled and
 has its own steps) and `sick`, which *only* exists there - with `HALLOWEEN` off it
 has no steps and isn't a need at all. While the flag is on, `unscrew()` also
 calls `ghost_gallery()`, which will either play the ghost gallery minigame
-or just disable it depending on `GHOST_GALLERY_PLAY_MINIGAME`; both branches
-are comments-only stubs for now.
+or just disable it depending on `GHOST_GALLERY_PLAY_MINIGAME`. The minigame
+branch is a comments-only stub; the disable branch works (see below).
 
 Every cycle, `unscrew()` runs `rejoin_game()` first (nothing else works
-while disconnected), then the paycheck check, then `ghost_gallery()` if
-`HALLOWEEN` is on. `rejoin_game()` is a comments-only stub for now: the
-plan is to detect a disconnect, get back in, then respawn.
+while disconnected), then `ghost_gallery()` if `HALLOWEEN` is on, then the
+paycheck check. The ghost gallery goes before the paycheck check because the
+popup's Yes button is the same green as the paycheck's CASH OUT button, so
+`detect_paycheck()` would mistake it for one. `rejoin_game()` is a
+comments-only stub for now: the plan is to detect a disconnect, get back in
+(`leave_and_rejoin()` below is the start of that), then respawn.
+
+**Disabling the ghost gallery.** `detect_ghost_gallery_popup()` recognises the
+"Ghost Gallery is starting soon! Teleport there now?" popup by its two
+buttons: neither color is unique alone (Yes green = `PAYCHECK_CASHOUT_COLOR`,
+No red = the Exit Home button), so it needs the Yes green
+(`GHOST_GALLERY_YES_COLOR`, at least `GHOST_GALLERY_MIN_BUTTON_PIXELS` px)
+with the No red (`GHOST_GALLERY_NO_COLOR`) within `GHOST_GALLERY_NO_MAX_DX` /
+`_DY` px to its left. `ghost_gallery()` then clicks `GHOST_GALLERY_DONT_SHOW_POS`
+("Do not show again this session") and `GHOST_GALLERY_NO_POS`, and returns
+`True`.
 
 A handler only counts as resolved (and only then triggers a respawn) if
 `handle()` returns `True`. `ButtonNeedHandler` returns `False` if
@@ -361,6 +374,14 @@ part of any cycle or loop: it only runs when you press the GUI's **Setup**
 button (or call it yourself), and nothing tracks whether it has run. The
 lure and tree actions are only reachable through `side_quest()`.
 
+- **`leave_and_rejoin()`** - GUI-only for now (the **Leave & rejoin** button;
+  `rejoin_game()` doesn't call it yet). Presses `REJOIN_LEAVE_KEYS` (esc, l,
+  enter), waits `REJOIN_AFTER_LEAVE_WAIT`, finds `REJOIN_GAME_TEXT`
+  ("Adopt Me!") on screen with OCR (`find_text()`, which needs `pytesseract`
+  and the Tesseract program) and clicks it, waits `REJOIN_AFTER_CLICK_WAIT`,
+  clicks the Play button found by its exact color (`REJOIN_PLAY_COLOR`), then
+  waits `REJOIN_LOAD_WAIT` (60s). Returns `False` without clicking further if
+  the text or the button isn't found.
 - **`lure_collect()`** - holds `a` for `LURE_COLLECT_WALK_DURATION` (2s),
   presses `KEY_INTERACT` (`e`) to collect the current lure's rewards,
   waits `LURE_COLLECT_SETTLE_DELAY` (1s), presses `KEY_INTERACT` again,
@@ -553,7 +574,7 @@ exact values and rationale):
 
 | Group | Examples |
 |---|---|
-| Behavior flags | `ENABLED_NEEDS`, `HALLOWEEN`, `GHOST_GALLERY_PLAY_MINIGAME`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
+| Behavior flags | `ENABLED_NEEDS`, `HALLOWEEN`, `GHOST_GALLERY_PLAY_MINIGAME`, `GHOST_GALLERY_*`, `REJOIN_*`, `TESSERACT_CMD`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `NEED_GONE_*` |
 | Stuck needs | `NEED_STUCK_CHECKS` |
 | Pet focusing | `FOCUS_PET_REGION_TOP_PERCENT`, `FOCUS_PET_FRAME_GAP`, `FOCUS_PET_DIFF_THRESHOLD`, `FOCUS_PET_MERGE_KERNEL`, `FOCUS_PET_MIN_AREA` |

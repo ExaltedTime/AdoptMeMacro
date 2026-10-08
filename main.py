@@ -10,6 +10,8 @@
 # pyautogui   - cross-platform mouse/keyboard automation
 # pydirectinput - direct input for game compatibility
 # pygetwindow - window management
+# pytesseract - OCR (only used by leave_and_rejoin(); also needs the Tesseract
+#               program itself installed - see README.md)
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
@@ -121,19 +123,45 @@ def grab_screen():
         shot = np.array(sct.grab(sct.monitors[1]))
     return cv2.cvtColor(shot, cv2.COLOR_BGRA2BGR)
 
+def exact_color_mask(img, rgb):
+    """Mask of every pixel in `img` (BGR, as grab_screen() returns) that
+    matches `rgb` (an (R, G, B) tuple) exactly."""
+    r, g, b = rgb
+    target_bgr = np.array([b, g, r])
+    return cv2.inRange(img, target_bgr, target_bgr)
+
 def find_exact_color(img, rgb):
     """Find the centroid of every pixel in `img` that matches `rgb` (an
     (R, G, B) tuple) exactly. Returns (x, y), or None if nothing matches.
-    `img` is expected in BGR (as grab_screen() returns), so this converts
-    the given RGB triple to BGR before comparing - an exact match means
-    passing the same value as both the lower and upper bound to inRange."""
-    r, g, b = rgb
-    target_bgr = np.array([b, g, r])
-    mask = cv2.inRange(img, target_bgr, target_bgr)
-    ys, xs = np.where(mask > 0)
+    `img` is expected in BGR (as grab_screen() returns)."""
+    ys, xs = np.where(exact_color_mask(img, rgb) > 0)
     if len(xs) == 0:
         return None
     return int(xs.mean()), int(ys.mean())
+
+def find_text(img, phrase):
+    """Find `phrase` (one or more words, case-insensitive) on screen with OCR
+    and return the (x, y) center of it, or None. Words must be next to each
+    other in the OCR output and each read with at least TEXT_MIN_CONFIDENCE.
+    Needs pytesseract and the Tesseract program (imported here so the rest
+    of the macro runs without them)."""
+    import pytesseract
+    if TESSERACT_CMD:
+        pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
+    data = pytesseract.image_to_data(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), output_type=pytesseract.Output.DICT)
+    words = phrase.lower().split()
+    found = [(data["text"][i].strip().lower(), float(data["conf"][i]),
+              data["left"][i], data["top"][i], data["width"][i], data["height"][i])
+             for i in range(len(data["text"]))]
+    for start in range(len(found) - len(words) + 1):
+        group = found[start:start + len(words)]
+        if all(g[0] == w and g[1] >= TEXT_MIN_CONFIDENCE for g, w in zip(group, words)):
+            left = min(g[2] for g in group)
+            top = min(g[3] for g in group)
+            right = max(g[2] + g[4] for g in group)
+            bottom = max(g[3] + g[5] for g in group)
+            return (left + right) // 2, (top + bottom) // 2
+    return None
 
 # ============================================================================
 # STATE
@@ -764,6 +792,40 @@ def setup_game():
     print("[!] Setup complete!")
     return True
 
+def leave_and_rejoin():
+    """Leave the game (esc, l, enter), find "Adopt Me!" on the screen it
+    drops back to with OCR and click it, click the blue Play button (by its
+    exact color), then wait REJOIN_LOAD_WAIT for the game to load. GUI-only
+    for now - nothing calls it yet (rejoin_game() is still a stub). Returns
+    False if the text or the button couldn't be found, True otherwise."""
+    if not focus_roblox():
+        return False
+    print("[debug] leaving the game...")
+    for key in REJOIN_LEAVE_KEYS:
+        pydirectinput.press(key)
+        wait_interruptible(UI_SETTLE)
+    wait_interruptible(REJOIN_AFTER_LEAVE_WAIT)
+
+    print(f"[debug] looking for '{REJOIN_GAME_TEXT}'...")
+    text_pos = find_text(grab_screen(), REJOIN_GAME_TEXT)
+    if text_pos is None:
+        print(f"[!] Rejoin failed: '{REJOIN_GAME_TEXT}' not found on screen")
+        return False
+    hover_click(*text_pos)
+    wait_interruptible(REJOIN_AFTER_CLICK_WAIT)
+
+    print(f"[debug] looking for the play button {REJOIN_PLAY_COLOR}...")
+    play_pos = find_exact_color(grab_screen(), REJOIN_PLAY_COLOR)
+    if play_pos is None:
+        print("[!] Rejoin failed: play button not found on screen")
+        return False
+    hover_click(*play_pos)
+
+    print(f"[debug] waiting {REJOIN_LOAD_WAIT}s for the game to load...")
+    wait_interruptible(REJOIN_LOAD_WAIT)
+    print("[!] Rejoin complete!")
+    return True
+
 # ============================================================================
 # NEED HANDLERS
 # ============================================================================
@@ -1238,36 +1300,51 @@ def rejoin_game():
     #     DISABLED_THIS_RUN) is a natural trigger for it too
     pass
 
+def detect_ghost_gallery_popup(img):
+    """True if the "Ghost Gallery is starting soon! Teleport there now?"
+    popup is on screen in `img`. Neither button color is unique on its own
+    (the Yes green is also the paycheck's CASH OUT green, the No red is also
+    the Exit Home button), so it needs both: the Yes green, with the No red
+    close by to its left."""
+    ys, xs = np.where(exact_color_mask(img, GHOST_GALLERY_YES_COLOR) > 0)
+    if len(xs) < GHOST_GALLERY_MIN_BUTTON_PIXELS:
+        return False
+    yes_x, yes_y = int(xs.mean()), int(ys.mean())
+    near_no = img[max(0, yes_y - GHOST_GALLERY_NO_MAX_DY):yes_y + GHOST_GALLERY_NO_MAX_DY,
+                  max(0, yes_x - GHOST_GALLERY_NO_MAX_DX):yes_x]
+    return int(np.count_nonzero(exact_color_mask(near_no, GHOST_GALLERY_NO_COLOR))) >= GHOST_GALLERY_MIN_BUTTON_PIXELS
+
 def ghost_gallery():
     """Halloween only (see HALLOWEEN): handles the ghost gallery popup.
-    NOT IMPLEMENTED YET - the comments below are the plan; for now this
+    Returns True if the popup was there and was dismissed. Only the disable
+    branch exists so far - the minigame branch is NOT IMPLEMENTED YET and
     does nothing."""
     if GHOST_GALLERY_PLAY_MINIGAME:
         # Play the minigame. Rough plan:
-        #   - detect that the ghost gallery is actually up (exact-color match
-        #     on a known button, like detect_paycheck() does for CASH OUT)
         #   - play it (clicks/keys to be worked out), under check_running()
         #     so [STOP] and focus loss still interrupt it
         #   - dismiss whatever it leaves behind
         # Probably wants its own timer in the persisted game config, like
         # lure_timer/tree_timer, rather than running every single cycle.
-        pass
-    else:
-        # Just disable it. Rough plan: detect the popup the same way as the
-        # paycheck one (find_exact_color() on a button unique to it) and
-        # click its dismiss/close position(s), which will need new
-        # GHOST_GALLERY_* constants in magic_numbers.py.
-        pass
+        return False
+    if not detect_ghost_gallery_popup(grab_screen()):
+        return False
+    print("[debug] ghost gallery popup detected, dismissing...")
+    hover_click(*GHOST_GALLERY_DONT_SHOW_POS)   # "Do not show again this session"
+    hover_click(*GHOST_GALLERY_NO_POS)
+    return True
 
 def unscrew():
     """Runs once per cycle, right after check_stop(). Rejoins if we've been
-    disconnected (first, since nothing else works while disconnected), checks
-    for the paycheck popup and, during Halloween, handles the ghost gallery;
-    more checks may be added here later."""
+    disconnected (first, since nothing else works while disconnected), then,
+    during Halloween, handles the ghost gallery popup, then checks for the
+    paycheck popup; more checks may be added here later. The ghost gallery
+    goes before the paycheck check because detect_paycheck() would otherwise
+    mistake the popup's Yes button for CASH OUT (same green)."""
     rejoin_game()
-    detect_paycheck()
     if HALLOWEEN:
         ghost_gallery()
+    detect_paycheck()
 
 def side_quest():
     """Runs once per cycle, right after unscrew(), unless side_quest_enabled
@@ -1491,6 +1568,12 @@ class AdoptMeGUI:
                                height=GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
         btn_setup.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
         self.action_buttons.append(btn_setup)
+
+        btn_rejoin = tk.Button(btn_frame, text="Leave & rejoin", command=lambda: self.run_async(leave_and_rejoin),
+                                font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=GUI_RESPAWN_COLOR, fg=self.fg,
+                                height=GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
+        btn_rejoin.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
+        self.action_buttons.append(btn_rejoin)
 
         # Persisted switches (see load_game_config()). Deliberately not in
         # action_buttons: they must stay usable while a workflow is running,

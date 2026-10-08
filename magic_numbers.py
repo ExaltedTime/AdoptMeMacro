@@ -32,6 +32,17 @@ HALLOWEEN = True
 # gallery minigame, False = it just disables (dismisses) the ghost gallery.
 GHOST_GALLERY_PLAY_MINIGAME = False
 
+# The "Ghost Gallery is starting soon! Teleport there now?" popup is recognised by its
+# Yes button (green) with its No button (red) close to the left - see detect_ghost_gallery_popup().
+# Dismissing it ticks "Do not show again this session", then clicks No.
+GHOST_GALLERY_YES_COLOR = (74, 198, 85)    # same green as PAYCHECK_CASHOUT_COLOR
+GHOST_GALLERY_NO_COLOR = (216, 42, 63)
+GHOST_GALLERY_MIN_BUTTON_PIXELS = 1000     # a button is ~5000 exact-color px; fewer is noise
+GHOST_GALLERY_NO_MAX_DX = 300              # No button must be within this many px left of Yes...
+GHOST_GALLERY_NO_MAX_DY = 40               # ...and this many px above/below it
+GHOST_GALLERY_DONT_SHOW_POS = (826, 666)
+GHOST_GALLERY_NO_POS = (879, 618)
+
 # ============================================================================
 # PATHS
 # ============================================================================
@@ -234,6 +245,18 @@ SETUP_SORT_MENU_POS = (1031, 680)
 SETUP_FAVORITES_POS = (1023, 810)
 SETUP_CONFIRM_POS = (1047, 908)
 
+# leave_and_rejoin(): esc, l, enter leaves the game; OCR then looks for the game's
+# name on the screen it lands on, the blue Play button is found by exact color.
+REJOIN_LEAVE_KEYS = ("esc", "l", "enter")
+REJOIN_AFTER_LEAVE_WAIT = 10.0     # wait after leaving, for the Roblox menu to appear
+REJOIN_GAME_TEXT = "Adopt Me!"
+REJOIN_AFTER_CLICK_WAIT = 5.0      # wait after clicking the game's name, for its page to load
+REJOIN_PLAY_COLOR = (74, 114, 255)
+REJOIN_LOAD_WAIT = 60.0            # wait after clicking Play, for the game to load
+TESSERACT_CMD = None               # path to tesseract.exe if it isn't on PATH, e.g.
+                                   # r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+TEXT_MIN_CONFIDENCE = 60           # Tesseract confidence (0-100) each word needs to count
+
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75
 FOCUS_CLICK_Y = 5
@@ -355,6 +378,10 @@ __all__ = [
     "TELEPORT_PETS_TAB_POS", "TELEPORT_VEHICLES_TAB_POS", "TELEPORT_FOOD_TAB_POS", "SICK_FINAL_CLICK_POS",
     "TELEPORT_WALK_NEEDS", "HELICOPTER_REQUIRED", "HELICOPTER_FORWARD_DURATION", "HELICOPTER_HOLD_DURATION",
     "NEED_STUCK_CHECKS", "HALLOWEEN", "GHOST_GALLERY_PLAY_MINIGAME",
+    "GHOST_GALLERY_YES_COLOR", "GHOST_GALLERY_NO_COLOR", "GHOST_GALLERY_MIN_BUTTON_PIXELS",
+    "GHOST_GALLERY_NO_MAX_DX", "GHOST_GALLERY_NO_MAX_DY", "GHOST_GALLERY_DONT_SHOW_POS", "GHOST_GALLERY_NO_POS",
+    "REJOIN_LEAVE_KEYS", "REJOIN_AFTER_LEAVE_WAIT", "REJOIN_GAME_TEXT", "REJOIN_AFTER_CLICK_WAIT",
+    "REJOIN_PLAY_COLOR", "REJOIN_LOAD_WAIT", "TESSERACT_CMD", "TEXT_MIN_CONFIDENCE",
     "NEED_GONE_MAX_WAIT", "NEED_GONE_POLL_INTERVAL", "NEED_GONE_CONFIRMATIONS",
     "NEED_GONE_CONFIRM_INTERVAL", "NEED_GONE_FLICKER_RECHECK_DELAY", "NEED_WATCH_JOIN_TIMEOUT",
     "KEY_BACKPACK", "KEY_MOUNT", "KEY_INTERACT", "KEY_ZOOM_IN", "KEY_HELICOPTER", "KEY_JUMP", "MOVE_KEYS", "RESPAWN_KEYS",

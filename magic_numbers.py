@@ -96,9 +96,15 @@ CATCH_UNEQUIP_POS = (1054, 983)
 # Used as the "click into empty space" throw motion in catch.
 EMPTY_POS = (142, 233)
 
-# Click this to open the pet's interaction menu (pet/weather/feed/dress up/
-# tricks/pick up/ride/fly icons arranged around the pet).
-FOCUS_PET_POS = (1114, 692)
+# focus_pet() finds the pet by what moves: it grabs the bottom part of the screen twice,
+# FOCUS_PET_FRAME_GAP apart, and clicks the center of every blob of pixels that changed
+# (the pet bobs up and down a little even when idle). Clicking it opens the pet's
+# interaction menu (pet/weather/feed/dress up/tricks/pick up/ride/fly icons).
+FOCUS_PET_REGION_TOP_PERCENT = 0.4   # only look at the bottom (1 - this) of the screen
+FOCUS_PET_FRAME_GAP = 0.1            # seconds between the two screenshots
+FOCUS_PET_DIFF_THRESHOLD = 25        # per-pixel brightness change that counts as movement (0-255)
+FOCUS_PET_MERGE_KERNEL = 25          # px; changed pixels this close together merge into one blob
+FOCUS_PET_MIN_AREA = 150             # px^2; smaller blobs are noise, not the pet
 
 # The 'choose' need's button is matched by its exact color rather than shape,
 # since it's just a plain circle with no distinguishing icon. Given as (R, G, B).
@@ -338,7 +344,8 @@ __all__ = [
     "CATCH_ZOOM_DURATION", "PET_CIRCLE_DURATION", "PET_CIRCLE_RADIUS", "PET_SETTLE_DELAY",
     "PET_CIRCLE_STEP_MOVE_DURATION", "PET_FOCUS_CLICK_DURATION", "ICON_EXTRACT_PADDING",
     "CATCH_TOYS_POS", "CATCH_SQUEAKY_TOY_POS", "CATCH_EQUIP_POS", "CATCH_UNEQUIP_POS",
-    "EMPTY_POS", "FOCUS_PET_POS",
+    "EMPTY_POS", "FOCUS_PET_REGION_TOP_PERCENT", "FOCUS_PET_FRAME_GAP", "FOCUS_PET_DIFF_THRESHOLD",
+    "FOCUS_PET_MERGE_KERNEL", "FOCUS_PET_MIN_AREA",
     "CHOOSE_BUTTON_COLOR", "CHOOSE_SLOW_MOVE_DURATION",
     "PAYCHECK_CASHOUT_COLOR", "PAYCHECK_DISMISS_POS_1", "PAYCHECK_DISMISS_POS_2",
     "RIDE_BACKWARD_DURATION", "RIDE_WAIT_AFTER_E", "RIDE_FORWARD_DURATION", "RIDE_VEHICLES_POS",

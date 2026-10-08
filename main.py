@@ -775,6 +775,46 @@ def setup_game():
 # NEED_HANDLER_CLASSES), since those only differ by a name/config, not by
 # behavior.
 
+def find_moving_blobs(img_a, img_b, top_percent=FOCUS_PET_REGION_TOP_PERCENT):
+    """Compare two same-size BGR screenshots over the bottom (1 - top_percent)
+    of the screen and return the (x, y) screen center of every blob of
+    pixels that changed between them, largest first. Pure image logic, no
+    input or waiting, so it can be tested on its own."""
+    top = int(img_a.shape[0] * top_percent)
+    diff = cv2.absdiff(cv2.cvtColor(img_a[top:], cv2.COLOR_BGR2GRAY),
+                       cv2.cvtColor(img_b[top:], cv2.COLOR_BGR2GRAY))
+    mask = (diff > FOCUS_PET_DIFF_THRESHOLD).astype(np.uint8) * PIXEL_MAX
+    # An up/down bob only changes the pet's top and bottom edges, so close
+    # the gap between them to get one blob per moving thing.
+    kernel = np.ones((FOCUS_PET_MERGE_KERNEL, FOCUS_PET_MERGE_KERNEL), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    blobs = []
+    for contour in sorted(contours, key=cv2.contourArea, reverse=True):
+        if cv2.contourArea(contour) < FOCUS_PET_MIN_AREA:
+            continue
+        x, y, w, h = cv2.boundingRect(contour)
+        blobs.append((x + w // 2, top + y + h // 2))
+    return blobs
+
+def focus_pet(click_duration=CLICK_MOVE_DURATION):
+    """Click the pet to open its interaction menu. The pet is found by
+    movement: two screenshots of the bottom of the screen FOCUS_PET_FRAME_GAP
+    apart, then a click on the center of everything that moved (see
+    find_moving_blobs()). Returns True if anything was clicked, False if
+    nothing moved."""
+    img_a = grab_screen()
+    wait_interruptible(FOCUS_PET_FRAME_GAP)
+    img_b = grab_screen()
+    blobs = find_moving_blobs(img_a, img_b)
+    if not blobs:
+        print("[debug] focus_pet: nothing moved, pet not found")
+        return False
+    for x, y in blobs:
+        print(f"[debug] focusing pet at ({x}, {y})...")
+        hover_click(x, y, duration=click_duration)
+    return True
+
 def equip_favorite_vehicle():
     """Open the backpack, select the first vehicle (the favorite, once
     setup_game() has filtered the backpack to favorites) and equip it, then
@@ -893,7 +933,8 @@ class PetNeedHandler(NeedHandler):
             return False
 
         print("[debug] focusing pet...")
-        hover_click(*FOCUS_PET_POS, duration=PET_FOCUS_CLICK_DURATION)
+        if not focus_pet(PET_FOCUS_CLICK_DURATION):
+            return False
         wait_interruptible(UI_SETTLE)
         print(f"[debug] attempting to pet for {PET_CIRCLE_DURATION}s...")
         # Move to starting position before pressing down
@@ -937,7 +978,8 @@ class ChooseNeedHandler(NeedHandler):
             return False
 
         print("[debug] focusing pet...")
-        hover_click(*FOCUS_PET_POS)
+        if not focus_pet():
+            return False
         wait_interruptible(UI_SETTLE)
 
         print(f"[debug] searching screen for color {CHOOSE_BUTTON_COLOR}...")

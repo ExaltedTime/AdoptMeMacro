@@ -6,7 +6,7 @@ After navigating to the working directory, run
 ```
 python main.py
 ```
-Requires Windows, python and a lot of adjustments, since button placements are hard-coded right now.
+Requires Windows, python and a lot of adjustments: button placements are hard-coded, measured with Roblox maximized on a 1920x1080 screen (other sizes are scaled, see docs/ARCHITECTURE.md).
 
 ## Docs
 

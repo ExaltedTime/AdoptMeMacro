@@ -67,8 +67,14 @@ MAX_FAILURE_SCREENSHOTS = 40             # oldest are deleted beyond this many
 pyautogui.FAILSAFE = True
 pydirectinput.FAILSAFE = True
 pydirectinput.PAUSE = 0.05
-SCREEN_WIDTH, SCREEN_HEIGHT = pyautogui.size()
-SCREEN_CENTER_X, SCREEN_CENTER_Y = SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2
+
+# Every position, size and screen region in this file was measured with the Roblox window maximized on
+# a 1920x1080 screen. The macro works in that "reference" space: grab_screen() crops the screenshot to
+# the Roblox window and scales it to this size, and clicks and mouse moves are scaled from it back onto
+# the window (see to_screen()). On a 1920x1080 screen with Roblox maximized nothing is scaled at all.
+REFERENCE_WIDTH, REFERENCE_HEIGHT = 1920, 1080
+REFERENCE_CENTER_X, REFERENCE_CENTER_Y = REFERENCE_WIDTH // 2, REFERENCE_HEIGHT // 2
+ROBLOX_RECT_TTL = 1.0   # seconds the Roblox window's position and size are remembered between lookups
 
 # Behavior flags
 FOCUS_WINDOW_ON_ACTION = True  # click the Roblox window to focus it before acting
@@ -270,6 +276,8 @@ REJOIN_LEAVE_KEYS = ("esc", "l", "enter")
 REJOIN_LEAVE_KEY_GAP = 0.25        # between those keys (Natro uses the same)
 REJOIN_MIN_LEAVE_HEIGHT = 500      # px; the L shortcut only works in a Roblox window at least this tall
 REJOIN_CLOSE_WAIT = 5.0            # after closing, before relaunching (relaunching too soon gives Roblox error 264)
+REJOIN_INTERVAL = 60 * 60          # while the loop runs, rejoin this often (seconds) even if nothing is wrong, to
+                                   # refresh a client that has been up a long time; also gives stuck needs a fresh chance
 REJOIN_MAX_ATTEMPTS = 3            # close -> launch -> wait cycles before giving up
 REJOIN_WINDOW_TIMEOUT = 240.0      # most it waits for the Roblox window to appear after launching (Natro: 4 minutes,
                                    # as Roblox may be installing an update first)
@@ -361,14 +369,13 @@ GUI_FONT = "Courier"
 GUI_BG = "#1a1a1a"
 GUI_ACCENT = "#0d7377"
 GUI_FG = "#fff"
-GUI_START_COLOR = "#2ecc71"
 GUI_STOP_COLOR = "#d62828"
 GUI_LOOP_COLOR = "#2980b9"
 GUI_RESPAWN_COLOR = "#8e44ad"
 GUI_TEST_COLOR = "#e74c3c"
 GUI_CONSOLE_BG = "#0a0a0a"
 GUI_CONSOLE_FG = "#00ff00"
-GUI_SQUARE_BUTTON_SIZE = 44         # px, start/stop buttons are square
+GUI_SQUARE_BUTTON_SIZE = 44         # px, the stop button is square (and the loop button as tall)
 GUI_STATUS_HEIGHT = 25              # px
 
 # GUI layout spacing
@@ -379,7 +386,6 @@ GUI_LABEL_PADDING = 3       # bottom pady under the "Output" label, and around t
 GUI_DIVIDER_HEIGHT = 2      # px, thickness of the horizontal divider line
 
 # GUI font sizes (family is GUI_FONT; weight is given at each call site)
-GUI_START_ICON_FONT_SIZE = 14
 GUI_STOP_ICON_FONT_SIZE = 16
 GUI_LOOP_ICON_FONT_SIZE = 20
 GUI_SECTION_FONT_SIZE = 9   # section headers, ordinary buttons/labels
@@ -395,7 +401,7 @@ __all__ = [
     "NEEDS_DIR", "DEBUG_DIR", "RUN_LOG_PATH", "RUN_COUNTER_PATH", "GAME_CONFIG_PATH",
     "OUTPUT_LOG_PATH", "FAILURE_DIR", "STATUS_PATH", "OUTPUT_LOG_MAX_BYTES", "MAX_FAILURE_SCREENSHOTS",
     "DISABLED_NEEDS_REJOIN_THRESHOLD",
-    "SCREEN_WIDTH", "SCREEN_CENTER_X", "SCREEN_CENTER_Y",
+    "REFERENCE_WIDTH", "REFERENCE_HEIGHT", "REFERENCE_CENTER_X", "REFERENCE_CENTER_Y", "ROBLOX_RECT_TTL",
     "FOCUS_WINDOW_ON_ACTION", "SAVE_NEW_NEEDS", "MATCH_ONLY_LEFT_HALF",
     "RESPAWN_KEY_DURATION", "RESPAWN_WAIT", "WALK_TO_BUTTONS_DURATION", "WALK_ALTERNATING_STEP",
     "KEY_STEP_GAP", "UI_SETTLE", "FOCUS_DELAY", "FOCUS_CLICK_SETTLE_DELAY",
@@ -419,7 +425,7 @@ __all__ = [
     "GHOST_GALLERY_YES_COLOR", "GHOST_GALLERY_NO_COLOR", "GHOST_GALLERY_MIN_BUTTON_PIXELS",
     "GHOST_GALLERY_NO_MAX_DX", "GHOST_GALLERY_NO_MAX_DY", "GHOST_GALLERY_DONT_SHOW_POS", "GHOST_GALLERY_NO_POS",
     "ROBLOX_PLACE_ID", "ROBLOX_PROCESS_NAMES", "REJOIN_LEAVE_KEYS", "REJOIN_LEAVE_KEY_GAP",
-    "REJOIN_MIN_LEAVE_HEIGHT", "REJOIN_CLOSE_WAIT", "REJOIN_MAX_ATTEMPTS", "REJOIN_WINDOW_TIMEOUT",
+    "REJOIN_MIN_LEAVE_HEIGHT", "REJOIN_CLOSE_WAIT", "REJOIN_INTERVAL", "REJOIN_MAX_ATTEMPTS", "REJOIN_WINDOW_TIMEOUT",
     "REJOIN_LOAD_TIMEOUT", "REJOIN_POLL_INTERVAL", "REJOIN_JOIN_POS", "REJOIN_PLAY_COLOR",
     "REJOIN_PLAY_COLOR_TOLERANCE", "REJOIN_PLAY_BOX", "REJOIN_PLAY_MIN_PIXELS", "REJOIN_PLAY_SETTLE",
     "REJOIN_AFTER_JOIN_WAIT",
@@ -449,11 +455,11 @@ __all__ = [
     "DEBUG_BUTTON_MARKER_RADIUS", "DEBUG_BUTTON_MARKER_THICKNESS", "DEBUG_BUTTON_LABEL_OFFSET",
     "DEBUG_BUTTON_LABEL_SCALE",
     "PURPLE_RANGE", "WHITE_RANGE",
-    "GUI_GEOMETRY", "GUI_ALPHA", "GUI_FONT", "GUI_BG", "GUI_ACCENT", "GUI_FG", "GUI_START_COLOR",
+    "GUI_GEOMETRY", "GUI_ALPHA", "GUI_FONT", "GUI_BG", "GUI_ACCENT", "GUI_FG",
     "GUI_STOP_COLOR", "GUI_LOOP_COLOR", "GUI_RESPAWN_COLOR", "GUI_TEST_COLOR", "GUI_CONSOLE_BG",
     "GUI_CONSOLE_FG", "GUI_SQUARE_BUTTON_SIZE", "GUI_STATUS_HEIGHT",
     "GUI_OUTER_PADDING", "GUI_ROW_SPACING", "GUI_WIDGET_SPACING", "GUI_LABEL_PADDING", "GUI_DIVIDER_HEIGHT",
-    "GUI_START_ICON_FONT_SIZE", "GUI_STOP_ICON_FONT_SIZE", "GUI_LOOP_ICON_FONT_SIZE",
+    "GUI_STOP_ICON_FONT_SIZE", "GUI_LOOP_ICON_FONT_SIZE",
     "GUI_SECTION_FONT_SIZE", "GUI_STATUS_FONT_SIZE", "GUI_CONSOLE_FONT_SIZE",
     "GUI_CONSOLE_HEIGHT", "GUI_CONSOLE_WIDTH", "GUI_RESPAWN_BUTTON_HEIGHT",
 ]

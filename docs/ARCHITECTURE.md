@@ -13,15 +13,12 @@ name everywhere else.
 
 ## The workflow lifecycle
 
-At the top level, exactly two things ever run:
+The only thing that runs is **`run_workflow_loop()`** (the GUI's loop
+button): it respawns once up front (so the loop always starts from a known,
+on-the-ground state), then repeats `run_full_cycle()` forever, pausing
+`LOOP_DELAY` seconds between cycles, until stopped.
 
-- **`run_workflow()`** - a single pass: wait for a resolvable need, resolve
-  it, done.
-- **`run_workflow_loop()`** - respawns once up front (so the loop always
-  starts from a known, on-the-ground state), then repeats `run_full_cycle()`
-  forever, pausing `LOOP_DELAY` seconds between cycles, until stopped.
-
-Both are built on **`run_full_cycle()`**, which is a tight retry loop:
+**`run_full_cycle()`** is a tight retry loop:
 
 ```
 while True:
@@ -125,10 +122,41 @@ character standing.
 - **PER-CYCLE CHECKS** - `unscrew()` and what it runs: `rejoin_game()`
   (with `rejoin_reason()` / `detect_disconnect()`), `ghost_gallery()`,
   `detect_paycheck()`; and `side_quest()`.
-- **WORKFLOWS** - `run_full_cycle()`, `run_workflow()`, `run_workflow_loop()`
-  (both start via `start_run()`). See
+- **WORKFLOWS** - `run_full_cycle()` and `run_workflow_loop()`. See
   [The workflow lifecycle](#the-workflow-lifecycle) above.
 - **GUI** - the `tkinter` control panel. See [GUI internals](#gui-internals).
+
+## Window & coordinates
+
+Every position, pixel size and screen region in `magic_numbers.py` was
+measured with the Roblox window maximized on a 1920x1080 screen
+(`REFERENCE_WIDTH` x `REFERENCE_HEIGHT`). The macro works entirely in that
+"reference" space and converts at exactly two points, so nothing else needs to
+know the real window size:
+
+- **`grab_screen()`** takes a screenshot of the whole monitor
+  (`grab_full_screen()`), crops it to the Roblox window (`roblox_rect()`) and
+  scales it to the reference size. Every detection - icons, buttons, popups,
+  the Play button, the pet - and every position they return is therefore in
+  reference space.
+- **`to_screen(x, y)`** maps a reference-space position onto the real window.
+  `hover_move()` (so every click), the pet's mouse circle and the focus click
+  all go through it.
+
+`roblox_rect()` reads the Roblox window's position and size (`roblox_window()`
+prefers the window titled exactly "Roblox", so a browser tab that mentions it
+isn't picked) and clips it to the monitor, which trims the few pixels of
+invisible border a maximized window reports. The whole monitor is used when
+there's no usable window (not running, minimized). It's remembered for
+`ROBLOX_RECT_TTL` seconds, and `focus_roblox()` forgets it. On a 1920x1080
+screen with Roblox maximized the rectangle is the whole screen, so nothing is
+cropped or scaled; on another resolution or a smaller window everything
+scales. Distances measured in pixels (icon radii, the `GHOST_GALLERY_NO_MAX_*`
+offsets, ...) are reference pixels, so they scale too. Scaling assumes the same
+aspect ratio and a window that fills its area - a non-maximized window's title
+bar and borders are counted as part of it, so expect small errors there.
+`save_failure_screenshot()` is the one thing that captures the whole screen
+instead, to show what else was on it.
 
 ## Need-icon detection
 
@@ -370,21 +398,30 @@ chance - while `DETECTION_HISTORY` is also emptied at the start of every
 workflow run, so a streak never spans a stop and restart.
 
 **Automatic recovery.** Every cycle `unscrew()` calls `rejoin_game()`, which
-asks `rejoin_reason()` whether the game needs rejoining. In order: Roblox's
-crash window (`ROBLOX_CRASH_WINDOW_TITLE`) is open; no Roblox window exists;
-the Disconnected dialog is showing (`detect_disconnect()`: at least
-`DISCONNECT_PANEL_MIN_FRACTION` of `DISCONNECT_PANEL_BOX` is the dialog's
-grey, `DISCONNECT_PANEL_COLOR` - the game behind it is blurred, so nothing
-else fills a box like that); or `DISABLED_NEEDS_REJOIN_THRESHOLD` (4) needs
-have been disabled as stuck. If so, it saves a failure screenshot (which
-shows the dialog and its error code), runs `leave_and_rejoin()` (see
-[Side actions](#side-actions)) - without the clean esc/l/enter leave for the
-first three reasons - then `setup_game()` (the rejoin resets the settings it
-sets), then clears `DISABLED_THIS_RUN` and `DETECTION_HISTORY` so every need
-gets a fresh chance, and the workflow carries on. If the rejoin fails the
-cause is still there, so the next cycle tries again. The disconnect check
-only runs once per cycle, so one that happens in the middle of a long
-handler is noticed when that handler finishes.
+asks `rejoin_reason()` whether the game needs rejoining. In order:
+
+1. *Disconnect* - Roblox's crash window (`ROBLOX_CRASH_WINDOW_TITLE`) is open;
+   no Roblox window exists; or the Disconnected dialog is showing
+   (`detect_disconnect()`: at least `DISCONNECT_PANEL_MIN_FRACTION` of
+   `DISCONNECT_PANEL_BOX` is the dialog's grey, `DISCONNECT_PANEL_COLOR` - the
+   game behind it is blurred, so nothing else fills a box like that).
+2. *Stuck* - `DISABLED_NEEDS_REJOIN_THRESHOLD` (4) needs have been disabled as
+   stuck.
+3. *Scheduled* - it has been `REJOIN_INTERVAL` (an hour) since the last
+   rejoin (`LAST_REJOIN`, set when the loop starts and by every successful
+   `leave_and_rejoin()`): a refresh of a client that has been up a long time.
+
+If so, it runs `leave_and_rejoin()` (see [Side actions](#side-actions)) -
+without the clean esc/l/enter leave for a disconnect, since there's no game
+to leave - then `setup_game()` (the rejoin resets the settings it sets), then
+clears `DISABLED_THIS_RUN` and `DETECTION_HISTORY` so every need gets a fresh
+chance, and the workflow carries on. A disconnect or stuck recovery counts as
+a failure: `log_failure()` saves a screenshot first, which shows the dialog
+and its error code. A scheduled rejoin isn't one: it's a line in the run log,
+counted in `scheduled_rejoins`. If the rejoin fails the cause is still
+there, so the next cycle tries again. The check only runs once per cycle, so
+a disconnect in the middle of a long handler is noticed when that handler
+finishes.
 
 ### Side actions
 
@@ -507,7 +544,7 @@ loop).
 
 One exception: the very first check at the top of `run_full_cycle()`'s
 retry loop uses `check_stop()` alone, not `check_running()`. That's
-deliberate - the moment you click **[START]**/**[LOOP]** in the Python
+deliberate - the moment you click **[LOOP]** in the Python
 GUI, *that* window has focus, not Roblox. `process_needs()` is what brings
 Roblox to the front a moment later; requiring focus before that first
 attempt would make the buttons non-functional. Every checkpoint after that
@@ -593,26 +630,20 @@ knowing if you're modifying it:
   same path back to a usable UI. `[STOP]` is deliberately excluded from
   `action_buttons`, since it must stay clickable while something is
   running.
-- **The main row** (start/loop/stop) gives all three buttons their own
+- **The main row** (loop/stop) gives both buttons their own
   fixed-pixel-**height** `Frame` container (`pack_propagate(False)`),
   rather than relying on `Button`'s own `width`/`height` (character
   units) - those scale inconsistently across different font sizes, and an
   unconstrained button's natural height grows with its font, which is
   what broke the row's alignment the first two times a font size changed.
-  The two side containers fix both width and height (making them equal
-  squares); the center container fixes only height and otherwise expands
+  The stop container fixes both width and height (making it a square); the
+  loop container fixes only height and otherwise expands
   (`fill=tk.X, expand=True`) to fill the remaining width. Fixing height on
-  all three individually, rather than letting the center one inherit it
-  from its siblings, is what keeps the row aligned regardless of any
-  future font size change to any one of them.
+  both individually, rather than letting the loop one inherit it from the
+  stop one, is what keeps the row aligned regardless of any future font
+  size change to either.
 - Every button in that row is created with `bd=0, highlightthickness=0` to
   flatten Tk's default border/focus-ring rendering.
-- **The single-cycle button's label** is plain button text
-  (`"\U0001F5041"`, the refresh icon followed by "1") rather than a
-  separate overlay widget - an earlier version tried layering a `Label`
-  with `place()` on top of the icon for a cleaner look, but Tk's border
-  rendering kept showing a visible seam/box behind it even with matching
-  fill colors, so plain text turned out simpler and more reliable.
 - **`DebugCapture`** redirects `sys.stdout` into the on-screen console
   (`self.debug_text`) for the lifetime of the GUI, so every `print()`
   anywhere in the macro shows up there automatically.
@@ -631,6 +662,7 @@ exact values and rationale):
 | Group | Examples |
 |---|---|
 | Behavior flags | `ENABLED_NEEDS`, `HALLOWEEN`, `GHOST_GALLERY_PLAY_MINIGAME`, `GHOST_GALLERY_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
+| Window / coordinates | `REFERENCE_WIDTH`, `REFERENCE_HEIGHT`, `REFERENCE_CENTER_X/Y`, `ROBLOX_RECT_TTL` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `NEED_GONE_*` |
 | Stuck needs | `NEED_STUCK_CHECKS` |
 | Pet focusing | `FOCUS_PET_REGION_TOP_PERCENT`, `FOCUS_PET_FRAME_GAP`, `FOCUS_PET_DIFF_THRESHOLD`, `FOCUS_PET_MERGE_KERNEL`, `FOCUS_PET_MIN_AREA` |
@@ -671,7 +703,8 @@ were away can be read back afterwards:
   need (`write_status()`): the run number and start time, time of the last
   update (if that's old, the macro is stuck or dead), cycle count, the needs
   last detected, how many of each need were resolved or failed, the needs
-  currently disabled, the number of recoveries, and the last resolved need
+  currently disabled, the number of recoveries, disconnects and scheduled
+  rejoins, and the last resolved need
   and last failure. `RUN_STATS` holds the counters in memory.
 - **`debug_needs.png`** / **`debug_buttons.png`** - see below.
 

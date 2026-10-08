@@ -10,6 +10,8 @@
 # pyautogui   - cross-platform mouse/keyboard automation
 # pydirectinput - direct input for game compatibility
 # pygetwindow - window management
+# pytesseract - OCR (only used by leave_and_rejoin(); also needs the Tesseract
+#               program itself installed - see README.md)
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
@@ -121,19 +123,45 @@ def grab_screen():
         shot = np.array(sct.grab(sct.monitors[1]))
     return cv2.cvtColor(shot, cv2.COLOR_BGRA2BGR)
 
+def exact_color_mask(img, rgb):
+    """Mask of every pixel in `img` (BGR, as grab_screen() returns) that
+    matches `rgb` (an (R, G, B) tuple) exactly."""
+    r, g, b = rgb
+    target_bgr = np.array([b, g, r])
+    return cv2.inRange(img, target_bgr, target_bgr)
+
 def find_exact_color(img, rgb):
     """Find the centroid of every pixel in `img` that matches `rgb` (an
     (R, G, B) tuple) exactly. Returns (x, y), or None if nothing matches.
-    `img` is expected in BGR (as grab_screen() returns), so this converts
-    the given RGB triple to BGR before comparing - an exact match means
-    passing the same value as both the lower and upper bound to inRange."""
-    r, g, b = rgb
-    target_bgr = np.array([b, g, r])
-    mask = cv2.inRange(img, target_bgr, target_bgr)
-    ys, xs = np.where(mask > 0)
+    `img` is expected in BGR (as grab_screen() returns)."""
+    ys, xs = np.where(exact_color_mask(img, rgb) > 0)
     if len(xs) == 0:
         return None
     return int(xs.mean()), int(ys.mean())
+
+def find_text(img, phrase):
+    """Find `phrase` (one or more words, case-insensitive) on screen with OCR
+    and return the (x, y) center of it, or None. Words must be next to each
+    other in the OCR output and each read with at least TEXT_MIN_CONFIDENCE.
+    Needs pytesseract and the Tesseract program (imported here so the rest
+    of the macro runs without them)."""
+    import pytesseract
+    if TESSERACT_CMD:
+        pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
+    data = pytesseract.image_to_data(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), output_type=pytesseract.Output.DICT)
+    words = phrase.lower().split()
+    found = [(data["text"][i].strip().lower(), float(data["conf"][i]),
+              data["left"][i], data["top"][i], data["width"][i], data["height"][i])
+             for i in range(len(data["text"]))]
+    for start in range(len(found) - len(words) + 1):
+        group = found[start:start + len(words)]
+        if all(g[0] == w and g[1] >= TEXT_MIN_CONFIDENCE for g, w in zip(group, words)):
+            left = min(g[2] for g in group)
+            top = min(g[3] for g in group)
+            right = max(g[2] + g[4] for g in group)
+            bottom = max(g[3] + g[5] for g in group)
+            return (left + right) // 2, (top + bottom) // 2
+    return None
 
 # ============================================================================
 # STATE
@@ -142,6 +170,11 @@ def find_exact_color(img, rgb):
 # else (fixed config/tuning values) lives in magic_numbers.py instead.
 
 STOP_FLAG = False
+
+# The GUI object (set by AdoptMeGUI), so macro code running on the worker
+# thread can send the macro window to the back and bring it up again - see
+# send_macro_window_to_back(). None when running without the GUI.
+MACRO_WINDOW = None
 
 # Detected action-button screen positions, keyed by need name (e.g. "hungry").
 # Populated by refresh_button_mapping() each time the macro walks to the
@@ -736,9 +769,9 @@ def tree_collect():
     return True
 
 def setup_game():
-    """Setup: lock the house, then set the backpack's item filter to
-    favorites only. Disabling trades isn't implemented yet. Not part of the
-    cycle - only run on demand (the GUI's Setup button)."""
+    """Setup: lock the house, set the backpack's item filter to favorites
+    only, then disable trades (disable_trades()). Not part of the cycle -
+    only run on demand (the GUI's Setup button)."""
     respawn_character()
     print("[debug] locking house...")
     hover_click(*SETUP_LOCK_HOUSE_POS)
@@ -760,8 +793,88 @@ def setup_game():
     wait_interruptible(UI_SETTLE)
     print("[debug] closing backpack...")
     pydirectinput.press(KEY_BACKPACK)
+    wait_interruptible(UI_SETTLE)
+
+    disable_trades()
 
     print("[!] Setup complete!")
+    return True
+
+def send_macro_window_to_back():
+    """Drop the macro's own window behind everything (it's normally
+    always-on-top and covers part of the Roblox UI). Safe to call from the
+    worker thread: the change runs on Tk's thread and this waits for it."""
+    if MACRO_WINDOW is not None:
+        MACRO_WINDOW.run_on_ui_thread(MACRO_WINDOW.send_to_back)
+
+def bring_macro_window_to_front():
+    """Undo send_macro_window_to_back()."""
+    if MACRO_WINDOW is not None:
+        MACRO_WINDOW.run_on_ui_thread(MACRO_WINDOW.bring_to_front)
+
+def disable_trades():
+    """Set the game's trade setting to "no one". The macro window covers the
+    settings gear, so it's sent to the back for the duration and always
+    brought back, even if the run is stopped partway."""
+    print("[debug] sending the macro window to the back...")
+    send_macro_window_to_back()
+    try:
+        wait_interruptible(UI_SETTLE)
+        if not focus_roblox():
+            return False
+        for label, pos in (("settings", SETUP_TRADES_SETTINGS_POS),
+                           ("settings menu", SETUP_TRADES_MENU_POS),
+                           ("interaction tab", SETUP_TRADES_INTERACTION_TAB_POS),
+                           ("trading setting", SETUP_TRADES_SETTING_POS),
+                           ("no one", SETUP_TRADES_NO_ONE_POS),
+                           ("closing settings", SETUP_TRADES_CLOSE_POS)):
+            print(f"[debug] {label}...")
+            hover_click(*pos)
+            wait_interruptible(UI_SETTLE)
+    finally:
+        print("[debug] bringing the macro window back...")
+        bring_macro_window_to_front()
+    print("[!] Trades disabled!")
+    return True
+
+def leave_and_rejoin():
+    """Leave the game (esc, l, enter), find "Adopt Me!" on the screen it
+    drops back to with OCR and click it, click the blue Play button (by its
+    exact color), wait REJOIN_LOAD_WAIT for the game to load, click
+    REJOIN_JOIN_POS, wait REJOIN_AFTER_JOIN_WAIT and respawn. GUI-only
+    for now - nothing calls it yet (rejoin_game() is still a stub). Returns
+    False if the text or the button couldn't be found, True otherwise."""
+    if not focus_roblox():
+        return False
+    print("[debug] leaving the game...")
+    for key in REJOIN_LEAVE_KEYS:
+        pydirectinput.press(key)
+        wait_interruptible(UI_SETTLE)
+    wait_interruptible(REJOIN_AFTER_LEAVE_WAIT)
+
+    print(f"[debug] looking for '{REJOIN_GAME_TEXT}'...")
+    text_pos = find_text(grab_screen(), REJOIN_GAME_TEXT)
+    if text_pos is None:
+        print(f"[!] Rejoin failed: '{REJOIN_GAME_TEXT}' not found on screen")
+        return False
+    hover_click(*text_pos)
+    wait_interruptible(REJOIN_AFTER_CLICK_WAIT)
+
+    print(f"[debug] looking for the play button {REJOIN_PLAY_COLOR}...")
+    play_pos = find_exact_color(grab_screen(), REJOIN_PLAY_COLOR)
+    if play_pos is None:
+        print("[!] Rejoin failed: play button not found on screen")
+        return False
+    hover_click(*play_pos)
+
+    print(f"[debug] waiting {REJOIN_LOAD_WAIT}s for the game to load...")
+    wait_interruptible(REJOIN_LOAD_WAIT)
+    hover_click(*REJOIN_JOIN_POS)
+
+    print(f"[debug] waiting {REJOIN_AFTER_JOIN_WAIT}s, then respawning...")
+    wait_interruptible(REJOIN_AFTER_JOIN_WAIT)
+    respawn_character()
+    print("[!] Rejoin complete!")
     return True
 
 # ============================================================================
@@ -1238,36 +1351,51 @@ def rejoin_game():
     #     DISABLED_THIS_RUN) is a natural trigger for it too
     pass
 
+def detect_ghost_gallery_popup(img):
+    """True if the "Ghost Gallery is starting soon! Teleport there now?"
+    popup is on screen in `img`. Neither button color is unique on its own
+    (the Yes green is also the paycheck's CASH OUT green, the No red is also
+    the Exit Home button), so it needs both: the Yes green, with the No red
+    close by to its left."""
+    ys, xs = np.where(exact_color_mask(img, GHOST_GALLERY_YES_COLOR) > 0)
+    if len(xs) < GHOST_GALLERY_MIN_BUTTON_PIXELS:
+        return False
+    yes_x, yes_y = int(xs.mean()), int(ys.mean())
+    near_no = img[max(0, yes_y - GHOST_GALLERY_NO_MAX_DY):yes_y + GHOST_GALLERY_NO_MAX_DY,
+                  max(0, yes_x - GHOST_GALLERY_NO_MAX_DX):yes_x]
+    return int(np.count_nonzero(exact_color_mask(near_no, GHOST_GALLERY_NO_COLOR))) >= GHOST_GALLERY_MIN_BUTTON_PIXELS
+
 def ghost_gallery():
     """Halloween only (see HALLOWEEN): handles the ghost gallery popup.
-    NOT IMPLEMENTED YET - the comments below are the plan; for now this
+    Returns True if the popup was there and was dismissed. Only the disable
+    branch exists so far - the minigame branch is NOT IMPLEMENTED YET and
     does nothing."""
     if GHOST_GALLERY_PLAY_MINIGAME:
         # Play the minigame. Rough plan:
-        #   - detect that the ghost gallery is actually up (exact-color match
-        #     on a known button, like detect_paycheck() does for CASH OUT)
         #   - play it (clicks/keys to be worked out), under check_running()
         #     so [STOP] and focus loss still interrupt it
         #   - dismiss whatever it leaves behind
         # Probably wants its own timer in the persisted game config, like
         # lure_timer/tree_timer, rather than running every single cycle.
-        pass
-    else:
-        # Just disable it. Rough plan: detect the popup the same way as the
-        # paycheck one (find_exact_color() on a button unique to it) and
-        # click its dismiss/close position(s), which will need new
-        # GHOST_GALLERY_* constants in magic_numbers.py.
-        pass
+        return False
+    if not detect_ghost_gallery_popup(grab_screen()):
+        return False
+    print("[debug] ghost gallery popup detected, dismissing...")
+    hover_click(*GHOST_GALLERY_DONT_SHOW_POS)   # "Do not show again this session"
+    hover_click(*GHOST_GALLERY_NO_POS)
+    return True
 
 def unscrew():
     """Runs once per cycle, right after check_stop(). Rejoins if we've been
-    disconnected (first, since nothing else works while disconnected), checks
-    for the paycheck popup and, during Halloween, handles the ghost gallery;
-    more checks may be added here later."""
+    disconnected (first, since nothing else works while disconnected), then,
+    during Halloween, handles the ghost gallery popup, then checks for the
+    paycheck popup; more checks may be added here later. The ghost gallery
+    goes before the paycheck check because detect_paycheck() would otherwise
+    mistake the popup's Yes button for CASH OUT (same green)."""
     rejoin_game()
-    detect_paycheck()
     if HALLOWEEN:
         ghost_gallery()
+    detect_paycheck()
 
 def side_quest():
     """Runs once per cycle, right after unscrew(), unless side_quest_enabled
@@ -1385,6 +1513,8 @@ class DebugCapture:
 
 class AdoptMeGUI:
     def __init__(self, root):
+        global MACRO_WINDOW
+        MACRO_WINDOW = self
         self.root = root
         self.root.title("Adopt Me Macro")
         self.root.geometry(GUI_GEOMETRY)
@@ -1492,6 +1622,12 @@ class AdoptMeGUI:
         btn_setup.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
         self.action_buttons.append(btn_setup)
 
+        btn_rejoin = tk.Button(btn_frame, text="Leave & rejoin", command=lambda: self.run_async(leave_and_rejoin),
+                                font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=GUI_RESPAWN_COLOR, fg=self.fg,
+                                height=GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
+        btn_rejoin.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
+        self.action_buttons.append(btn_rejoin)
+
         # Persisted switches (see load_game_config()). Deliberately not in
         # action_buttons: they must stay usable while a workflow is running,
         # which is safe since update_game_config() is locked.
@@ -1532,6 +1668,28 @@ class AdoptMeGUI:
         status.pack_propagate(False)
         self.status = tk.Label(status, text="Ready", font=(GUI_FONT, GUI_STATUS_FONT_SIZE), bg=self.accent, fg=self.fg)
         self.status.pack(anchor=tk.W, padx=GUI_OUTER_PADDING, pady=GUI_LABEL_PADDING)
+
+    def send_to_back(self):
+        """Stop being always-on-top and drop behind other windows."""
+        self.root.attributes('-topmost', False)
+        self.root.lower()
+
+    def bring_to_front(self):
+        """Always-on-top again, as at startup."""
+        self.root.attributes('-topmost', True)
+        self.root.lift()
+
+    def run_on_ui_thread(self, func, timeout=5.0):
+        """Run `func` on Tk's own thread (Tk isn't safe to touch from the
+        worker thread) and wait until it has run, or `timeout` seconds."""
+        done = threading.Event()
+        def call():
+            try:
+                func()
+            finally:
+                done.set()
+        self.root.after(0, call)
+        done.wait(timeout)
 
     def run_async(self, func):
         """Run `func` on a background daemon thread so the GUI never freezes

@@ -324,9 +324,9 @@ Every cycle, `unscrew()` runs `rejoin_game()` first (nothing else works
 while disconnected), then `ghost_gallery()` if `HALLOWEEN` is on, then the
 paycheck check. The ghost gallery goes before the paycheck check because the
 popup's Yes button is the same green as the paycheck's CASH OUT button, so
-`detect_paycheck()` would mistake it for one. `rejoin_game()` is a
-comments-only stub for now: the plan is to detect a disconnect, get back in
-(`leave_and_rejoin()` below is the start of that), then respawn.
+`detect_paycheck()` would mistake it for one. `rejoin_game()` is the
+automatic recovery - see [Stuck needs](#stuck-needs); detecting an actual
+disconnect as a second trigger for it isn't implemented yet.
 
 **Disabling the ghost gallery.** `detect_ghost_gallery_popup()` recognises the
 "Ghost Gallery is starting soon! Teleport there now?" popup by its two
@@ -362,6 +362,14 @@ detection disables the need without a 5th attempt.
 to the game config, so relaunching the script gives every need a fresh
 chance - while `DETECTION_HISTORY` is also emptied at the start of every
 workflow run, so a streak never spans a stop and restart.
+
+**Automatic recovery.** When `DISABLED_NEEDS_REJOIN_THRESHOLD` (4) needs have
+been disabled this way, the game is in a bad state, so the next cycle's
+`unscrew()` calls `rejoin_game()`, which runs `leave_and_rejoin()` (see
+[Side actions](#side-actions)), then `setup_game()`, then clears
+`DISABLED_THIS_RUN` and `DETECTION_HISTORY` so every need gets a fresh
+chance, and the workflow carries on. If the rejoin fails the disabled needs
+are kept, so the next cycle tries again.
 
 ### Side actions
 
@@ -613,9 +621,44 @@ exact values and rationale):
 | Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN/MAX_RADIUS`, `NEED_ICON_HOUGH_*` |
 | Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
+| Debug logging | `OUTPUT_LOG_PATH`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_SCREENSHOTS` |
+| Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `REJOIN_*`, `ROBLOX_*` |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
 | GUI | colors/fonts (`GUI_BG`, `GUI_FONT`, ...) and layout spacing (`GUI_OUTER_PADDING`, `GUI_ROW_SPACING`, ...) for the `tkinter` panel |
+
+## Debugging an unattended run
+
+Everything below is in `debug/` (git-ignored) so a run that broke while you
+were away can be read back afterwards:
+
+- **`output.log`** - everything the macro prints (the same as the GUI
+  console), one timestamped line each, appended to across runs. `log_output()`
+  is called by `DebugCapture`, so this only exists while the GUI is up. Past
+  `OUTPUT_LOG_MAX_BYTES` (5 MB) it moves to `output.log.old`, replacing the
+  previous one.
+- **`run_log.txt`** - the short version: one tagged line per notable event
+  (needs detected, resolved with how long they took, popups dismissed,
+  recoveries, stops, failures). Start here to see roughly what happened.
+- **`failures/`** - `log_failure(reason)` saves a screenshot of the whole
+  screen named with the time, run number and reason, and also prints the
+  reason, writes it to `run_log.txt` and counts it in the status file. It's
+  called when a handler can't resolve a need, a need is still showing after
+  `NEED_GONE_MAX_WAIT`, a need is disabled as stuck, a recovery starts or
+  fails, Roblox loses focus and stops the run, and when the run crashes (the
+  full traceback is in `output.log`). It never raises, since it runs while
+  something else is already wrong. The oldest screenshots beyond
+  `MAX_FAILURE_SCREENSHOTS` (40) are deleted.
+- **`status.json`** - rewritten every cycle and on every failure/resolved
+  need (`write_status()`): the run number and start time, time of the last
+  update (if that's old, the macro is stuck or dead), cycle count, the needs
+  last detected, how many of each need were resolved or failed, the needs
+  currently disabled, the number of recoveries, and the last resolved need
+  and last failure. `RUN_STATS` holds the counters in memory.
+- **`debug_needs.png`** / **`debug_buttons.png`** - see below.
+
+A run that *stops* (a crash, Roblox losing focus) still ends the loop; the
+logs say why, but nothing restarts it yet.
 
 If detection isn't finding what you expect after changing screen
 resolution or Roblox's UI, check `debug/debug_needs.png` and

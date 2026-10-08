@@ -13,7 +13,7 @@
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
-import os, sys, re, time, threading, json, subprocess
+import os, sys, re, time, threading, json, subprocess, traceback
 from abc import ABC, abstractmethod
 from collections import deque
 from functools import partial
@@ -199,6 +199,82 @@ def log_run_event(message):
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     with open(RUN_LOG_PATH, "a") as f:
         f.write(f"[{timestamp}] [RUN {CURRENT_RUN_NUMBER}] {message}\n")
+
+# What the macro knows about how this run is going, written to STATUS_PATH by
+# write_status() so it can be checked without opening the GUI.
+RUN_STATS = {"run": None, "started": None, "cycles": 0, "last_detected": [], "resolved": {}, "failed": {},
+             "failures": 0, "recoveries": 0, "last_resolved": None, "last_failure": None}
+
+OUTPUT_LOG_LOCK = threading.Lock()
+_output_at_line_start = True
+
+def log_output(text):
+    """Append `text` (whatever was just printed) to OUTPUT_LOG_PATH, with a
+    timestamp at the start of every line. Called by DebugCapture, so it's
+    everything the GUI console shows, kept on disk. Never raises. Past
+    OUTPUT_LOG_MAX_BYTES the file moves to output.log.old first."""
+    global _output_at_line_start
+    try:
+        with OUTPUT_LOG_LOCK:
+            if os.path.exists(OUTPUT_LOG_PATH) and os.path.getsize(OUTPUT_LOG_PATH) > OUTPUT_LOG_MAX_BYTES:
+                os.replace(OUTPUT_LOG_PATH, OUTPUT_LOG_PATH + ".old")
+            with open(OUTPUT_LOG_PATH, "a", encoding="utf-8") as f:
+                for piece in text.splitlines(keepends=True):
+                    if _output_at_line_start:
+                        f.write(time.strftime("[%Y-%m-%d %H:%M:%S] "))
+                    f.write(piece)
+                    _output_at_line_start = piece.endswith("\n")
+    except OSError:
+        pass
+
+def save_failure_screenshot(reason):
+    """Save a screenshot of the whole screen to FAILURE_DIR, named with the
+    time, run number and `reason`, and delete the oldest beyond
+    MAX_FAILURE_SCREENSHOTS. Returns the file name, or None if it couldn't
+    (never raises - it's called while something else is already going wrong)."""
+    try:
+        os.makedirs(FAILURE_DIR, exist_ok=True)
+        slug = re.sub(r"[^a-z0-9]+", "_", reason.lower()).strip("_")[:40]
+        name = f"{time.strftime('%Y%m%d_%H%M%S')}_run{CURRENT_RUN_NUMBER}_{slug}.png"
+        cv2.imwrite(os.path.join(FAILURE_DIR, name), grab_screen())
+        for old in sorted(os.listdir(FAILURE_DIR))[:-MAX_FAILURE_SCREENSHOTS]:
+            os.remove(os.path.join(FAILURE_DIR, old))
+        return name
+    except Exception as e:
+        print(f"[!] couldn't save a failure screenshot: {e}")
+        return None
+
+def write_status():
+    """Write RUN_STATS, the currently disabled needs and the time to
+    STATUS_PATH (replacing it atomically). Never raises."""
+    try:
+        status = {**RUN_STATS, "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
+                  "disabled_needs": sorted(DISABLED_THIS_RUN)}
+        tmp = STATUS_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(status, f, indent=2)
+        os.replace(tmp, STATUS_PATH)
+    except (OSError, TypeError):
+        pass
+
+def log_failure(reason, screenshot=True):
+    """Record that something went wrong: print it, add it to the run log,
+    save a screenshot of what was on screen, and note it in the status
+    file. Doesn't change what the macro does next."""
+    shot = save_failure_screenshot(reason) if screenshot else None
+    detail = f"{reason}" + (f" (screenshot: failures/{shot})" if shot else "")
+    print(f"[!] FAILURE: {detail}")
+    log_run_event(f"FAILURE: {detail}")
+    RUN_STATS["failures"] += 1
+    RUN_STATS["last_failure"] = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "reason": reason, "screenshot": shot}
+    write_status()
+
+def reset_run_stats():
+    """Start the status counters afresh (a workflow was just started)."""
+    RUN_STATS.update(run=CURRENT_RUN_NUMBER, started=time.strftime("%Y-%m-%d %H:%M:%S"), cycles=0,
+                     last_detected=[], resolved={}, failed={}, failures=0, recoveries=0,
+                     last_resolved=None, last_failure=None)
+    write_status()
 
 # ============================================================================
 # GAME CONFIG
@@ -400,6 +476,7 @@ def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=N
         remaining = deadline - time.time()
         if remaining <= 0:
             print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
+            log_failure(f"{need_name} still showing after {max_wait}s")
             return
         wait_interruptible(min(NEED_GONE_CONFIRM_INTERVAL if misses else poll_interval, remaining))
         if not _need_cleared(need_name):
@@ -1317,7 +1394,8 @@ def record_detected_needs(detected):
     for need_name in sorted(stuck):
         DISABLED_THIS_RUN.add(need_name)
         print(f"[!] {need_name} detected on {NEED_STUCK_CHECKS} checks in a row - disabling it for this run")
-        log_run_event(f"disabled for this run: {need_name} (stuck for {NEED_STUCK_CHECKS} checks)")
+        log_failure(f"{need_name} stuck for {NEED_STUCK_CHECKS} checks - disabled for this run "
+                    f"({len(DISABLED_THIS_RUN)} disabled now: {', '.join(sorted(DISABLED_THIS_RUN))})")
 
 def process_needs():
     """Detect needs on screen and resolve them one at a time: each matched
@@ -1354,6 +1432,7 @@ def process_needs():
         matched_needs.append(need_name)
 
     log_run_event(f"detected: {', '.join(matched_needs) if matched_needs else 'none matched'}")
+    RUN_STATS["last_detected"] = matched_needs
     record_detected_needs(matched_needs)
 
     if not matched_needs:
@@ -1368,12 +1447,20 @@ def process_needs():
         if handler is None:
             print(f"[debug] {need_name} is disabled, skipping")
             continue
+        started = time.time()
         if not handler.handle():
             print(f"[debug] could not resolve '{need_name}' this pass, skipping")
+            RUN_STATS["failed"][need_name] = RUN_STATS["failed"].get(need_name, 0) + 1
+            log_failure(f"{need_name} handler could not resolve it")
             continue
 
         respawn_character()
         resolved = True
+        seconds = time.time() - started
+        RUN_STATS["resolved"][need_name] = RUN_STATS["resolved"].get(need_name, 0) + 1
+        RUN_STATS["last_resolved"] = {"need": need_name, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+        log_run_event(f"resolved: {need_name} ({seconds:.0f}s)")
+        write_status()
 
     return resolved
 
@@ -1390,25 +1477,38 @@ def detect_paycheck():
         return False
 
     print("[debug] paycheck popup detected, dismissing...")
+    log_run_event("paycheck popup dismissed")
     hover_click(*PAYCHECK_DISMISS_POS_1)
     hover_click(*PAYCHECK_DISMISS_POS_2)
     return True
 
 def rejoin_game():
-    """Rejoins the game if we've been disconnected. NOT IMPLEMENTED YET -
-    the comments below are the plan; for now this does nothing."""
-    # Rough plan:
-    #   - detect that we're disconnected: Roblox puts up a dialog with a
-    #     reconnect/leave button (exact-color match on a known button, the way
-    #     detect_paycheck() finds CASH OUT), or the window title changes, or
-    #     the Roblox window is simply gone
-    #   - get back in: click the dialog's reconnect button, or relaunch the
-    #     game (e.g. via a roblox:// URI) and wait for it to load
-    #   - afterwards the character is somewhere unknown, so respawn and let
-    #     the usual cycle carry on
-    #   - once this exists, "too many needs disabled this run" (see
-    #     DISABLED_THIS_RUN) is a natural trigger for it too
-    pass
+    """Recover when the game needs it. Currently the one trigger is
+    DISABLED_NEEDS_REJOIN_THRESHOLD needs having been disabled for this run
+    (see record_detected_needs()): that many stuck needs means the game is
+    in a bad state, so rejoin it (leave_and_rejoin()), run setup_game(), and
+    clear the disabled set so every need gets a fresh chance. Returns True
+    if it recovered, False if nothing needed doing or the rejoin failed (the
+    disabled needs are kept, so the next cycle tries again).
+
+    Not implemented yet: detecting an actual disconnect (Roblox puts up a
+    dialog with a reconnect/leave button - an exact-color match on it, like
+    detect_paycheck() does for CASH OUT, or the window being gone) as a
+    second trigger for the same recovery."""
+    if len(DISABLED_THIS_RUN) < DISABLED_NEEDS_REJOIN_THRESHOLD:
+        return False
+    log_failure(f"{len(DISABLED_THIS_RUN)} needs disabled ({', '.join(sorted(DISABLED_THIS_RUN))}) - rejoining")
+    RUN_STATS["recoveries"] += 1
+    if not leave_and_rejoin():
+        log_failure("recovery: rejoin failed, will try again next cycle")
+        return False
+    setup_game()
+    DISABLED_THIS_RUN.clear()
+    DETECTION_HISTORY.clear()
+    log_run_event("recovery complete: rejoined, setup run, disabled needs cleared")
+    print("[!] Recovery complete - carrying on")
+    write_status()
+    return True
 
 def detect_ghost_gallery_popup(img):
     """True if the "Ghost Gallery is starting soon! Teleport there now?"
@@ -1440,6 +1540,7 @@ def ghost_gallery():
     if not detect_ghost_gallery_popup(grab_screen()):
         return False
     print("[debug] ghost gallery popup detected, dismissing...")
+    log_run_event("ghost gallery popup dismissed")
     hover_click(*GHOST_GALLERY_DONT_SHOW_POS)   # "Do not show again this session"
     hover_click(*GHOST_GALLERY_NO_POS)
     return True
@@ -1495,6 +1596,8 @@ def run_full_cycle():
         # process_needs() below is what brings Roblox to the front. Once
         # that succeeds, every wait from here on does check_running().
         check_stop()
+        RUN_STATS["cycles"] += 1
+        write_status()
         unscrew()
         side_quest()
         print("\n[debug] checking needs...")
@@ -1509,6 +1612,7 @@ def run_workflow():
     STOP_FLAG = False
     CURRENT_RUN_NUMBER = next_run_number()
     DETECTION_HISTORY.clear()
+    reset_run_stats()
     log_run_event("WORKFLOW started")
     print("\n" + "=" * 50)
     print(f"[WORKFLOW] Starting (run {CURRENT_RUN_NUMBER})")
@@ -1528,6 +1632,7 @@ def run_workflow_loop():
     STOP_FLAG = False
     CURRENT_RUN_NUMBER = next_run_number()
     DETECTION_HISTORY.clear()
+    reset_run_stats()
     log_run_event("LOOP started")
     print("\n" + "=" * 50)
     print(f"[LOOP] Starting continuous workflow (run {CURRENT_RUN_NUMBER})")
@@ -1558,6 +1663,7 @@ class DebugCapture:
         self.original_stdout = sys.stdout
 
     def write(self, msg):
+        log_output(msg)
         self.text.config(state=tk.NORMAL)
         self.text.insert(tk.END, msg)
         self.text.see(tk.END)
@@ -1793,13 +1899,16 @@ class AdoptMeGUI:
                 # StopRequested is itself an Exception subclass, so if the
                 # broad handler came first it would catch this too and
                 # misreport a clean stop as "[ERROR]".
+                log_run_event("stopped by the user")
                 final_status = "[STOPPED]"
             except FocusLost:
                 # Same reasoning as StopRequested above - must come before
                 # the generic Exception handler.
+                log_failure("stopped: Roblox lost focus")
                 final_status = "[STOPPED: Roblox not focused]"
             except Exception as e:
-                print(f"\n[ERROR] {e}")
+                print(f"\n[ERROR] {e}\n{traceback.format_exc()}")
+                log_failure(f"crashed: {type(e).__name__}: {e}")
                 final_status = "[ERROR]"
             finally:
                 release_all_inputs()  # last line of defense against stuck keys/mouse

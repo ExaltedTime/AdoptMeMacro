@@ -55,6 +55,11 @@ Path(DEBUG_DIR).mkdir(exist_ok=True)
 RUN_LOG_PATH = os.path.join(DEBUG_DIR, "run_log.txt")      # appended to, never overwritten
 RUN_COUNTER_PATH = os.path.join(DEBUG_DIR, "run_counter.txt")  # holds the last-used run number
 GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")      # persisted game state - see load_game_config()
+OUTPUT_LOG_PATH = os.path.join(DEBUG_DIR, "output.log")    # everything the macro prints, timestamped - see log_output()
+FAILURE_DIR = os.path.join(DEBUG_DIR, "failures")          # a screenshot per failure - see log_failure()
+STATUS_PATH = os.path.join(DEBUG_DIR, "status.json")       # live "is it alive and what's it doing" summary - see write_status()
+OUTPUT_LOG_MAX_BYTES = 5 * 1024 * 1024   # output.log moves to output.log.old (replacing the last one) past this size
+MAX_FAILURE_SCREENSHOTS = 40             # oldest are deleted beyond this many
 
 # ============================================================================
 # SCREEN / INPUT SETUP
@@ -196,6 +201,8 @@ TELEPORT_WALK_NEEDS_HALLOWEEN = {
 # handler registry both read this).
 TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN \
     else TELEPORT_WALK_NEEDS_NORMAL
+DISABLED_NEEDS_REJOIN_THRESHOLD = 4  # this many needs disabled for the run (see NEED_STUCK_CHECKS) means something is
+                                     # badly wrong: rejoin the game, run setup, and give every need a fresh chance
 NEED_STUCK_CHECKS = 5            # an enabled need detected on this many checks in a row is
                                   # disabled for the rest of the run - see record_detected_needs()
 NEED_GONE_MAX_WAIT = 60.0        # most wait_until_need_gone() ever waits for an icon to disappear -
@@ -377,6 +384,8 @@ GUI_RESPAWN_BUTTON_HEIGHT = 1    # lines
 __all__ = [
     "ENABLED_NEEDS",
     "SCRIPT_DIR", "NEEDS_DIR", "DEBUG_DIR", "RUN_LOG_PATH", "RUN_COUNTER_PATH", "GAME_CONFIG_PATH",
+    "OUTPUT_LOG_PATH", "FAILURE_DIR", "STATUS_PATH", "OUTPUT_LOG_MAX_BYTES", "MAX_FAILURE_SCREENSHOTS",
+    "DISABLED_NEEDS_REJOIN_THRESHOLD",
     "SCREEN_WIDTH", "SCREEN_HEIGHT", "SCREEN_CENTER_X", "SCREEN_CENTER_Y",
     "FOCUS_WINDOW_ON_ACTION", "SAVE_NEW_NEEDS", "MATCH_ONLY_LEFT_HALF",
     "RESPAWN_KEY_DURATION", "RESPAWN_WAIT", "WALK_TO_BUTTONS_DURATION", "WALK_ALTERNATING_STEP",

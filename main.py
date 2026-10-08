@@ -10,8 +10,6 @@
 # pyautogui   - cross-platform mouse/keyboard automation
 # pydirectinput - direct input for game compatibility
 # pygetwindow - window management
-# pytesseract - OCR (only used by leave_and_rejoin(); also needs the Tesseract
-#               program itself installed - see README.md)
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
@@ -138,30 +136,6 @@ def find_exact_color(img, rgb):
     if len(xs) == 0:
         return None
     return int(xs.mean()), int(ys.mean())
-
-def find_text(img, phrase):
-    """Find `phrase` (one or more words, case-insensitive) on screen with OCR
-    and return the (x, y) center of it, or None. Words must be next to each
-    other in the OCR output and each read with at least TEXT_MIN_CONFIDENCE.
-    Needs pytesseract and the Tesseract program (imported here so the rest
-    of the macro runs without them)."""
-    import pytesseract
-    if TESSERACT_CMD:
-        pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
-    data = pytesseract.image_to_data(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), output_type=pytesseract.Output.DICT)
-    words = phrase.lower().split()
-    found = [(data["text"][i].strip().lower(), float(data["conf"][i]),
-              data["left"][i], data["top"][i], data["width"][i], data["height"][i])
-             for i in range(len(data["text"]))]
-    for start in range(len(found) - len(words) + 1):
-        group = found[start:start + len(words)]
-        if all(g[0] == w and g[1] >= TEXT_MIN_CONFIDENCE for g, w in zip(group, words)):
-            left = min(g[2] for g in group)
-            top = min(g[3] for g in group)
-            right = max(g[2] + g[4] for g in group)
-            bottom = max(g[3] + g[5] for g in group)
-            return (left + right) // 2, (top + bottom) // 2
-    return None
 
 # ============================================================================
 # STATE
@@ -838,12 +812,11 @@ def disable_trades():
     return True
 
 def leave_and_rejoin():
-    """Leave the game (esc, l, enter), find "Adopt Me!" on the screen it
-    drops back to with OCR and click it, click the blue Play button (by its
-    exact color), wait REJOIN_LOAD_WAIT for the game to load, click
+    """Leave the game (esc, l, enter), click the blue Play button on the
+    screen it drops back to (found by its exact color), wait REJOIN_LOAD_WAIT for the game to load, click
     REJOIN_JOIN_POS, wait REJOIN_AFTER_JOIN_WAIT and respawn. GUI-only
     for now - nothing calls it yet (rejoin_game() is still a stub). Returns
-    False if the text or the button couldn't be found, True otherwise."""
+    False if the Play button couldn't be found, True otherwise."""
     if not focus_roblox():
         return False
     print("[debug] leaving the game...")
@@ -851,14 +824,6 @@ def leave_and_rejoin():
         pydirectinput.press(key)
         wait_interruptible(UI_SETTLE)
     wait_interruptible(REJOIN_AFTER_LEAVE_WAIT)
-
-    print(f"[debug] looking for '{REJOIN_GAME_TEXT}'...")
-    text_pos = find_text(grab_screen(), REJOIN_GAME_TEXT)
-    if text_pos is None:
-        print(f"[!] Rejoin failed: '{REJOIN_GAME_TEXT}' not found on screen")
-        return False
-    hover_click(*text_pos)
-    wait_interruptible(REJOIN_AFTER_CLICK_WAIT)
 
     print(f"[debug] looking for the play button {REJOIN_PLAY_COLOR}...")
     play_pos = find_exact_color(grab_screen(), REJOIN_PLAY_COLOR)

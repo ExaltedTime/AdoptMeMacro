@@ -376,13 +376,10 @@ lure and tree actions are only reachable through `side_quest()`.
 
 - **`leave_and_rejoin()`** - GUI-only for now (the **Leave & rejoin** button;
   `rejoin_game()` doesn't call it yet). Presses `REJOIN_LEAVE_KEYS` (esc, l,
-  enter), waits `REJOIN_AFTER_LEAVE_WAIT`, finds `REJOIN_GAME_TEXT`
-  ("Adopt Me!") on screen with OCR (`find_text()`, which needs `pytesseract`
-  and the Tesseract program) and clicks it, waits `REJOIN_AFTER_CLICK_WAIT`,
-  clicks the Play button found by its exact color (`REJOIN_PLAY_COLOR`), then
-  waits `REJOIN_LOAD_WAIT` (60s), clicks `REJOIN_JOIN_POS`, waits
+  enter), waits `REJOIN_AFTER_LEAVE_WAIT`, clicks the Play button found by
+  its exact color (`REJOIN_PLAY_COLOR`), then waits `REJOIN_LOAD_WAIT` (60s), clicks `REJOIN_JOIN_POS`, waits
   `REJOIN_AFTER_JOIN_WAIT` (15s) and respawns. Returns `False` without
-  clicking further if the text or the button isn't found.
+  clicking further if the Play button isn't found.
 - **`lure_collect()`** - holds `a` for `LURE_COLLECT_WALK_DURATION` (2s),
   presses `KEY_INTERACT` (`e`) to collect the current lure's rewards,
   waits `LURE_COLLECT_SETTLE_DELAY` (1s), presses `KEY_INTERACT` again,
@@ -581,7 +578,7 @@ exact values and rationale):
 
 | Group | Examples |
 |---|---|
-| Behavior flags | `ENABLED_NEEDS`, `HALLOWEEN`, `GHOST_GALLERY_PLAY_MINIGAME`, `GHOST_GALLERY_*`, `REJOIN_*`, `TESSERACT_CMD`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
+| Behavior flags | `ENABLED_NEEDS`, `HALLOWEEN`, `GHOST_GALLERY_PLAY_MINIGAME`, `GHOST_GALLERY_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `NEED_GONE_*` |
 | Stuck needs | `NEED_STUCK_CHECKS` |
 | Pet focusing | `FOCUS_PET_REGION_TOP_PERCENT`, `FOCUS_PET_FRAME_GAP`, `FOCUS_PET_DIFF_THRESHOLD`, `FOCUS_PET_MERGE_KERNEL`, `FOCUS_PET_MIN_AREA` |

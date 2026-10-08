@@ -375,11 +375,33 @@ button (or call it yourself), and nothing tracks whether it has run. The
 lure and tree actions are only reachable through `side_quest()`.
 
 - **`leave_and_rejoin()`** - GUI-only for now (the **Leave & rejoin** button;
-  `rejoin_game()` doesn't call it yet). Presses `REJOIN_LEAVE_KEYS` (esc, l,
-  enter), waits `REJOIN_AFTER_LEAVE_WAIT`, clicks the Play button found by
-  its exact color (`REJOIN_PLAY_COLOR`), then waits `REJOIN_LOAD_WAIT` (60s), clicks `REJOIN_JOIN_POS`, waits
-  `REJOIN_AFTER_JOIN_WAIT` (15s) and respawns. Returns `False` without
-  clicking further if the Play button isn't found.
+  `rejoin_game()` doesn't call it yet). Modelled on how Natro Macro (a Bee
+  Swarm Simulator macro) reconnects: close the game properly, relaunch it
+  through a deeplink, and wait in stages by looking at the screen rather
+  than for a fixed time. Up to `REJOIN_MAX_ATTEMPTS` (3) times:
+  1. `close_roblox()` - if the Roblox window is at least
+     `REJOIN_MIN_LEAVE_HEIGHT` tall (the L shortcut needs it) press
+     `REJOIN_LEAVE_KEYS` (esc, l, enter), then `taskkill` every process in
+     `ROBLOX_PROCESS_NAMES` and wait `REJOIN_CLOSE_WAIT` (relaunching sooner
+     gives Roblox error 264).
+  2. `run_deeplink()` - `roblox://navigation/share_links?code=...&type=Server`
+     for the private server link saved in the GUI (`parse_server_link()` also
+     understands the older `privateServerLinkCode=` form), or
+     `roblox://placeID=ROBLOX_PLACE_ID` for a public server if no link is
+     saved. A saved link that doesn't parse aborts instead of silently
+     joining a public server.
+  3. Wait up to `REJOIN_WINDOW_TIMEOUT` for a Roblox window to exist, then up
+     to `REJOIN_LOAD_TIMEOUT` for the game's green Play button
+     (`REJOIN_PLAY_COLOR`) to show up around `REJOIN_JOIN_POS`
+     (`play_button_visible()`).
+  4. Wait `REJOIN_PLAY_SETTLE`, click it, wait `REJOIN_AFTER_JOIN_WAIT` (15s),
+     respawn and return `True`. A stage that times out starts the next attempt;
+     after the last one it returns `False`.
+
+  All of this waits with `wait_stoppable()`, which only [STOP] interrupts.
+  `wait_interruptible()` also stops the run when Roblox loses focus, which is
+  what used to kill the rejoin as soon as the game closed - there is no
+  focused Roblox window while it restarts.
 - **`lure_collect()`** - holds `a` for `LURE_COLLECT_WALK_DURATION` (2s),
   presses `KEY_INTERACT` (`e`) to collect the current lure's rewards,
   waits `LURE_COLLECT_SETTLE_DELAY` (1s), presses `KEY_INTERACT` again,
@@ -504,6 +526,10 @@ actually on disk (so an old config missing a newer key still works), and
 - **`side_quest_enabled`** - on/off switch (default on) for
   `side_quest()`. It's a checkbox in the GUI, and can be flipped while a
   workflow runs.
+- **`private_server_link`** - the private server link `leave_and_rejoin()`
+  joins, typed into the GUI's entry box (saved when you press Enter or click
+  away). It lives here rather than in `magic_numbers.py` because it's a key
+  to your server and the source is in a git repo. **Reset Config** keeps it.
 
 During a run, this file is read and updated by:
 

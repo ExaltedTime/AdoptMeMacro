@@ -13,7 +13,7 @@
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
-import os, sys, time, threading, json
+import os, sys, re, time, threading, json, subprocess
 from abc import ABC, abstractmethod
 from collections import deque
 from functools import partial
@@ -121,12 +121,13 @@ def grab_screen():
         shot = np.array(sct.grab(sct.monitors[1]))
     return cv2.cvtColor(shot, cv2.COLOR_BGRA2BGR)
 
-def exact_color_mask(img, rgb):
+def exact_color_mask(img, rgb, tolerance=0):
     """Mask of every pixel in `img` (BGR, as grab_screen() returns) that
-    matches `rgb` (an (R, G, B) tuple) exactly."""
+    matches `rgb` (an (R, G, B) tuple) exactly - or, with `tolerance`, to
+    within that much on each channel."""
     r, g, b = rgb
     target_bgr = np.array([b, g, r])
-    return cv2.inRange(img, target_bgr, target_bgr)
+    return cv2.inRange(img, target_bgr - tolerance, target_bgr + tolerance)
 
 def find_exact_color(img, rgb):
     """Find the centroid of every pixel in `img` that matches `rgb` (an
@@ -213,6 +214,7 @@ def load_game_config():
         "lure_timer": time.time(),  # due immediately on a fresh config
         "tree_timer": time.time(),  # likewise
         "side_quest_enabled": True, # whether side_quest() is allowed to run at all
+        "private_server_link": "",  # used by leave_and_rejoin(); kept here, not in the source, since it's a join key
     }
     try:
         with open(GAME_CONFIG_PATH, "r") as f:
@@ -243,12 +245,16 @@ def update_game_config(mutate):
         return config
 
 def reset_game_config():
-    """Delete GAME_CONFIG_PATH so the next load starts from the defaults."""
+    """Delete GAME_CONFIG_PATH so the next load starts from the defaults -
+    except the private server link, which isn't progress and is kept."""
     with GAME_CONFIG_LOCK:
+        link = load_game_config()["private_server_link"]
         try:
             os.remove(GAME_CONFIG_PATH)
         except FileNotFoundError:
             pass
+        if link:
+            save_game_config({**load_game_config(), "private_server_link": link})
 
 # ============================================================================
 # ICON PROCESSING
@@ -811,36 +817,124 @@ def disable_trades():
     print("[!] Trades disabled!")
     return True
 
+def parse_server_link(link):
+    """Turn a private server link into (type, code) for run_deeplink(), or
+    None if it isn't one. Understands the share form
+    (https://www.roblox.com/share?code=...&type=Server) and the older
+    ...?privateServerLinkCode=... form."""
+    match = re.search(r"privateServerLinkCode=(\w{32})", link, re.I)
+    if match:
+        return "LinkCode", match.group(1)
+    match = re.search(r"share\?code=(\w{32})&type=Server", link, re.I)
+    if match:
+        return "ShareCode", match.group(1)
+    return None
+
+def run_deeplink(server=None):
+    """Start Roblox on the game through a roblox:// deeplink: onto the given
+    (type, code) private server, or a public server if `server` is None."""
+    if server is None:
+        uri = f"roblox://placeID={ROBLOX_PLACE_ID}"
+    elif server[0] == "LinkCode":
+        uri = f"roblox://placeID={ROBLOX_PLACE_ID}&linkcode={server[1]}"
+    else:
+        uri = f"roblox://navigation/share_links?code={server[1]}&type=Server"
+    os.startfile(uri)
+
+def roblox_windows():
+    return [w for w in gw.getAllWindows() if "roblox" in w.title.lower()]
+
+def wait_stoppable(duration):
+    """Like wait_interruptible() but only [STOP] interrupts it, not Roblox
+    losing focus. Used while the game is being closed and relaunched, when
+    there is no focused Roblox window to lose."""
+    end = time.time() + duration
+    while time.time() < end:
+        check_stop()
+        time.sleep(min(STOP_CHECK_INTERVAL, max(0.0, end - time.time())))
+    check_stop()
+
+def close_roblox():
+    """Leave the game properly (esc, l, enter - only if the window is tall
+    enough for L to work), then kill any Roblox process still around and
+    wait REJOIN_CLOSE_WAIT. Nothing here needs Roblox to stay focused."""
+    windows = roblox_windows()
+    if windows and windows[0].height >= REJOIN_MIN_LEAVE_HEIGHT and focus_roblox():
+        print("[debug] leaving the game...")
+        for key in REJOIN_LEAVE_KEYS:
+            pydirectinput.press(key)
+            wait_stoppable(REJOIN_LEAVE_KEY_GAP)
+    print("[debug] closing Roblox...")
+    for name in ROBLOX_PROCESS_NAMES:
+        subprocess.run(["taskkill", "/F", "/IM", name], capture_output=True)
+    wait_stoppable(REJOIN_CLOSE_WAIT)
+
+def play_button_visible(img):
+    """True if the game's green Play button is on screen around
+    REJOIN_JOIN_POS in `img` - the sign that the game has loaded."""
+    x, y = REJOIN_JOIN_POS
+    half_w, half_h = REJOIN_PLAY_BOX
+    box = img[max(0, y - half_h):y + half_h, max(0, x - half_w):x + half_w]
+    mask = exact_color_mask(box, REJOIN_PLAY_COLOR, REJOIN_PLAY_COLOR_TOLERANCE)
+    return int(np.count_nonzero(mask)) >= REJOIN_PLAY_MIN_PIXELS
+
 def leave_and_rejoin():
-    """Leave the game (esc, l, enter), click the blue Play button on the
-    screen it drops back to (found by its exact color), wait REJOIN_LOAD_WAIT for the game to load, click
-    REJOIN_JOIN_POS, wait REJOIN_AFTER_JOIN_WAIT and respawn. GUI-only
-    for now - nothing calls it yet (rejoin_game() is still a stub). Returns
-    False if the Play button couldn't be found, True otherwise."""
-    if not focus_roblox():
-        return False
-    print("[debug] leaving the game...")
-    for key in REJOIN_LEAVE_KEYS:
-        pydirectinput.press(key)
-        wait_interruptible(UI_SETTLE)
-    wait_interruptible(REJOIN_AFTER_LEAVE_WAIT)
+    """Close Roblox, relaunch the game through a deeplink (to the private
+    server saved in the GUI, or a public one if none is saved), wait for it
+    to load, click Play, wait REJOIN_AFTER_JOIN_WAIT and respawn - see the
+    REJOIN_* settings. Retries the whole thing up to REJOIN_MAX_ATTEMPTS
+    times. GUI-only for now - nothing calls it yet (rejoin_game() is still a
+    stub). Returns True once back in the game, False if every attempt
+    failed (or the saved link isn't a valid private server link)."""
+    link = load_game_config()["private_server_link"].strip()
+    server = None
+    if link:
+        server = parse_server_link(link)
+        if server is None:
+            print("[!] Rejoin failed: the saved private server link isn't recognised")
+            return False
+    else:
+        print("[!] No private server link saved - rejoining a public server")
 
-    print(f"[debug] looking for the play button {REJOIN_PLAY_COLOR}...")
-    play_pos = find_exact_color(grab_screen(), REJOIN_PLAY_COLOR)
-    if play_pos is None:
-        print("[!] Rejoin failed: play button not found on screen")
-        return False
-    hover_click(*play_pos)
+    for attempt in range(1, REJOIN_MAX_ATTEMPTS + 1):
+        print(f"[debug] rejoin attempt {attempt}/{REJOIN_MAX_ATTEMPTS}")
+        close_roblox()
+        run_deeplink(server)
 
-    print(f"[debug] waiting {REJOIN_LOAD_WAIT}s for the game to load...")
-    wait_interruptible(REJOIN_LOAD_WAIT)
-    hover_click(*REJOIN_JOIN_POS)
+        print("[debug] waiting for the Roblox window...")
+        deadline = time.time() + REJOIN_WINDOW_TIMEOUT
+        while not roblox_windows() and time.time() < deadline:
+            wait_stoppable(REJOIN_POLL_INTERVAL)
+        if not roblox_windows():
+            print("[!] No Roblox window appeared")
+            continue
 
-    print(f"[debug] waiting {REJOIN_AFTER_JOIN_WAIT}s, then respawning...")
-    wait_interruptible(REJOIN_AFTER_JOIN_WAIT)
-    respawn_character()
-    print("[!] Rejoin complete!")
-    return True
+        print("[debug] waiting for the game to load...")
+        loaded = False
+        deadline = time.time() + REJOIN_LOAD_TIMEOUT
+        while time.time() < deadline:
+            if roblox_windows():
+                focus_roblox()
+                if play_button_visible(grab_screen()):
+                    loaded = True
+                    break
+            wait_stoppable(REJOIN_POLL_INTERVAL)
+        if not loaded:
+            print("[!] The game didn't finish loading")
+            continue
+
+        print("[debug] game loaded, clicking play...")
+        wait_stoppable(REJOIN_PLAY_SETTLE)
+        focus_roblox()
+        hover_click(*REJOIN_JOIN_POS)
+        print(f"[debug] waiting {REJOIN_AFTER_JOIN_WAIT}s, then respawning...")
+        wait_stoppable(REJOIN_AFTER_JOIN_WAIT)
+        respawn_character()
+        print("[!] Rejoin complete!")
+        return True
+
+    print(f"[!] Rejoin failed after {REJOIN_MAX_ATTEMPTS} attempts")
+    return False
 
 # ============================================================================
 # NEED HANDLERS
@@ -1607,6 +1701,15 @@ class AdoptMeGUI:
                            selectcolor=self.bg, activebackground=self.bg, activeforeground=self.fg,
                            anchor=tk.W, cursor="hand2").pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
 
+        tk.Label(btn_frame, text="Private server link", font=(GUI_FONT, GUI_SECTION_FONT_SIZE),
+                 bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X)
+        self.server_link_var = tk.StringVar(value=config["private_server_link"])
+        server_link_entry = tk.Entry(btn_frame, textvariable=self.server_link_var, font=(GUI_FONT, GUI_SECTION_FONT_SIZE),
+                                     bg=GUI_CONSOLE_BG, fg=GUI_CONSOLE_FG, insertbackground=GUI_CONSOLE_FG)
+        server_link_entry.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
+        server_link_entry.bind("<FocusOut>", lambda e: self.save_server_link())
+        server_link_entry.bind("<Return>", lambda e: self.save_server_link())
+
         tk.Button(btn_frame, text="Reset Config", command=self.reset_config,
                   font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=GUI_STOP_COLOR, fg=self.fg,
                   height=GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2").pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
@@ -1728,6 +1831,13 @@ class AdoptMeGUI:
         """Persist one of the config's on/off switches (a checkbox was clicked)."""
         update_game_config(lambda c: c.update({key: value}))
         print(f"[!] {key} = {value}")
+
+    def save_server_link(self):
+        """Persist the private server link typed into the entry box."""
+        link = self.server_link_var.get().strip()
+        if link != load_game_config()["private_server_link"]:
+            update_game_config(lambda c: c.update(private_server_link=link))
+            print("[!] Private server link saved")
 
     def reset_config(self):
         """Delete the persisted config (money collected, timers, setup done,

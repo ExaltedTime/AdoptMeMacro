@@ -13,7 +13,7 @@
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
-import os, sys, re, time, threading, json, subprocess, traceback, ctypes, queue
+import os, sys, re, time, threading, json, subprocess, traceback, ctypes, queue, random
 from abc import ABC, abstractmethod
 from functools import partial
 import tkinter as tk
@@ -376,6 +376,7 @@ def load_game_config():
         "tree_timer": time.time(),  # likewise
         "side_quest_enabled": True, # whether side_quest() is allowed to run at all
         "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
+        **{f"{name}_enabled": False for name in MINIGAME_LABELS},  # which Halloween minigames get played (see minigame_popup())
         "private_server_link": "",  # used by leave_and_rejoin(); kept here, not in the source, since it's a join key
     }
     try:
@@ -617,7 +618,7 @@ def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=N
             return
         wait_interruptible(min(NEED_GONE_CONFIRM_INTERVAL if misses else poll_interval, remaining))
         if HALLOWEEN:
-            minigame_popup()
+            minigame_popup(can_play=False)
         cleared = _need_cleared(need_name)
         unreadable = cleared is None
         if not cleared:
@@ -1757,26 +1758,139 @@ def detect_minigame_popup(img):
                   max(0, yes_x - MINIGAME_POPUP_NO_MAX_DX):yes_x]
     return int(np.count_nonzero(exact_color_mask(near_no, MINIGAME_POPUP_NO_COLOR))) >= MINIGAME_POPUP_MIN_BUTTON_PIXELS
 
-def minigame_popup():
+def load_minigame_titles():
+    """{minigame name: title crop} for every image in MINIGAME_TEMPLATE_DIR."""
+    titles = {}
+    if os.path.isdir(MINIGAME_TEMPLATE_DIR):
+        for f in sorted(os.listdir(MINIGAME_TEMPLATE_DIR)):
+            crop = cv2.imread(os.path.join(MINIGAME_TEMPLATE_DIR, f))
+            if f.lower().endswith(".png") and crop is not None:
+                titles[os.path.splitext(f)[0].lower()] = crop
+    return titles
+
+def identify_minigame(img):
+    """Which minigame the popup in `img` is for: the name whose title crop
+    (MINIGAME_TEMPLATE_DIR) matches best within MINIGAME_TITLE_BOX, if that
+    match reaches MINIGAME_TITLE_MATCH_THRESHOLD - otherwise None."""
+    left, top, right, bottom = MINIGAME_TITLE_BOX
+    band = img[top:bottom, left:right]
+    best_name, best_score = None, MINIGAME_TITLE_MATCH_THRESHOLD
+    for name, crop in load_minigame_titles().items():
+        if crop.shape[0] > band.shape[0] or crop.shape[1] > band.shape[1]:
+            continue
+        score = float(cv2.minMaxLoc(cv2.matchTemplate(band, crop, cv2.TM_CCOEFF_NORMED))[1])
+        if score >= best_score:
+            best_name, best_score = name, score
+    return best_name
+
+def detect_minigame_victory(img):
+    """True if the minigame victory screen is on screen in `img`: the red
+    GAME OVER! banner and the green NICE! button, both by exact color (the
+    same green is the Yes button's, so the banner is what rules that out)."""
+    for color, tolerance, box, minimum in (
+            (MINIGAME_VICTORY_BANNER_COLOR, MINIGAME_VICTORY_BANNER_TOLERANCE,
+             MINIGAME_VICTORY_BANNER_BOX, MINIGAME_VICTORY_BANNER_MIN_PIXELS),
+            (MINIGAME_VICTORY_BUTTON_COLOR, MINIGAME_VICTORY_BUTTON_TOLERANCE,
+             MINIGAME_VICTORY_BUTTON_BOX, MINIGAME_VICTORY_BUTTON_MIN_PIXELS)):
+        left, top, right, bottom = box
+        if np.count_nonzero(exact_color_mask(img[top:bottom, left:right], color, tolerance)) < minimum:
+            return False
+    return True
+
+def minigame_won():
+    """detect_minigame_victory() on a fresh screenshot."""
+    return detect_minigame_victory(grab_screen())
+
+def play_hauntlet(deadline):
+    """Hauntlet 2: wait HAUNTLET_START_WAIT for it to start (no needs can be
+    seen while it runs, and the lobby counts down first), then hold forward
+    until the victory screen shows. Returns True if it did before `deadline`."""
+    print(f"[debug] hauntlet: waiting {HAUNTLET_START_WAIT:g}s for it to start...")
+    wait_interruptible(HAUNTLET_START_WAIT)
+    pydirectinput.keyDown(HAUNTLET_FORWARD_KEY)
+    try:
+        while time.time() < deadline:
+            wait_interruptible(MINIGAME_VICTORY_CHECK_INTERVAL)
+            if minigame_won():
+                return True
+    finally:
+        pydirectinput.keyUp(HAUNTLET_FORWARD_KEY)
+    return False
+
+def play_ghost_gallery(deadline):
+    """Ghost Gallery: run about at random, jumping, with the mouse held in
+    GHOST_GALLERY_HOLD-second holds (GHOST_GALLERY_HOLD_GAP apart), until the
+    victory screen shows. Returns True if it did before `deadline`."""
+    print(f"[debug] ghost gallery: waiting {GHOST_GALLERY_START_WAIT:g}s for it to start...")
+    wait_interruptible(GHOST_GALLERY_START_WAIT)
+    while time.time() < deadline:
+        pydirectinput.mouseDown()
+        try:
+            hold_until = time.time() + GHOST_GALLERY_HOLD
+            while time.time() < hold_until:
+                if minigame_won():
+                    return True
+                key = random.choice(MOVE_KEYS)
+                pydirectinput.keyDown(key)
+                try:
+                    pydirectinput.press(KEY_JUMP)
+                    wait_interruptible(min(random.uniform(GHOST_GALLERY_STEP_MIN, GHOST_GALLERY_STEP_MAX),
+                                           max(0.0, hold_until - time.time())))
+                finally:
+                    pydirectinput.keyUp(key)
+        finally:
+            pydirectinput.mouseUp()
+        wait_interruptible(GHOST_GALLERY_HOLD_GAP)
+    return False
+
+MINIGAME_PLAYERS = {"hauntlet": play_hauntlet, "ghost_gallery": play_ghost_gallery}
+
+def play_minigame(name):
+    """Take the popup's Yes, play minigame `name` until its victory screen
+    shows, click NICE!, and respawn. Gives up (a logged failure) after
+    MINIGAME_MAX_DURATION. Counts as progress for the no-progress rejoin.
+    Returns True if it was won."""
+    global LAST_PROGRESS
+    label = MINIGAME_LABELS.get(name, name)
+    print(f"[!] playing {label}")
+    log_run_event(f"minigame started: {label}")
+    hover_click(*MINIGAME_POPUP_YES_POS)
+    started = time.time()
+    try:
+        won = MINIGAME_PLAYERS[name](started + MINIGAME_MAX_DURATION)
+    finally:
+        release_all_inputs()
+    if won:
+        hover_click(*MINIGAME_VICTORY_BUTTON_POS)
+        log_run_event(f"minigame finished: {label} ({time.time() - started:.0f}s)")
+        wait_interruptible(MINIGAME_FINISH_WAIT)
+    else:
+        log_failure(f"{label} didn't reach the victory screen within {MINIGAME_MAX_DURATION:g}s")
+    LAST_PROGRESS = time.time()
+    respawn_character()
+    return won
+
+def minigame_popup(can_play=True):
     """Halloween only (see HALLOWEEN): handles a minigame popup (see
-    detect_minigame_popup()). Returns True if one was there and was
-    dismissed. Only the disable branch exists so far - the minigame branch is
-    NOT IMPLEMENTED YET and does nothing; it will also have to tell the
-    minigames apart, which the popup detection doesn't."""
-    if MINIGAME_POPUP_PLAY:
-        # Play the minigame. Rough plan:
-        #   - work out which minigame the popup is for
-        #   - play it (clicks/keys to be worked out), under check_running()
-        #     so [STOP] and focus loss still interrupt it
-        #   - dismiss whatever it leaves behind
-        # Probably wants its own timer in the persisted game config, like
-        # lure_timer/tree_timer, rather than running every single cycle.
+    detect_minigame_popup()). Which minigame it is comes from
+    identify_minigame(). One that is switched on ("<name>_enabled" in the game
+    config) is played (play_minigame()) when `can_play`, otherwise just closed
+    with No so it can offer itself again; any other (switched off, or not
+    recognised) is dismissed for the session with "do not show again" ticked.
+    Returns True if a popup was there and was handled."""
+    img = grab_screen()
+    if not detect_minigame_popup(img):
         return False
-    if not detect_minigame_popup(grab_screen()):
-        return False
-    print("[debug] minigame popup detected, dismissing...")
-    log_run_event("minigame popup dismissed")
-    hover_click(*MINIGAME_POPUP_DONT_SHOW_POS)   # "Do not show again this session"
+    name = identify_minigame(img)
+    enabled = name is not None and load_game_config().get(f"{name}_enabled", False)
+    if enabled and can_play:
+        print(f"[debug] minigame popup detected: playing {name}")
+        play_minigame(name)
+        return True
+    print(f"[debug] minigame popup detected ({name or 'unknown'}), dismissing...")
+    log_run_event(f"minigame popup dismissed ({name or 'unknown'})")
+    if not enabled:
+        hover_click(*MINIGAME_POPUP_DONT_SHOW_POS)   # "Do not show again this session"
     hover_click(*MINIGAME_POPUP_NO_POS)
     return True
 
@@ -2140,7 +2254,8 @@ class AdoptMeGUI:
         config = load_game_config()
         self.config_flag_vars = {}
         for label, key in (("Run side quest", "side_quest_enabled"),
-                           ("Resume after focus loss", "resume_on_focus_loss")):
+                           ("Resume after focus loss", "resume_on_focus_loss"),
+                           *((f"Play {label}", f"{name}_enabled") for name, label in MINIGAME_LABELS.items())):
             var = tk.BooleanVar(value=config[key])
             self.config_flag_vars[key] = var
             tk.Checkbutton(options_tab, text=label, variable=var,

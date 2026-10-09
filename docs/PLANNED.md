@@ -1,7 +1,7 @@
 # Add next
 
 - [ ] Pet focusing for choose and pet sometimes breaks
-- [ ] Add auto minigame functions if the halloween toggle is on, and a toggle for whether to play them (MINIGAME_POPUP_PLAY is the toggle; the dismiss branch of minigame_popup() works, the minigame branch is comments only so far). There are two minigames now - Ghost Gallery and Hauntlet 2 - with the same popup, so playing them needs a way to tell which one the popup is for (e.g. matching a crop of its title against saved images, like the need icons)
+- [ ] Check what happens after a minigame ends: `play_minigame()` respawns afterwards, which is only right if the game then puts you back where the needs can be handled (the button needs walk from the spawn point)
 - [ ] Tune the timings and make the clicks not hard-coded
       
 # Ideas from Natro Macro
@@ -46,16 +46,6 @@ Suggestions from reading through the code, none of them started. Roughly in orde
 
 ## Reliability
 
-- [ ] Minigame popups: tell them apart by the width of the title's first line (see below), so the right minigame can be started later
 - [ ] A health check that notices the loop going quiet without any rejoin trigger (e.g. the macro window itself frozen), and writes it to the status file
 - [ ] After a failed handler, save the screenshot *and* the need-icon crop so a misidentified icon can be seen straight away
 - [ ] Failure screenshots only keep the newest 40; keep the first failure of each kind per run as well, so an early cause isn't pushed out by later noise
-
-## Telling the minigame popups apart
-
-The Ghost Gallery and Hauntlet 2 popups are identical except for the first line of the title ("Ghost Gallery is" / "Hauntlet 2 is"). Two ways to tell them apart in a screenshot, both in the 1920x1080 reference space:
-
-1. **Title width, no saved images.** The title text is purple on cream paper, so in the band `y 435-485`, `x 730-1200` count the purple pixels (roughly blue > 150, green < 120, red 90-190) and take the left-most and right-most column. In the screenshots: Ghost Gallery spans x 823-1101 (278 px), Hauntlet 2 spans x 852-1072 (220 px). Anything above ~250 px is Ghost Gallery, below it Hauntlet; a third minigame would need its own measurement
-2. **Template match, more robust.** Save a crop of that first line for each minigame (e.g. `minigames/ghost_gallery.png`, `minigames/hauntlet_2.png`, taken from lossless screenshots), and use `cv2.matchTemplate(band, template, cv2.TM_CCOEFF_NORMED)`; the best score above ~0.9 names the minigame. This is the same idea as the need icons, and a new minigame is just a new file
-
-Either would sit in `detect_minigame_popup()` (returning the name instead of `True`), and `minigame_popup()` would use the name once playing is implemented. Option 1 needs no assets, so it is the quick start; option 2 survives UI changes better.

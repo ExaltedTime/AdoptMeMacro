@@ -99,6 +99,7 @@ STOP_CHECK_INTERVAL = 0.1      # granularity of the interruptible wait loop
 STOP_HOTKEY = "p"              # a letter or digit: pressing it, in any window, stops a running macro
                                # (so you can take over the computer) - see watch_stop_hotkey()
 STOP_HOTKEY_POLL_INTERVAL = 0.05  # how often the key is looked at (seconds)
+CONSOLE_DRAIN_INTERVAL_MS = 50   # how often queued output is put on the GUI console (see DebugCapture)
 CATCH_WAIT_AFTER_EQUIP = 1.0   # wait after equipping toy before throwing
 CATCH_EMOTE_DELAY = 5.0       # delay between throw clicks
 CATCH_THROW_COUNT = 3          # number of times the toy is thrown

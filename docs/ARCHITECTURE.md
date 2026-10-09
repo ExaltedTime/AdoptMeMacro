@@ -47,8 +47,8 @@ every second instead of a line per check.
    Nothing found → return `False` immediately (silently).
 3. For each detected icon, match it against the saved reference icons in
    `needs/` (`find_matching_need()`). An icon that doesn't match anything
-   well enough triggers `prompt_rename_need()` (asks you, in the console,
-   to name and save it) and is otherwise skipped this pass - it isn't
+   well enough triggers `prompt_rename_need()` (asks you, in a dialog, to
+   name and save it - only when `SAVE_NEW_NEEDS` is on) and is otherwise skipped this pass - it isn't
    "resolved," it's just been taught for next time.
 4. Every icon that *did* match is collected into an ordered list of need
    names, in the order they were detected, and printed and logged
@@ -213,8 +213,11 @@ resolution, so `icon_variants()` cuts the live icon out at every offset
 within `ICON_SHIFT_TOLERANCE` px and each saved need is scored by its
 best-aligned variant.
 
-`find_matching_need()` compares the new icon against every saved `.png` in
-`needs/` - including subfolders, so related icons can be grouped (the
+`find_matching_need()` compares the new icon against the signature of every
+saved `.png` in
+`needs/` (`need_signatures()` computes those once and recomputes them only
+when a file in `needs/` is added, changed or removed, so a check doesn't
+re-read the folder) - including subfolders, so related icons can be grouped (the
 seasonal `diving` and `puddle` icons live in `needs/weather/`); a need's
 name is just its file name, wherever it sits - and keeps the best score. A best score below
 `ICON_MATCH_THRESHOLD` (0.93) means "not confident this is anything we've
@@ -727,7 +730,9 @@ knowing if you're modifying it:
   the **Debug** tab has a button per need handler.
 - **`DebugCapture`** redirects `sys.stdout` into the on-screen console
   (`self.debug_text`) for the lifetime of the GUI, so every `print()`
-  anywhere in the macro shows up there automatically, each line starting with
+  anywhere in the macro shows up there automatically (`write()` only logs
+  and queues - from any thread - and the Tk thread puts the queue on the
+  widget every `CONSOLE_DRAIN_INTERVAL_MS`, since Tk isn't thread-safe), each line starting with
   the time (`[HH:MM:SS]`). A print starting with `\r` is a status line: it
   replaces the previous status line instead of adding one, and goes into
   `output.log` only the first time (this is the "Waiting for a need..."

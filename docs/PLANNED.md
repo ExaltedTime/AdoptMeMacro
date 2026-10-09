@@ -31,8 +31,6 @@ Suggestions from reading through the code, none of them started. Roughly in orde
 
 - [ ] Several functions share state through bare globals; a small `State` object (or class) would make them testable and remove the `global` statements
 - [ ] `STOP_FLAG` as a `threading.Event`, rather than a bool read from other threads
-- [ ] `DebugCapture.write()` calls `self.text.update()` from the worker thread; Tk isn't thread-safe. Queue the text and let `root.after()` drain it
-- [ ] `prompt_rename_need()` calls `input()` from the worker thread, which can't work with the GUI console (stdin isn't the console). Either remove `SAVE_NEW_NEEDS` or ask through a Tk dialog
 - [ ] The teleport and walk handlers are already table-driven; the button handlers, `catch` and `pet` could be too (a list of steps instead of code), which also makes the timing tuning item easier
 - [ ] Use the `logging` module instead of `print("[debug] ...")`, so levels and the console/file split come for free and the on-screen console can hide debug lines
 - [ ] `RUN_STATS` as a dataclass, written to `status.json` atomically (write to a temp file, then `os.replace`) so a reader never sees half a file
@@ -41,7 +39,6 @@ Suggestions from reading through the code, none of them started. Roughly in orde
 
 ## Optimization
 
-- [ ] `find_matching_need()` walks `needs/` and reads and preprocesses every PNG on every call, for every icon, every check (and twice per flicker re-check). Load the reference signatures once at startup and reuse them
 - [ ] `detect_need_icons()` grabs the whole screen and then crops the top strip; grab only that region (`mss` can capture a sub-rectangle), and share one grab between the readability check and the detection
 - [ ] `log_output()` reopens the file for every write; keep one handle open (flushed) instead
 - [ ] While waiting for a need, detection runs every few seconds; the check that nothing changed in the strip could be a cheap frame diff against the last one before running Hough circles and matching

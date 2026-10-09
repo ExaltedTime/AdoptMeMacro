@@ -13,11 +13,11 @@
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
-import os, sys, re, time, threading, json, subprocess, traceback, ctypes
+import os, sys, re, time, threading, json, subprocess, traceback, ctypes, queue
 from abc import ABC, abstractmethod
 from functools import partial
 import tkinter as tk
-from tkinter import scrolledtext, ttk
+from tkinter import scrolledtext, simpledialog, ttk
 
 import numpy as np
 import cv2
@@ -486,39 +486,62 @@ def icon_variants(img, cx, cy):
     shifts = range(-ICON_SHIFT_TOLERANCE, ICON_SHIFT_TOLERANCE + 1)
     return [extract_icon(img, cx + dx, cy + dy, ICON_CROP_RADIUS) for dx in shifts for dy in shifts]
 
+# (need file paths and modification times, [(name, signature)]) - see need_signatures().
+_NEED_SIGNATURES = (None, [])
+
+def need_signatures():
+    """[(need name, signature)] for every saved need icon. Reading and
+    preprocessing every .png in NEEDS_DIR is far too slow to repeat for each
+    icon on each check, so it's done once and redone only when the files
+    change (checking their modification times is cheap), which also picks up
+    an icon added while the macro runs. Recurses, so related icons can sit in
+    subfolders (e.g. needs/weather/) - a need's name is just its file name,
+    wherever it lives."""
+    global _NEED_SIGNATURES
+    files = sorted(os.path.join(root, f) for root, _, names in os.walk(NEEDS_DIR) for f in names if f.endswith('.png'))
+    key = tuple((f, os.path.getmtime(f)) for f in files)
+    if _NEED_SIGNATURES[0] != key:
+        loaded = []
+        for f in files:
+            icon = cv2.imread(f)
+            if icon is not None:
+                loaded.append((os.path.splitext(os.path.basename(f))[0], icon_signature(icon)))
+        _NEED_SIGNATURES = (key, loaded)
+    return _NEED_SIGNATURES[1]
+
 def find_matching_need(icon_variants):
     """Compare a detected icon (its icon_variants() crops) against the saved
-    needs, scoring each by its best-aligned variant. Returns (name, score)."""
+    needs (need_signatures()), scoring each by its best-aligned variant.
+    Returns (name, score)."""
     live_signatures = [icon_signature(v) for v in icon_variants]
-    # Recurses, so related icons can sit in subfolders (e.g. needs/weather/) -
-    # a need's name is just its file name, wherever it lives.
-    need_files = sorted(os.path.join(root, f) for root, _, files in os.walk(NEEDS_DIR)
-                        for f in files if f.endswith('.png'))
-    if not need_files:
-        return None, 0.0
-
     best_match, best_score = None, 0.0
-    for need_file in need_files:
-        saved_icon = cv2.imread(need_file)
-        if saved_icon is None:
-            continue
-        saved_signature = icon_signature(saved_icon)
+    for name, saved_signature in need_signatures():
         score = max(compare_signatures(sig, saved_signature) for sig in live_signatures)
         if score > best_score:
-            best_match, best_score = os.path.splitext(os.path.basename(need_file))[0], score
+            best_match, best_score = name, score
 
     if best_score >= ICON_MATCH_THRESHOLD:
         return best_match, best_score
     return None, best_score
 
 def prompt_rename_need(icon_img, idx):
-    """Save a new need icon (as high-contrast B/W) and ask the user to name it."""
+    """Save a new need icon (as high-contrast B/W) and ask the user to name
+    it - in a dialog when the GUI is up (the worker thread has no console to
+    read from), otherwise on the console. Cancelling or an empty name saves
+    it as unnamed_<idx>."""
     print("\n[!] NEW NEED DETECTED!")
     temp_path = os.path.join(NEEDS_DIR, f"temp_{idx}.png")
     cv2.imwrite(temp_path, preprocess_icon(icon_img))
 
-    print("[!] Enter need name (hungry/thirsty/dirty/potty/sleepy/catch/walk/other): ", end="", flush=True)
-    need_name = input().strip().lower() or f"unnamed_{idx}"
+    prompt = "Need name (hungry/thirsty/dirty/potty/sleepy/catch/walk/other):"
+    if MACRO_WINDOW is not None:
+        answer = MACRO_WINDOW.run_on_ui_thread(
+            lambda: simpledialog.askstring("New need", prompt, parent=MACRO_WINDOW.root), timeout=None)
+        focus_roblox_click()   # the dialog took the focus
+    else:
+        print(f"[!] {prompt} ", end="", flush=True)
+        answer = input()
+    need_name = (answer or "").strip().lower() or f"unnamed_{idx}"
 
     os.rename(temp_path, os.path.join(NEEDS_DIR, f"{need_name}.png"))
     print(f"[!] Saved: {need_name}")
@@ -1899,45 +1922,77 @@ class DebugCapture:
     A message starting with a carriage return is a status line instead: it
     replaces the previous status line rather than adding one (and is logged
     to the file only when it first appears), until something else is
-    printed."""
+    printed.
 
-    def __init__(self, text_widget):
+    write() can be called from any thread, but Tk widgets may only be
+    touched from Tk's own, so it only logs the message and queues it; the
+    queue is drained onto the widget every CONSOLE_DRAIN_INTERVAL_MS by
+    root.after() on the Tk thread."""
+
+    def __init__(self, root, text_widget):
+        self.root = root
         self.text = text_widget
-        self.at_line_start = True
+        self.queue = queue.Queue()
+        self.log_status_active = False   # write() side: a status line is the last thing logged
+        self.at_line_start = True        # drain() side: the widget's state
         self.status_active = False
+        self.drain()
 
     def write(self, msg):
         if not msg:
             return
-        self.text.config(state=tk.NORMAL)
+        if msg.startswith("\r"):
+            if not self.log_status_active:
+                log_output(msg[1:] + "\n")
+            self.log_status_active = True
+        else:
+            self.log_status_active = False
+            log_output(msg)
+        self.queue.put(msg)
+
+    def drain(self):
+        """Put every queued message on the widget, then schedule the next drain."""
+        try:
+            batch = []
+            while True:
+                try:
+                    batch.append(self.queue.get_nowait())
+                except queue.Empty:
+                    break
+            if batch:
+                self.text.config(state=tk.NORMAL)
+                for msg in batch:
+                    self.render(msg)
+                self.text.see(tk.END)
+                self.text.config(state=tk.DISABLED)
+            self.root.after(CONSOLE_DRAIN_INTERVAL_MS, self.drain)
+        except tk.TclError:
+            pass   # the window is gone
+
+    def render(self, msg):
+        """Add one message to the widget (Tk thread only)."""
         if msg.startswith("\r"):
             line = time.strftime("[%H:%M:%S] ") + msg[1:]
             if self.status_active:
                 self.text.delete("end-1c linestart", "end-1c")
-            else:
-                if not self.at_line_start:
-                    self.text.insert(tk.END, "\n")
-                log_output(msg[1:] + "\n")
+            elif not self.at_line_start:
+                self.text.insert(tk.END, "\n")
             self.text.insert(tk.END, line)
             self.status_active = True
             self.at_line_start = False
-        else:
-            if self.status_active:
-                # the status line has no newline yet; the message supplies
-                # one if it starts with it, otherwise end the line first
-                if not msg.startswith("\n"):
-                    self.text.insert(tk.END, "\n")
-                self.status_active = False
-                self.at_line_start = True
-            log_output(msg)
-            for piece in msg.splitlines(keepends=True):
-                if self.at_line_start and piece != "\n":
-                    self.text.insert(tk.END, time.strftime("[%H:%M:%S] "))
-                self.text.insert(tk.END, piece)
-                self.at_line_start = piece.endswith("\n")
-        self.text.see(tk.END)
-        self.text.config(state=tk.DISABLED)
-        self.text.update()
+            return
+        if self.status_active:
+            # the status line has no newline yet; the message supplies
+            # one if it starts with it, otherwise end the line first
+            if not msg.startswith("\n"):
+                self.text.insert(tk.END, "\n")
+            self.status_active = False
+            self.at_line_start = True
+        for piece in msg.splitlines(keepends=True):
+            if self.at_line_start and piece != "\n":
+                self.text.insert(tk.END, time.strftime("[%H:%M:%S] "))
+            self.text.insert(tk.END, piece)
+            self.at_line_start = piece.endswith("\n")
 
     def flush(self):
         pass
@@ -1960,7 +2015,7 @@ class AdoptMeGUI:
 
         self.create_ui()
 
-        self.capture = DebugCapture(self.debug_text)
+        self.capture = DebugCapture(self.root, self.debug_text)
         sys.stdout = self.capture
 
         print("\n" + "=" * 60)
@@ -2142,15 +2197,19 @@ class AdoptMeGUI:
 
     def run_on_ui_thread(self, func, timeout=5.0):
         """Run `func` on Tk's own thread (Tk isn't safe to touch from the
-        worker thread) and wait until it has run, or `timeout` seconds."""
+        worker thread) and wait until it has run, or `timeout` seconds (None
+        = as long as it takes, for a dialog). Returns what `func` returned
+        (None if it was still running when the wait ended)."""
         done = threading.Event()
+        result = []
         def call():
             try:
-                func()
+                result.append(func())
             finally:
                 done.set()
         self.root.after(0, call)
         done.wait(timeout)
+        return result[0] if result else None
 
     def run_async(self, func):
         """Run `func` on a background daemon thread so the GUI never freezes

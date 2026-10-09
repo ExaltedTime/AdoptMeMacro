@@ -22,57 +22,63 @@ on-the-ground state), then repeats `run_full_cycle()` forever, pausing
 
 ```
 while True:
-    if process_needs():   # found something AND actually resolved it
+    unscrew(); side_quest()
+    if process_needs():   # resolved ONE need
         return
     wait NEED_CHECK_RETRY_DELAY seconds, then check again
 ```
 
 The key word is *resolved*. `process_needs()` returns `True` only if it
-actually did something - clicking a button or running a special handler.
-Finding icons that don't lead to any action (see below) still returns
-`False`, so the cycle keeps waiting and re-checking rather than treating a
-no-op as progress.
+actually did something - clicking a button or running a special handler -
+and it resolves **one** need per call. The loop then starts a new cycle, so
+the popup checks, the side quest and a fresh detection all run again before
+the next need: what to do next is always decided from what's on screen
+*now*, not from a list taken before the previous need (which can take a
+minute or two) was handled. Finding icons that don't lead to any action
+(see below) returns `False`, so the cycle keeps waiting and re-checking
+rather than treating a no-op as progress. While nothing is on screen the
+console shows one `Waiting for a need... 1m 23s` line that is overwritten
+every second instead of a line per check.
 
 ### `process_needs()`, step by step
 
 1. Focus Roblox and take a screenshot (`focus_roblox_click()`).
 2. Detect every need icon currently on screen (`detect_need_icons()`).
-   Nothing found → return `False` immediately.
+   Nothing found → return `False` immediately (silently).
 3. For each detected icon, match it against the saved reference icons in
    `needs/` (`find_matching_need()`). An icon that doesn't match anything
    well enough triggers `prompt_rename_need()` (asks you, in the console,
    to name and save it) and is otherwise skipped this pass - it isn't
    "resolved," it's just been taught for next time.
 4. Every icon that *did* match is collected into an ordered list of need
-   names (`matched_needs`), in the order they were detected. That list is
-   also handed to `record_detected_needs()` - on every check, including
-   ones that find nothing - which is what catches
+   names, in the order they were detected, and printed and logged
+   (`detected: ...`; icons on screen but none recognised are logged once,
+   not on every check). The list is also handed to `record_detection()` -
+   on every check, including ones that find nothing - which is what catches
    [stuck needs](#stuck-needs).
-5. That list is then worked through **one need at a time**, and each one
-   ends with its own respawn before moving to the next - nothing is
-   batched. For each `need_name`, `get_need_handler(need_name)` looks it up
-   in `NEED_HANDLER_CLASSES` and returns an instance, or `None` if that
-   need isn't in `ENABLED_NEEDS` - a `None` result is logged and skipped
-   without doing anything. Every need is handled the same way from here:
-   calling `.handle()` on whatever handler came back (see
+5. The list is then worked through in order until one need is resolved. For
+   each `need_name`, `get_need_handler(need_name)` looks it up in
+   `NEED_HANDLER_CLASSES` and returns an instance, or `None` if that need
+   isn't in `ENABLED_NEEDS` - a `None` result is logged and skipped without
+   doing anything. Every need is handled the same way from here: calling
+   `.handle()` on whatever handler came back (see
    [Need handlers](#need-handlers)).
-   - If `handle()` returns `True`, the character respawns immediately
-     (always done by `process_needs()`, never by the handler itself) -
-     **before** the next matched need is even looked at.
+   - If `handle()` returns `True`, the character respawns (always done by
+     `process_needs()`, never by the handler itself) and `process_needs()`
+     returns `True` - the remaining needs in the list are dropped; they
+     will be detected again, along with anything new, by the next check.
    - If it returns `False` (the need wasn't actually resolved this pass -
      e.g. no buttons detected, or a UI element `ChooseNeedHandler` needed
-     wasn't found), the need is logged and skipped with no respawn.
-6. `process_needs()` returns `True` if at least one need in the list
-   actually ran, `False` otherwise (e.g. every match turned out to be
-   disabled, or every handler that ran returned `False`). A `False` return
-   is what sends `run_full_cycle()` back to waiting and re-checking instead
-   of treating a no-op as progress.
+     wasn't found), the need is logged and skipped with no respawn, and the
+     next one in the list is tried.
+6. `process_needs()` returns `False` if nothing was resolved (e.g. every
+   match turned out to be disabled, or every handler that ran returned
+   `False`), which sends `run_full_cycle()` back to waiting and
+   re-checking instead of treating a no-op as progress.
 
-Respawning between every individual need - rather than once per cycle - is
-what keeps `walk_to_buttons()` reliable when multiple needs are detected
-together: it always starts from the same known respawn point, instead of
-compounding an extra walk from wherever the previous need left the
-character standing.
+Respawning after every individual need keeps `walk_to_buttons()` reliable:
+it always starts from the same known respawn point, instead of compounding
+an extra walk from wherever the previous need left the character standing.
 
 ## Code structure, top to bottom
 
@@ -88,7 +94,7 @@ character standing.
   `BUTTON_POSITIONS`, the in-memory cache of the last-detected action
   button positions (never persisted to disk - see
   [Persisted game config](#persisted-game-config)); and
-  `DETECTION_HISTORY` / `DISABLED_THIS_RUN`, which back
+  `ATTEMPT_STREAKS` / `ATTEMPTED_LAST` / `DISABLED_THIS_RUN`, which back
   [Stuck needs](#stuck-needs). Every fixed
   config/tuning value lives in `magic_numbers.py` instead - see
   [Configuration reference](#configuration-reference).
@@ -121,7 +127,7 @@ character standing.
   of needs, via `partial()`). See [Need handlers](#need-handlers).
 - **PER-CYCLE CHECKS** - `unscrew()` and what it runs: `rejoin_game()`
   (with `rejoin_reason()` / `detect_disconnect()`), `close_backpack_if_open()`,
-  `ghost_gallery()`,
+  `minigame_popup()`,
   `detect_paycheck()`; and `side_quest()`.
 - **WORKFLOWS** - `run_full_cycle()` and `run_workflow_loop()`. See
   [The workflow lifecycle](#the-workflow-lifecycle) above.
@@ -152,7 +158,7 @@ there's no usable window (not running, minimized). It's remembered for
 `ROBLOX_RECT_TTL` seconds, and `focus_roblox()` forgets it. On a 1920x1080
 screen with Roblox maximized the rectangle is the whole screen, so nothing is
 cropped or scaled; on another resolution or a smaller window everything
-scales. Distances measured in pixels (icon radii, the `GHOST_GALLERY_NO_MAX_*`
+scales. Distances measured in pixels (icon radii, the `MINIGAME_POPUP_NO_MAX_*`
 offsets, ...) are reference pixels, so they scale too. Scaling assumes the same
 aspect ratio and a window that fills its area - a non-maximized window's title
 bar and borders are counted as part of it, so expect small errors there.
@@ -216,10 +222,10 @@ seen" and falls through to `prompt_rename_need()` instead.
 
 ## Waiting for a need to clear
 
-`wait_until_need_gone()` - used after a button click (`click_need_button()`),
-after `ChooseNeedHandler` dismisses its menu, and after
-`TeleportWalkNeedHandler`'s movement sequence - polls
-`detected_need_names()` (one fresh detect-and-match pass) every
+`wait_until_need_gone()` - used after a button click (`click_need_button()`)
+and after `TeleportWalkNeedHandler`'s movement sequence (`choose` doesn't
+wait: it clears at once, and the next check sees that) - polls
+`scan_needs()` (one fresh detect-and-match pass) every
 `NEED_GONE_POLL_INTERVAL` until the target need is missing
 `NEED_GONE_CONFIRMATIONS` times in a row (any sighting resets the count
 back to zero), up to `NEED_GONE_MAX_WAIT` total.
@@ -230,9 +236,19 @@ allowed to count: the icon can drop out of a single detection pass for a
 frame (or against a momentarily busy background) without the need having
 actually cleared, and a bare miss-streak alone isn't enough to tell that
 apart from the real thing. This only guards against a one-frame flicker -
-a detection failure caused by a *sustained* background change (lighting,
-a different area of the map) behind the icon isn't something this
-re-check can fix, since it'll fail again on the immediate retry too.
+a detection failure caused by a *sustained* background change behind the
+icon isn't something this re-check can fix, since it'll fail again on the
+immediate retry too. The one such case that is handled: the Pizza Party's
+background is near-white, which the icons can't be recognised against, so
+the pizza need looked "gone" a few seconds in - the handler returned early,
+the character respawned with the pizza still unserved, and it had to run
+twice. `need_bar_readable()` spots it (more than
+`NEED_BAR_MAX_BRIGHT_FRACTION` of the icon strip brighter than
+`NEED_BAR_BRIGHT_LEVEL`); while the icons are unreadable `_need_cleared()`
+returns `None`, which counts as neither a miss nor a sighting, so the wait
+runs its full `NEED_GONE_MAX_WAIT` - and ending it isn't logged as a failure.
+While it waits, a minigame popup that appears is dismissed too (Halloween
+only), since it would otherwise block the whole wait.
 
 `_need_cleared()` is also what `_watch_need_gone()` uses - see
 [Checking a need in parallel with movement](#checking-a-need-in-parallel-with-movement)
@@ -328,7 +344,7 @@ rather than a flat sleep after the fact.
 | `hungry` / `thirsty` / `dirty` / `potty` / `sleepy` | `ButtonNeedHandler`: walk to the action buttons (`walk_to_buttons()`), refresh the button mapping (`refresh_button_mapping()`), click the matching one (`click_need_button()`), which then calls `wait_until_need_gone()` for that need name. |
 | `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → scroll up + click empty space, `CATCH_THROW_COUNT` (3) times, `CATCH_EMOTE_DELAY` apart → unequip. Always runs this exact sequence - no `wait_until_need_gone()` involved. |
 | `pet` | `PetNeedHandler`: `focus_pet()` (see below), then hold the mouse down and trace a circle of radius `PET_CIRCLE_RADIUS` around screen center for `PET_CIRCLE_DURATION`. Same as `catch` - always the full fixed duration. |
-| `choose` | `ChooseNeedHandler`: `focus_pet()` (see below), find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu, then `wait_until_need_gone("choose")`. |
+| `choose` | `ChooseNeedHandler`: `focus_pet()` (see below), find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. It doesn't wait for the icon to clear (it's gone at once; the next check confirms). |
 | `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then `equip_favorite_vehicle()` (backpack → vehicles → first vehicle → equip → close backpack), hold `r` (`KEY_HELICOPTER`) for `RIDE_R_HOLD_DURATION` (1s), then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT` (60s), ending early the moment "ride" is confirmed cleared (see below). |
 | `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`), and `helicopter` (see below). Which table is used depends on `HALLOWEEN` - see below. |
 | `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")` - up to `NEED_GONE_MAX_WAIT` (60s), same early-exit as `ride` above. |
@@ -352,13 +368,13 @@ over it while the flag is on. The Halloween table covers `bored`, `beach`,
 `school`, `camping` (Halloween moves the nursery, so each has its own steps
 there; `bored`, `beach` and `camping` also fly by helicopter) and `sick`, which *only* exists there - with `HALLOWEEN` off it
 has no steps and isn't a need at all. While the flag is on, `unscrew()` also
-calls `ghost_gallery()`, which will either play the ghost gallery minigame
-or just disable it depending on `GHOST_GALLERY_PLAY_MINIGAME`. The minigame
-branch is a comments-only stub; the disable branch works (see below).
+calls `minigame_popup()`, which will either play the minigame the popup
+offers or just dismiss it depending on `MINIGAME_POPUP_PLAY`. The minigame
+branch is a comments-only stub; the dismiss branch works (see below).
 
 Every cycle, `unscrew()` runs `rejoin_game()` first (nothing else works
-while disconnected), then `close_backpack_if_open()`, then `ghost_gallery()`
-if `HALLOWEEN` is on, then the paycheck check. The ghost gallery goes before the paycheck check because the
+while disconnected), then `close_backpack_if_open()`, then `minigame_popup()`
+if `HALLOWEEN` is on, then the paycheck check. The minigame popup goes before the paycheck check because the
 popup's Yes button is the same green as the paycheck's CASH OUT button, so
 `detect_paycheck()` would mistake it for one. For the same reason
 `detect_paycheck()` only counts that green inside `PAYCHECK_REGION` (the middle
@@ -381,15 +397,21 @@ isn't, a failure is logged and it stops rather than pressing again, since
 another press could just reopen it. (The normal backpack has no header to
 check, so the second press isn't verified.)
 
-**Disabling the ghost gallery.** `detect_ghost_gallery_popup()` recognises the
-"Ghost Gallery is starting soon! Teleport there now?" popup by its two
-buttons: neither color is unique alone (Yes green = `PAYCHECK_CASHOUT_COLOR`,
-No red = the Exit Home button), so it needs the Yes green
-(`GHOST_GALLERY_YES_COLOR`, at least `GHOST_GALLERY_MIN_BUTTON_PIXELS` px)
-with the No red (`GHOST_GALLERY_NO_COLOR`) within `GHOST_GALLERY_NO_MAX_DX` /
-`_DY` px to its left. `ghost_gallery()` then clicks `GHOST_GALLERY_DONT_SHOW_POS`
-("Do not show again this session") and `GHOST_GALLERY_NO_POS`, and returns
-`True`.
+**Dismissing the minigame popups.** Halloween has two minigames that offer to
+teleport you - "Ghost Gallery is starting soon! Teleport there now?" and
+"Hauntlet 2 is starting soon!..." - in the same popup layout.
+`detect_minigame_popup()` recognises that layout by its two buttons: neither
+color is unique alone (Yes green = `PAYCHECK_CASHOUT_COLOR`, No red = the
+Exit Home button), so it needs the Yes green (`MINIGAME_POPUP_YES_COLOR`, at
+least `MINIGAME_POPUP_MIN_BUTTON_PIXELS` px) with the No red
+(`MINIGAME_POPUP_NO_COLOR`) within `MINIGAME_POPUP_NO_MAX_DX` / `_DY` px to
+its left. `minigame_popup()` then clicks `MINIGAME_POPUP_DONT_SHOW_POS` ("Do
+not show again this session") and `MINIGAME_POPUP_NO_POS`, and returns
+`True`. It also runs during `wait_until_need_gone()`, because a popup that
+turns up mid-handler blocks the handler's clicks until it's dismissed. For
+dismissing, the two minigames needn't be told apart; the day
+`MINIGAME_POPUP_PLAY` gets implemented they will have to be (see
+[PLANNED.md](PLANNED.md)).
 
 A handler only counts as resolved (and only then triggers a respawn) if
 `handle()` returns `True`. `ButtonNeedHandler` returns `False` if
@@ -401,20 +423,21 @@ logged and skipped for this pass with no respawn, same as a disabled need
 
 ### Stuck needs
 
-`record_detected_needs()` saves the set of need names detected on each
-check into `DETECTION_HISTORY` (the last `NEED_STUCK_CHECKS` = 5 checks).
-If an *enabled* need turns up in all 5 of the most recent checks, it's
-stuck - it's supposed to be getting resolved, yet it never goes away - so
-it's added to `DISABLED_THIS_RUN` and `get_need_handler()` returns `None`
-for it from then on, same as a need that isn't in `ENABLED_NEEDS`. A single
-check without it, even one that detects nothing at all, breaks the streak.
-The check runs before the pass's handlers do, so the 5th straight
-detection disables the need without a 5th attempt.
+Needs are resolved one per check, so a need can sit through several checks
+just waiting its turn - that isn't being stuck. What is: `record_detection()`
+compares each check with the needs the *previous pass attempted*
+(`ATTEMPTED_LAST`). An attempted need still on screen has its streak in
+`ATTEMPT_STREAKS` raised; one that's gone has it dropped. When an *enabled*
+need's streak reaches `NEED_STUCK_CHECKS` (5) - it's supposed to be getting
+resolved, yet it never goes away - it's added to `DISABLED_THIS_RUN` and
+`get_need_handler()` returns `None` for it from then on, same as a need that
+isn't in `ENABLED_NEEDS`. A single check without it, even one that detects
+nothing at all, breaks the streak.
 
 `DISABLED_THIS_RUN` lasts for the life of the process only - it isn't saved
 to the game config, so relaunching the script gives every need a fresh
-chance - while `DETECTION_HISTORY` is also emptied at the start of every
-workflow run, so a streak never spans a stop and restart.
+chance - while the streaks are also reset (`reset_need_tracking()`) at the
+start of every workflow run, so a streak never spans a stop and restart.
 
 **Automatic recovery.** Every cycle `unscrew()` calls `rejoin_game()`, which
 asks `rejoin_reason()` whether the game needs rejoining. In order:
@@ -437,7 +460,7 @@ asks `rejoin_reason()` whether the game needs rejoining. In order:
 If so, it runs `leave_and_rejoin()` (see [Side actions](#side-actions)) -
 without the clean esc/l/enter leave for a disconnect, since there's no game
 to leave - then `setup_game()` (the rejoin resets the settings it sets), then
-clears `DISABLED_THIS_RUN` and `DETECTION_HISTORY` so every need gets a fresh
+clears `DISABLED_THIS_RUN` and the streaks so every need gets a fresh
 chance, and the workflow carries on. A disconnect, stuck or stalled recovery counts as
 a failure: `log_failure()` saves a screenshot first, which shows the dialog
 and its error code. A scheduled rejoin isn't one: it's a line in the run log,
@@ -584,7 +607,7 @@ the unwind. `release_all_inputs()` runs once more in `run_async`'s
 `finally` block as a last line of defense.
 
 **Resuming after focus loss.** The GUI's **Resume after focus loss** checkbox
-(the `resume_on_focus_loss` config switch, off by default - stopping is the
+(on the Options tab; the `resume_on_focus_loss` config switch, off by default - stopping is the
 right thing when you're using the computer yourself) makes the loop carry on
 instead of ending. When `FocusLost` reaches `run_workflow_loop()` with the
 switch on, it releases every held input, saves a failure screenshot (which
@@ -698,9 +721,17 @@ knowing if you're modifying it:
   size change to either.
 - Every button in that row is created with `bd=0, highlightthickness=0` to
   flatten Tk's default border/focus-ring rendering.
+- The **Main** tab has the loop/stop row and the Respawn, Setup and Leave &
+  rejoin buttons; the **Options** tab holds the persisted switches (Run side
+  quest, Resume after focus loss), the private server link and Reset Config;
+  the **Debug** tab has a button per need handler.
 - **`DebugCapture`** redirects `sys.stdout` into the on-screen console
   (`self.debug_text`) for the lifetime of the GUI, so every `print()`
-  anywhere in the macro shows up there automatically.
+  anywhere in the macro shows up there automatically, each line starting with
+  the time (`[HH:MM:SS]`). A print starting with `\r` is a status line: it
+  replaces the previous status line instead of adding one, and goes into
+  `output.log` only the first time (this is the "Waiting for a need..."
+  counter).
 
 ## Configuration reference
 
@@ -715,10 +746,11 @@ exact values and rationale):
 
 | Group | Examples |
 |---|---|
-| Behavior flags | `ENABLED_NEEDS`, `STOP_HOTKEY`, `BACKPACK_HEADER_*`, `HALLOWEEN`, `GHOST_GALLERY_PLAY_MINIGAME`, `GHOST_GALLERY_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
+| Behavior flags | `ENABLED_NEEDS`, `STOP_HOTKEY`, `BACKPACK_HEADER_*`, `HALLOWEEN`, `MINIGAME_POPUP_PLAY`, `MINIGAME_POPUP_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
 | Window / coordinates | `REFERENCE_WIDTH`, `REFERENCE_HEIGHT`, `REFERENCE_CENTER_X/Y`, `ROBLOX_RECT_TTL` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `NEED_GONE_*` |
 | Stuck needs | `NEED_STUCK_CHECKS` |
+| Icon readability | `NEED_BAR_BRIGHT_LEVEL`, `NEED_BAR_MAX_BRIGHT_FRACTION` |
 | Pet focusing | `FOCUS_PET_REGION_TOP_PERCENT`, `FOCUS_PET_FRAME_GAP`, `FOCUS_PET_DIFF_THRESHOLD`, `FOCUS_PET_MERGE_KERNEL`, `FOCUS_PET_MIN_AREA` |
 | Screen positions | `CATCH_*_POS`, `EMPTY_POS`, `RIDE_*_POS`, `LURE_NEW_POS_*`, `SETUP_*_POS` |
 | Side quest / setup | `TREE_HARVEST_YIELD`, `MONEY_COLLECTED_TARGET`, `TREE_CHECK_INTERVAL`, `LURE_RECOLLECT_INTERVAL`, `LURE_COLLECT_*`, `TREE_COLLECT_*` |

@@ -26,22 +26,22 @@ ENABLED_NEEDS = {
 # EVENT FLAGS
 # ============================================================================
 # While HALLOWEEN is on, some teleport needs use different steps (see
-# TELEPORT_WALK_NEEDS_HALLOWEEN) and unscrew() also runs ghost_gallery().
+# TELEPORT_WALK_NEEDS_HALLOWEEN) and unscrew() also runs minigame_popup().
 HALLOWEEN = True
-# Only matters while HALLOWEEN is on: True = ghost_gallery() plays the ghost
-# gallery minigame, False = it just disables (dismisses) the ghost gallery.
-GHOST_GALLERY_PLAY_MINIGAME = False
+# Only matters while HALLOWEEN is on: True = minigame_popup() plays the
+# minigame, False = it just dismisses the popup (and ticks "do not show again").
+MINIGAME_POPUP_PLAY = False
 
-# The "Ghost Gallery is starting soon! Teleport there now?" popup is recognised by its
-# Yes button (green) with its No button (red) close to the left - see detect_ghost_gallery_popup().
+# The "Ghost Gallery / Hauntlet 2 is starting soon! Teleport there now?" popups (one layout) are recognised by their
+# Yes button (green) with its No button (red) close to the left - see detect_minigame_popup().
 # Dismissing it ticks "Do not show again this session", then clicks No.
-GHOST_GALLERY_YES_COLOR = (74, 198, 85)    # same green as PAYCHECK_CASHOUT_COLOR
-GHOST_GALLERY_NO_COLOR = (216, 42, 63)
-GHOST_GALLERY_MIN_BUTTON_PIXELS = 1000     # a button is ~5000 exact-color px; fewer is noise
-GHOST_GALLERY_NO_MAX_DX = 300              # No button must be within this many px left of Yes...
-GHOST_GALLERY_NO_MAX_DY = 40               # ...and this many px above/below it
-GHOST_GALLERY_DONT_SHOW_POS = (826, 666)
-GHOST_GALLERY_NO_POS = (879, 618)
+MINIGAME_POPUP_YES_COLOR = (74, 198, 85)    # same green as PAYCHECK_CASHOUT_COLOR
+MINIGAME_POPUP_NO_COLOR = (216, 42, 63)
+MINIGAME_POPUP_MIN_BUTTON_PIXELS = 1000     # a button is ~5000 exact-color px; fewer is noise
+MINIGAME_POPUP_NO_MAX_DX = 300              # No button must be within this many px left of Yes...
+MINIGAME_POPUP_NO_MAX_DY = 40               # ...and this many px above/below it
+MINIGAME_POPUP_DONT_SHOW_POS = (826, 666)
+MINIGAME_POPUP_NO_POS = (879, 618)
 
 # ============================================================================
 # PATHS
@@ -224,8 +224,8 @@ TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLO
 
 DISABLED_NEEDS_REJOIN_THRESHOLD = 4  # this many needs disabled for the run (see NEED_STUCK_CHECKS) means something is
                                      # badly wrong: rejoin the game, run setup, and give every need a fresh chance
-NEED_STUCK_CHECKS = 5            # an enabled need detected on this many checks in a row is
-                                  # disabled for the rest of the run - see record_detected_needs()
+NEED_STUCK_CHECKS = 5            # an enabled need still on screen after this many attempts in a row is
+                                  # disabled for the rest of the run - see record_detection()
 NEED_GONE_MAX_WAIT = 60.0        # most wait_until_need_gone() ever waits for an icon to disappear -
                                   # also reused as walk_alternating()'s total duration cap for walk/ride
 NEED_GONE_POLL_INTERVAL = 5.0    # how often to re-check for the icon during that wait
@@ -343,6 +343,11 @@ NEED_ICON_MIN_DISTANCE = 40         # px, minimum spacing between two icon cente
 NEED_ICON_BLUR_KERNEL = 5           # median blur applied before circle detection
 NEED_ICON_HOUGH_EDGE = 100          # Hough: Canny upper edge threshold
 NEED_ICON_HOUGH_VOTES = 25          # Hough: accumulator votes needed to accept a circle
+# The icons can't be recognised against a bright background (the Pizza Party's, say), so when
+# more than this fraction of the icon strip is brighter than this gray level it counts as unreadable
+# (need_bar_readable()) and "the icon is gone" can't be concluded from it.
+NEED_BAR_BRIGHT_LEVEL = 200
+NEED_BAR_MAX_BRIGHT_FRACTION = 0.5
 CIRCULARITY_EPSILON = 1e-6          # avoids dividing by zero when scoring circularity
 PIXEL_MAX = 255                     # max value of an 8-bit pixel channel
 
@@ -445,9 +450,9 @@ __all__ = [
     "TELEPORT_BACK_DURATION", "TELEPORT_WALK_STEP_GAP", "SICK_CONFIRM_WAIT",
     "TELEPORT_PETS_TAB_POS", "TELEPORT_VEHICLES_TAB_POS", "SICK_FINAL_CLICK_POS",
     "TELEPORT_WALK_NEEDS", "HELICOPTER_REQUIRED", "HELICOPTER_FORWARD_DURATION", "HELICOPTER_HOLD_DURATION",
-    "NEED_STUCK_CHECKS", "HALLOWEEN", "GHOST_GALLERY_PLAY_MINIGAME",
-    "GHOST_GALLERY_YES_COLOR", "GHOST_GALLERY_NO_COLOR", "GHOST_GALLERY_MIN_BUTTON_PIXELS",
-    "GHOST_GALLERY_NO_MAX_DX", "GHOST_GALLERY_NO_MAX_DY", "GHOST_GALLERY_DONT_SHOW_POS", "GHOST_GALLERY_NO_POS",
+    "NEED_STUCK_CHECKS", "HALLOWEEN", "MINIGAME_POPUP_PLAY",
+    "MINIGAME_POPUP_YES_COLOR", "MINIGAME_POPUP_NO_COLOR", "MINIGAME_POPUP_MIN_BUTTON_PIXELS",
+    "MINIGAME_POPUP_NO_MAX_DX", "MINIGAME_POPUP_NO_MAX_DY", "MINIGAME_POPUP_DONT_SHOW_POS", "MINIGAME_POPUP_NO_POS",
     "ROBLOX_PLACE_ID", "ROBLOX_PROCESS_NAMES", "REJOIN_LEAVE_KEYS", "REJOIN_LEAVE_KEY_GAP",
     "REJOIN_MIN_LEAVE_HEIGHT", "REJOIN_CLOSE_WAIT", "REJOIN_INTERVAL", "NO_PROGRESS_REJOIN_INTERVAL",
     "FOCUS_RESUME_MAX_IN_A_ROW", "FOCUS_RESUME_DELAY", "REJOIN_MAX_ATTEMPTS", "REJOIN_WINDOW_TIMEOUT",
@@ -468,7 +473,7 @@ __all__ = [
     "SETUP_TRADES_SETTING_POS", "SETUP_TRADES_NO_ONE_POS", "SETUP_TRADES_CLOSE_POS",
     "FOCUS_CLICK_X_PERCENT", "FOCUS_CLICK_Y", "HOVER_NUDGE_PIXELS",
     "NEED_ICON_TOP_PERCENT", "NEED_ICON_WIDTH_PERCENT", "NEED_ICON_BLANK_HEIGHT", "NEED_ICON_BLANK_WIDTH",
-    "NEED_ICON_MIN_RADIUS", "NEED_ICON_MAX_RADIUS", "NEED_ICON_MIN_DISTANCE", "NEED_ICON_BLUR_KERNEL",
+    "NEED_BAR_BRIGHT_LEVEL", "NEED_BAR_MAX_BRIGHT_FRACTION", "NEED_ICON_MIN_RADIUS", "NEED_ICON_MAX_RADIUS", "NEED_ICON_MIN_DISTANCE", "NEED_ICON_BLUR_KERNEL",
     "NEED_ICON_HOUGH_EDGE", "NEED_ICON_HOUGH_VOTES", "CIRCULARITY_EPSILON", "PIXEL_MAX",
     "ICON_MATCH_THRESHOLD", "ICON_BW_THRESHOLD", "ICON_CLAHE_CLIP", "ICON_CLAHE_TILE",
     "ICON_COMPARE_SIZE", "ICON_CROP_RADIUS", "ICON_SHIFT_TOLERANCE",

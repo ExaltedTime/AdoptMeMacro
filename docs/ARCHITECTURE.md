@@ -373,9 +373,13 @@ between cycles, so one that is was left that way (a handler interrupted halfway,
 a toggle that got out of step). `detect_backpack_open()` recognises it by its
 purple header bar (`BACKPACK_HEADER_COLOR`) filling at least
 `BACKPACK_HEADER_MIN_FRACTION` of `BACKPACK_HEADER_BOX`; `close_backpack_if_open()`
-presses `KEY_BACKPACK` once, but only while Roblox has the focus (so the key
-can't go to another window). It checks again afterwards and logs a failure
-rather than pressing a second time, since another press could just reopen it.
+presses `KEY_BACKPACK` - but only while Roblox has the focus, so the key can't
+go to another window. What the header marks is the *expanded* backpack, which
+takes two presses: the first shrinks it to the normal backpack, the second
+closes that. After the first press the expanded header must be gone; if it
+isn't, a failure is logged and it stops rather than pressing again, since
+another press could just reopen it. (The normal backpack has no header to
+check, so the second press isn't verified.)
 
 **Disabling the ghost gallery.** `detect_ghost_gallery_popup()` recognises the
 "Ghost Gallery is starting soon! Teleport there now?" popup by its two

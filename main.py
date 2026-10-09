@@ -1573,22 +1573,27 @@ def detect_backpack_open(img):
     return np.count_nonzero(mask) / mask.size >= BACKPACK_HEADER_MIN_FRACTION
 
 def close_backpack_if_open():
-    """Press KEY_BACKPACK if the backpack is open - it's run at the start of a
-    cycle, when no handler should have it open, so one that's open was left
-    that way (a handler interrupted halfway, a toggle that got out of step).
-    Pressed once, then checked again: if it's still showing, that's logged as
-    a failure rather than pressed again, since another press could just open
-    it. Does nothing unless Roblox has the focus, so the key can't go to
-    another window. Returns True if it was open."""
+    """Close the backpack if it's open - it's run at the start of a cycle, when
+    no handler should have it open, so one that's open was left that way (a
+    handler interrupted halfway, a toggle that got out of step). What
+    detect_backpack_open() sees is the *expanded* backpack, which takes two
+    presses of KEY_BACKPACK: the first shrinks it to the normal backpack, the
+    second closes that. After the first press the expanded header must be
+    gone - if it isn't, the key isn't doing what's expected, so that's logged
+    as a failure and it stops instead of pressing again (another press could
+    just reopen it). Does nothing unless Roblox has the focus, so the key
+    can't go to another window. Returns True if it was open."""
     if not is_roblox_focused() or not detect_backpack_open(grab_screen()):
         return False
     print("[debug] backpack left open, closing it...")
     pydirectinput.press(KEY_BACKPACK)
     wait_interruptible(UI_SETTLE)
     if detect_backpack_open(grab_screen()):
-        log_failure("backpack still open after pressing the backpack key")
-    else:
-        log_run_event("backpack was left open - closed it")
+        log_failure("backpack still expanded after pressing the backpack key")
+        return True
+    pydirectinput.press(KEY_BACKPACK)
+    wait_interruptible(UI_SETTLE)
+    log_run_event("backpack was left open - closed it")
     return True
 
 def detect_disconnect(img):

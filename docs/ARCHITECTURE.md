@@ -120,7 +120,8 @@ character standing.
 - **NEED HANDLERS** - `NeedHandler` and one subclass per need (or per group
   of needs, via `partial()`). See [Need handlers](#need-handlers).
 - **PER-CYCLE CHECKS** - `unscrew()` and what it runs: `rejoin_game()`
-  (with `rejoin_reason()` / `detect_disconnect()`), `ghost_gallery()`,
+  (with `rejoin_reason()` / `detect_disconnect()`), `close_backpack_if_open()`,
+  `ghost_gallery()`,
   `detect_paycheck()`; and `side_quest()`.
 - **WORKFLOWS** - `run_full_cycle()` and `run_workflow_loop()`. See
   [The workflow lifecycle](#the-workflow-lifecycle) above.
@@ -356,11 +357,29 @@ or just disable it depending on `GHOST_GALLERY_PLAY_MINIGAME`. The minigame
 branch is a comments-only stub; the disable branch works (see below).
 
 Every cycle, `unscrew()` runs `rejoin_game()` first (nothing else works
-while disconnected), then `ghost_gallery()` if `HALLOWEEN` is on, then the
-paycheck check. The ghost gallery goes before the paycheck check because the
+while disconnected), then `close_backpack_if_open()`, then `ghost_gallery()`
+if `HALLOWEEN` is on, then the paycheck check. The ghost gallery goes before the paycheck check because the
 popup's Yes button is the same green as the paycheck's CASH OUT button, so
-`detect_paycheck()` would mistake it for one. `rejoin_game()` is the
-automatic recovery - see [Automatic recovery](#stuck-needs).
+`detect_paycheck()` would mistake it for one. For the same reason
+`detect_paycheck()` only counts that green inside `PAYCHECK_REGION` (the middle
+of the screen, around its dismiss positions) and with at least
+`PAYCHECK_MIN_PIXELS` of it: it used to look at the whole screen, and the
+backpack's green Select All button, left open on screen, made it "dismiss" a
+paycheck popup every cycle. `rejoin_game()` is the automatic recovery - see
+[Automatic recovery](#stuck-needs).
+
+**Closing a backpack left open.** No handler should have the backpack open
+between cycles, so one that is was left that way (a handler interrupted halfway,
+a toggle that got out of step). `detect_backpack_open()` recognises it by its
+purple header bar (`BACKPACK_HEADER_COLOR`) filling at least
+`BACKPACK_HEADER_MIN_FRACTION` of `BACKPACK_HEADER_BOX`; `close_backpack_if_open()`
+presses `KEY_BACKPACK` - but only while Roblox has the focus, so the key can't
+go to another window. What the header marks is the *expanded* backpack, which
+takes two presses: the first shrinks it to the normal backpack, the second
+closes that. After the first press the expanded header must be gone; if it
+isn't, a failure is logged and it stops rather than pressing again, since
+another press could just reopen it. (The normal backpack has no header to
+check, so the second press isn't verified.)
 
 **Disabling the ghost gallery.** `detect_ghost_gallery_popup()` recognises the
 "Ghost Gallery is starting soon! Teleport there now?" popup by its two
@@ -407,7 +426,11 @@ asks `rejoin_reason()` whether the game needs rejoining. In order:
    game behind it is blurred, so nothing else fills a box like that).
 2. *Stuck* - `DISABLED_NEEDS_REJOIN_THRESHOLD` (4) needs have been disabled as
    stuck.
-3. *Scheduled* - it has been `REJOIN_INTERVAL` (an hour) since the last
+3. *Stalled* - no need has been resolved for `NO_PROGRESS_REJOIN_INTERVAL`
+   (20 minutes; `LAST_PROGRESS`, set when the loop starts, whenever a need is
+   resolved and by every successful `leave_and_rejoin()`): the game is up but
+   nothing is working, whatever the cause.
+4. *Scheduled* - it has been `REJOIN_INTERVAL` (an hour) since the last
    rejoin (`LAST_REJOIN`, set when the loop starts and by every successful
    `leave_and_rejoin()`): a refresh of a client that has been up a long time.
 
@@ -415,7 +438,7 @@ If so, it runs `leave_and_rejoin()` (see [Side actions](#side-actions)) -
 without the clean esc/l/enter leave for a disconnect, since there's no game
 to leave - then `setup_game()` (the rejoin resets the settings it sets), then
 clears `DISABLED_THIS_RUN` and `DETECTION_HISTORY` so every need gets a fresh
-chance, and the workflow carries on. A disconnect or stuck recovery counts as
+chance, and the workflow carries on. A disconnect, stuck or stalled recovery counts as
 a failure: `log_failure()` saves a screenshot first, which shows the dialog
 and its error code. A scheduled rejoin isn't one: it's a line in the run log,
 counted in `scheduled_rejoins`. If the rejoin fails the cause is still
@@ -552,11 +575,40 @@ first one does require focus.
 
 Both exceptions unwind via ordinary Python exception propagation, all the
 way up to `run_async()`'s worker thread, which reports `[STOPPED]` or
-`[STOPPED: Roblox not focused]` respectively. Anywhere a key or the mouse
+`[STOPPED: Roblox not focused]` respectively - unless **Resume after focus
+loss** is ticked, in which case `run_workflow_loop()` catches `FocusLost`
+itself (below). Anywhere a key or the mouse
 button is held down (walking, petting) wraps the hold in `try/finally` so
 it's always released on the way up, regardless of which exception caused
 the unwind. `release_all_inputs()` runs once more in `run_async`'s
 `finally` block as a last line of defense.
+
+**Resuming after focus loss.** The GUI's **Resume after focus loss** checkbox
+(the `resume_on_focus_loss` config switch, off by default - stopping is the
+right thing when you're using the computer yourself) makes the loop carry on
+instead of ending. When `FocusLost` reaches `run_workflow_loop()` with the
+switch on, it releases every held input, saves a failure screenshot (which
+shows what took the focus), waits `FOCUS_RESUME_DELAY`, takes Roblox back with
+`focus_roblox_click()`, respawns (a half-finished handler leaves the character
+somewhere unknown) and starts the next cycle. After `FOCUS_RESUME_MAX_IN_A_ROW`
+(5) focus losses with no need resolved in between it gives up and stops as
+usual, so it can't fight you for the window forever. The switch is read at the
+moment of each loss, so it can be flipped while the loop runs. Resumes are
+counted in `focus_resumes` in `status.json`.
+
+**The stop hotkey.** Pressing `STOP_HOTKEY` (`p`) in *any* window stops a running
+macro, so you can take over the computer without reaching for the GUI (which
+also has a hint label saying so). `AdoptMeGUI.watch_stop_hotkey()` runs a small
+daemon thread that polls the key every `STOP_HOTKEY_POLL_INTERVAL` through
+`hotkey_down()` (Windows' `GetAsyncKeyState`, so it needs no extra package and
+works while another window has the focus). Only the key going *down* counts, so
+holding it doesn't retrigger, and it does nothing while nothing is running. It
+hands the stop to Tk's thread, which does exactly what the [STOP] button does
+(sets `STOP_FLAG`, so the run unwinds at the next `check_running()`, within
+`STOP_CHECK_INTERVAL`, releasing any held key on the way) and logs "stopped with
+the P key". It stops the run for good - **Resume after focus loss** only catches
+`FocusLost`, not a stop. Because it's global, typing a `p` anywhere (including in
+the private server link box) while the macro is running stops it too.
 
 This is deliberately *not* solved with a second "killer" thread that
 force-stops the running one from outside - Python has no safe way to do
@@ -589,6 +641,8 @@ actually on disk (so an old config missing a newer key still works), and
 - **`side_quest_enabled`** - on/off switch (default on) for
   `side_quest()`. It's a checkbox in the GUI, and can be flipped while a
   workflow runs.
+- **`resume_on_focus_loss`** - the **Resume after focus loss** checkbox (default
+  off); see [Stopping & focus safety](#stopping--focus-safety).
 - **`private_server_link`** - the private server link `leave_and_rejoin()`
   joins, typed into the GUI's entry box (saved when you press Enter or click
   away). It lives here rather than in `magic_numbers.py` because it's a key
@@ -661,7 +715,7 @@ exact values and rationale):
 
 | Group | Examples |
 |---|---|
-| Behavior flags | `ENABLED_NEEDS`, `HALLOWEEN`, `GHOST_GALLERY_PLAY_MINIGAME`, `GHOST_GALLERY_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
+| Behavior flags | `ENABLED_NEEDS`, `STOP_HOTKEY`, `BACKPACK_HEADER_*`, `HALLOWEEN`, `GHOST_GALLERY_PLAY_MINIGAME`, `GHOST_GALLERY_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
 | Window / coordinates | `REFERENCE_WIDTH`, `REFERENCE_HEIGHT`, `REFERENCE_CENTER_X/Y`, `ROBLOX_RECT_TTL` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `NEED_GONE_*` |
 | Stuck needs | `NEED_STUCK_CHECKS` |
@@ -672,7 +726,7 @@ exact values and rationale):
 | Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
 | Debug logging | `OUTPUT_LOG_PATH`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_SCREENSHOTS` |
-| Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `DISCONNECT_*`, `REJOIN_*`, `ROBLOX_*` |
+| Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `DISCONNECT_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_REGION`, `PAYCHECK_MIN_PIXELS` |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
 | GUI | colors/fonts (`GUI_BG`, `GUI_FONT`, ...) and layout spacing (`GUI_OUTER_PADDING`, `GUI_ROW_SPACING`, ...) for the `tkinter` panel |
@@ -703,14 +757,16 @@ were away can be read back afterwards:
   need (`write_status()`): the run number and start time, time of the last
   update (if that's old, the macro is stuck or dead), cycle count, the needs
   last detected, how many of each need were resolved or failed, the needs
-  currently disabled, the number of recoveries, disconnects and scheduled
-  rejoins, and the last resolved need
+  currently disabled, the number of recoveries, disconnects, scheduled
+  rejoins and focus resumes, and the last resolved need
   and last failure. `RUN_STATS` holds the counters in memory.
 - **`debug_needs.png`** / **`debug_buttons.png`** - see below.
 
-A run that *stops* (a crash, Roblox losing focus) ends the loop and stays
-stopped - deliberately, since losing focus means the computer is being used
-for something else. The logs say why.
+A run that *stops* (a crash, or Roblox losing focus with **Resume after focus
+loss** off) ends the loop and stays stopped - deliberately, since losing focus
+usually means the computer is being used for something else. The logs say
+why: the failure screenshot is of the whole screen, so it shows what took the
+focus.
 
 If detection isn't finding what you expect after changing screen
 resolution or Roblox's UI, check `debug/debug_needs.png` and

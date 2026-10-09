@@ -13,7 +13,7 @@
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
-import os, sys, re, time, threading, json, subprocess, traceback
+import os, sys, re, time, threading, json, subprocess, traceback, ctypes
 from abc import ABC, abstractmethod
 from collections import deque
 from functools import partial
@@ -56,6 +56,11 @@ class FocusLost(Exception):
     sending clicks or keypresses into whatever window the user switched to."""
     pass
 
+def hotkey_down(key):
+    """True while `key` (a single letter or digit) is held down, whichever
+    window has the focus (Windows)."""
+    return bool(ctypes.windll.user32.GetAsyncKeyState(ord(key.upper())) & 0x8000)
+
 def check_stop():
     """Raise StopRequested if the user has pressed [STOP]. Prefer
     check_running() at checkpoints that should also require Roblox focus -
@@ -68,7 +73,7 @@ def check_focus():
     """Raise FocusLost if Roblox is running but is no longer the focused
     window. Prefer check_running() at most checkpoints."""
     if not is_roblox_focused():
-        print("\n[!] Roblox is no longer focused - stopping.")
+        print("\n[!] Roblox is no longer focused")
         raise FocusLost()
 
 def check_running():
@@ -216,6 +221,11 @@ MACRO_WINDOW = None
 # refresh REJOIN_INTERVAL after it. None until then.
 LAST_REJOIN = None
 
+# When a need was last resolved (or the loop started, or the game was last
+# rejoined): rejoin_reason() rejoins after NO_PROGRESS_REJOIN_INTERVAL
+# without any. None until the loop starts.
+LAST_PROGRESS = None
+
 # Detected action-button screen positions, keyed by need name (e.g. "hungry").
 # Populated by refresh_button_mapping() each time the macro walks to the
 # buttons, so this is a same-run cache, not persisted state - there's
@@ -267,7 +277,7 @@ def log_run_event(message):
 # What the macro knows about how this run is going, written to STATUS_PATH by
 # write_status() so it can be checked without opening the GUI.
 RUN_STATS = {"run": None, "started": None, "cycles": 0, "last_detected": [], "resolved": {}, "failed": {},
-             "failures": 0, "recoveries": 0, "disconnects": 0, "scheduled_rejoins": 0, "last_resolved": None, "last_failure": None}
+             "failures": 0, "recoveries": 0, "disconnects": 0, "scheduled_rejoins": 0, "focus_resumes": 0, "last_resolved": None, "last_failure": None}
 
 OUTPUT_LOG_LOCK = threading.Lock()
 _output_at_line_start = True
@@ -336,7 +346,7 @@ def log_failure(reason, screenshot=True):
 def reset_run_stats():
     """Start the status counters afresh (a workflow was just started)."""
     RUN_STATS.update(run=CURRENT_RUN_NUMBER, started=time.strftime("%Y-%m-%d %H:%M:%S"), cycles=0,
-                     last_detected=[], resolved={}, failed={}, failures=0, recoveries=0, disconnects=0, scheduled_rejoins=0,
+                     last_detected=[], resolved={}, failed={}, failures=0, recoveries=0, disconnects=0, scheduled_rejoins=0, focus_resumes=0,
                      last_resolved=None, last_failure=None)
     write_status()
 
@@ -354,6 +364,7 @@ def load_game_config():
         "lure_timer": time.time(),  # due immediately on a fresh config
         "tree_timer": time.time(),  # likewise
         "side_quest_enabled": True, # whether side_quest() is allowed to run at all
+        "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
         "private_server_link": "",  # used by leave_and_rejoin(); kept here, not in the source, since it's a join key
     }
     try:
@@ -1031,7 +1042,7 @@ def leave_and_rejoin(clean_leave=True):
     Returns True once back in the game, False if every attempt failed (or
     the saved link isn't a valid private server link). `clean_leave` is
     passed on to close_roblox()."""
-    global LAST_REJOIN
+    global LAST_REJOIN, LAST_PROGRESS
     link = load_game_config()["private_server_link"].strip()
     server = None
     if link:
@@ -1076,7 +1087,7 @@ def leave_and_rejoin(clean_leave=True):
         print(f"[debug] waiting {REJOIN_AFTER_JOIN_WAIT}s, then respawning...")
         wait_stoppable(REJOIN_AFTER_JOIN_WAIT)
         respawn_character()
-        LAST_REJOIN = time.time()
+        LAST_REJOIN = LAST_PROGRESS = time.time()
         print("[!] Rejoin complete!")
         return True
 
@@ -1475,6 +1486,7 @@ def process_needs():
     wasn't really handled (disabled, unmapped, or its handler returned
     False). Returns True if anything was actually resolved this check,
     False if there was nothing to do."""
+    global LAST_PROGRESS
     if not focus_roblox_click():
         return False
 
@@ -1529,6 +1541,7 @@ def process_needs():
         seconds = time.time() - started
         RUN_STATS["resolved"][need_name] = RUN_STATS["resolved"].get(need_name, 0) + 1
         RUN_STATS["last_resolved"] = {"need": need_name, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+        LAST_PROGRESS = time.time()
         log_run_event(f"resolved: {need_name} ({seconds:.0f}s)")
         write_status()
 
@@ -1541,17 +1554,51 @@ def process_needs():
 # dismiss, recovering the game when it's gone wrong, and the timed chores.
 
 def detect_paycheck():
-    """Detect the paycheck popup by its CASH OUT button's exact color and,
+    """Detect the paycheck popup by its CASH OUT button's exact color - only
+    within PAYCHECK_REGION and with at least PAYCHECK_MIN_PIXELS of it, since
+    that green is also the backpack's Select All button, among others - and,
     if present, dismiss it. Returns True if the popup was detected and
     dismissed, False otherwise."""
-    img = grab_screen()
-    if find_exact_color(img, PAYCHECK_CASHOUT_COLOR) is None:
+    left, top, right, bottom = PAYCHECK_REGION
+    region = grab_screen()[top:bottom, left:right]
+    if np.count_nonzero(exact_color_mask(region, PAYCHECK_CASHOUT_COLOR)) < PAYCHECK_MIN_PIXELS:
         return False
 
     print("[debug] paycheck popup detected, dismissing...")
     log_run_event("paycheck popup dismissed")
     hover_click(*PAYCHECK_DISMISS_POS_1)
     hover_click(*PAYCHECK_DISMISS_POS_2)
+    return True
+
+def detect_backpack_open(img):
+    """True if the backpack is open in `img`: most of BACKPACK_HEADER_BOX is
+    the purple of its header bar."""
+    left, top, right, bottom = BACKPACK_HEADER_BOX
+    mask = exact_color_mask(img[top:bottom, left:right], BACKPACK_HEADER_COLOR, BACKPACK_HEADER_TOLERANCE)
+    return np.count_nonzero(mask) / mask.size >= BACKPACK_HEADER_MIN_FRACTION
+
+def close_backpack_if_open():
+    """Close the backpack if it's open - it's run at the start of a cycle, when
+    no handler should have it open, so one that's open was left that way (a
+    handler interrupted halfway, a toggle that got out of step). What
+    detect_backpack_open() sees is the *expanded* backpack, which takes two
+    presses of KEY_BACKPACK: the first shrinks it to the normal backpack, the
+    second closes that. After the first press the expanded header must be
+    gone - if it isn't, the key isn't doing what's expected, so that's logged
+    as a failure and it stops instead of pressing again (another press could
+    just reopen it). Does nothing unless Roblox has the focus, so the key
+    can't go to another window. Returns True if it was open."""
+    if not is_roblox_focused() or not detect_backpack_open(grab_screen()):
+        return False
+    print("[debug] backpack left open, closing it...")
+    pydirectinput.press(KEY_BACKPACK)
+    wait_interruptible(UI_SETTLE)
+    if detect_backpack_open(grab_screen()):
+        log_failure("backpack still expanded after pressing the backpack key")
+        return True
+    pydirectinput.press(KEY_BACKPACK)
+    wait_interruptible(UI_SETTLE)
+    log_run_event("backpack was left open - closed it")
     return True
 
 def detect_disconnect(img):
@@ -1569,6 +1616,8 @@ def rejoin_reason():
           running, or is showing the Disconnected dialog;
       "stuck" - DISABLED_NEEDS_REJOIN_THRESHOLD needs have been disabled
           for this run;
+      "stalled" - no need has been resolved for NO_PROGRESS_REJOIN_INTERVAL
+          (see LAST_PROGRESS): the game is up but nothing is working;
       "scheduled" - it has been REJOIN_INTERVAL since the last rejoin (see
           LAST_REJOIN)."""
     if any(w.title == ROBLOX_CRASH_WINDOW_TITLE for w in gw.getAllWindows()):
@@ -1579,6 +1628,8 @@ def rejoin_reason():
         return "disconnect", "disconnected from the game"
     if len(DISABLED_THIS_RUN) >= DISABLED_NEEDS_REJOIN_THRESHOLD:
         return "stuck", f"{len(DISABLED_THIS_RUN)} needs disabled ({', '.join(sorted(DISABLED_THIS_RUN))})"
+    if LAST_PROGRESS is not None and time.time() - LAST_PROGRESS >= NO_PROGRESS_REJOIN_INTERVAL:
+        return "stalled", f"no need resolved for {NO_PROGRESS_REJOIN_INTERVAL / 60:g} minutes"
     if LAST_REJOIN is not None and time.time() - LAST_REJOIN >= REJOIN_INTERVAL:
         return "scheduled", f"{REJOIN_INTERVAL / 3600:g} hour(s) since the last rejoin"
     return None
@@ -1654,12 +1705,14 @@ def ghost_gallery():
 
 def unscrew():
     """Runs once per cycle, right after check_stop(). Rejoins if we've been
-    disconnected (first, since nothing else works while disconnected), then,
-    during Halloween, handles the ghost gallery popup, then checks for the
-    paycheck popup; more checks may be added here later. The ghost gallery
+    disconnected (first, since nothing else works while disconnected), closes
+    the backpack if it was left open, then, during Halloween, handles the
+    ghost gallery popup, then checks for the paycheck popup; more checks may
+    be added here later. The ghost gallery
     goes before the paycheck check because detect_paycheck() would otherwise
     mistake the popup's Yes button for CASH OUT (same green)."""
     rejoin_game()
+    close_backpack_if_open()
     if HALLOWEEN:
         ghost_gallery()
     detect_paycheck()
@@ -1720,12 +1773,12 @@ def run_workflow_loop():
     propagate on up to run_async()'s worker (via the bare `finally`, not
     `except`) so the GUI still reports [STOPPED] correctly; the finally
     just prints locally first."""
-    global STOP_FLAG, CURRENT_RUN_NUMBER, LAST_REJOIN
+    global STOP_FLAG, CURRENT_RUN_NUMBER, LAST_REJOIN, LAST_PROGRESS
     STOP_FLAG = False
     CURRENT_RUN_NUMBER = next_run_number()
     DETECTION_HISTORY.clear()
     reset_run_stats()
-    LAST_REJOIN = time.time()  # the hourly rejoin counts from here
+    LAST_REJOIN = LAST_PROGRESS = time.time()  # the hourly and no-progress rejoins count from here
     log_run_event("LOOP started")
     print("\n" + "=" * 50)
     print(f"[LOOP] Starting continuous workflow (run {CURRENT_RUN_NUMBER})")
@@ -1733,15 +1786,40 @@ def run_workflow_loop():
 
     # Respawn once up front so the loop always starts from a known state,
     # regardless of wherever the character happened to be standing.
-    respawn_character()
+    needs_respawn = True
 
     loop_num = 0
+    focus_losses, progress_at_loss = 0, None
     try:
         while True:
             loop_num += 1
             print(f"\n[LOOP {loop_num}]")
-            run_full_cycle()
-            wait_interruptible(LOOP_DELAY)
+            try:
+                if needs_respawn:
+                    respawn_character()
+                    needs_respawn = False
+                run_full_cycle()
+                wait_interruptible(LOOP_DELAY)
+            except FocusLost:
+                # Only stops the run unless "Resume after focus loss" is
+                # ticked - and even then gives up after
+                # FOCUS_RESUME_MAX_IN_A_ROW losses with no need resolved in
+                # between, so it can't fight you for the window forever.
+                if not load_game_config()["resume_on_focus_loss"]:
+                    raise
+                if LAST_PROGRESS != progress_at_loss:
+                    focus_losses = 0
+                progress_at_loss = LAST_PROGRESS
+                focus_losses += 1
+                if focus_losses > FOCUS_RESUME_MAX_IN_A_ROW:
+                    log_failure(f"Roblox lost focus {focus_losses} times in a row - giving up")
+                    raise
+                RUN_STATS["focus_resumes"] += 1
+                log_failure(f"Roblox lost focus - resuming ({focus_losses}/{FOCUS_RESUME_MAX_IN_A_ROW})")
+                release_all_inputs()
+                wait_stoppable(FOCUS_RESUME_DELAY)
+                focus_roblox_click()
+                needs_respawn = True  # where a half-finished handler left the character is unknown
     finally:
         log_run_event("LOOP stopped")
         print("\n[LOOP] Stopped\n")
@@ -1798,6 +1876,33 @@ class AdoptMeGUI:
         print("=" * 60 + "\n")
 
         self.is_running = False
+        self.watch_stop_hotkey()
+
+    def watch_stop_hotkey(self):
+        """Start a background thread that stops a running macro the moment
+        STOP_HOTKEY is pressed, in any window - so you can take over the
+        computer without reaching for the GUI. Only the key *going down*
+        counts (holding it doesn't retrigger), and it does nothing while
+        nothing is running. The stop itself is handed to Tk's thread."""
+        def watch():
+            was_down = False
+            while True:
+                try:
+                    down = hotkey_down(STOP_HOTKEY)
+                    if down and not was_down and self.is_running:
+                        self.root.after(0, self.stop_by_hotkey)
+                except (RuntimeError, tk.TclError):
+                    return  # the window is gone
+                was_down = down
+                time.sleep(STOP_HOTKEY_POLL_INTERVAL)
+        threading.Thread(target=watch, daemon=True).start()
+
+    def stop_by_hotkey(self):
+        """STOP_HOTKEY was pressed: stop, same as the [STOP] button, and say so."""
+        if self.is_running:
+            print(f"\n[!] '{STOP_HOTKEY.upper()}' pressed")
+            log_run_event(f"stopped with the {STOP_HOTKEY.upper()} key")
+            self.stop()
 
     def create_ui(self):
         """Build every widget. Any button that kicks off a background action
@@ -1850,6 +1955,9 @@ class AdoptMeGUI:
         btn_loop.pack(fill=tk.BOTH, expand=True)
         self.action_buttons.append(btn_loop)
 
+        tk.Label(btn_frame, text=f"Press {STOP_HOTKEY.upper()} anywhere to stop", font=(GUI_FONT, GUI_STATUS_FONT_SIZE),
+                 bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X)
+
         tk.Frame(btn_frame, bg=self.accent, height=GUI_DIVIDER_HEIGHT).pack(fill=tk.X, pady=GUI_ROW_SPACING)
 
         tk.Label(btn_frame, text="Functions", font=(GUI_FONT, GUI_SECTION_FONT_SIZE, "bold"),
@@ -1878,7 +1986,8 @@ class AdoptMeGUI:
         # which is safe since update_game_config() is locked.
         config = load_game_config()
         self.config_flag_vars = {}
-        for label, key in (("Run side quest", "side_quest_enabled"),):
+        for label, key in (("Run side quest", "side_quest_enabled"),
+                           ("Resume after focus loss", "resume_on_focus_loss")):
             var = tk.BooleanVar(value=config[key])
             self.config_flag_vars[key] = var
             tk.Checkbutton(btn_frame, text=label, variable=var,

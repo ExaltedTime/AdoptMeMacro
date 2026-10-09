@@ -596,6 +596,20 @@ usual, so it can't fight you for the window forever. The switch is read at the
 moment of each loss, so it can be flipped while the loop runs. Resumes are
 counted in `focus_resumes` in `status.json`.
 
+**The stop hotkey.** Pressing `STOP_HOTKEY` (`p`) in *any* window stops a running
+macro, so you can take over the computer without reaching for the GUI (which
+also has a hint label saying so). `AdoptMeGUI.watch_stop_hotkey()` runs a small
+daemon thread that polls the key every `STOP_HOTKEY_POLL_INTERVAL` through
+`hotkey_down()` (Windows' `GetAsyncKeyState`, so it needs no extra package and
+works while another window has the focus). Only the key going *down* counts, so
+holding it doesn't retrigger, and it does nothing while nothing is running. It
+hands the stop to Tk's thread, which does exactly what the [STOP] button does
+(sets `STOP_FLAG`, so the run unwinds at the next `check_running()`, within
+`STOP_CHECK_INTERVAL`, releasing any held key on the way) and logs "stopped with
+the P key". It stops the run for good - **Resume after focus loss** only catches
+`FocusLost`, not a stop. Because it's global, typing a `p` anywhere (including in
+the private server link box) while the macro is running stops it too.
+
 This is deliberately *not* solved with a second "killer" thread that
 force-stops the running one from outside - Python has no safe way to do
 that, and the unsafe tricks that exist (async-raising into another thread)
@@ -701,7 +715,7 @@ exact values and rationale):
 
 | Group | Examples |
 |---|---|
-| Behavior flags | `ENABLED_NEEDS`, `BACKPACK_HEADER_*`, `HALLOWEEN`, `GHOST_GALLERY_PLAY_MINIGAME`, `GHOST_GALLERY_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
+| Behavior flags | `ENABLED_NEEDS`, `STOP_HOTKEY`, `BACKPACK_HEADER_*`, `HALLOWEEN`, `GHOST_GALLERY_PLAY_MINIGAME`, `GHOST_GALLERY_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
 | Window / coordinates | `REFERENCE_WIDTH`, `REFERENCE_HEIGHT`, `REFERENCE_CENTER_X/Y`, `ROBLOX_RECT_TTL` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `NEED_GONE_*` |
 | Stuck needs | `NEED_STUCK_CHECKS` |

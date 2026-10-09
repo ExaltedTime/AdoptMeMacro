@@ -96,6 +96,9 @@ POST_CLICK_DELAY = 0.4         # pause after each click
 NEED_CHECK_RETRY_DELAY = 5.0   # pause before re-checking when no need was found
 LOOP_DELAY = 2.0               # pause between iterations of the workflow loop
 STOP_CHECK_INTERVAL = 0.1      # granularity of the interruptible wait loop
+STOP_HOTKEY = "p"              # a letter or digit: pressing it, in any window, stops a running macro
+                               # (so you can take over the computer) - see watch_stop_hotkey()
+STOP_HOTKEY_POLL_INTERVAL = 0.05  # how often the key is looked at (seconds)
 CATCH_WAIT_AFTER_EQUIP = 1.0   # wait after equipping toy before throwing
 CATCH_EMOTE_DELAY = 5.0       # delay between throw clicks
 CATCH_THROW_COUNT = 3          # number of times the toy is thrown
@@ -427,7 +430,7 @@ __all__ = [
     "KEY_STEP_GAP", "UI_SETTLE", "FOCUS_DELAY", "FOCUS_CLICK_SETTLE_DELAY",
     "CLICK_MOVE_DURATION", "CLICK_SETTLE_DELAY", "POST_CLICK_DELAY",
     "NEED_CHECK_RETRY_DELAY", "LOOP_DELAY",
-    "STOP_CHECK_INTERVAL", "CATCH_WAIT_AFTER_EQUIP", "CATCH_EMOTE_DELAY", "CATCH_THROW_COUNT",
+    "STOP_CHECK_INTERVAL", "STOP_HOTKEY", "STOP_HOTKEY_POLL_INTERVAL", "CATCH_WAIT_AFTER_EQUIP", "CATCH_EMOTE_DELAY", "CATCH_THROW_COUNT",
     "CATCH_ZOOM_DURATION", "PET_CIRCLE_DURATION", "PET_CIRCLE_RADIUS", "PET_SETTLE_DELAY",
     "PET_CIRCLE_STEP_MOVE_DURATION", "PET_FOCUS_CLICK_DURATION", "ICON_EXTRACT_PADDING",
     "CATCH_TOYS_POS", "CATCH_SQUEAKY_TOY_POS", "CATCH_EQUIP_POS", "CATCH_UNEQUIP_POS",

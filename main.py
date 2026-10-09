@@ -13,7 +13,7 @@
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
-import os, sys, re, time, threading, json, subprocess, traceback
+import os, sys, re, time, threading, json, subprocess, traceback, ctypes
 from abc import ABC, abstractmethod
 from collections import deque
 from functools import partial
@@ -55,6 +55,11 @@ class FocusLost(Exception):
     the same try/finally blocks along the way - so the macro never keeps
     sending clicks or keypresses into whatever window the user switched to."""
     pass
+
+def hotkey_down(key):
+    """True while `key` (a single letter or digit) is held down, whichever
+    window has the focus (Windows)."""
+    return bool(ctypes.windll.user32.GetAsyncKeyState(ord(key.upper())) & 0x8000)
 
 def check_stop():
     """Raise StopRequested if the user has pressed [STOP]. Prefer
@@ -1871,6 +1876,33 @@ class AdoptMeGUI:
         print("=" * 60 + "\n")
 
         self.is_running = False
+        self.watch_stop_hotkey()
+
+    def watch_stop_hotkey(self):
+        """Start a background thread that stops a running macro the moment
+        STOP_HOTKEY is pressed, in any window - so you can take over the
+        computer without reaching for the GUI. Only the key *going down*
+        counts (holding it doesn't retrigger), and it does nothing while
+        nothing is running. The stop itself is handed to Tk's thread."""
+        def watch():
+            was_down = False
+            while True:
+                try:
+                    down = hotkey_down(STOP_HOTKEY)
+                    if down and not was_down and self.is_running:
+                        self.root.after(0, self.stop_by_hotkey)
+                except (RuntimeError, tk.TclError):
+                    return  # the window is gone
+                was_down = down
+                time.sleep(STOP_HOTKEY_POLL_INTERVAL)
+        threading.Thread(target=watch, daemon=True).start()
+
+    def stop_by_hotkey(self):
+        """STOP_HOTKEY was pressed: stop, same as the [STOP] button, and say so."""
+        if self.is_running:
+            print(f"\n[!] '{STOP_HOTKEY.upper()}' pressed")
+            log_run_event(f"stopped with the {STOP_HOTKEY.upper()} key")
+            self.stop()
 
     def create_ui(self):
         """Build every widget. Any button that kicks off a background action
@@ -1922,6 +1954,9 @@ class AdoptMeGUI:
                               cursor="hand2", **NO_BORDER)
         btn_loop.pack(fill=tk.BOTH, expand=True)
         self.action_buttons.append(btn_loop)
+
+        tk.Label(btn_frame, text=f"Press {STOP_HOTKEY.upper()} anywhere to stop", font=(GUI_FONT, GUI_STATUS_FONT_SIZE),
+                 bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X)
 
         tk.Frame(btn_frame, bg=self.accent, height=GUI_DIVIDER_HEIGHT).pack(fill=tk.X, pady=GUI_ROW_SPACING)
 

@@ -137,6 +137,11 @@ CHOOSE_SLOW_MOVE_DURATION = 1.0  # deliberate, slow mouse travel to the found bu
 # The paycheck popup's CASH OUT button, matched by exact color the same way
 # as CHOOSE_BUTTON_COLOR above.
 PAYCHECK_CASHOUT_COLOR = (74, 198, 85)
+# That green is everywhere in the game (the backpack's Select All button, the Play and Yes buttons...), so
+# it only counts inside PAYCHECK_REGION (left, top, right, bottom, around the dismiss positions below), and
+# only with at least PAYCHECK_MIN_PIXELS of it.
+PAYCHECK_REGION = (700, 540, 1220, 800)
+PAYCHECK_MIN_PIXELS = 200
 PAYCHECK_DISMISS_POS_1 = (946, 679)
 PAYCHECK_DISMISS_POS_2 = (948, 627)
 
@@ -278,6 +283,7 @@ REJOIN_MIN_LEAVE_HEIGHT = 500      # px; the L shortcut only works in a Roblox w
 REJOIN_CLOSE_WAIT = 5.0            # after closing, before relaunching (relaunching too soon gives Roblox error 264)
 REJOIN_INTERVAL = 60 * 60          # while the loop runs, rejoin this often (seconds) even if nothing is wrong, to
                                    # refresh a client that has been up a long time; also gives stuck needs a fresh chance
+NO_PROGRESS_REJOIN_INTERVAL = 20 * 60  # while the loop runs, rejoin if no need has been resolved for this long (seconds)
 REJOIN_MAX_ATTEMPTS = 3            # close -> launch -> wait cycles before giving up
 REJOIN_WINDOW_TIMEOUT = 240.0      # most it waits for the Roblox window to appear after launching (Natro: 4 minutes,
                                    # as Roblox may be installing an update first)
@@ -300,6 +306,12 @@ DISCONNECT_PANEL_TOLERANCE = 3
 DISCONNECT_PANEL_BOX = (760, 427, 1160, 677)   # left, top, right, bottom
 DISCONNECT_PANEL_MIN_FRACTION = 0.5
 ROBLOX_CRASH_WINDOW_TITLE = "Roblox Crash"
+
+# Optional: resume after Roblox loses focus instead of stopping (the "Resume after focus loss" checkbox).
+# Gives up after this many focus losses in a row without a need being resolved in between, so it can't
+# fight you for the window forever.
+FOCUS_RESUME_MAX_IN_A_ROW = 5
+FOCUS_RESUME_DELAY = 3.0   # wait before taking the window back, so whatever took it is out of the way
 
 # Window focus click (near top edge, right of center)
 FOCUS_CLICK_X_PERCENT = 0.75
@@ -414,7 +426,7 @@ __all__ = [
     "EMPTY_POS", "FOCUS_PET_REGION_TOP_PERCENT", "FOCUS_PET_FRAME_GAP", "FOCUS_PET_DIFF_THRESHOLD",
     "FOCUS_PET_MERGE_KERNEL", "FOCUS_PET_MIN_AREA", "FOCUS_PET_MENU_WAIT",
     "CHOOSE_BUTTON_COLOR", "CHOOSE_SLOW_MOVE_DURATION",
-    "PAYCHECK_CASHOUT_COLOR", "PAYCHECK_DISMISS_POS_1", "PAYCHECK_DISMISS_POS_2",
+    "PAYCHECK_CASHOUT_COLOR", "PAYCHECK_REGION", "PAYCHECK_MIN_PIXELS", "PAYCHECK_DISMISS_POS_1", "PAYCHECK_DISMISS_POS_2",
     "RIDE_BACKWARD_DURATION", "RIDE_WAIT_AFTER_E", "RIDE_FORWARD_DURATION", "RIDE_VEHICLES_POS",
     "RIDE_FIRST_VEHICLE_POS", "RIDE_EQUIP_POS", "RIDE_R_HOLD_DURATION",
     "TELEPORT_WAIT", "TELEPORT_SETTLE_WAIT", "GENERAL_TELEPORT_POS_2", "GENERAL_TELEPORT_POS_3",
@@ -425,7 +437,8 @@ __all__ = [
     "GHOST_GALLERY_YES_COLOR", "GHOST_GALLERY_NO_COLOR", "GHOST_GALLERY_MIN_BUTTON_PIXELS",
     "GHOST_GALLERY_NO_MAX_DX", "GHOST_GALLERY_NO_MAX_DY", "GHOST_GALLERY_DONT_SHOW_POS", "GHOST_GALLERY_NO_POS",
     "ROBLOX_PLACE_ID", "ROBLOX_PROCESS_NAMES", "REJOIN_LEAVE_KEYS", "REJOIN_LEAVE_KEY_GAP",
-    "REJOIN_MIN_LEAVE_HEIGHT", "REJOIN_CLOSE_WAIT", "REJOIN_INTERVAL", "REJOIN_MAX_ATTEMPTS", "REJOIN_WINDOW_TIMEOUT",
+    "REJOIN_MIN_LEAVE_HEIGHT", "REJOIN_CLOSE_WAIT", "REJOIN_INTERVAL", "NO_PROGRESS_REJOIN_INTERVAL",
+    "FOCUS_RESUME_MAX_IN_A_ROW", "FOCUS_RESUME_DELAY", "REJOIN_MAX_ATTEMPTS", "REJOIN_WINDOW_TIMEOUT",
     "REJOIN_LOAD_TIMEOUT", "REJOIN_POLL_INTERVAL", "REJOIN_JOIN_POS", "REJOIN_PLAY_COLOR",
     "REJOIN_PLAY_COLOR_TOLERANCE", "REJOIN_PLAY_BOX", "REJOIN_PLAY_MIN_PIXELS", "REJOIN_PLAY_SETTLE",
     "REJOIN_AFTER_JOIN_WAIT",

@@ -47,8 +47,8 @@ every second instead of a line per check.
    Nothing found → return `False` immediately (silently).
 3. For each detected icon, match it against the saved reference icons in
    `needs/` (`find_matching_need()`). An icon that doesn't match anything
-   well enough triggers `prompt_rename_need()` (asks you, in the console,
-   to name and save it) and is otherwise skipped this pass - it isn't
+   well enough triggers `prompt_rename_need()` (asks you, in a dialog, to
+   name and save it - only when `SAVE_NEW_NEEDS` is on) and is otherwise skipped this pass - it isn't
    "resolved," it's just been taught for next time.
 4. Every icon that *did* match is collected into an ordered list of need
    names, in the order they were detected, and printed and logged
@@ -213,8 +213,11 @@ resolution, so `icon_variants()` cuts the live icon out at every offset
 within `ICON_SHIFT_TOLERANCE` px and each saved need is scored by its
 best-aligned variant.
 
-`find_matching_need()` compares the new icon against every saved `.png` in
-`needs/` - including subfolders, so related icons can be grouped (the
+`find_matching_need()` compares the new icon against the signature of every
+saved `.png` in
+`needs/` (`need_signatures()` computes those once and recomputes them only
+when a file in `needs/` is added, changed or removed, so a check doesn't
+re-read the folder) - including subfolders, so related icons can be grouped (the
 seasonal `diving` and `puddle` icons live in `needs/weather/`); a need's
 name is just its file name, wherever it sits - and keeps the best score. A best score below
 `ICON_MATCH_THRESHOLD` (0.93) means "not confident this is anything we've
@@ -368,9 +371,8 @@ over it while the flag is on. The Halloween table covers `bored`, `beach`,
 `school`, `camping` (Halloween moves the nursery, so each has its own steps
 there; `bored`, `beach` and `camping` also fly by helicopter) and `sick`, which *only* exists there - with `HALLOWEEN` off it
 has no steps and isn't a need at all. While the flag is on, `unscrew()` also
-calls `minigame_popup()`, which will either play the minigame the popup
-offers or just dismiss it depending on `MINIGAME_POPUP_PLAY`. The minigame
-branch is a comments-only stub; the dismiss branch works (see below).
+calls `minigame_popup()`, which plays or dismisses the minigame popups
+(see below).
 
 Every cycle, `unscrew()` runs `rejoin_game()` first (nothing else works
 while disconnected), then `close_backpack_if_open()`, then `minigame_popup()`
@@ -397,21 +399,50 @@ isn't, a failure is logged and it stops rather than pressing again, since
 another press could just reopen it. (The normal backpack has no header to
 check, so the second press isn't verified.)
 
-**Dismissing the minigame popups.** Halloween has two minigames that offer to
-teleport you - "Ghost Gallery is starting soon! Teleport there now?" and
-"Hauntlet 2 is starting soon!..." - in the same popup layout.
+**Minigame popups.** Halloween has two minigames that offer to teleport you -
+"Ghost Gallery is starting soon! Teleport there now?" and "Hauntlet 2 is
+starting soon!..." - in the same popup layout.
 `detect_minigame_popup()` recognises that layout by its two buttons: neither
 color is unique alone (Yes green = `PAYCHECK_CASHOUT_COLOR`, No red = the
 Exit Home button), so it needs the Yes green (`MINIGAME_POPUP_YES_COLOR`, at
 least `MINIGAME_POPUP_MIN_BUTTON_PIXELS` px) with the No red
 (`MINIGAME_POPUP_NO_COLOR`) within `MINIGAME_POPUP_NO_MAX_DX` / `_DY` px to
-its left. `minigame_popup()` then clicks `MINIGAME_POPUP_DONT_SHOW_POS` ("Do
-not show again this session") and `MINIGAME_POPUP_NO_POS`, and returns
-`True`. It also runs during `wait_until_need_gone()`, because a popup that
-turns up mid-handler blocks the handler's clicks until it's dismissed. For
-dismissing, the two minigames needn't be told apart; the day
-`MINIGAME_POPUP_PLAY` gets implemented they will have to be (see
-[PLANNED.md](PLANNED.md)).
+its left. `identify_minigame()` then says which one it is: it matches the
+first line of the title (`MINIGAME_TITLE_BOX`) against the crops in
+`ref/halloween/` (`cv2.matchTemplate`, best score at least
+`MINIGAME_TITLE_MATCH_THRESHOLD`); a minigame's name is its file name,
+lower-cased (`Ghost_gallery.png` → `ghost_gallery`), so a new one is just a
+new crop - plus an entry in `MINIGAME_LABELS` and a player in
+`MINIGAME_PLAYERS`.
+
+Each minigame has a switch in the game config (`hauntlet_enabled`,
+`ghost_gallery_enabled`, both **off** by default; "Play ..." checkboxes on the
+Options tab). `minigame_popup()`:
+- **switched off, or not recognised** - clicks `MINIGAME_POPUP_DONT_SHOW_POS`
+  ("Do not show again this session") and `MINIGAME_POPUP_NO_POS`;
+- **switched on** - `play_minigame()` clicks Yes (`MINIGAME_POPUP_YES_POS`)
+  and plays it, as below. Minigames are time-sensitive, so this also happens
+  when the popup turns up while a handler is waiting in
+  `wait_until_need_gone()` (which calls `minigame_popup()` for that reason): the
+  minigame is played right then and that wait ends - where the handler left
+  the character is unknown afterwards, and the next check sees whether the
+  need is still there. Handlers that never call `wait_until_need_gone()`
+  (`catch`, `pet`, `choose`) only see the popup at the start of the next cycle.
+
+*Playing.* No needs can be seen while a minigame runs, so both end on the
+victory screen instead - a red GAME OVER! banner over a green NICE! button,
+found by exact color (`detect_minigame_victory()`, checked every
+`MINIGAME_VICTORY_CHECK_INTERVAL`), which is the same for both. Then NICE!
+(`MINIGAME_VICTORY_BUTTON_POS`) is clicked, `MINIGAME_FINISH_WAIT` is waited
+out, and the character respawns. If the victory screen hasn't shown after
+`MINIGAME_MAX_DURATION` it gives up with a logged failure (and releases every
+input). A minigame counts as progress for the no-progress rejoin.
+- `play_hauntlet()` waits `HAUNTLET_START_WAIT` (50 s), then holds
+  `HAUNTLET_FORWARD_KEY` until victory.
+- `play_ghost_gallery()` waits `GHOST_GALLERY_START_WAIT`, then holds the mouse
+  in `GHOST_GALLERY_HOLD`-second holds (`GHOST_GALLERY_HOLD_GAP` apart) while
+  running in random `MOVE_KEYS` directions with a jump, each for a random time
+  between `GHOST_GALLERY_STEP_MIN` and `_MAX`, until victory.
 
 A handler only counts as resolved (and only then triggers a respawn) if
 `handle()` returns `True`. `ButtonNeedHandler` returns `False` if
@@ -727,7 +758,9 @@ knowing if you're modifying it:
   the **Debug** tab has a button per need handler.
 - **`DebugCapture`** redirects `sys.stdout` into the on-screen console
   (`self.debug_text`) for the lifetime of the GUI, so every `print()`
-  anywhere in the macro shows up there automatically, each line starting with
+  anywhere in the macro shows up there automatically (`write()` only logs
+  and queues - from any thread - and the Tk thread puts the queue on the
+  widget every `CONSOLE_DRAIN_INTERVAL_MS`, since Tk isn't thread-safe), each line starting with
   the time (`[HH:MM:SS]`). A print starting with `\r` is a status line: it
   replaces the previous status line instead of adding one, and goes into
   `output.log` only the first time (this is the "Waiting for a need..."
@@ -746,7 +779,7 @@ exact values and rationale):
 
 | Group | Examples |
 |---|---|
-| Behavior flags | `ENABLED_NEEDS`, `STOP_HOTKEY`, `BACKPACK_HEADER_*`, `HALLOWEEN`, `MINIGAME_POPUP_PLAY`, `MINIGAME_POPUP_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
+| Behavior flags | `ENABLED_NEEDS`, `STOP_HOTKEY`, `BACKPACK_HEADER_*`, `HALLOWEEN`, `MINIGAME_*`, `HAUNTLET_*`, `GHOST_GALLERY_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
 | Window / coordinates | `REFERENCE_WIDTH`, `REFERENCE_HEIGHT`, `REFERENCE_CENTER_X/Y`, `ROBLOX_RECT_TTL` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `NEED_GONE_*` |
 | Stuck needs | `NEED_STUCK_CHECKS` |

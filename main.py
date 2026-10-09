@@ -13,11 +13,11 @@
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
-import os, sys, re, time, threading, json, subprocess, traceback, ctypes
+import os, sys, re, time, threading, json, subprocess, traceback, ctypes, queue, random
 from abc import ABC, abstractmethod
 from functools import partial
 import tkinter as tk
-from tkinter import scrolledtext, ttk
+from tkinter import scrolledtext, simpledialog, ttk
 
 import numpy as np
 import cv2
@@ -376,6 +376,7 @@ def load_game_config():
         "tree_timer": time.time(),  # likewise
         "side_quest_enabled": True, # whether side_quest() is allowed to run at all
         "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
+        **{f"{name}_enabled": False for name in MINIGAME_LABELS},  # which Halloween minigames get played (see minigame_popup())
         "private_server_link": "",  # used by leave_and_rejoin(); kept here, not in the source, since it's a join key
     }
     try:
@@ -486,39 +487,62 @@ def icon_variants(img, cx, cy):
     shifts = range(-ICON_SHIFT_TOLERANCE, ICON_SHIFT_TOLERANCE + 1)
     return [extract_icon(img, cx + dx, cy + dy, ICON_CROP_RADIUS) for dx in shifts for dy in shifts]
 
+# (need file paths and modification times, [(name, signature)]) - see need_signatures().
+_NEED_SIGNATURES = (None, [])
+
+def need_signatures():
+    """[(need name, signature)] for every saved need icon. Reading and
+    preprocessing every .png in NEEDS_DIR is far too slow to repeat for each
+    icon on each check, so it's done once and redone only when the files
+    change (checking their modification times is cheap), which also picks up
+    an icon added while the macro runs. Recurses, so related icons can sit in
+    subfolders (e.g. needs/weather/) - a need's name is just its file name,
+    wherever it lives."""
+    global _NEED_SIGNATURES
+    files = sorted(os.path.join(root, f) for root, _, names in os.walk(NEEDS_DIR) for f in names if f.endswith('.png'))
+    key = tuple((f, os.path.getmtime(f)) for f in files)
+    if _NEED_SIGNATURES[0] != key:
+        loaded = []
+        for f in files:
+            icon = cv2.imread(f)
+            if icon is not None:
+                loaded.append((os.path.splitext(os.path.basename(f))[0], icon_signature(icon)))
+        _NEED_SIGNATURES = (key, loaded)
+    return _NEED_SIGNATURES[1]
+
 def find_matching_need(icon_variants):
     """Compare a detected icon (its icon_variants() crops) against the saved
-    needs, scoring each by its best-aligned variant. Returns (name, score)."""
+    needs (need_signatures()), scoring each by its best-aligned variant.
+    Returns (name, score)."""
     live_signatures = [icon_signature(v) for v in icon_variants]
-    # Recurses, so related icons can sit in subfolders (e.g. needs/weather/) -
-    # a need's name is just its file name, wherever it lives.
-    need_files = sorted(os.path.join(root, f) for root, _, files in os.walk(NEEDS_DIR)
-                        for f in files if f.endswith('.png'))
-    if not need_files:
-        return None, 0.0
-
     best_match, best_score = None, 0.0
-    for need_file in need_files:
-        saved_icon = cv2.imread(need_file)
-        if saved_icon is None:
-            continue
-        saved_signature = icon_signature(saved_icon)
+    for name, saved_signature in need_signatures():
         score = max(compare_signatures(sig, saved_signature) for sig in live_signatures)
         if score > best_score:
-            best_match, best_score = os.path.splitext(os.path.basename(need_file))[0], score
+            best_match, best_score = name, score
 
     if best_score >= ICON_MATCH_THRESHOLD:
         return best_match, best_score
     return None, best_score
 
 def prompt_rename_need(icon_img, idx):
-    """Save a new need icon (as high-contrast B/W) and ask the user to name it."""
+    """Save a new need icon (as high-contrast B/W) and ask the user to name
+    it - in a dialog when the GUI is up (the worker thread has no console to
+    read from), otherwise on the console. Cancelling or an empty name saves
+    it as unnamed_<idx>."""
     print("\n[!] NEW NEED DETECTED!")
     temp_path = os.path.join(NEEDS_DIR, f"temp_{idx}.png")
     cv2.imwrite(temp_path, preprocess_icon(icon_img))
 
-    print("[!] Enter need name (hungry/thirsty/dirty/potty/sleepy/catch/walk/other): ", end="", flush=True)
-    need_name = input().strip().lower() or f"unnamed_{idx}"
+    prompt = "Need name (hungry/thirsty/dirty/potty/sleepy/catch/walk/other):"
+    if MACRO_WINDOW is not None:
+        answer = MACRO_WINDOW.run_on_ui_thread(
+            lambda: simpledialog.askstring("New need", prompt, parent=MACRO_WINDOW.root), timeout=None)
+        focus_roblox_click()   # the dialog took the focus
+    else:
+        print(f"[!] {prompt} ", end="", flush=True)
+        answer = input()
+    need_name = (answer or "").strip().lower() or f"unnamed_{idx}"
 
     os.rename(temp_path, os.path.join(NEEDS_DIR, f"{need_name}.png"))
     print(f"[!] Saved: {need_name}")
@@ -577,8 +601,11 @@ def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=N
     While the icons can't be read (a bright background, see
     need_bar_readable()) nothing counts as a miss, so that wait runs its
     full length - and ending it isn't logged as a failure. A minigame popup
-    that appears meanwhile is dismissed (HALLOWEEN only), since it blocks
-    the clicks and the view. Interruptible."""
+    that appears meanwhile is handled at once (HALLOWEEN only), since it
+    blocks the clicks and the view and minigames are time-sensitive: if one
+    is played the wait ends there (where the handler left the character is
+    unknown by then, and the next check will see whether the need is still
+    there). Interruptible."""
     print(f"[debug] waiting up to {max_wait}s for {need_name} to clear...")
     deadline = time.time() + max_wait
     misses = 0
@@ -593,8 +620,9 @@ def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=N
                 log_failure(f"{need_name} still showing after {max_wait}s")
             return
         wait_interruptible(min(NEED_GONE_CONFIRM_INTERVAL if misses else poll_interval, remaining))
-        if HALLOWEEN:
-            minigame_popup()
+        if HALLOWEEN and minigame_popup() == "played":
+            print(f"[debug] a minigame was played - the {need_name} wait is over")
+            return
         cleared = _need_cleared(need_name)
         unreadable = cleared is None
         if not cleared:
@@ -1734,28 +1762,138 @@ def detect_minigame_popup(img):
                   max(0, yes_x - MINIGAME_POPUP_NO_MAX_DX):yes_x]
     return int(np.count_nonzero(exact_color_mask(near_no, MINIGAME_POPUP_NO_COLOR))) >= MINIGAME_POPUP_MIN_BUTTON_PIXELS
 
+def load_minigame_titles():
+    """{minigame name: title crop} for every image in MINIGAME_TEMPLATE_DIR."""
+    titles = {}
+    if os.path.isdir(MINIGAME_TEMPLATE_DIR):
+        for f in sorted(os.listdir(MINIGAME_TEMPLATE_DIR)):
+            crop = cv2.imread(os.path.join(MINIGAME_TEMPLATE_DIR, f))
+            if f.lower().endswith(".png") and crop is not None:
+                titles[os.path.splitext(f)[0].lower()] = crop
+    return titles
+
+def identify_minigame(img):
+    """Which minigame the popup in `img` is for: the name whose title crop
+    (MINIGAME_TEMPLATE_DIR) matches best within MINIGAME_TITLE_BOX, if that
+    match reaches MINIGAME_TITLE_MATCH_THRESHOLD - otherwise None."""
+    left, top, right, bottom = MINIGAME_TITLE_BOX
+    band = img[top:bottom, left:right]
+    best_name, best_score = None, MINIGAME_TITLE_MATCH_THRESHOLD
+    for name, crop in load_minigame_titles().items():
+        if crop.shape[0] > band.shape[0] or crop.shape[1] > band.shape[1]:
+            continue
+        score = float(cv2.minMaxLoc(cv2.matchTemplate(band, crop, cv2.TM_CCOEFF_NORMED))[1])
+        if score >= best_score:
+            best_name, best_score = name, score
+    return best_name
+
+def detect_minigame_victory(img):
+    """True if the minigame victory screen is on screen in `img`: the red
+    GAME OVER! banner and the green NICE! button, both by exact color (the
+    same green is the Yes button's, so the banner is what rules that out)."""
+    for color, tolerance, box, minimum in (
+            (MINIGAME_VICTORY_BANNER_COLOR, MINIGAME_VICTORY_BANNER_TOLERANCE,
+             MINIGAME_VICTORY_BANNER_BOX, MINIGAME_VICTORY_BANNER_MIN_PIXELS),
+            (MINIGAME_VICTORY_BUTTON_COLOR, MINIGAME_VICTORY_BUTTON_TOLERANCE,
+             MINIGAME_VICTORY_BUTTON_BOX, MINIGAME_VICTORY_BUTTON_MIN_PIXELS)):
+        left, top, right, bottom = box
+        if np.count_nonzero(exact_color_mask(img[top:bottom, left:right], color, tolerance)) < minimum:
+            return False
+    return True
+
+def minigame_won():
+    """detect_minigame_victory() on a fresh screenshot."""
+    return detect_minigame_victory(grab_screen())
+
+def play_hauntlet(deadline):
+    """Hauntlet 2: wait HAUNTLET_START_WAIT for it to start (no needs can be
+    seen while it runs, and the lobby counts down first), then hold forward
+    until the victory screen shows. Returns True if it did before `deadline`."""
+    print(f"[debug] hauntlet: waiting {HAUNTLET_START_WAIT:g}s for it to start...")
+    wait_interruptible(HAUNTLET_START_WAIT)
+    pydirectinput.keyDown(HAUNTLET_FORWARD_KEY)
+    try:
+        while time.time() < deadline:
+            wait_interruptible(MINIGAME_VICTORY_CHECK_INTERVAL)
+            if minigame_won():
+                return True
+    finally:
+        pydirectinput.keyUp(HAUNTLET_FORWARD_KEY)
+    return False
+
+def play_ghost_gallery(deadline):
+    """Ghost Gallery: run about at random, jumping, with the mouse held in
+    GHOST_GALLERY_HOLD-second holds (GHOST_GALLERY_HOLD_GAP apart), until the
+    victory screen shows. Returns True if it did before `deadline`."""
+    print(f"[debug] ghost gallery: waiting {GHOST_GALLERY_START_WAIT:g}s for it to start...")
+    wait_interruptible(GHOST_GALLERY_START_WAIT)
+    while time.time() < deadline:
+        pydirectinput.mouseDown()
+        try:
+            hold_until = time.time() + GHOST_GALLERY_HOLD
+            while time.time() < hold_until:
+                if minigame_won():
+                    return True
+                key = random.choice(MOVE_KEYS)
+                pydirectinput.keyDown(key)
+                try:
+                    pydirectinput.press(KEY_JUMP)
+                    wait_interruptible(min(random.uniform(GHOST_GALLERY_STEP_MIN, GHOST_GALLERY_STEP_MAX),
+                                           max(0.0, hold_until - time.time())))
+                finally:
+                    pydirectinput.keyUp(key)
+        finally:
+            pydirectinput.mouseUp()
+        wait_interruptible(GHOST_GALLERY_HOLD_GAP)
+    return False
+
+MINIGAME_PLAYERS = {"hauntlet": play_hauntlet, "ghost_gallery": play_ghost_gallery}
+
+def play_minigame(name):
+    """Take the popup's Yes, play minigame `name` until its victory screen
+    shows, click NICE!, and respawn. Gives up (a logged failure) after
+    MINIGAME_MAX_DURATION. Counts as progress for the no-progress rejoin.
+    Returns True if it was won."""
+    global LAST_PROGRESS
+    label = MINIGAME_LABELS.get(name, name)
+    print(f"[!] playing {label}")
+    log_run_event(f"minigame started: {label}")
+    hover_click(*MINIGAME_POPUP_YES_POS)
+    started = time.time()
+    try:
+        won = MINIGAME_PLAYERS[name](started + MINIGAME_MAX_DURATION)
+    finally:
+        release_all_inputs()
+    if won:
+        hover_click(*MINIGAME_VICTORY_BUTTON_POS)
+        log_run_event(f"minigame finished: {label} ({time.time() - started:.0f}s)")
+        wait_interruptible(MINIGAME_FINISH_WAIT)
+    else:
+        log_failure(f"{label} didn't reach the victory screen within {MINIGAME_MAX_DURATION:g}s")
+    LAST_PROGRESS = time.time()
+    respawn_character()
+    return won
+
 def minigame_popup():
     """Halloween only (see HALLOWEEN): handles a minigame popup (see
-    detect_minigame_popup()). Returns True if one was there and was
-    dismissed. Only the disable branch exists so far - the minigame branch is
-    NOT IMPLEMENTED YET and does nothing; it will also have to tell the
-    minigames apart, which the popup detection doesn't."""
-    if MINIGAME_POPUP_PLAY:
-        # Play the minigame. Rough plan:
-        #   - work out which minigame the popup is for
-        #   - play it (clicks/keys to be worked out), under check_running()
-        #     so [STOP] and focus loss still interrupt it
-        #   - dismiss whatever it leaves behind
-        # Probably wants its own timer in the persisted game config, like
-        # lure_timer/tree_timer, rather than running every single cycle.
-        return False
-    if not detect_minigame_popup(grab_screen()):
-        return False
-    print("[debug] minigame popup detected, dismissing...")
-    log_run_event("minigame popup dismissed")
+    detect_minigame_popup()). Which minigame it is comes from
+    identify_minigame(). One that is switched on ("<name>_enabled" in the game
+    config) is played (play_minigame()); any other (switched off, or not
+    recognised) is dismissed for the session with "do not show again" ticked.
+    Returns "played" or "dismissed" if a popup was there, None if not."""
+    img = grab_screen()
+    if not detect_minigame_popup(img):
+        return None
+    name = identify_minigame(img)
+    if name is not None and load_game_config().get(f"{name}_enabled", False):
+        print(f"[debug] minigame popup detected: playing {name}")
+        play_minigame(name)
+        return "played"
+    print(f"[debug] minigame popup detected ({name or 'unknown'}), dismissing...")
+    log_run_event(f"minigame popup dismissed ({name or 'unknown'})")
     hover_click(*MINIGAME_POPUP_DONT_SHOW_POS)   # "Do not show again this session"
     hover_click(*MINIGAME_POPUP_NO_POS)
-    return True
+    return "dismissed"
 
 def unscrew():
     """Runs once per cycle, right after check_stop(). Rejoins if we've been
@@ -1899,45 +2037,77 @@ class DebugCapture:
     A message starting with a carriage return is a status line instead: it
     replaces the previous status line rather than adding one (and is logged
     to the file only when it first appears), until something else is
-    printed."""
+    printed.
 
-    def __init__(self, text_widget):
+    write() can be called from any thread, but Tk widgets may only be
+    touched from Tk's own, so it only logs the message and queues it; the
+    queue is drained onto the widget every CONSOLE_DRAIN_INTERVAL_MS by
+    root.after() on the Tk thread."""
+
+    def __init__(self, root, text_widget):
+        self.root = root
         self.text = text_widget
-        self.at_line_start = True
+        self.queue = queue.Queue()
+        self.log_status_active = False   # write() side: a status line is the last thing logged
+        self.at_line_start = True        # drain() side: the widget's state
         self.status_active = False
+        self.drain()
 
     def write(self, msg):
         if not msg:
             return
-        self.text.config(state=tk.NORMAL)
+        if msg.startswith("\r"):
+            if not self.log_status_active:
+                log_output(msg[1:] + "\n")
+            self.log_status_active = True
+        else:
+            self.log_status_active = False
+            log_output(msg)
+        self.queue.put(msg)
+
+    def drain(self):
+        """Put every queued message on the widget, then schedule the next drain."""
+        try:
+            batch = []
+            while True:
+                try:
+                    batch.append(self.queue.get_nowait())
+                except queue.Empty:
+                    break
+            if batch:
+                self.text.config(state=tk.NORMAL)
+                for msg in batch:
+                    self.render(msg)
+                self.text.see(tk.END)
+                self.text.config(state=tk.DISABLED)
+            self.root.after(CONSOLE_DRAIN_INTERVAL_MS, self.drain)
+        except tk.TclError:
+            pass   # the window is gone
+
+    def render(self, msg):
+        """Add one message to the widget (Tk thread only)."""
         if msg.startswith("\r"):
             line = time.strftime("[%H:%M:%S] ") + msg[1:]
             if self.status_active:
                 self.text.delete("end-1c linestart", "end-1c")
-            else:
-                if not self.at_line_start:
-                    self.text.insert(tk.END, "\n")
-                log_output(msg[1:] + "\n")
+            elif not self.at_line_start:
+                self.text.insert(tk.END, "\n")
             self.text.insert(tk.END, line)
             self.status_active = True
             self.at_line_start = False
-        else:
-            if self.status_active:
-                # the status line has no newline yet; the message supplies
-                # one if it starts with it, otherwise end the line first
-                if not msg.startswith("\n"):
-                    self.text.insert(tk.END, "\n")
-                self.status_active = False
-                self.at_line_start = True
-            log_output(msg)
-            for piece in msg.splitlines(keepends=True):
-                if self.at_line_start and piece != "\n":
-                    self.text.insert(tk.END, time.strftime("[%H:%M:%S] "))
-                self.text.insert(tk.END, piece)
-                self.at_line_start = piece.endswith("\n")
-        self.text.see(tk.END)
-        self.text.config(state=tk.DISABLED)
-        self.text.update()
+            return
+        if self.status_active:
+            # the status line has no newline yet; the message supplies
+            # one if it starts with it, otherwise end the line first
+            if not msg.startswith("\n"):
+                self.text.insert(tk.END, "\n")
+            self.status_active = False
+            self.at_line_start = True
+        for piece in msg.splitlines(keepends=True):
+            if self.at_line_start and piece != "\n":
+                self.text.insert(tk.END, time.strftime("[%H:%M:%S] "))
+            self.text.insert(tk.END, piece)
+            self.at_line_start = piece.endswith("\n")
 
     def flush(self):
         pass
@@ -1960,7 +2130,7 @@ class AdoptMeGUI:
 
         self.create_ui()
 
-        self.capture = DebugCapture(self.debug_text)
+        self.capture = DebugCapture(self.root, self.debug_text)
         sys.stdout = self.capture
 
         print("\n" + "=" * 60)
@@ -2085,7 +2255,8 @@ class AdoptMeGUI:
         config = load_game_config()
         self.config_flag_vars = {}
         for label, key in (("Run side quest", "side_quest_enabled"),
-                           ("Resume after focus loss", "resume_on_focus_loss")):
+                           ("Resume after focus loss", "resume_on_focus_loss"),
+                           *((f"Play {label}", f"{name}_enabled") for name, label in MINIGAME_LABELS.items())):
             var = tk.BooleanVar(value=config[key])
             self.config_flag_vars[key] = var
             tk.Checkbutton(options_tab, text=label, variable=var,
@@ -2142,15 +2313,19 @@ class AdoptMeGUI:
 
     def run_on_ui_thread(self, func, timeout=5.0):
         """Run `func` on Tk's own thread (Tk isn't safe to touch from the
-        worker thread) and wait until it has run, or `timeout` seconds."""
+        worker thread) and wait until it has run, or `timeout` seconds (None
+        = as long as it takes, for a dialog). Returns what `func` returned
+        (None if it was still running when the wait ended)."""
         done = threading.Event()
+        result = []
         def call():
             try:
-                func()
+                result.append(func())
             finally:
                 done.set()
         self.root.after(0, call)
         done.wait(timeout)
+        return result[0] if result else None
 
     def run_async(self, func):
         """Run `func` on a background daemon thread so the GUI never freezes

@@ -28,9 +28,6 @@ ENABLED_NEEDS = {
 # While HALLOWEEN is on, some teleport needs use different steps (see
 # TELEPORT_WALK_NEEDS_HALLOWEEN) and unscrew() also runs minigame_popup().
 HALLOWEEN = True
-# Only matters while HALLOWEEN is on: True = minigame_popup() plays the
-# minigame, False = it just dismisses the popup (and ticks "do not show again").
-MINIGAME_POPUP_PLAY = False
 
 # The "Ghost Gallery / Hauntlet 2 is starting soon! Teleport there now?" popups (one layout) are recognised by their
 # Yes button (green) with its No button (red) close to the left - see detect_minigame_popup().
@@ -42,11 +39,43 @@ MINIGAME_POPUP_NO_MAX_DX = 300              # No button must be within this many
 MINIGAME_POPUP_NO_MAX_DY = 40               # ...and this many px above/below it
 MINIGAME_POPUP_DONT_SHOW_POS = (826, 666)
 MINIGAME_POPUP_NO_POS = (879, 618)
+MINIGAME_POPUP_YES_POS = (1049, 612)
+
+# Which minigame a popup is for: the first line of its title ("Ghost Gallery", "Hauntlet 2") is matched
+# against the crops in MINIGAME_TEMPLATE_DIR, searched for within MINIGAME_TITLE_BOX. A minigame is the
+# lower-cased file name (Ghost_gallery.png -> "ghost_gallery"); each one has an on/off switch in the game
+# config ("<name>_enabled", off by default) - an off one is dismissed, an on one is played.
+MINIGAME_TITLE_BOX = (730, 410, 1200, 510)   # left, top, right, bottom
+MINIGAME_TITLE_MATCH_THRESHOLD = 0.85
+MINIGAME_LABELS = {"hauntlet": "Hauntlet 2", "ghost_gallery": "Ghost Gallery"}   # for the GUI and the logs
+
+# Playing one. Both end on the victory screen (a red "GAME OVER!" banner over a green NICE! button), which
+# is looked for every MINIGAME_VICTORY_CHECK_INTERVAL seconds, then the button is clicked.
+MINIGAME_VICTORY_BANNER_COLOR = (255, 45, 89)
+MINIGAME_VICTORY_BANNER_TOLERANCE = 4
+MINIGAME_VICTORY_BANNER_BOX = (740, 255, 1190, 370)
+MINIGAME_VICTORY_BANNER_MIN_PIXELS = 3000
+MINIGAME_VICTORY_BUTTON_COLOR = (74, 198, 85)
+MINIGAME_VICTORY_BUTTON_TOLERANCE = 3
+MINIGAME_VICTORY_BUTTON_BOX = (860, 725, 1060, 800)
+MINIGAME_VICTORY_BUTTON_MIN_PIXELS = 2000
+MINIGAME_VICTORY_BUTTON_POS = (966, 762)
+MINIGAME_VICTORY_CHECK_INTERVAL = 1.0
+MINIGAME_MAX_DURATION = 600.0       # gives up (and logs a failure) if the victory screen hasn't shown by then
+MINIGAME_FINISH_WAIT = 5.0          # after clicking NICE!, before carrying on
+HAUNTLET_START_WAIT = 50.0          # waits this long after teleporting, then holds HAUNTLET_FORWARD_KEY
+HAUNTLET_FORWARD_KEY = "w"
+GHOST_GALLERY_START_WAIT = 5.0      # after teleporting, before it starts running about
+GHOST_GALLERY_HOLD = 5.0            # the mouse is held down in holds this long...
+GHOST_GALLERY_HOLD_GAP = 0.2        # ...with this short a pause between them
+GHOST_GALLERY_STEP_MIN = 0.3        # while it's held, a random direction (MOVE_KEYS) is run in, with a jump,
+GHOST_GALLERY_STEP_MAX = 1.0        # for a random time between these
 
 # ============================================================================
 # PATHS
 # ============================================================================
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+MINIGAME_TEMPLATE_DIR = os.path.join(SCRIPT_DIR, "ref", "halloween")
 NEEDS_DIR = os.path.join(SCRIPT_DIR, "needs")
 DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
 Path(NEEDS_DIR).mkdir(exist_ok=True)
@@ -99,6 +128,7 @@ STOP_CHECK_INTERVAL = 0.1      # granularity of the interruptible wait loop
 STOP_HOTKEY = "p"              # a letter or digit: pressing it, in any window, stops a running macro
                                # (so you can take over the computer) - see watch_stop_hotkey()
 STOP_HOTKEY_POLL_INTERVAL = 0.05  # how often the key is looked at (seconds)
+CONSOLE_DRAIN_INTERVAL_MS = 50   # how often queued output is put on the GUI console (see DebugCapture)
 CATCH_WAIT_AFTER_EQUIP = 1.0   # wait after equipping toy before throwing
 CATCH_EMOTE_DELAY = 5.0       # delay between throw clicks
 CATCH_THROW_COUNT = 3          # number of times the toy is thrown

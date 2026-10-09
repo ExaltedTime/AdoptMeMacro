@@ -15,7 +15,6 @@
 
 import os, sys, re, time, threading, json, subprocess, traceback, ctypes
 from abc import ABC, abstractmethod
-from collections import deque
 from functools import partial
 import tkinter as tk
 from tkinter import scrolledtext, ttk
@@ -238,10 +237,15 @@ BUTTON_POSITIONS = {}
 # runs can be told apart in the shared RUN_LOG_PATH file.
 CURRENT_RUN_NUMBER = None
 
-# The set of need names detected on each of the last NEED_STUCK_CHECKS checks
-# (see record_detected_needs()) - emptied at the start of every workflow run,
-# so a streak never spans a stop and restart.
-DETECTION_HISTORY = deque(maxlen=NEED_STUCK_CHECKS)
+# Stuck-need tracking (see record_detection()): how many times in a row each
+# need was attempted and still showed on the next check, and which needs the
+# last pass attempted. Reset by reset_need_tracking() at the start of every
+# workflow run and after a rejoin, so a streak never spans a stop and restart.
+ATTEMPT_STREAKS = {}
+ATTEMPTED_LAST = set()
+# True while the last "detected:" line in the run log was "none matched", so
+# an unrecognised icon sitting on screen is logged once, not on every check.
+NONE_MATCHED_LOGGED = False
 
 # Needs switched off for the rest of this launch of the script because they
 # kept showing up without ever clearing. Deliberately not persisted (unlike
@@ -266,6 +270,13 @@ def next_run_number():
     with open(RUN_COUNTER_PATH, "w") as f:
         f.write(str(n))
     return n
+
+def reset_need_tracking():
+    """Forget the stuck-need streaks (see record_detection())."""
+    global ATTEMPTED_LAST, NONE_MATCHED_LOGGED
+    ATTEMPT_STREAKS.clear()
+    ATTEMPTED_LAST = set()
+    NONE_MATCHED_LOGGED = False
 
 def log_run_event(message):
     """Append one timestamped line to RUN_LOG_PATH, tagged with
@@ -523,19 +534,39 @@ def identify_icons(found_icons, full_img):
         need_name, score = find_matching_need(icon_variants(full_img, cx, cy))
         yield idx, icon_img, need_name, score
 
-def detected_need_names():
-    """One-shot snapshot: every need name currently detected on screen."""
+def need_bar_readable(img):
+    """False if the strip the icons sit in is mostly near-white in `img`
+    (NEED_BAR_BRIGHT_LEVEL / NEED_BAR_MAX_BRIGHT_FRACTION) - the Pizza Party's
+    bright background, say. The icons can't be recognised against that, so
+    a missing icon there says nothing about whether the need is gone."""
+    h, w = img.shape[:2]
+    strip = img[0:int(h * NEED_ICON_TOP_PERCENT), int(w * NEED_ICON_BLANK_WIDTH):int(w * NEED_ICON_WIDTH_PERCENT)]
+    bright = np.count_nonzero(cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY) > NEED_BAR_BRIGHT_LEVEL)
+    return bright / (strip.shape[0] * strip.shape[1]) < NEED_BAR_MAX_BRIGHT_FRACTION
+
+def scan_needs():
+    """One-shot snapshot: (every need name currently detected on screen, whether
+    the icons could be read at all - see need_bar_readable())."""
     found_icons, full_img = detect_need_icons()
-    return [name for _, _, name, _ in identify_icons(found_icons, full_img)]
+    if not need_bar_readable(full_img):
+        return [], False
+    return [name for _, _, name, _ in identify_icons(found_icons, full_img)], True
 
 def _need_cleared(need_name):
     """True if `need_name`'s icon is missing on two quick checks in a row
     (NEED_GONE_FLICKER_RECHECK_DELAY apart) - the single-frame-flicker
-    guard shared by wait_until_need_gone() and _watch_need_gone() below."""
-    if need_name in detected_need_names():
-        return False
-    wait_interruptible(NEED_GONE_FLICKER_RECHECK_DELAY)
-    return need_name not in detected_need_names()
+    guard shared by wait_until_need_gone() and _watch_need_gone() below.
+    None if the icons couldn't be read (see need_bar_readable()): that's
+    neither cleared nor not cleared."""
+    for attempt in range(2):
+        names, readable = scan_needs()
+        if not readable:
+            return None
+        if need_name in names:
+            return False
+        if attempt == 0:
+            wait_interruptible(NEED_GONE_FLICKER_RECHECK_DELAY)
+    return True
 
 def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=NEED_GONE_POLL_INTERVAL):
     """Wait for `need_name`'s icon to stop being detected, for at most
@@ -543,18 +574,30 @@ def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=N
     NEED_GONE_CONFIRMATIONS checks in a row (any sighting resets the count),
     so a single missed detection can't end the wait early - see
     _need_cleared() for how each individual check is itself debounced.
-    Interruptible."""
+    While the icons can't be read (a bright background, see
+    need_bar_readable()) nothing counts as a miss, so that wait runs its
+    full length - and ending it isn't logged as a failure. A minigame popup
+    that appears meanwhile is dismissed (HALLOWEEN only), since it blocks
+    the clicks and the view. Interruptible."""
     print(f"[debug] waiting up to {max_wait}s for {need_name} to clear...")
     deadline = time.time() + max_wait
     misses = 0
+    unreadable = False
     while True:
         remaining = deadline - time.time()
         if remaining <= 0:
-            print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
-            log_failure(f"{need_name} still showing after {max_wait}s")
+            if unreadable:
+                print(f"[debug] couldn't read the need icons (bright background) - waited {max_wait}s, moving on")
+            else:
+                print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
+                log_failure(f"{need_name} still showing after {max_wait}s")
             return
         wait_interruptible(min(NEED_GONE_CONFIRM_INTERVAL if misses else poll_interval, remaining))
-        if not _need_cleared(need_name):
+        if HALLOWEEN:
+            minigame_popup()
+        cleared = _need_cleared(need_name)
+        unreadable = cleared is None
+        if not cleared:
             misses = 0
             continue
 
@@ -580,7 +623,7 @@ def _watch_need_gone(need_name, cleared_event, stop_event):
         while not stop_event.is_set():
             if stop_event.wait(NEED_GONE_CONFIRM_INTERVAL):
                 return
-            if not _need_cleared(need_name):
+            if _need_cleared(need_name) is not True:
                 misses = 0
                 continue
             misses += 1
@@ -1301,7 +1344,8 @@ class ChooseNeedHandler(NeedHandler):
     find the button with a distinctive exact color (it has no distinguishing
     icon, so shape detection doesn't apply here), move to it slowly rather
     than jumping straight there, click it, then click the middle of the
-    screen to dismiss the menu, then wait for the icon to actually clear."""
+    screen to dismiss the menu. It doesn't wait for the icon to clear - that
+    happens at once, and process_needs() checks again after every need."""
 
     def handle(self):
         print("[!] CHOOSE NEED")
@@ -1325,8 +1369,6 @@ class ChooseNeedHandler(NeedHandler):
 
         print("[debug] clicking middle of screen...")
         hover_click(REFERENCE_CENTER_X, REFERENCE_CENTER_Y, duration=CHOOSE_SLOW_MOVE_DURATION)
-
-        wait_until_need_gone("choose")
 
         print("[!] Choose complete!")
         return True
@@ -1455,48 +1497,52 @@ DEBUG_HANDLERS = NEED_HANDLER_CLASSES
 def get_need_handler(need_name):
     """Return the handler for a detected need, or None if it's not
     currently enabled (see ENABLED_NEEDS), was disabled for this run (see
-    record_detected_needs()), or the macro doesn't know it."""
+    record_detection()), or the macro doesn't know it."""
     if need_name not in ENABLED_NEEDS or need_name in DISABLED_THIS_RUN:
         return None
     handler_cls = NEED_HANDLER_CLASSES.get(need_name)
     return handler_cls() if handler_cls else None
 
-def record_detected_needs(detected):
-    """Save which needs were detected on this check, and disable (for the
-    rest of this run) any enabled need that's now been detected on each of
-    the last NEED_STUCK_CHECKS checks in a row - a need we're supposed to be
-    resolving that never goes away is stuck, and retrying it forever just
-    wastes time. A check where it's absent, even once, breaks the streak.
-    Call this for every check, including ones that detect nothing."""
-    DETECTION_HISTORY.append(set(detected))
-    if len(DETECTION_HISTORY) < NEED_STUCK_CHECKS:
-        return
-    stuck = set.intersection(*DETECTION_HISTORY) & (ENABLED_NEEDS - DISABLED_THIS_RUN)
+def record_detection(detected):
+    """Track stuck needs: one that was attempted on the last pass and is
+    still on screen now has failed to clear, and an enabled need that does
+    that NEED_STUCK_CHECKS times in a row is disabled for the rest of the
+    run - retrying it forever just wastes time. A check where it's gone,
+    even once, breaks the streak. (A need merely waiting its turn behind
+    others doesn't count - only attempts do.) Call this for every check,
+    including ones that detect nothing."""
+    global ATTEMPTED_LAST
+    for need_name in ATTEMPTED_LAST:
+        if need_name in detected:
+            ATTEMPT_STREAKS[need_name] = ATTEMPT_STREAKS.get(need_name, 0) + 1
+        else:
+            ATTEMPT_STREAKS.pop(need_name, None)
+    ATTEMPTED_LAST = set()
+    stuck = {n for n, count in ATTEMPT_STREAKS.items() if count >= NEED_STUCK_CHECKS} & (ENABLED_NEEDS - DISABLED_THIS_RUN)
     for need_name in sorted(stuck):
         DISABLED_THIS_RUN.add(need_name)
-        print(f"[!] {need_name} detected on {NEED_STUCK_CHECKS} checks in a row - disabling it for this run")
-        log_failure(f"{need_name} stuck for {NEED_STUCK_CHECKS} checks - disabled for this run "
+        print(f"[!] {need_name} still there after {NEED_STUCK_CHECKS} attempts in a row - disabling it for this run")
+        log_failure(f"{need_name} stuck for {NEED_STUCK_CHECKS} attempts - disabled for this run "
                     f"({len(DISABLED_THIS_RUN)} disabled now: {', '.join(sorted(DISABLED_THIS_RUN))})")
 
 def process_needs():
-    """Detect needs on screen and resolve them one at a time: each matched
-    need's handler runs via get_need_handler(), and the character respawns
-    immediately after it's *actually* resolved, before moving on to the
-    next matched need - never batched, and never respawned for a need that
-    wasn't really handled (disabled, unmapped, or its handler returned
-    False). Returns True if anything was actually resolved this check,
-    False if there was nothing to do."""
-    global LAST_PROGRESS
+    """Detect needs on screen and resolve the first one that can be: its
+    handler runs via get_need_handler(), and if it *actually* resolved the
+    need the character respawns and this returns True - the caller then
+    starts a fresh check, so the next need is always picked from what's on
+    screen now, never from a list taken before the last one was handled. A
+    need that isn't resolved (disabled, unmapped, or its handler returned
+    False) is skipped for the next one, with no respawn. Returns False if
+    nothing was resolved - including when nothing was on screen, which
+    prints nothing (the caller shows a waiting line instead)."""
+    global LAST_PROGRESS, ATTEMPTED_LAST, NONE_MATCHED_LOGGED
     if not focus_roblox_click():
         return False
 
     found_icons, full_img = detect_need_icons(save_debug=True)
     if not found_icons:
-        print("[debug] no need icons detected")
-        record_detected_needs([])
+        record_detection([])
         return False
-
-    print(f"[debug] found {len(found_icons)} icon(s)")
 
     matched_needs = []
     for idx, icon_img, need_name, score in identify_icons(found_icons, full_img):
@@ -1509,43 +1555,47 @@ def process_needs():
                 # persist here.
                 prompt_rename_need(icon_img, idx)
             continue
+        matched_needs.append((need_name, score))
 
-        print(f"\n[!] MATCHED: {need_name} (score: {score:.4f})")
-        matched_needs.append(need_name)
+    names = [name for name, _ in matched_needs]
+    if names:
+        print(f"\n[!] Found {len(found_icons)} icon(s): " + ", ".join(f"{n} ({s:.4f})" for n, s in matched_needs))
+        log_run_event(f"detected: {', '.join(names)}")
+        NONE_MATCHED_LOGGED = False
+    elif not NONE_MATCHED_LOGGED:
+        log_run_event(f"detected: none matched ({len(found_icons)} icon(s) on screen)")
+        NONE_MATCHED_LOGGED = True
+    RUN_STATS["last_detected"] = names
+    record_detection(names)
 
-    log_run_event(f"detected: {', '.join(matched_needs) if matched_needs else 'none matched'}")
-    RUN_STATS["last_detected"] = matched_needs
-    record_detected_needs(matched_needs)
+    attempted = set()
+    try:
+        for need_name in names:
+            check_running()
 
-    if not matched_needs:
+            handler = get_need_handler(need_name)
+            if handler is None:
+                print(f"[debug] {need_name} is disabled, skipping")
+                continue
+            attempted.add(need_name)
+            started = time.time()
+            if not handler.handle():
+                print(f"[debug] could not resolve '{need_name}' this pass, skipping")
+                RUN_STATS["failed"][need_name] = RUN_STATS["failed"].get(need_name, 0) + 1
+                log_failure(f"{need_name} handler could not resolve it")
+                continue
+
+            respawn_character()
+            seconds = time.time() - started
+            RUN_STATS["resolved"][need_name] = RUN_STATS["resolved"].get(need_name, 0) + 1
+            RUN_STATS["last_resolved"] = {"need": need_name, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+            LAST_PROGRESS = time.time()
+            log_run_event(f"resolved: {need_name} ({seconds:.0f}s)")
+            write_status()
+            return True
         return False
-
-    resolved = False
-
-    for need_name in matched_needs:
-        check_running()
-
-        handler = get_need_handler(need_name)
-        if handler is None:
-            print(f"[debug] {need_name} is disabled, skipping")
-            continue
-        started = time.time()
-        if not handler.handle():
-            print(f"[debug] could not resolve '{need_name}' this pass, skipping")
-            RUN_STATS["failed"][need_name] = RUN_STATS["failed"].get(need_name, 0) + 1
-            log_failure(f"{need_name} handler could not resolve it")
-            continue
-
-        respawn_character()
-        resolved = True
-        seconds = time.time() - started
-        RUN_STATS["resolved"][need_name] = RUN_STATS["resolved"].get(need_name, 0) + 1
-        RUN_STATS["last_resolved"] = {"need": need_name, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
-        LAST_PROGRESS = time.time()
-        log_run_event(f"resolved: {need_name} ({seconds:.0f}s)")
-        write_status()
-
-    return resolved
+    finally:
+        ATTEMPTED_LAST = attempted
 
 # ============================================================================
 # PER-CYCLE CHECKS
@@ -1662,59 +1712,63 @@ def rejoin_game():
         return False
     setup_game()
     DISABLED_THIS_RUN.clear()
-    DETECTION_HISTORY.clear()
+    reset_need_tracking()
     log_run_event("recovery complete: rejoined, setup run, disabled needs cleared")
     print("[!] Recovery complete - carrying on")
     write_status()
     return True
 
-def detect_ghost_gallery_popup(img):
-    """True if the "Ghost Gallery is starting soon! Teleport there now?"
-    popup is on screen in `img`. Neither button color is unique on its own
-    (the Yes green is also the paycheck's CASH OUT green, the No red is also
-    the Exit Home button), so it needs both: the Yes green, with the No red
-    close by to its left."""
-    ys, xs = np.where(exact_color_mask(img, GHOST_GALLERY_YES_COLOR) > 0)
-    if len(xs) < GHOST_GALLERY_MIN_BUTTON_PIXELS:
+def detect_minigame_popup(img):
+    """True if one of the Halloween minigame popups ("Ghost Gallery is
+    starting soon! Teleport there now?", "Hauntlet 2 is starting soon!...")
+    is on screen in `img`. They share one layout and nothing here tells them
+    apart - only that a minigame is offering to teleport you. Neither button
+    color is unique on its own (the Yes green is also the paycheck's CASH OUT
+    green, the No red is also the Exit Home button), so it needs both: the
+    Yes green, with the No red close by to its left."""
+    ys, xs = np.where(exact_color_mask(img, MINIGAME_POPUP_YES_COLOR) > 0)
+    if len(xs) < MINIGAME_POPUP_MIN_BUTTON_PIXELS:
         return False
     yes_x, yes_y = int(xs.mean()), int(ys.mean())
-    near_no = img[max(0, yes_y - GHOST_GALLERY_NO_MAX_DY):yes_y + GHOST_GALLERY_NO_MAX_DY,
-                  max(0, yes_x - GHOST_GALLERY_NO_MAX_DX):yes_x]
-    return int(np.count_nonzero(exact_color_mask(near_no, GHOST_GALLERY_NO_COLOR))) >= GHOST_GALLERY_MIN_BUTTON_PIXELS
+    near_no = img[max(0, yes_y - MINIGAME_POPUP_NO_MAX_DY):yes_y + MINIGAME_POPUP_NO_MAX_DY,
+                  max(0, yes_x - MINIGAME_POPUP_NO_MAX_DX):yes_x]
+    return int(np.count_nonzero(exact_color_mask(near_no, MINIGAME_POPUP_NO_COLOR))) >= MINIGAME_POPUP_MIN_BUTTON_PIXELS
 
-def ghost_gallery():
-    """Halloween only (see HALLOWEEN): handles the ghost gallery popup.
-    Returns True if the popup was there and was dismissed. Only the disable
-    branch exists so far - the minigame branch is NOT IMPLEMENTED YET and
-    does nothing."""
-    if GHOST_GALLERY_PLAY_MINIGAME:
+def minigame_popup():
+    """Halloween only (see HALLOWEEN): handles a minigame popup (see
+    detect_minigame_popup()). Returns True if one was there and was
+    dismissed. Only the disable branch exists so far - the minigame branch is
+    NOT IMPLEMENTED YET and does nothing; it will also have to tell the
+    minigames apart, which the popup detection doesn't."""
+    if MINIGAME_POPUP_PLAY:
         # Play the minigame. Rough plan:
+        #   - work out which minigame the popup is for
         #   - play it (clicks/keys to be worked out), under check_running()
         #     so [STOP] and focus loss still interrupt it
         #   - dismiss whatever it leaves behind
         # Probably wants its own timer in the persisted game config, like
         # lure_timer/tree_timer, rather than running every single cycle.
         return False
-    if not detect_ghost_gallery_popup(grab_screen()):
+    if not detect_minigame_popup(grab_screen()):
         return False
-    print("[debug] ghost gallery popup detected, dismissing...")
-    log_run_event("ghost gallery popup dismissed")
-    hover_click(*GHOST_GALLERY_DONT_SHOW_POS)   # "Do not show again this session"
-    hover_click(*GHOST_GALLERY_NO_POS)
+    print("[debug] minigame popup detected, dismissing...")
+    log_run_event("minigame popup dismissed")
+    hover_click(*MINIGAME_POPUP_DONT_SHOW_POS)   # "Do not show again this session"
+    hover_click(*MINIGAME_POPUP_NO_POS)
     return True
 
 def unscrew():
     """Runs once per cycle, right after check_stop(). Rejoins if we've been
     disconnected (first, since nothing else works while disconnected), closes
-    the backpack if it was left open, then, during Halloween, handles the
-    ghost gallery popup, then checks for the paycheck popup; more checks may
-    be added here later. The ghost gallery
+    the backpack if it was left open, then, during Halloween, handles a
+    minigame popup, then checks for the paycheck popup; more checks may
+    be added here later. The minigame popup
     goes before the paycheck check because detect_paycheck() would otherwise
     mistake the popup's Yes button for CASH OUT (same green)."""
     rejoin_game()
     close_backpack_if_open()
     if HALLOWEEN:
-        ghost_gallery()
+        minigame_popup()
     detect_paycheck()
 
 def side_quest():
@@ -1746,10 +1800,18 @@ def side_quest():
 # WORKFLOWS
 # ============================================================================
 
+def format_duration(seconds):
+    """"1m 23s" / "45s" - how long something has been going."""
+    minutes, secs = divmod(int(seconds), 60)
+    return f"{minutes}m {secs:02d}s" if minutes else f"{secs}s"
+
 def run_full_cycle():
-    """One full cycle: keep checking for needs, waiting NEED_CHECK_RETRY_DELAY
-    between checks whenever none are found, until something is detected and
-    handled."""
+    """One cycle: keep checking for needs, waiting NEED_CHECK_RETRY_DELAY
+    between checks whenever none are found (showing how long it has been
+    waiting on one overwritten line), until one is resolved. Returning after
+    a single need means the next cycle - popups, side quest and all - starts
+    from a fresh look at the screen."""
+    waiting_since = None
     while True:
         # check_stop() only, not check_running() - clicking [LOOP]
         # in this Python GUI is what has focus at this exact instant, and
@@ -1760,11 +1822,13 @@ def run_full_cycle():
         write_status()
         unscrew()
         side_quest()
-        print("\n[debug] checking needs...")
         if process_needs():
             return
-        print(f"[debug] no needs found, waiting {NEED_CHECK_RETRY_DELAY}s...")
-        wait_interruptible(NEED_CHECK_RETRY_DELAY)
+        waiting_since = waiting_since or time.time()
+        deadline = time.time() + NEED_CHECK_RETRY_DELAY
+        while time.time() < deadline:
+            print(f"\rWaiting for a need... {format_duration(time.time() - waiting_since)}", end="")
+            wait_interruptible(min(1.0, deadline - time.time()))
 
 def run_workflow_loop():
     """Respawn once, then repeat the workflow continuously. The only way this
@@ -1776,7 +1840,7 @@ def run_workflow_loop():
     global STOP_FLAG, CURRENT_RUN_NUMBER, LAST_REJOIN, LAST_PROGRESS
     STOP_FLAG = False
     CURRENT_RUN_NUMBER = next_run_number()
-    DETECTION_HISTORY.clear()
+    reset_need_tracking()
     reset_run_stats()
     LAST_REJOIN = LAST_PROGRESS = time.time()  # the hourly and no-progress rejoins count from here
     log_run_event("LOOP started")
@@ -1830,16 +1894,47 @@ def run_workflow_loop():
 
 class DebugCapture:
     """Replaces sys.stdout for the lifetime of the GUI: everything printed
-    anywhere in the macro goes to the on-screen console and, via
-    log_output(), to OUTPUT_LOG_PATH."""
+    anywhere in the macro goes to the on-screen console - every line
+    starting with the time - and, via log_output(), to OUTPUT_LOG_PATH.
+    A message starting with a carriage return is a status line instead: it
+    replaces the previous status line rather than adding one (and is logged
+    to the file only when it first appears), until something else is
+    printed."""
 
     def __init__(self, text_widget):
         self.text = text_widget
+        self.at_line_start = True
+        self.status_active = False
 
     def write(self, msg):
-        log_output(msg)
+        if not msg:
+            return
         self.text.config(state=tk.NORMAL)
-        self.text.insert(tk.END, msg)
+        if msg.startswith("\r"):
+            line = time.strftime("[%H:%M:%S] ") + msg[1:]
+            if self.status_active:
+                self.text.delete("end-1c linestart", "end-1c")
+            else:
+                if not self.at_line_start:
+                    self.text.insert(tk.END, "\n")
+                log_output(msg[1:] + "\n")
+            self.text.insert(tk.END, line)
+            self.status_active = True
+            self.at_line_start = False
+        else:
+            if self.status_active:
+                # the status line has no newline yet; the message supplies
+                # one if it starts with it, otherwise end the line first
+                if not msg.startswith("\n"):
+                    self.text.insert(tk.END, "\n")
+                self.status_active = False
+                self.at_line_start = True
+            log_output(msg)
+            for piece in msg.splitlines(keepends=True):
+                if self.at_line_start and piece != "\n":
+                    self.text.insert(tk.END, time.strftime("[%H:%M:%S] "))
+                self.text.insert(tk.END, piece)
+                self.at_line_start = piece.endswith("\n")
         self.text.see(tk.END)
         self.text.config(state=tk.DISABLED)
         self.text.update()
@@ -1914,8 +2009,10 @@ class AdoptMeGUI:
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill=tk.X, padx=GUI_OUTER_PADDING, pady=(GUI_OUTER_PADDING, 0))
         btn_frame = tk.Frame(notebook, bg=self.bg)
+        options_tab = tk.Frame(notebook, bg=self.bg)
         debug_tab = tk.Frame(notebook, bg=self.bg)
         notebook.add(btn_frame, text="Main")
+        notebook.add(options_tab, text="Options")
         notebook.add(debug_tab, text="Debug")
 
         self.action_buttons = []  # every button that starts a background task
@@ -1981,6 +2078,7 @@ class AdoptMeGUI:
         btn_rejoin.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
         self.action_buttons.append(btn_rejoin)
 
+        # Options tab
         # Persisted switches (see load_game_config()). Deliberately not in
         # action_buttons: they must stay usable while a workflow is running,
         # which is safe since update_game_config() is locked.
@@ -1990,22 +2088,22 @@ class AdoptMeGUI:
                            ("Resume after focus loss", "resume_on_focus_loss")):
             var = tk.BooleanVar(value=config[key])
             self.config_flag_vars[key] = var
-            tk.Checkbutton(btn_frame, text=label, variable=var,
+            tk.Checkbutton(options_tab, text=label, variable=var,
                            command=lambda k=key, v=var: self.set_config_flag(k, v.get()),
                            font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=self.bg, fg=self.fg,
                            selectcolor=self.bg, activebackground=self.bg, activeforeground=self.fg,
                            anchor=tk.W, cursor="hand2").pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
 
-        tk.Label(btn_frame, text="Private server link", font=(GUI_FONT, GUI_SECTION_FONT_SIZE),
+        tk.Label(options_tab, text="Private server link", font=(GUI_FONT, GUI_SECTION_FONT_SIZE),
                  bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X)
         self.server_link_var = tk.StringVar(value=config["private_server_link"])
-        server_link_entry = tk.Entry(btn_frame, textvariable=self.server_link_var, font=(GUI_FONT, GUI_SECTION_FONT_SIZE),
+        server_link_entry = tk.Entry(options_tab, textvariable=self.server_link_var, font=(GUI_FONT, GUI_SECTION_FONT_SIZE),
                                      bg=GUI_CONSOLE_BG, fg=GUI_CONSOLE_FG, insertbackground=GUI_CONSOLE_FG)
         server_link_entry.pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
         server_link_entry.bind("<FocusOut>", lambda e: self.save_server_link())
         server_link_entry.bind("<Return>", lambda e: self.save_server_link())
 
-        tk.Button(btn_frame, text="Reset Config", command=self.reset_config,
+        tk.Button(options_tab, text="Reset Config", command=self.reset_config,
                   font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=GUI_STOP_COLOR, fg=self.fg,
                   height=GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2").pack(fill=tk.X, pady=GUI_WIDGET_SPACING)
 

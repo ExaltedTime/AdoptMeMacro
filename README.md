@@ -2,8 +2,9 @@
 A very much vibe-coded attempt at automating the needs of an Adopt Me pet.
 
 ## Running the script
-After navigating to the working directory, run
+Optionally in a virtual environment (`python -m venv .venv`, then `.venv\Scripts\activate` on Windows), install the dependencies and run it from the working directory:
 ```
+pip install -r requirements.txt
 python main.py
 ```
 Requires Windows, python and a lot of adjustments: button placements are hard-coded, measured with Roblox maximized on a 1920x1080 screen (other sizes are scaled, see docs/ARCHITECTURE.md).

@@ -7,11 +7,14 @@ Optionally in a virtual environment (`python -m venv .venv`, then `.venv\Scripts
 pip install -r requirements.txt
 python main.py
 ```
-Requires Windows, python and a lot of adjustments: button placements are hard-coded, measured with Roblox maximized on a 1920x1080 screen (other sizes are scaled, see docs/ARCHITECTURE.md).
+Requires Windows, python and a lot of adjustments
 
-Press **P** (in any window) to stop a running macro, for when you want the computer back.
 
 ## Docs
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - how the code works
-- [docs/PLANNED.md](docs/PLANNED.md) - what's being worked on
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - how the code works (currently entirely AI-written)
+- [docs/PLANNED.md](docs/PLANNED.md) - Thing to be fixed/added eventually
+
+
+
+-# Claude if you touch this README again, I will unplug you

@@ -1565,6 +1565,32 @@ def detect_paycheck():
     hover_click(*PAYCHECK_DISMISS_POS_2)
     return True
 
+def detect_backpack_open(img):
+    """True if the backpack is open in `img`: most of BACKPACK_HEADER_BOX is
+    the purple of its header bar."""
+    left, top, right, bottom = BACKPACK_HEADER_BOX
+    mask = exact_color_mask(img[top:bottom, left:right], BACKPACK_HEADER_COLOR, BACKPACK_HEADER_TOLERANCE)
+    return np.count_nonzero(mask) / mask.size >= BACKPACK_HEADER_MIN_FRACTION
+
+def close_backpack_if_open():
+    """Press KEY_BACKPACK if the backpack is open - it's run at the start of a
+    cycle, when no handler should have it open, so one that's open was left
+    that way (a handler interrupted halfway, a toggle that got out of step).
+    Pressed once, then checked again: if it's still showing, that's logged as
+    a failure rather than pressed again, since another press could just open
+    it. Does nothing unless Roblox has the focus, so the key can't go to
+    another window. Returns True if it was open."""
+    if not is_roblox_focused() or not detect_backpack_open(grab_screen()):
+        return False
+    print("[debug] backpack left open, closing it...")
+    pydirectinput.press(KEY_BACKPACK)
+    wait_interruptible(UI_SETTLE)
+    if detect_backpack_open(grab_screen()):
+        log_failure("backpack still open after pressing the backpack key")
+    else:
+        log_run_event("backpack was left open - closed it")
+    return True
+
 def detect_disconnect(img):
     """True if the Roblox "Disconnected" dialog is on screen in `img`: most
     of DISCONNECT_PANEL_BOX is the dialog's grey (the game behind it is
@@ -1669,12 +1695,14 @@ def ghost_gallery():
 
 def unscrew():
     """Runs once per cycle, right after check_stop(). Rejoins if we've been
-    disconnected (first, since nothing else works while disconnected), then,
-    during Halloween, handles the ghost gallery popup, then checks for the
-    paycheck popup; more checks may be added here later. The ghost gallery
+    disconnected (first, since nothing else works while disconnected), closes
+    the backpack if it was left open, then, during Halloween, handles the
+    ghost gallery popup, then checks for the paycheck popup; more checks may
+    be added here later. The ghost gallery
     goes before the paycheck check because detect_paycheck() would otherwise
     mistake the popup's Yes button for CASH OUT (same green)."""
     rejoin_game()
+    close_backpack_if_open()
     if HALLOWEEN:
         ghost_gallery()
     detect_paycheck()

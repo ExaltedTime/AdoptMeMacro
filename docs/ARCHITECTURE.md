@@ -120,7 +120,8 @@ character standing.
 - **NEED HANDLERS** - `NeedHandler` and one subclass per need (or per group
   of needs, via `partial()`). See [Need handlers](#need-handlers).
 - **PER-CYCLE CHECKS** - `unscrew()` and what it runs: `rejoin_game()`
-  (with `rejoin_reason()` / `detect_disconnect()`), `ghost_gallery()`,
+  (with `rejoin_reason()` / `detect_disconnect()`), `close_backpack_if_open()`,
+  `ghost_gallery()`,
   `detect_paycheck()`; and `side_quest()`.
 - **WORKFLOWS** - `run_full_cycle()` and `run_workflow_loop()`. See
   [The workflow lifecycle](#the-workflow-lifecycle) above.
@@ -356,8 +357,8 @@ or just disable it depending on `GHOST_GALLERY_PLAY_MINIGAME`. The minigame
 branch is a comments-only stub; the disable branch works (see below).
 
 Every cycle, `unscrew()` runs `rejoin_game()` first (nothing else works
-while disconnected), then `ghost_gallery()` if `HALLOWEEN` is on, then the
-paycheck check. The ghost gallery goes before the paycheck check because the
+while disconnected), then `close_backpack_if_open()`, then `ghost_gallery()`
+if `HALLOWEEN` is on, then the paycheck check. The ghost gallery goes before the paycheck check because the
 popup's Yes button is the same green as the paycheck's CASH OUT button, so
 `detect_paycheck()` would mistake it for one. For the same reason
 `detect_paycheck()` only counts that green inside `PAYCHECK_REGION` (the middle
@@ -366,6 +367,15 @@ of the screen, around its dismiss positions) and with at least
 backpack's green Select All button, left open on screen, made it "dismiss" a
 paycheck popup every cycle. `rejoin_game()` is the automatic recovery - see
 [Automatic recovery](#stuck-needs).
+
+**Closing a backpack left open.** No handler should have the backpack open
+between cycles, so one that is was left that way (a handler interrupted halfway,
+a toggle that got out of step). `detect_backpack_open()` recognises it by its
+purple header bar (`BACKPACK_HEADER_COLOR`) filling at least
+`BACKPACK_HEADER_MIN_FRACTION` of `BACKPACK_HEADER_BOX`; `close_backpack_if_open()`
+presses `KEY_BACKPACK` once, but only while Roblox has the focus (so the key
+can't go to another window). It checks again afterwards and logs a failure
+rather than pressing a second time, since another press could just reopen it.
 
 **Disabling the ghost gallery.** `detect_ghost_gallery_popup()` recognises the
 "Ghost Gallery is starting soon! Teleport there now?" popup by its two
@@ -687,7 +697,7 @@ exact values and rationale):
 
 | Group | Examples |
 |---|---|
-| Behavior flags | `ENABLED_NEEDS`, `HALLOWEEN`, `GHOST_GALLERY_PLAY_MINIGAME`, `GHOST_GALLERY_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
+| Behavior flags | `ENABLED_NEEDS`, `BACKPACK_HEADER_*`, `HALLOWEEN`, `GHOST_GALLERY_PLAY_MINIGAME`, `GHOST_GALLERY_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
 | Window / coordinates | `REFERENCE_WIDTH`, `REFERENCE_HEIGHT`, `REFERENCE_CENTER_X/Y`, `ROBLOX_RECT_TTL` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `NEED_GONE_*` |
 | Stuck needs | `NEED_STUCK_CHECKS` |

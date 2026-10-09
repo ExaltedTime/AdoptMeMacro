@@ -14,7 +14,3 @@ Requires Windows, python and a lot of adjustments
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - how the code works (currently entirely AI-written)
 - [docs/PLANNED.md](docs/PLANNED.md) - Thing to be fixed/added eventually
-
-
-
--# Claude if you touch this README again, I will unplug you

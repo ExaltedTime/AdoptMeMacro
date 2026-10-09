@@ -421,10 +421,13 @@ Options tab). `minigame_popup()`:
 - **switched off, or not recognised** - clicks `MINIGAME_POPUP_DONT_SHOW_POS`
   ("Do not show again this session") and `MINIGAME_POPUP_NO_POS`;
 - **switched on** - `play_minigame()` clicks Yes (`MINIGAME_POPUP_YES_POS`)
-  and plays it, as below. If the popup turns up while a handler is waiting in
-  `wait_until_need_gone()` (which also calls `minigame_popup()`, since a popup
-  blocks the handler's clicks) it is only closed with No, without the "do not
-  show again" tick, so it can offer itself again at the start of a cycle.
+  and plays it, as below. Minigames are time-sensitive, so this also happens
+  when the popup turns up while a handler is waiting in
+  `wait_until_need_gone()` (which calls `minigame_popup()` for that reason): the
+  minigame is played right then and that wait ends - where the handler left
+  the character is unknown afterwards, and the next check sees whether the
+  need is still there. Handlers that never call `wait_until_need_gone()`
+  (`catch`, `pet`, `choose`) only see the popup at the start of the next cycle.
 
 *Playing.* No needs can be seen while a minigame runs, so both end on the
 victory screen instead - a red GAME OVER! banner over a green NICE! button,

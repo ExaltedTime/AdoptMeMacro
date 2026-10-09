@@ -601,8 +601,11 @@ def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=N
     While the icons can't be read (a bright background, see
     need_bar_readable()) nothing counts as a miss, so that wait runs its
     full length - and ending it isn't logged as a failure. A minigame popup
-    that appears meanwhile is dismissed (HALLOWEEN only), since it blocks
-    the clicks and the view. Interruptible."""
+    that appears meanwhile is handled at once (HALLOWEEN only), since it
+    blocks the clicks and the view and minigames are time-sensitive: if one
+    is played the wait ends there (where the handler left the character is
+    unknown by then, and the next check will see whether the need is still
+    there). Interruptible."""
     print(f"[debug] waiting up to {max_wait}s for {need_name} to clear...")
     deadline = time.time() + max_wait
     misses = 0
@@ -617,8 +620,9 @@ def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=N
                 log_failure(f"{need_name} still showing after {max_wait}s")
             return
         wait_interruptible(min(NEED_GONE_CONFIRM_INTERVAL if misses else poll_interval, remaining))
-        if HALLOWEEN:
-            minigame_popup(can_play=False)
+        if HALLOWEEN and minigame_popup() == "played":
+            print(f"[debug] a minigame was played - the {need_name} wait is over")
+            return
         cleared = _need_cleared(need_name)
         unreadable = cleared is None
         if not cleared:
@@ -1870,29 +1874,26 @@ def play_minigame(name):
     respawn_character()
     return won
 
-def minigame_popup(can_play=True):
+def minigame_popup():
     """Halloween only (see HALLOWEEN): handles a minigame popup (see
     detect_minigame_popup()). Which minigame it is comes from
     identify_minigame(). One that is switched on ("<name>_enabled" in the game
-    config) is played (play_minigame()) when `can_play`, otherwise just closed
-    with No so it can offer itself again; any other (switched off, or not
+    config) is played (play_minigame()); any other (switched off, or not
     recognised) is dismissed for the session with "do not show again" ticked.
-    Returns True if a popup was there and was handled."""
+    Returns "played" or "dismissed" if a popup was there, None if not."""
     img = grab_screen()
     if not detect_minigame_popup(img):
-        return False
+        return None
     name = identify_minigame(img)
-    enabled = name is not None and load_game_config().get(f"{name}_enabled", False)
-    if enabled and can_play:
+    if name is not None and load_game_config().get(f"{name}_enabled", False):
         print(f"[debug] minigame popup detected: playing {name}")
         play_minigame(name)
-        return True
+        return "played"
     print(f"[debug] minigame popup detected ({name or 'unknown'}), dismissing...")
     log_run_event(f"minigame popup dismissed ({name or 'unknown'})")
-    if not enabled:
-        hover_click(*MINIGAME_POPUP_DONT_SHOW_POS)   # "Do not show again this session"
+    hover_click(*MINIGAME_POPUP_DONT_SHOW_POS)   # "Do not show again this session"
     hover_click(*MINIGAME_POPUP_NO_POS)
-    return True
+    return "dismissed"
 
 def unscrew():
     """Runs once per cycle, right after check_stop(). Rejoins if we've been

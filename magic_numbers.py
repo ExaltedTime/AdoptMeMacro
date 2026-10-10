@@ -61,6 +61,7 @@ MINIGAME_VICTORY_BUTTON_BOX = (860, 725, 1060, 800)
 MINIGAME_VICTORY_BUTTON_MIN_PIXELS = 2000
 MINIGAME_VICTORY_BUTTON_POS = (966, 762)
 MINIGAME_VICTORY_CHECK_INTERVAL = 1.0
+MINIGAME_POPUP_CHECK_INTERVAL = 4.0   # the popup checks (stray windows, paycheck) run this often while a minigame is played
 MINIGAME_MAX_DURATION = 600.0       # gives up (and logs a failure) if the victory screen hasn't shown by then
 MINIGAME_FINISH_WAIT = 5.0          # after clicking NICE!, before carrying on
 HAUNTLET_START_WAIT = 50.0          # waits this long after teleporting, then holds HAUNTLET_FORWARD_KEY
@@ -119,6 +120,7 @@ GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")      # persisted game stat
 OUTPUT_LOG_PATH = os.path.join(DEBUG_DIR, "output.log")    # everything the macro prints, timestamped - see log_output()
 FAILURE_DIR = os.path.join(DEBUG_DIR, "failures")          # a screenshot per failure - see log_failure()
 RECORDINGS_DIR = os.path.join(DEBUG_DIR, "recordings")      # run videos - see RunRecorder
+REPORTS_DIR = os.path.join(DEBUG_DIR, "reports")            # run<N>.png charts of a run - see helper.py
 STATUS_PATH = os.path.join(DEBUG_DIR, "status.json")       # live "is it alive and what's it doing" summary - see write_status()
 OUTPUT_LOG_MAX_BYTES = 5 * 1024 * 1024   # output.log moves to output.log.old (replacing the last one) past this size
 MAX_FAILURE_SCREENSHOTS = 40             # oldest are deleted beyond this many
@@ -175,10 +177,11 @@ CATCH_WAIT_AFTER_EQUIP = 1.0   # wait after equipping toy before throwing
 CATCH_THROW_INTERVAL = 0.5     # the toy is thrown (a click) this often until the need clears
 CATCH_MAX_WAIT = 60.0          # ...for at most this long
 CATCH_ZOOM_DURATION = 2.0      # seconds the zoom-in key is held before throwing
-PET_CIRCLE_DURATION = 8.0     # how long to make circles with mouse
-PET_CIRCLE_RADIUS = 100                # amplitude (px) of the up/down sine motion around screen center
+PET_SWIPE_DURATION = 8.0      # how long the one downward swipe (mouse held down) takes
+PET_SWIPE_START_OFFSET = -15           # px from screen center the swipe starts at (negative = above it)
+PET_SWIPE_END_OFFSET = 45              # px from screen center the swipe ends at (positive = below it)
 PET_SETTLE_DELAY = 0.1                 # pause after each mouse move/click before the next pet step
-PET_CIRCLE_STEP_MOVE_DURATION = 0.05   # time for each small step around the circle
+PET_SWIPE_STEP_DURATION = 0.05         # time for each small step down the swipe
 PET_FOCUS_CLICK_DURATION = 0.1         # mouse travel time for the two focus clicks before petting starts
 ICON_EXTRACT_PADDING = 5       # px of padding added around a detected icon's radius
 
@@ -204,6 +207,7 @@ FOCUS_PET_MERGE_KERNEL = 25          # px; changed pixels this close together me
 FOCUS_PET_MIN_AREA = 150             # px^2; smaller blobs are noise, not the pet
 FOCUS_PET_IGNORE_MARGIN = 20           # px around the macro's own window that focus_pet() ignores too
 FOCUS_PET_DEBUG_COLOR = (0, 255, 0)    # BGR, the boxes drawn on debug/debug_focus_pet.png
+FOCUS_PET_CLICK_SETTLE = 1.0         # after each click, before checking whether the pet is focused now
 FOCUS_PET_MENU_WAIT = 4.0            # wait after the clicks, for the pet's menu to open
 
 # The 'choose' need's button is matched by its exact color rather than shape,

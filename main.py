@@ -27,6 +27,7 @@ import pydirectinput
 import pygetwindow as gw
 
 from magic_numbers import *
+import helper
 
 class TaskInterrupted(Exception):
     """Raised from inside a need handler's waits when something that can't
@@ -1308,6 +1309,12 @@ def save_focus_pet_debug(img, blobs, mask, top, name="debug_focus_pet.png", igno
         cv2.putText(marked, f"{i}: {area}", (x, max(12, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, FOCUS_PET_DEBUG_COLOR, 2)
     cv2.imwrite(os.path.join(DEBUG_DIR, name), marked)
 
+def pet_focused(img):
+    """True if the pet focus view is showing in `img` - the "pet_focus" crop
+    of STRAY_WINDOWS (its BACK button)."""
+    crop = load_templates(STRAY_WINDOW_DIR).get("pet_focus")
+    return crop is not None and template_score(img, crop, STRAY_WINDOWS["pet_focus"]["box"]) >= STRAY_WINDOW_MATCH_THRESHOLD
+
 def focus_pet(click_duration=CLICK_MOVE_DURATION):
     """Click the pet to open its interaction menu. The pet is found by
     movement: two screenshots of the bottom of the screen FOCUS_PET_FRAME_GAP
@@ -1315,7 +1322,13 @@ def focus_pet(click_duration=CLICK_MOVE_DURATION):
     moving_blobs(), which leaves out the macro's own window). What it saw is printed and written to
     debug/debug_focus_pet.png (the blobs, marked) - and what the screen looked
     like after the clicks to debug/debug_focus_pet_after.png. Returns True if
-    anything was clicked, False if nothing moved."""
+    anything was clicked, False if nothing moved. It looks at whether the pet
+    is focused after each click and stops clicking the moment it is. If the pet is already
+    focused (the pet focus view's BACK button is on screen) there's nothing
+    to click: it just returns True."""
+    if pet_focused(grab_screen()):
+        print("[debug] focus_pet: the pet is already focused")
+        return True
     img_a = grab_screen()
     wait_interruptible(FOCUS_PET_FRAME_GAP)
     img_b = grab_screen()
@@ -1332,7 +1345,12 @@ def focus_pet(click_duration=CLICK_MOVE_DURATION):
     for i, (x, y, w, h, _) in enumerate(blobs, 1):
         print(f"[debug] focus_pet: clicking #{i} at ({x + w // 2}, {y + h // 2})...")
         hover_click(x + w // 2, y + h // 2, duration=click_duration)
-    wait_interruptible(FOCUS_PET_MENU_WAIT)
+        wait_interruptible(FOCUS_PET_CLICK_SETTLE)
+        if pet_focused(grab_screen()):
+            print(f"[debug] focus_pet: focused after click #{i}, no more clicks needed")
+            break
+    else:
+        wait_interruptible(FOCUS_PET_MENU_WAIT)
     after = grab_screen()
     save_focus_pet_debug(after, blobs, np.zeros_like(mask), top, name="debug_focus_pet_after.png", ignore=ignore)
     return True
@@ -1479,7 +1497,8 @@ class CatchNeedHandler(NeedHandler):
 
 class PetNeedHandler(NeedHandler):
     """The 'pet' need: click to focus the pet, then hold the mouse button
-    down and move it up and down from the center of the screen."""
+    down and swipe it once down from just above the center of the screen to
+    just below it, over PET_SWIPE_DURATION."""
 
     def handle(self):
         print("[!] PET NEED")
@@ -1494,12 +1513,13 @@ class PetNeedHandler(NeedHandler):
         if not focus_pet(PET_FOCUS_CLICK_DURATION):
             return False
         wait_interruptible(UI_SETTLE)
-        print(f"[debug] attempting to pet for {PET_CIRCLE_DURATION}s...")
-        # Move to starting position before pressing down
-        pydirectinput.moveTo(*to_screen(REFERENCE_CENTER_X, REFERENCE_CENTER_Y - PET_CIRCLE_RADIUS))
-        time.sleep(PET_SETTLE_DELAY)
+        print(f"[debug] petting: one swipe down over {PET_SWIPE_DURATION}s...")
         # Click the center to focus
         hover_click(REFERENCE_CENTER_X, REFERENCE_CENTER_Y, duration=PET_FOCUS_CLICK_DURATION)
+        time.sleep(PET_SETTLE_DELAY)
+        start_y = REFERENCE_CENTER_Y + PET_SWIPE_START_OFFSET
+        end_y = REFERENCE_CENTER_Y + PET_SWIPE_END_OFFSET
+        pydirectinput.moveTo(*to_screen(REFERENCE_CENTER_X, start_y))
         time.sleep(PET_SETTLE_DELAY)
         # Hold down and move with incremental steps (much more reliable for games)
         pydirectinput.mouseDown()
@@ -1508,15 +1528,11 @@ class PetNeedHandler(NeedHandler):
             while True:
                 check_running()
                 elapsed = time.time() - start_time
-                if elapsed >= PET_CIRCLE_DURATION:
+                if elapsed >= PET_SWIPE_DURATION:
                     break
-                # Move up and down in a sine wave centered on screen center
-                progress = elapsed / PET_CIRCLE_DURATION
-                angle = progress * 2 * np.pi
-                y = int(REFERENCE_CENTER_Y + PET_CIRCLE_RADIUS * np.sin(angle))
-                # Use pydirectinput for better game compatibility
+                y = int(start_y + (end_y - start_y) * elapsed / PET_SWIPE_DURATION)
                 pydirectinput.moveTo(*to_screen(REFERENCE_CENTER_X, y))
-                time.sleep(PET_CIRCLE_STEP_MOVE_DURATION)
+                time.sleep(PET_SWIPE_STEP_DURATION)
         finally:
             # Always release, even if interrupted
             pydirectinput.mouseUp()
@@ -2087,16 +2103,39 @@ def detect_minigame_victory(img):
             return False
     return True
 
+_LAST_MINIGAME_POPUP_CHECK = 0.0
+
+def minigame_popup_checks():
+    """The popups that can turn up mid-minigame - stray windows and the
+    paycheck - checked at most every MINIGAME_POPUP_CHECK_INTERVAL. (The
+    in-task unscrew() can't run here: the minigame is itself played from it.)"""
+    global _LAST_MINIGAME_POPUP_CHECK
+    if time.time() - _LAST_MINIGAME_POPUP_CHECK < MINIGAME_POPUP_CHECK_INTERVAL:
+        return
+    _LAST_MINIGAME_POPUP_CHECK = time.time()
+    if not dismiss_stray_windows():
+        detect_paycheck()
+
 def minigame_won():
-    """detect_minigame_victory() on a fresh screenshot."""
+    """Run the popup checks if they're due, then detect_minigame_victory() on
+    a fresh screenshot."""
+    minigame_popup_checks()
     return detect_minigame_victory(grab_screen())
+
+def minigame_wait(duration):
+    """wait_interruptible(), with the popup checks every
+    MINIGAME_POPUP_CHECK_INTERVAL - for the long waits of a minigame."""
+    end = time.time() + duration
+    while time.time() < end:
+        wait_interruptible(min(MINIGAME_POPUP_CHECK_INTERVAL, end - time.time()))
+        minigame_popup_checks()
 
 def play_hauntlet(deadline):
     """Hauntlet 2: wait HAUNTLET_START_WAIT for it to start (no needs can be
     seen while it runs, and the lobby counts down first), then hold forward
     until the victory screen shows. Returns True if it did before `deadline`."""
     print(f"[debug] hauntlet: waiting {HAUNTLET_START_WAIT:g}s for it to start...")
-    wait_interruptible(HAUNTLET_START_WAIT)
+    minigame_wait(HAUNTLET_START_WAIT)
     pydirectinput.keyDown(HAUNTLET_FORWARD_KEY)
     try:
         while time.time() < deadline:
@@ -2112,7 +2151,7 @@ def play_ghost_gallery(deadline):
     GHOST_GALLERY_HOLD-second holds (GHOST_GALLERY_HOLD_GAP apart), until the
     victory screen shows. Returns True if it did before `deadline`."""
     print(f"[debug] ghost gallery: waiting {GHOST_GALLERY_START_WAIT:g}s for it to start...")
-    wait_interruptible(GHOST_GALLERY_START_WAIT)
+    minigame_wait(GHOST_GALLERY_START_WAIT)
     while time.time() < deadline:
         pydirectinput.mouseDown()
         try:
@@ -2429,11 +2468,20 @@ def run_workflow_loop():
         if recorder is not None:
             recorder.stop()
         log_run_event("LOOP stopped")
+        write_run_report(CURRENT_RUN_NUMBER)
         print("\n[LOOP] Stopped\n")
 
 # ============================================================================
 # GUI
 # ============================================================================
+
+def write_run_report(run):
+    """Chart run `run` from the log into REPORTS_DIR (see helper.py) and print
+    where it went. Returns the path, or None. Never raises."""
+    path = helper.generate_run_report(RUN_LOG_PATH, run, REPORTS_DIR, BUTTON_NAMES, TELEPORT_WALK_NEEDS)
+    if path:
+        print(f"[debug] run report: {path}")
+    return path
 
 class DebugCapture:
     """Replaces sys.stdout for the lifetime of the GUI: everything printed
@@ -2837,6 +2885,20 @@ class AdoptMeGUI:
                             font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
             btn.grid(row=1 + i // 2, column=i % 2, sticky=tk.EW, padx=GUI_WIDGET_SPACING, pady=GUI_WIDGET_SPACING)
             self.action_buttons.append(btn)
+        rows = 1 + (len(DEBUG_HANDLERS) + 1) // 2
+        tk.Button(parent, text="Report on the last run", command=self.show_run_report,
+                  font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=self.accent, fg=self.fg, cursor="hand2"
+                  ).grid(row=rows, column=0, columnspan=2, sticky=tk.EW, padx=GUI_WIDGET_SPACING, pady=GUI_WIDGET_SPACING)
+
+    def show_run_report(self):
+        """Chart the current (or, if none has started, the last) run from the
+        log and open the picture."""
+        run = CURRENT_RUN_NUMBER or helper.latest_run(RUN_LOG_PATH)
+        path = write_run_report(run) if run is not None else None
+        if path is None:
+            print("[debug] no run in the log to report on")
+        elif hasattr(os, "startfile"):
+            os.startfile(path)
 
     def test_handler(self, name, handler_cls):
         """Run one need handler on its own, outside the normal need-detection

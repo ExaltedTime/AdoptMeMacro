@@ -61,6 +61,7 @@ MINIGAME_VICTORY_BUTTON_BOX = (860, 725, 1060, 800)
 MINIGAME_VICTORY_BUTTON_MIN_PIXELS = 2000
 MINIGAME_VICTORY_BUTTON_POS = (966, 762)
 MINIGAME_VICTORY_CHECK_INTERVAL = 1.0
+MINIGAME_POPUP_CHECK_INTERVAL = 4.0   # the popup checks (stray windows, paycheck) run this often while a minigame is played
 MINIGAME_MAX_DURATION = 600.0       # gives up (and logs a failure) if the victory screen hasn't shown by then
 MINIGAME_FINISH_WAIT = 5.0          # after clicking NICE!, before carrying on
 HAUNTLET_START_WAIT = 50.0          # waits this long after teleporting, then holds HAUNTLET_FORWARD_KEY
@@ -175,10 +176,11 @@ CATCH_WAIT_AFTER_EQUIP = 1.0   # wait after equipping toy before throwing
 CATCH_THROW_INTERVAL = 0.5     # the toy is thrown (a click) this often until the need clears
 CATCH_MAX_WAIT = 60.0          # ...for at most this long
 CATCH_ZOOM_DURATION = 2.0      # seconds the zoom-in key is held before throwing
-PET_CIRCLE_DURATION = 8.0     # how long to make circles with mouse
-PET_CIRCLE_RADIUS = 100                # amplitude (px) of the up/down sine motion around screen center
+PET_SWIPE_DURATION = 8.0      # how long the one downward swipe (mouse held down) takes
+PET_SWIPE_START_OFFSET = -15           # px from screen center the swipe starts at (negative = above it)
+PET_SWIPE_END_OFFSET = 45              # px from screen center the swipe ends at (positive = below it)
 PET_SETTLE_DELAY = 0.1                 # pause after each mouse move/click before the next pet step
-PET_CIRCLE_STEP_MOVE_DURATION = 0.05   # time for each small step around the circle
+PET_SWIPE_STEP_DURATION = 0.05         # time for each small step down the swipe
 PET_FOCUS_CLICK_DURATION = 0.1         # mouse travel time for the two focus clicks before petting starts
 ICON_EXTRACT_PADDING = 5       # px of padding added around a detected icon's radius
 

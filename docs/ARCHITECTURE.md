@@ -330,7 +330,7 @@ everything else).
 The GUI's **Debug** tab has a button per handler that runs it directly
 regardless of `ENABLED_NEEDS`.
 
-**Focusing the pet.** `pet` and `choose` both start with `focus_pet()`, which
+**Focusing the pet.** `pet` and `choose` both start with `focus_pet()`, which first checks whether the pet is already focused (`pet_focused()`: the BACK button's crop is on screen) and if so returns True with no clicks; otherwise it
 has no hardcoded position: it takes two screenshots of the bottom of the
 screen (below `FOCUS_PET_REGION_TOP_PERCENT`) `FOCUS_PET_FRAME_GAP` apart,
 and `moving_blobs()` diffs them - leaving out the macro's own window
@@ -358,7 +358,7 @@ rather than a flat sleep after the fact.
 |---|---|
 | `hungry` / `thirsty` / `dirty` / `potty` / `sleepy` | `ButtonNeedHandler`: walk to the action buttons (`walk_to_buttons()`), refresh the button mapping (`refresh_button_mapping()`), click the matching one (`click_need_button()`), which then calls `wait_until_need_gone()` for that need name. |
 | `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → hold zoom-in → click empty space every `CATCH_THROW_INTERVAL` (0.5s) until the "catch" icon is confirmed gone (`click_until_need_gone()`, the same watcher thread `walk_alternating()` uses; at most `CATCH_MAX_WAIT`) → unequip. |
-| `pet` | `PetNeedHandler`: `focus_pet()` (see below), then hold the mouse down and trace a circle of radius `PET_CIRCLE_RADIUS` around screen center for `PET_CIRCLE_DURATION`. Same as `catch` - always the full fixed duration. |
+| `pet` | `PetNeedHandler`: `focus_pet()` (see below), then hold the mouse down and swipe once down from `PET_SWIPE_START_OFFSET` above screen center to `PET_SWIPE_END_OFFSET` below it over `PET_SWIPE_DURATION` (8s). Same as `catch` - always the full fixed duration. |
 | `choose` | `ChooseNeedHandler`: `focus_pet()` (see below), find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. It doesn't wait for the icon to clear (it's gone at once; the next check confirms). |
 | `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then `equip_favorite_vehicle()` (backpack → vehicles → first vehicle → equip → close backpack), hold `r` (`KEY_HELICOPTER`) for `RIDE_R_HOLD_DURATION` (1s), then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT` (60s), ending early the moment "ride" is confirmed cleared (see below). |
 | `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`), and `helicopter` (see below). Which table is used depends on `HALLOWEEN` - see below. |
@@ -526,7 +526,7 @@ Options tab). `minigame_popup()`:
 *Playing.* No needs can be seen while a minigame runs, so both end on the
 victory screen instead - a red GAME OVER! banner over a green NICE! button,
 found by exact color (`detect_minigame_victory()`, checked every
-`MINIGAME_VICTORY_CHECK_INTERVAL`), which is the same for both. Then NICE!
+`MINIGAME_VICTORY_CHECK_INTERVAL`), which is the same for both. While it plays, `minigame_popup_checks()` runs `dismiss_stray_windows()` and `detect_paycheck()` every `MINIGAME_POPUP_CHECK_INTERVAL` (4s), including during the start waits (`minigame_wait()`) - the in-task `unscrew()` can't, since the minigame is played from it. Then NICE!
 (`MINIGAME_VICTORY_BUTTON_POS`) is clicked, `MINIGAME_FINISH_WAIT` is waited
 out, and the character respawns. If the victory screen hasn't shown after
 `MINIGAME_MAX_DURATION` it gives up with a logged failure (and releases every

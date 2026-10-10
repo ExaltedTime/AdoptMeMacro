@@ -126,9 +126,12 @@ an extra walk from wherever the previous need left the character standing.
 - **NEED HANDLERS** - `NeedHandler` and one subclass per need (or per group
   of needs, via `partial()`). See [Need handlers](#need-handlers).
 - **PER-CYCLE CHECKS** - `unscrew()` and what it runs: `rejoin_game()`
-  (with `rejoin_reason()` / `detect_disconnect()`), `close_backpack_if_open()`,
-  `minigame_popup()`,
-  `detect_paycheck()`; and `side_quest()`.
+  (with `rejoin_reason()` / `detect_disconnect()`), `close_backpack_if_stuck()`
+  / `close_backpack_if_open()` (with `detect_backpack_expanded()` /
+  `detect_backpack_normal()`),
+  `dismiss_stray_windows()`, `minigame_popup()`,
+  `detect_paycheck()`; the `task_unscrew()` / `task_unscrew_tick()` hook that
+  runs them during a task; and `side_quest()`.
 - **WORKFLOWS** - `run_full_cycle()` and `run_workflow_loop()`. See
   [The workflow lifecycle](#the-workflow-lifecycle) above.
 - **GUI** - the `tkinter` control panel. See [GUI internals](#gui-internals).
@@ -250,8 +253,9 @@ twice. `need_bar_readable()` spots it (more than
 `NEED_BAR_BRIGHT_LEVEL`); while the icons are unreadable `_need_cleared()`
 returns `None`, which counts as neither a miss nor a sighting, so the wait
 runs its full `NEED_GONE_MAX_WAIT` - and ending it isn't logged as a failure.
-While it waits, a minigame popup that appears is dismissed too (Halloween
-only), since it would otherwise block the whole wait.
+Popups, stray windows and minigames that turn up during the wait are handled
+by the `unscrew()` checks that `wait_interruptible()` runs during a task - see
+[Per-cycle checks while a task runs](#per-cycle-checks-while-a-task-runs).
 
 `_need_cleared()` is also what `_watch_need_gone()` uses - see
 [Checking a need in parallel with movement](#checking-a-need-in-parallel-with-movement)
@@ -329,12 +333,18 @@ regardless of `ENABLED_NEEDS`.
 **Focusing the pet.** `pet` and `choose` both start with `focus_pet()`, which
 has no hardcoded position: it takes two screenshots of the bottom of the
 screen (below `FOCUS_PET_REGION_TOP_PERCENT`) `FOCUS_PET_FRAME_GAP` apart,
-and `find_moving_blobs()` diffs them. Pixels that changed by more than
+and `moving_blobs()` diffs them. Pixels that changed by more than
 `FOCUS_PET_DIFF_THRESHOLD` are closed together (`FOCUS_PET_MERGE_KERNEL`,
 since an up/down bob only changes the pet's top and bottom edges), blobs
 under `FOCUS_PET_MIN_AREA` are dropped as noise, and `focus_pet()` clicks
 the center of every remaining blob, largest first. It returns `False` (and
-the handler skips the need) if nothing moved.
+the handler skips the need) if nothing moved. It prints what it saw (how many
+blobs, each one's center, size and area) and writes
+`debug/debug_focus_pet.png` - the second frame with the changed pixels in
+red and a numbered box round every blob - plus
+`debug/debug_focus_pet_after.png`, the screen after the clicks and the menu
+wait, so a click that lands on the wrong thing (another player, a UI
+element) can be seen.
 
 Except for `catch` and `pet` - which always run their full fixed sequence
 precisely, with no early exit - every other need either waits for its
@@ -375,10 +385,13 @@ calls `minigame_popup()`, which plays or dismisses the minigame popups
 (see below).
 
 Every cycle, `unscrew()` runs `rejoin_game()` first (nothing else works
-while disconnected), then `close_backpack_if_open()`, then `minigame_popup()`
-if `HALLOWEEN` is on, then the paycheck check. The minigame popup goes before the paycheck check because the
-popup's Yes button is the same green as the paycheck's CASH OUT button, so
-`detect_paycheck()` would mistake it for one. For the same reason
+while disconnected), then `close_backpack_if_stuck()` (the backpack, either
+form), then
+`dismiss_stray_windows()`, then `minigame_popup()` if `HALLOWEEN` is on, then
+the paycheck check. The stray windows and the minigame popup go before the
+paycheck check because their green buttons (Okay, Yes) are the same green as
+the paycheck's CASH OUT button, so `detect_paycheck()` would mistake them for
+one. For the same reason
 `detect_paycheck()` only counts that green inside `PAYCHECK_REGION` (the middle
 of the screen, around its dismiss positions) and with at least
 `PAYCHECK_MIN_PIXELS` of it: it used to look at the whole screen, and the
@@ -386,18 +399,65 @@ backpack's green Select All button, left open on screen, made it "dismiss" a
 paycheck popup every cycle. `rejoin_game()` is the automatic recovery - see
 [Automatic recovery](#stuck-needs).
 
-**Closing a backpack left open.** No handler should have the backpack open
-between cycles, so one that is was left that way (a handler interrupted halfway,
-a toggle that got out of step). `detect_backpack_open()` recognises it by its
-purple header bar (`BACKPACK_HEADER_COLOR`) filling at least
-`BACKPACK_HEADER_MIN_FRACTION` of `BACKPACK_HEADER_BOX`; `close_backpack_if_open()`
-presses `KEY_BACKPACK` - but only while Roblox has the focus, so the key can't
-go to another window. What the header marks is the *expanded* backpack, which
-takes two presses: the first shrinks it to the normal backpack, the second
-closes that. After the first press the expanded header must be gone; if it
-isn't, a failure is logged and it stops rather than pressing again, since
-another press could just reopen it. (The normal backpack has no header to
-check, so the second press isn't verified.)
+**Stray windows.** Two windows have been seen open on their own, covering
+the screen: the Trading Hub (how it got opened isn't known; a misclicking
+`choose` is the suspect - see `debug/debug_focus_pet.png`; it throws up a "Go
+to the Trading Hub to edit listings!" popup on top) and the Star Rewards, which
+opens once a day, at no known moment. The Star Rewards hides the need icons;
+the Trading Hub doesn't, but needs can't be resolved with it in the way. Run
+308's two 20-minute stalls (a `paycheck popup dismissed` line every cycle) were
+these windows - the macro's paycheck clicks don't close them, and their green
+buttons look like CASH OUT.
+`dismiss_stray_windows()` recognises each by a crop of its title
+in `ref/popups/` (`trading_hub.png`, `star_rewards.png`; matched within the
+`box` in `STRAY_WINDOWS`, at least `STRAY_WINDOW_MATCH_THRESHOLD`) and clicks
+its `close_pos`; for the Trading Hub it first clicks the popup's green Okay
+(`STRAY_OKAY_*`) if that's showing. A new window is a new crop plus an entry in
+`STRAY_WINDOWS`. `setup_game()` also closes any before it starts, since an open
+one would take its clicks.
+
+**Per-cycle checks while a task runs.** Waiting for the top of the next cycle
+would leave a popup, a stray window or an offered minigame in the way for the
+whole of a handler (a minute or two), and minigames are time-sensitive. So
+`process_needs()` runs each handler - and `setup_game()` its steps - inside
+`task_unscrew()`, and during it every `wait_interruptible()` also runs
+`unscrew(in_task=True)` every `UNSCREW_TASK_INTERVAL` (only on the thread that
+started the task, and never from inside `unscrew()` itself). It's the same
+`unscrew()`, with two differences: the rejoin check only acts on a disconnect
+(`rejoin_game(kinds=("disconnect",))`; the scheduled and stalled rejoins wait
+for the top of a cycle), and the backpack is only closed once it has been seen
+open on `BACKPACK_CLOSE_CONFIRMATIONS` (2) checks in a row - a handler opens the
+normal backpack for a few seconds on purpose, so one sighting could be a
+handler in the middle of its steps, but two `UNSCREW_TASK_INTERVAL` apart is a
+backpack open for longer than any handler needs. The paycheck check is skipped
+while the backpack is still open. If a minigame is played, or a disconnect made
+it rejoin, `TaskInterrupted` is raised: the handler is abandoned (both respawn
+the character), `process_needs()` logs `<need> interrupted by a minigame` /
+`a rejoin`, doesn't count it as resolved or as a failed attempt, and the next
+check decides from the screen what's still needed. During setup a minigame is
+only declined (No, without "do not show again"), since setup's clicks toggle
+things and can't be abandoned halfway.
+
+**Closing a backpack left open.** The backpack has two forms and both are
+detected. The *expanded* backpack (`detect_backpack_expanded()`) is recognised by
+its purple header bar (`BACKPACK_HEADER_COLOR`) filling at least
+`BACKPACK_HEADER_MIN_FRACTION` of `BACKPACK_HEADER_BOX`; it should never be
+open during a task. The *normal* backpack (`detect_backpack_normal()`) - the
+small panel at the bottom of the screen that handlers open for a few seconds -
+is recognised by its purple frame (`BACKPACK_NORMAL_COLOR`, at least
+`BACKPACK_NORMAL_MIN_PIXELS` within `BACKPACK_NORMAL_PANEL_BOX`) together with
+the white of its item grid (`BACKPACK_NORMAL_WHITE_*`); the frame alone or the
+white alone isn't enough, since the white is also any bright scenery. The normal
+backpack's detection is calibrated on a single screenshot (`ref/test` is for
+more). `detect_backpack_open()` is either. `close_backpack_if_open()` presses
+`KEY_BACKPACK` - but only while Roblox has the focus, so the key can't go to
+another window - looks again, and presses once more if it's still open (the
+expanded backpack takes two presses: the first shrinks it to the normal one, the
+second closes that). If it's still open after the second press the key isn't
+doing what's expected, so a failure is logged and it stops rather than pressing
+again, since another press could just reopen it. `close_backpack_if_stuck()`
+decides *when*: at once at the top of a cycle, and mid-task only on the second
+sighting in a row (see above).
 
 **Minigame popups.** Halloween has two minigames that offer to teleport you -
 "Ghost Gallery is starting soon! Teleport there now?" and "Hauntlet 2 is
@@ -423,11 +483,11 @@ Options tab). `minigame_popup()`:
 - **switched on** - `play_minigame()` clicks Yes (`MINIGAME_POPUP_YES_POS`)
   and plays it, as below. Minigames are time-sensitive, so this also happens
   when the popup turns up while a handler is waiting in
-  `wait_until_need_gone()` (which calls `minigame_popup()` for that reason): the
-  minigame is played right then and that wait ends - where the handler left
-  the character is unknown afterwards, and the next check sees whether the
-  need is still there. Handlers that never call `wait_until_need_gone()`
-  (`catch`, `pet`, `choose`) only see the popup at the start of the next cycle.
+  a handler's waits (see [Per-cycle checks while a task
+  runs](#per-cycle-checks-while-a-task-runs)): the minigame is played right
+  then and the handler abandoned (`TaskInterrupted`) - where it left the
+  character is unknown afterwards, and the next check sees what is still
+  needed.
 
 *Playing.* No needs can be seen while a minigame runs, so both end on the
 victory screen instead - a red GAME OVER! banner over a green NICE! button,
@@ -557,7 +617,9 @@ lure and tree actions are only reachable through `side_quest()`.
   house, then opens the backpack and clicks through
   `SETUP_BACKPACK_SETTINGS_POS` → `SETUP_SORT_MENU_POS` →
   `SETUP_FAVORITES_POS` → `SETUP_CONFIRM_POS` to set its item filter to
-  favorites only, then closes the backpack and calls `disable_trades()`.
+  favorites only, then closes the backpack and calls `disable_trades()`. It
+first closes any stray window (up to `SETUP_STRAY_TRIES`; see [Stray
+windows](#per-cycle-checks)) and runs inside `task_unscrew()`.
 - **`disable_trades()`** - sends the macro window to the back
   (`send_macro_window_to_back()`; the always-on-top panel covers the settings
   gear), clicks the six `SETUP_TRADES_*` positions (settings → settings menu →
@@ -779,7 +841,7 @@ exact values and rationale):
 
 | Group | Examples |
 |---|---|
-| Behavior flags | `ENABLED_NEEDS`, `STOP_HOTKEY`, `BACKPACK_HEADER_*`, `HALLOWEEN`, `MINIGAME_*`, `HAUNTLET_*`, `GHOST_GALLERY_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
+| Behavior flags | `ENABLED_NEEDS`, `STOP_HOTKEY`, `BACKPACK_*`, `HALLOWEEN`, `MINIGAME_*`, `HAUNTLET_*`, `GHOST_GALLERY_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
 | Window / coordinates | `REFERENCE_WIDTH`, `REFERENCE_HEIGHT`, `REFERENCE_CENTER_X/Y`, `ROBLOX_RECT_TTL` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `NEED_GONE_*` |
 | Stuck needs | `NEED_STUCK_CHECKS` |
@@ -826,6 +888,8 @@ were away can be read back afterwards:
   rejoins and focus resumes, and the last resolved need
   and last failure. `RUN_STATS` holds the counters in memory.
 - **`debug_needs.png`** / **`debug_buttons.png`** - see below.
+- **`debug_focus_pet.png`** / **`debug_focus_pet_after.png`** - what
+  `focus_pet()` saw and what the screen looked like after its clicks.
 
 A run that *stops* (a crash, or Roblox losing focus with **Resume after focus
 loss** off) ends the loop and stays stopped - deliberately, since losing focus

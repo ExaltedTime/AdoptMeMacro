@@ -13,7 +13,7 @@
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
-import os, sys, re, time, threading, json, subprocess, traceback, ctypes, queue, random
+import os, sys, re, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib
 from abc import ABC, abstractmethod
 from functools import partial
 import tkinter as tk
@@ -27,6 +27,15 @@ import pydirectinput
 import pygetwindow as gw
 
 from magic_numbers import *
+
+class TaskInterrupted(Exception):
+    """Raised from inside a need handler's waits when something that can't
+    wait (a minigame, a rejoin) took over the character: whatever the handler
+    was doing is abandoned. process_needs() catches it; the next check
+    decides from the screen what's still needed. `reason` is for the log."""
+    def __init__(self, reason="something"):
+        super().__init__(reason)
+        self.reason = reason
 
 class StopRequested(Exception):
     """Raised to unwind out of a running workflow when the user presses [STOP].
@@ -600,12 +609,9 @@ def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=N
     _need_cleared() for how each individual check is itself debounced.
     While the icons can't be read (a bright background, see
     need_bar_readable()) nothing counts as a miss, so that wait runs its
-    full length - and ending it isn't logged as a failure. A minigame popup
-    that appears meanwhile is handled at once (HALLOWEEN only), since it
-    blocks the clicks and the view and minigames are time-sensitive: if one
-    is played the wait ends there (where the handler left the character is
-    unknown by then, and the next check will see whether the need is still
-    there). Interruptible."""
+    full length - and ending it isn't logged as a failure. (Popups and
+    minigames that turn up meanwhile are handled by the unscrew() checks
+    wait_interruptible() runs during a task.) Interruptible."""
     print(f"[debug] waiting up to {max_wait}s for {need_name} to clear...")
     deadline = time.time() + max_wait
     misses = 0
@@ -620,9 +626,6 @@ def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=N
                 log_failure(f"{need_name} still showing after {max_wait}s")
             return
         wait_interruptible(min(NEED_GONE_CONFIRM_INTERVAL if misses else poll_interval, remaining))
-        if HALLOWEEN and minigame_popup() == "played":
-            print(f"[debug] a minigame was played - the {need_name} wait is over")
-            return
         cleared = _need_cleared(need_name)
         unreadable = cleared is None
         if not cleared:
@@ -686,6 +689,50 @@ def hover_click(x, y, duration=CLICK_MOVE_DURATION):
     pydirectinput.click()
     time.sleep(POST_CLICK_DELAY)
 
+# While a need handler (or setup) runs - see task_unscrew() - every
+# wait_interruptible() also runs the per-cycle checks (unscrew()) now and
+# then, so a popup, a stray window or a minigame doesn't wait for the handler
+# to finish. Only on the thread that started the task, and never from inside
+# unscrew() itself.
+TASK_ACTIVE = False
+TASK_PLAY_MINIGAMES = True
+TASK_THREAD = None
+_IN_UNSCREW = False
+_LAST_TASK_UNSCREW = 0.0
+
+@contextlib.contextmanager
+def task_unscrew(play_minigames=True):
+    """Within this block wait_interruptible() runs unscrew(in_task=True) every
+    UNSCREW_TASK_INTERVAL seconds. With `play_minigames` False (setup) an
+    offered minigame is only declined, never played - setup can't be
+    abandoned halfway, since its clicks toggle things."""
+    global TASK_ACTIVE, TASK_PLAY_MINIGAMES, TASK_THREAD, _LAST_TASK_UNSCREW
+    previous = (TASK_ACTIVE, TASK_PLAY_MINIGAMES, TASK_THREAD)
+    TASK_ACTIVE, TASK_PLAY_MINIGAMES, TASK_THREAD = True, play_minigames, threading.get_ident()
+    _LAST_TASK_UNSCREW = time.time()
+    try:
+        yield
+    finally:
+        TASK_ACTIVE, TASK_PLAY_MINIGAMES, TASK_THREAD = previous
+
+def task_unscrew_tick():
+    """The hook in wait_interruptible(): run the in-task checks if one is due.
+    Raises TaskInterrupted if a minigame was played or the game was rejoined."""
+    global _IN_UNSCREW, _LAST_TASK_UNSCREW
+    if (not TASK_ACTIVE or _IN_UNSCREW or threading.get_ident() != TASK_THREAD
+            or time.time() - _LAST_TASK_UNSCREW < UNSCREW_TASK_INTERVAL):
+        return
+    _IN_UNSCREW = True
+    try:
+        played = unscrew(in_task=True, play_minigames=TASK_PLAY_MINIGAMES)
+    finally:
+        _IN_UNSCREW = False
+        _LAST_TASK_UNSCREW = time.time()
+    if played == "played":
+        raise TaskInterrupted("a minigame")
+    if played == "rejoined":
+        raise TaskInterrupted("a rejoin")
+
 def wait_interruptible(duration):
     """Sleep for `duration`, in STOP_CHECK_INTERVAL chunks, checking
     check_running() between each chunk. Raises StopRequested or FocusLost
@@ -694,6 +741,7 @@ def wait_interruptible(duration):
     elapsed = 0.0
     while elapsed < duration:
         check_running()
+        task_unscrew_tick()
         sleep_chunk = min(STOP_CHECK_INTERVAL, duration - elapsed)
         time.sleep(sleep_chunk)
         elapsed += sleep_chunk
@@ -987,7 +1035,16 @@ def tree_collect():
 def setup_game():
     """Setup: lock the house, set the backpack's item filter to favorites
     only, then disable trades (disable_trades()). Not part of the cycle -
-    only run on demand (the GUI's Setup button)."""
+    only run on demand (the GUI's Setup button), and after a rejoin. Stray
+    windows are closed first, since an open one would take its clicks, and
+    the in-task checks run throughout (minigames only declined)."""
+    with task_unscrew(play_minigames=False):
+        return _setup_steps()
+
+def _setup_steps():
+    for _ in range(SETUP_STRAY_TRIES):
+        if not dismiss_stray_windows():
+            break
     respawn_character()
     print("[debug] locking house...")
     hover_click(*SETUP_LOCK_HOUSE_POS)
@@ -1176,11 +1233,12 @@ def leave_and_rejoin(clean_leave=True):
 # NEED_HANDLER_CLASSES), since those only differ by a name/config, not by
 # behavior.
 
-def find_moving_blobs(img_a, img_b, top_percent=FOCUS_PET_REGION_TOP_PERCENT):
+def moving_blobs(img_a, img_b, top_percent=FOCUS_PET_REGION_TOP_PERCENT):
     """Compare two same-size BGR screenshots over the bottom (1 - top_percent)
-    of the screen and return the (x, y) screen center of every blob of
-    pixels that changed between them, largest first. Pure image logic, no
-    input or waiting, so it can be tested on its own."""
+    of the screen and return ([(x, y, w, h, area) per blob of pixels that
+    changed between them, largest first, in screen coordinates], the change
+    mask of the region, its top row). Pure image logic, no input or waiting,
+    so it can be tested on its own."""
     top = int(img_a.shape[0] * top_percent)
     diff = cv2.absdiff(cv2.cvtColor(img_a[top:], cv2.COLOR_BGR2GRAY),
                        cv2.cvtColor(img_b[top:], cv2.COLOR_BGR2GRAY))
@@ -1192,29 +1250,57 @@ def find_moving_blobs(img_a, img_b, top_percent=FOCUS_PET_REGION_TOP_PERCENT):
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     blobs = []
     for contour in sorted(contours, key=cv2.contourArea, reverse=True):
-        if cv2.contourArea(contour) < FOCUS_PET_MIN_AREA:
+        area = cv2.contourArea(contour)
+        if area < FOCUS_PET_MIN_AREA:
             continue
         x, y, w, h = cv2.boundingRect(contour)
-        blobs.append((x + w // 2, top + y + h // 2))
-    return blobs
+        blobs.append((x, top + y, w, h, int(area)))
+    return blobs, mask, top
+
+def find_moving_blobs(img_a, img_b, top_percent=FOCUS_PET_REGION_TOP_PERCENT):
+    """The (x, y) center of every blob moving_blobs() finds, largest first."""
+    blobs, _, _ = moving_blobs(img_a, img_b, top_percent)
+    return [(x + w // 2, y + h // 2) for x, y, w, h, _ in blobs]
+
+def save_focus_pet_debug(img, blobs, mask, top, name="debug_focus_pet.png"):
+    """Write debug/<name>: `img` (the second frame) with the searched region
+    marked, the changed pixels in red, and a numbered box around every blob -
+    so what focus_pet() thinks moved, and so where it clicks, can be seen."""
+    marked = img.copy()
+    region = marked[top:]
+    region[mask > 0] = (0, 0, 255)
+    cv2.line(marked, (0, top), (marked.shape[1], top), FOCUS_PET_DEBUG_COLOR, 1)
+    for i, (x, y, w, h, area) in enumerate(blobs, 1):
+        cv2.rectangle(marked, (x, y), (x + w, y + h), FOCUS_PET_DEBUG_COLOR, 2)
+        cv2.putText(marked, f"{i}: {area}", (x, max(12, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, FOCUS_PET_DEBUG_COLOR, 2)
+    cv2.imwrite(os.path.join(DEBUG_DIR, name), marked)
 
 def focus_pet(click_duration=CLICK_MOVE_DURATION):
     """Click the pet to open its interaction menu. The pet is found by
     movement: two screenshots of the bottom of the screen FOCUS_PET_FRAME_GAP
     apart, then a click on the center of everything that moved (see
-    find_moving_blobs()). Returns True if anything was clicked, False if
-    nothing moved."""
+    moving_blobs()). What it saw is printed and written to
+    debug/debug_focus_pet.png (the blobs, marked) - and what the screen looked
+    like after the clicks to debug/debug_focus_pet_after.png. Returns True if
+    anything was clicked, False if nothing moved."""
     img_a = grab_screen()
     wait_interruptible(FOCUS_PET_FRAME_GAP)
     img_b = grab_screen()
-    blobs = find_moving_blobs(img_a, img_b)
+    blobs, mask, top = moving_blobs(img_a, img_b)
+    changed = int(np.count_nonzero(mask))
+    print(f"[debug] focus_pet: {len(blobs)} moving blob(s), {changed} changed px below y={top}")
+    for i, (x, y, w, h, area) in enumerate(blobs, 1):
+        print(f"[debug] focus_pet:   #{i} center ({x + w // 2}, {y + h // 2}), {w}x{h}, area {area}")
+    save_focus_pet_debug(img_b, blobs, mask, top)
     if not blobs:
-        print("[debug] focus_pet: nothing moved, pet not found")
+        print("[debug] focus_pet: nothing moved, pet not found (see debug/debug_focus_pet.png)")
         return False
-    for x, y in blobs:
-        print(f"[debug] focusing pet at ({x}, {y})...")
-        hover_click(x, y, duration=click_duration)
+    for i, (x, y, w, h, _) in enumerate(blobs, 1):
+        print(f"[debug] focus_pet: clicking #{i} at ({x + w // 2}, {y + h // 2})...")
+        hover_click(x + w // 2, y + h // 2, duration=click_duration)
     wait_interruptible(FOCUS_PET_MENU_WAIT)
+    after = grab_screen()
+    save_focus_pet_debug(after, blobs, np.zeros_like(mask), top, name="debug_focus_pet_after.png")
     return True
 
 def equip_favorite_vehicle():
@@ -1607,7 +1693,18 @@ def process_needs():
                 continue
             attempted.add(need_name)
             started = time.time()
-            if not handler.handle():
+            try:
+                with task_unscrew():
+                    handled = handler.handle()
+            except TaskInterrupted as interruption:
+                # A minigame or a rejoin took over (both respawn): not
+                # resolved, and not a failed attempt either - the next check
+                # sees what's still on screen.
+                attempted.discard(need_name)
+                print(f"[debug] {need_name} interrupted by {interruption.reason}")
+                log_run_event(f"{need_name} interrupted by {interruption.reason}")
+                return True
+            if not handled:
                 print(f"[debug] could not resolve '{need_name}' this pass, skipping")
                 RUN_STATS["failed"][need_name] = RUN_STATS["failed"].get(need_name, 0) + 1
                 log_failure(f"{need_name} handler could not resolve it")
@@ -1648,36 +1745,77 @@ def detect_paycheck():
     hover_click(*PAYCHECK_DISMISS_POS_2)
     return True
 
-def detect_backpack_open(img):
-    """True if the backpack is open in `img`: most of BACKPACK_HEADER_BOX is
-    the purple of its header bar."""
+def detect_backpack_expanded(img):
+    """True if the EXPANDED backpack is open in `img`: most of
+    BACKPACK_HEADER_BOX is the purple of its header bar."""
     left, top, right, bottom = BACKPACK_HEADER_BOX
     mask = exact_color_mask(img[top:bottom, left:right], BACKPACK_HEADER_COLOR, BACKPACK_HEADER_TOLERANCE)
     return np.count_nonzero(mask) / mask.size >= BACKPACK_HEADER_MIN_FRACTION
 
+def detect_backpack_normal(img):
+    """True if the NORMAL backpack is open in `img`: its purple frame within
+    BACKPACK_NORMAL_PANEL_BOX and the white of its item grid
+    (BACKPACK_NORMAL_WHITE_BOX), both - the white alone would also be any
+    bright scenery."""
+    left, top, right, bottom = BACKPACK_NORMAL_PANEL_BOX
+    frame = exact_color_mask(img[top:bottom, left:right], BACKPACK_NORMAL_COLOR, BACKPACK_NORMAL_TOLERANCE)
+    if np.count_nonzero(frame) < BACKPACK_NORMAL_MIN_PIXELS:
+        return False
+    left, top, right, bottom = BACKPACK_NORMAL_WHITE_BOX
+    grid = img[top:bottom, left:right]
+    white = np.count_nonzero(grid.min(axis=2) >= BACKPACK_NORMAL_WHITE_LEVEL)
+    return white / (grid.shape[0] * grid.shape[1]) >= BACKPACK_NORMAL_MIN_WHITE_FRACTION
+
+def detect_backpack_open(img):
+    """True if the backpack is open in `img`, in either form."""
+    return detect_backpack_expanded(img) or detect_backpack_normal(img)
+
+# How many in-task checks in a row have seen the backpack open (see
+# close_backpack_if_stuck()).
+_BACKPACK_STRIKES = 0
+
 def close_backpack_if_open():
-    """Close the backpack if it's open - it's run at the start of a cycle, when
-    no handler should have it open, so one that's open was left that way (a
-    handler interrupted halfway, a toggle that got out of step). What
-    detect_backpack_open() sees is the *expanded* backpack, which takes two
-    presses of KEY_BACKPACK: the first shrinks it to the normal backpack, the
-    second closes that. After the first press the expanded header must be
-    gone - if it isn't, the key isn't doing what's expected, so that's logged
-    as a failure and it stops instead of pressing again (another press could
-    just reopen it). Does nothing unless Roblox has the focus, so the key
-    can't go to another window. Returns True if it was open."""
+    """Close the backpack if it's open, in either form: press KEY_BACKPACK,
+    look again, and press once more if it's still open (the expanded one takes
+    two presses - the first shrinks it to the normal one, the second closes
+    that). If it's still open after the second press the key isn't doing what's
+    expected, so that's logged as a failure and it stops instead of pressing
+    again (another press could just reopen it). Does nothing unless Roblox has
+    the focus, so the key can't go to another window. Returns True if it was
+    open."""
     if not is_roblox_focused() or not detect_backpack_open(grab_screen()):
         return False
     print("[debug] backpack left open, closing it...")
-    pydirectinput.press(KEY_BACKPACK)
-    wait_interruptible(UI_SETTLE)
-    if detect_backpack_open(grab_screen()):
-        log_failure("backpack still expanded after pressing the backpack key")
-        return True
-    pydirectinput.press(KEY_BACKPACK)
-    wait_interruptible(UI_SETTLE)
-    log_run_event("backpack was left open - closed it")
+    for _ in range(2):
+        pydirectinput.press(KEY_BACKPACK)
+        wait_interruptible(UI_SETTLE)
+        if not detect_backpack_open(grab_screen()):
+            log_run_event("backpack was left open - closed it")
+            return True
+    log_failure("backpack still open after pressing the backpack key twice")
     return True
+
+def close_backpack_if_stuck(in_task):
+    """The backpack part of unscrew(). At the top of a cycle no handler has it
+    open, so it's closed at once (close_backpack_if_open()). During a task a
+    handler has the normal one open for a few seconds on purpose, so it's only
+    closed once it has been seen open on BACKPACK_CLOSE_CONFIRMATIONS checks
+    in a row - at UNSCREW_TASK_INTERVAL apart that's a backpack open for
+    longer than that, which a handler never needs. Returns True if it's still
+    open (a first sighting, mid-task)."""
+    global _BACKPACK_STRIKES
+    if not in_task:
+        close_backpack_if_open()
+        return False
+    if not is_roblox_focused() or not detect_backpack_open(grab_screen()):
+        _BACKPACK_STRIKES = 0
+        return False
+    _BACKPACK_STRIKES += 1
+    if _BACKPACK_STRIKES < BACKPACK_CLOSE_CONFIRMATIONS:
+        return True
+    _BACKPACK_STRIKES = 0
+    close_backpack_if_open()
+    return False
 
 def detect_disconnect(img):
     """True if the Roblox "Disconnected" dialog is on screen in `img`: most
@@ -1712,8 +1850,10 @@ def rejoin_reason():
         return "scheduled", f"{REJOIN_INTERVAL / 3600:g} hour(s) since the last rejoin"
     return None
 
-def rejoin_game():
-    """Recover when the game needs it (see rejoin_reason()): rejoin it
+def rejoin_game(kinds=None):
+    """Recover when the game needs it (see rejoin_reason()), or - with `kinds`
+    (e.g. ("disconnect",), for the mid-task check) - only when it needs it for
+    one of those reasons: rejoin it
     (leave_and_rejoin()), run setup_game() - the rejoin resets the game
     settings it sets - and clear the disabled needs and their detection
     history so every need gets a fresh chance. Returns True if it recovered,
@@ -1723,7 +1863,7 @@ def rejoin_game():
     Disconnected dialog and its error code if that's why. The clean esc/l/
     enter leave is skipped when the game is already gone."""
     found = rejoin_reason()
-    if found is None:
+    if found is None or (kinds is not None and found[0] not in kinds):
         return False
     kind, reason = found
     if kind == "scheduled":
@@ -1762,30 +1902,63 @@ def detect_minigame_popup(img):
                   max(0, yes_x - MINIGAME_POPUP_NO_MAX_DX):yes_x]
     return int(np.count_nonzero(exact_color_mask(near_no, MINIGAME_POPUP_NO_COLOR))) >= MINIGAME_POPUP_MIN_BUTTON_PIXELS
 
-def load_minigame_titles():
-    """{minigame name: title crop} for every image in MINIGAME_TEMPLATE_DIR."""
-    titles = {}
-    if os.path.isdir(MINIGAME_TEMPLATE_DIR):
-        for f in sorted(os.listdir(MINIGAME_TEMPLATE_DIR)):
-            crop = cv2.imread(os.path.join(MINIGAME_TEMPLATE_DIR, f))
+def load_templates(directory):
+    """{lower-cased file name without extension: image} for every .png in
+    `directory` (none if it doesn't exist)."""
+    templates = {}
+    if os.path.isdir(directory):
+        for f in sorted(os.listdir(directory)):
+            crop = cv2.imread(os.path.join(directory, f))
             if f.lower().endswith(".png") and crop is not None:
-                titles[os.path.splitext(f)[0].lower()] = crop
-    return titles
+                templates[os.path.splitext(f)[0].lower()] = crop
+    return templates
+
+def template_score(img, crop, box):
+    """How well `crop` matches anywhere within `box` (left, top, right,
+    bottom) of `img`: 0-1, 1 = identical (cv2.matchTemplate)."""
+    left, top, right, bottom = box
+    band = img[top:bottom, left:right]
+    if crop.shape[0] > band.shape[0] or crop.shape[1] > band.shape[1]:
+        return 0.0
+    return float(cv2.minMaxLoc(cv2.matchTemplate(band, crop, cv2.TM_CCOEFF_NORMED))[1])
 
 def identify_minigame(img):
     """Which minigame the popup in `img` is for: the name whose title crop
     (MINIGAME_TEMPLATE_DIR) matches best within MINIGAME_TITLE_BOX, if that
     match reaches MINIGAME_TITLE_MATCH_THRESHOLD - otherwise None."""
-    left, top, right, bottom = MINIGAME_TITLE_BOX
-    band = img[top:bottom, left:right]
     best_name, best_score = None, MINIGAME_TITLE_MATCH_THRESHOLD
-    for name, crop in load_minigame_titles().items():
-        if crop.shape[0] > band.shape[0] or crop.shape[1] > band.shape[1]:
-            continue
-        score = float(cv2.minMaxLoc(cv2.matchTemplate(band, crop, cv2.TM_CCOEFF_NORMED))[1])
+    for name, crop in load_templates(MINIGAME_TEMPLATE_DIR).items():
+        score = template_score(img, crop, MINIGAME_TITLE_BOX)
         if score >= best_score:
             best_name, best_score = name, score
     return best_name
+
+def dismiss_stray_windows():
+    """Close any window from STRAY_WINDOWS that's open (found by its title
+    crop in STRAY_WINDOW_DIR): the Trading Hub the macro can open by a
+    misclick - first its "Go to the Trading Hub to edit listings!" popup, by
+    the green Okay button - and the Star Rewards, which opens once a day.
+    They cover the screen and get in the way of everything the macro clicks
+    (the Star Rewards also hides the need icons; the Trading Hub doesn't, but
+    needs can't be resolved with it in the way), and the paycheck check
+    mistakes their green buttons for CASH OUT. Returns the name of the window
+    closed, or None."""
+    img = grab_screen()
+    for name, crop in load_templates(STRAY_WINDOW_DIR).items():
+        config = STRAY_WINDOWS.get(name)
+        if config is None or template_score(img, crop, config["box"]) < STRAY_WINDOW_MATCH_THRESHOLD:
+            continue
+        print(f"[debug] stray window open: {name}, closing it...")
+        log_run_event(f"stray window closed: {name}")
+        if name == "trading_hub":
+            left, top, right, bottom = STRAY_OKAY_BOX
+            okay = exact_color_mask(img[top:bottom, left:right], STRAY_OKAY_COLOR, STRAY_OKAY_TOLERANCE)
+            if np.count_nonzero(okay) >= STRAY_OKAY_MIN_PIXELS:
+                hover_click(*STRAY_OKAY_POS)
+        hover_click(*config["close_pos"])
+        time.sleep(STRAY_CLOSE_SETTLE)
+        return name
+    return None
 
 def detect_minigame_victory(img):
     """True if the minigame victory screen is on screen in `img`: the red
@@ -1874,40 +2047,61 @@ def play_minigame(name):
     respawn_character()
     return won
 
-def minigame_popup():
+def minigame_popup(play=True):
     """Halloween only (see HALLOWEEN): handles a minigame popup (see
     detect_minigame_popup()). Which minigame it is comes from
     identify_minigame(). One that is switched on ("<name>_enabled" in the game
-    config) is played (play_minigame()); any other (switched off, or not
-    recognised) is dismissed for the session with "do not show again" ticked.
-    Returns "played" or "dismissed" if a popup was there, None if not."""
+    config) is played (play_minigame()) - unless `play` is False, when it's
+    only closed with No so it can offer itself again; any other (switched off,
+    or not recognised) is dismissed for the session with "do not show again"
+    ticked. Returns "played" or "dismissed" if a popup was there, None if not."""
     img = grab_screen()
     if not detect_minigame_popup(img):
         return None
     name = identify_minigame(img)
     if name is not None and load_game_config().get(f"{name}_enabled", False):
-        print(f"[debug] minigame popup detected: playing {name}")
-        play_minigame(name)
-        return "played"
+        if play:
+            print(f"[debug] minigame popup detected: playing {name}")
+            play_minigame(name)
+            return "played"
+        print(f"[debug] minigame popup detected ({name}), declining it for now...")
+        hover_click(*MINIGAME_POPUP_NO_POS)
+        return "dismissed"
     print(f"[debug] minigame popup detected ({name or 'unknown'}), dismissing...")
     log_run_event(f"minigame popup dismissed ({name or 'unknown'})")
     hover_click(*MINIGAME_POPUP_DONT_SHOW_POS)   # "Do not show again this session"
     hover_click(*MINIGAME_POPUP_NO_POS)
     return "dismissed"
 
-def unscrew():
-    """Runs once per cycle, right after check_stop(). Rejoins if we've been
-    disconnected (first, since nothing else works while disconnected), closes
-    the backpack if it was left open, then, during Halloween, handles a
-    minigame popup, then checks for the paycheck popup; more checks may
-    be added here later. The minigame popup
-    goes before the paycheck check because detect_paycheck() would otherwise
-    mistake the popup's Yes button for CASH OUT (same green)."""
-    rejoin_game()
-    close_backpack_if_open()
-    if HALLOWEEN:
-        minigame_popup()
-    detect_paycheck()
+def unscrew(in_task=False, play_minigames=True):
+    """The per-cycle checks - run right after check_stop() at the top of every
+    cycle, and, with `in_task`, every UNSCREW_TASK_INTERVAL seconds while a
+    need handler or setup is running (see task_unscrew()). In order:
+      - rejoin if we've been disconnected (first, since nothing else works
+        while disconnected; mid-task only that, not the scheduled or stalled
+        rejoins, which wait for the top of a cycle);
+      - close the backpack, in either form (close_backpack_if_stuck(): at once
+        at the top of a cycle, mid-task once it's been seen open twice in a
+        row);
+      - close stray windows (dismiss_stray_windows());
+      - during Halloween, handle a minigame popup;
+      - the paycheck popup (not while the backpack is still open - its green
+        Select All button would be mistaken for CASH OUT).
+    The stray windows and the minigame popup go before the paycheck check
+    because their green buttons would otherwise be mistaken for CASH OUT too.
+    Returns "played" if a minigame was played, "rejoined" if the game was
+    rejoined mid-task (the callers abandon the task), otherwise None."""
+    if in_task:
+        if rejoin_game(kinds=("disconnect",)):
+            return "rejoined"
+    else:
+        rejoin_game()
+    backpack_open = close_backpack_if_stuck(in_task)
+    dismiss_stray_windows()
+    played = minigame_popup(play=play_minigames) if HALLOWEEN else None
+    if not backpack_open:
+        detect_paycheck()
+    return played
 
 def side_quest():
     """Runs once per cycle, right after unscrew(), unless side_quest_enabled
@@ -2437,7 +2631,11 @@ class AdoptMeGUI:
         flow, so it can be tried even when it isn't in ENABLED_NEEDS."""
         def test():
             print(f"\n[TEST] Running {name} handler...")
-            handler_cls().handle()
+            try:
+                with task_unscrew():
+                    handler_cls().handle()
+            except TaskInterrupted as interruption:
+                print(f"[TEST] {name} interrupted by {interruption.reason}")
             print(f"[TEST] {name.capitalize()} handler complete\n")
         self.run_async(test)
 

@@ -72,10 +72,33 @@ GHOST_GALLERY_STEP_MIN = 0.3        # while it's held, a random direction (MOVE_
 GHOST_GALLERY_STEP_MAX = 1.0        # for a random time between these
 
 # ============================================================================
+# STRAY WINDOWS
+# ============================================================================
+# Windows that open by accident (a misclick) or on their own (the daily Star Rewards) and block everything: each is
+# recognised by a crop of its title in STRAY_WINDOW_DIR (file name = the name here), searched for within
+# "box", and closed by clicking "close_pos" - see dismiss_stray_windows(). The Trading Hub also throws up a
+# "Go to the Trading Hub to edit listings!" popup, found by its green Okay button and clicked first.
+STRAY_WINDOW_MATCH_THRESHOLD = 0.8
+STRAY_WINDOWS = {
+    "trading_hub": {"box": (580, 290, 1020, 400), "close_pos": (1278, 339)},
+    "star_rewards": {"box": (640, 385, 1060, 475), "close_pos": (1209, 441)},
+}
+STRAY_OKAY_BOX = (800, 637, 1120, 680)
+STRAY_OKAY_COLOR = (74, 198, 85)
+STRAY_OKAY_TOLERANCE = 3
+STRAY_OKAY_MIN_PIXELS = 5000      # the button is ~11000 exact-color px in that box
+STRAY_OKAY_POS = (962, 657)
+SETUP_STRAY_TRIES = 3             # setup closes up to this many stray windows before it starts
+STRAY_CLOSE_SETTLE = 1.0          # after a click, before looking again
+# While a need handler (or setup) is running, the per-cycle checks (unscrew()) also run, this often.
+UNSCREW_TASK_INTERVAL = 4.0
+
+# ============================================================================
 # PATHS
 # ============================================================================
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MINIGAME_TEMPLATE_DIR = os.path.join(SCRIPT_DIR, "ref", "halloween")
+STRAY_WINDOW_DIR = os.path.join(SCRIPT_DIR, "ref", "popups")
 NEEDS_DIR = os.path.join(SCRIPT_DIR, "needs")
 DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
 Path(NEEDS_DIR).mkdir(exist_ok=True)
@@ -160,6 +183,7 @@ FOCUS_PET_FRAME_GAP = 0.1            # seconds between the two screenshots
 FOCUS_PET_DIFF_THRESHOLD = 25        # per-pixel brightness change that counts as movement (0-255)
 FOCUS_PET_MERGE_KERNEL = 25          # px; changed pixels this close together merge into one blob
 FOCUS_PET_MIN_AREA = 150             # px^2; smaller blobs are noise, not the pet
+FOCUS_PET_DEBUG_COLOR = (0, 255, 0)    # BGR, the boxes drawn on debug/debug_focus_pet.png
 FOCUS_PET_MENU_WAIT = 4.0            # wait after the clicks, for the pet's menu to open
 
 # The 'choose' need's button is matched by its exact color rather than shape,
@@ -178,13 +202,27 @@ PAYCHECK_MIN_PIXELS = 200
 PAYCHECK_DISMISS_POS_1 = (946, 679)
 PAYCHECK_DISMISS_POS_2 = (948, 627)
 
-# The backpack is open when its purple header bar fills BACKPACK_HEADER_BOX (left, top, right, bottom) -
-# see detect_backpack_open(). unscrew() presses KEY_BACKPACK if it's open at the start of a cycle, when
-# no handler should have it open.
+# The EXPANDED backpack is open when its purple header bar fills BACKPACK_HEADER_BOX (left, top, right,
+# bottom) - see detect_backpack_expanded(). It should never be open during a task.
 BACKPACK_HEADER_COLOR = (143, 74, 255)
 BACKPACK_HEADER_TOLERANCE = 4
 BACKPACK_HEADER_BOX = (1090, 36, 1840, 70)
 BACKPACK_HEADER_MIN_FRACTION = 0.5
+# The NORMAL backpack (the small panel at the bottom of the screen, which handlers open for a few seconds):
+# its purple frame (BACKPACK_NORMAL_COLOR, at least BACKPACK_NORMAL_MIN_PIXELS of it within the panel box)
+# and the white of its item grid (at least BACKPACK_NORMAL_MIN_WHITE_FRACTION of the white box at or above
+# BACKPACK_NORMAL_WHITE_LEVEL) - see detect_backpack_normal(). Calibrated on a single screenshot.
+BACKPACK_NORMAL_COLOR = (150, 92, 255)
+BACKPACK_NORMAL_TOLERANCE = 12
+BACKPACK_NORMAL_PANEL_BOX = (712, 640, 1210, 930)
+BACKPACK_NORMAL_MIN_PIXELS = 800
+BACKPACK_NORMAL_WHITE_BOX = (850, 690, 1190, 920)
+BACKPACK_NORMAL_WHITE_LEVEL = 240
+BACKPACK_NORMAL_MIN_WHITE_FRACTION = 0.2
+# unscrew() closes either backpack at once at the start of a cycle; during a task (where a handler has the
+# normal one open for a few seconds on purpose) only once it's been seen open on this many checks in a
+# row, UNSCREW_TASK_INTERVAL apart.
+BACKPACK_CLOSE_CONFIRMATIONS = 2
 
 # Ride need: positions for the backpack -> vehicles -> first vehicle -> equip
 # sequence, plus how long to hold each step.

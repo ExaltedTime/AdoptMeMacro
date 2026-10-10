@@ -1779,15 +1779,13 @@ def process_needs():
 # dismiss, recovering the game when it's gone wrong, and the timed chores.
 
 def detect_paycheck():
-    """Detect the paycheck popup by its CASH OUT button's exact color - only
-    filling PAYCHECK_BUTTON_BOX by at least PAYCHECK_MIN_FRACTION, since
-    that green is also the backpack's Select All button, among others - and,
-    if present, dismiss it. Returns True if the popup was detected and
-    dismissed, False otherwise."""
-    left, top, right, bottom = PAYCHECK_BUTTON_BOX
-    region = grab_screen()[top:bottom, left:right]
-    mask = exact_color_mask(region, PAYCHECK_CASHOUT_COLOR)
-    if np.count_nonzero(mask) / mask.size < PAYCHECK_MIN_FRACTION:
+    """Detect the paycheck popup by the crop of its bank-card header
+    (ref/popups/paycheck.png, matched within PAYCHECK_BOX) and, if present,
+    dismiss it. Returns True if the popup was detected and dismissed, False
+    otherwise. Not by the green of its CASH OUT button, which the backpack's
+    tiles share."""
+    crop = load_templates(STRAY_WINDOW_DIR).get("paycheck")
+    if crop is None or template_score(grab_screen(), crop, PAYCHECK_BOX) < PAYCHECK_MATCH_THRESHOLD:
         return False
 
     print("[debug] paycheck popup detected, dismissing...")

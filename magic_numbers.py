@@ -208,12 +208,10 @@ CHOOSE_SLOW_MOVE_DURATION = 1.0  # deliberate, slow mouse travel to the found bu
 # The paycheck popup's CASH OUT button, matched by exact color the same way
 # as CHOOSE_BUTTON_COLOR above.
 PAYCHECK_CASHOUT_COLOR = (74, 198, 85)
-# That green is everywhere in the game (the backpack's tab tiles and Select All button, the Play and Yes
-# buttons...), so it only counts when it fills PAYCHECK_BUTTON_BOX (left, top, right, bottom - exactly the
-# CASH OUT button) by at least PAYCHECK_MIN_FRACTION. The real button measures 0.73; small green tiles
-# can't fill that much of it.
-PAYCHECK_BUTTON_BOX = (770, 603, 1152, 648)
-PAYCHECK_MIN_FRACTION = 0.5
+# The popup itself is recognised by a crop of its bank-card header ("BANK of Adopt Me!", ref/popups/paycheck.png)
+# found within PAYCHECK_BOX (left, top, right, bottom) with a match of at least PAYCHECK_MATCH_THRESHOLD.
+PAYCHECK_BOX = (740, 400, 1180, 490)
+PAYCHECK_MATCH_THRESHOLD = 0.8
 PAYCHECK_DISMISS_POS_1 = (946, 679)
 PAYCHECK_DISMISS_POS_2 = (948, 627)
 

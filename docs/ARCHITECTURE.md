@@ -400,11 +400,11 @@ paycheck popup every cycle. `rejoin_game()` is the automatic recovery - see
 the screen: the Trading Hub (how it got opened isn't known; a misclicking
 `choose` is the suspect - see `debug/debug_focus_pet.png`; it throws up a "Go
 to the Trading Hub to edit listings!" popup on top) and the Star Rewards, which
-opens once a day, at no known moment. While one is open the need icons are
-hidden, so nothing is detected and nothing gets done; run 308's two 20-minute
-stalls (a `paycheck popup dismissed` line every cycle, no `detected:` lines)
-were these windows - the macro's paycheck clicks don't close them, and their
-green buttons look like CASH OUT.
+opens once a day, at no known moment. The Star Rewards hides the need icons;
+the Trading Hub doesn't, but needs can't be resolved with it in the way. Run
+308's two 20-minute stalls (a `paycheck popup dismissed` line every cycle) were
+these windows - the macro's paycheck clicks don't close them, and their green
+buttons look like CASH OUT.
 `dismiss_stray_windows()` recognises each by a crop of its title
 in `ref/popups/` (`trading_hub.png`, `star_rewards.png`; matched within the
 `box` in `STRAY_WINDOWS`, at least `STRAY_WINDOW_MATCH_THRESHOLD`) and clicks

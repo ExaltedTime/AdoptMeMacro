@@ -1891,9 +1891,11 @@ def dismiss_stray_windows():
     crop in STRAY_WINDOW_DIR): the Trading Hub the macro can open by a
     misclick - first its "Go to the Trading Hub to edit listings!" popup, by
     the green Okay button - and the Star Rewards, which opens once a day.
-    They cover the screen, the need icons are hidden while they're open, and
-    the paycheck check mistakes their green buttons for CASH OUT. Returns the
-    name of the window closed, or None."""
+    They cover the screen and get in the way of everything the macro clicks
+    (the Star Rewards also hides the need icons; the Trading Hub doesn't, but
+    needs can't be resolved with it in the way), and the paycheck check
+    mistakes their green buttons for CASH OUT. Returns the name of the window
+    closed, or None."""
     img = grab_screen()
     for name, crop in load_templates(STRAY_WINDOW_DIR).items():
         config = STRAY_WINDOWS.get(name)

@@ -13,11 +13,11 @@
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
-import os, sys, re, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib
+import os, sys, re, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib, shutil
 from abc import ABC, abstractmethod
 from functools import partial
 import tkinter as tk
-from tkinter import scrolledtext, simpledialog, ttk
+from tkinter import messagebox, scrolledtext, simpledialog, ttk
 
 import numpy as np
 import cv2
@@ -267,6 +267,39 @@ DISABLED_THIS_RUN = set()
 # LOGGING
 # ============================================================================
 
+def migrate_debug_layout():
+    """Move what an older version left in debug/ into the images/ and logs/
+    subfolders (see IMAGES_DIR / LOGS_DIR), if it isn't there already. Never
+    raises."""
+    moves = [(name, LOGS_DIR) for name in ("run_log.txt", "run_counter.txt", "output.log", "output.log.old", "status.json")]
+    moves += [(name, IMAGES_DIR) for name in ("failures", "reports")]
+    try:
+        moves += [(name, IMAGES_DIR) for name in os.listdir(DEBUG_DIR) if name.startswith("debug_") and name.endswith(".png")]
+        for name, folder in moves:
+            source, target = os.path.join(DEBUG_DIR, name), os.path.join(folder, name)
+            if os.path.exists(source) and not os.path.exists(target):
+                os.replace(source, target)
+    except OSError as error:
+        print(f"[!] couldn't move the old debug files: {error}")
+
+migrate_debug_layout()
+
+def refresh_debug():
+    """Empty the debug folder - the images, the logs, the recordings - except
+    the game config (GAME_CONFIG_PATH), then recreate the subfolders. The run
+    numbers start from 1 again, since the counter goes with the logs. Returns
+    the number of entries removed."""
+    removed = 0
+    for name in os.listdir(DEBUG_DIR):
+        path = os.path.join(DEBUG_DIR, name)
+        if path == GAME_CONFIG_PATH:
+            continue
+        shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
+        removed += 1
+    for directory in (IMAGES_DIR, LOGS_DIR):
+        os.makedirs(directory, exist_ok=True)
+    return removed
+
 def next_run_number():
     """Return a fresh run number, persisted in RUN_COUNTER_PATH so numbers
     stay unique across separate launches of the script, not just within one
@@ -395,6 +428,8 @@ def load_game_config():
             config = json.load(f)
     except (FileNotFoundError, ValueError):
         return defaults
+    if "hauntlet_enabled" in config:   # before it was called Hauntlet 2
+        config.setdefault("hauntlet_2_enabled", config.pop("hauntlet_enabled"))
     return {**defaults, **config}
 
 def save_game_config(config):
@@ -487,7 +522,7 @@ def detect_need_icons(save_debug=False):
         debug_img = top_strip.copy()
         for cx, cy, r in found:
             cv2.circle(debug_img, (cx, cy), r, DEBUG_NEED_MARKER_COLOR, DEBUG_NEED_MARKER_THICKNESS)
-        cv2.imwrite(os.path.join(DEBUG_DIR, "debug_needs.png"), debug_img)
+        cv2.imwrite(os.path.join(IMAGES_DIR, "debug_needs.png"), debug_img)
 
     return found, img
 
@@ -569,7 +604,7 @@ def identify_icons(found_icons, full_img):
         need_name, score = find_matching_need(icon_variants(full_img, cx, cy))
         yield idx, icon_img, need_name, score
 
-def need_bar_readable(img):
+def detect_need_bar_readable(img):
     """False if the strip the icons sit in is mostly near-white in `img`
     (NEED_BAR_BRIGHT_LEVEL / NEED_BAR_MAX_BRIGHT_FRACTION) - the Pizza Party's
     bright background, say. The icons can't be recognised against that, so
@@ -581,9 +616,9 @@ def need_bar_readable(img):
 
 def scan_needs():
     """One-shot snapshot: (every need name currently detected on screen, whether
-    the icons could be read at all - see need_bar_readable())."""
+    the icons could be read at all - see detect_need_bar_readable())."""
     found_icons, full_img = detect_need_icons()
-    if not need_bar_readable(full_img):
+    if not detect_need_bar_readable(full_img):
         return [], False
     return [name for _, _, name, _ in identify_icons(found_icons, full_img)], True
 
@@ -591,7 +626,7 @@ def _need_cleared(need_name):
     """True if `need_name`'s icon is missing on two quick checks in a row
     (NEED_GONE_FLICKER_RECHECK_DELAY apart) - the single-frame-flicker
     guard shared by wait_until_need_gone() and _watch_need_gone() below.
-    None if the icons couldn't be read (see need_bar_readable()): that's
+    None if the icons couldn't be read (see detect_need_bar_readable()): that's
     neither cleared nor not cleared."""
     for attempt in range(2):
         names, readable = scan_needs()
@@ -610,7 +645,7 @@ def wait_until_need_gone(need_name, max_wait=NEED_GONE_MAX_WAIT, poll_interval=N
     so a single missed detection can't end the wait early - see
     _need_cleared() for how each individual check is itself debounced.
     While the icons can't be read (a bright background, see
-    need_bar_readable()) nothing counts as a miss, so that wait runs its
+    detect_need_bar_readable()) nothing counts as a miss, so that wait runs its
     full length - and ending it isn't logged as a failure. (Popups and
     minigames that turn up meanwhile are handled by the unscrew() checks
     wait_interruptible() runs during a task.) Interruptible."""
@@ -850,7 +885,7 @@ def detect_buttons(save_debug=False):
             label_pos = (cx + DEBUG_BUTTON_LABEL_OFFSET[0], cy + DEBUG_BUTTON_LABEL_OFFSET[1])
             cv2.putText(debug_img, str(i + 1), label_pos, cv2.FONT_HERSHEY_SIMPLEX,
                         DEBUG_BUTTON_LABEL_SCALE, DEBUG_BUTTON_MARKER_COLOR, DEBUG_BUTTON_MARKER_THICKNESS)
-        cv2.imwrite(os.path.join(DEBUG_DIR, "debug_buttons.png"), debug_img)
+        cv2.imwrite(os.path.join(IMAGES_DIR, "debug_buttons.png"), debug_img)
 
     if not positions:
         print("[!] No buttons detected. Check debug_buttons.png in the debug/ folder to see "
@@ -1014,7 +1049,9 @@ def lure_collect():
     pydirectinput.press(KEY_INTERACT)
     wait_interruptible(LURE_COLLECT_SETTLE_DELAY)
     pydirectinput.press(KEY_INTERACT)
-    set_new_lure()
+    wait_interruptible(UI_SETTLE)
+    if not set_new_lure():
+        return False
     respawn_character()
     print("[!] Lure collect complete!")
     return True
@@ -1027,7 +1064,9 @@ def set_new_lure():
     if not focus_roblox():
         return False
     hover_click(*LURE_NEW_POS_1)
+    wait_interruptible(UI_SETTLE)
     hover_click(*LURE_NEW_POS_2)
+    wait_interruptible(UI_SETTLE)
     print("[!] New lure set!")
     return True
 
@@ -1164,7 +1203,7 @@ def close_roblox(clean_leave=True):
         subprocess.run(["taskkill", "/F", "/IM", name], capture_output=True)
     wait_stoppable(REJOIN_CLOSE_WAIT)
 
-def play_button_visible(img):
+def detect_play_button(img):
     """True if the game's green Play button is on screen around
     REJOIN_JOIN_POS in `img` - the sign that the game has loaded."""
     x, y = REJOIN_JOIN_POS
@@ -1212,7 +1251,7 @@ def leave_and_rejoin(clean_leave=True):
         while time.time() < deadline:
             if roblox_windows():
                 focus_roblox()
-                if play_button_visible(grab_screen()):
+                if detect_play_button(grab_screen()):
                     loaded = True
                     break
             wait_stoppable(REJOIN_POLL_INTERVAL)
@@ -1309,9 +1348,9 @@ def save_focus_pet_debug(img, blobs, mask, top, name="debug_focus_pet.png", igno
     for i, (x, y, w, h, area) in enumerate(blobs, 1):
         cv2.rectangle(marked, (x, y), (x + w, y + h), FOCUS_PET_DEBUG_COLOR, 2)
         cv2.putText(marked, f"{i}: {area}", (x, max(12, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, FOCUS_PET_DEBUG_COLOR, 2)
-    cv2.imwrite(os.path.join(DEBUG_DIR, name), marked)
+    cv2.imwrite(os.path.join(IMAGES_DIR, name), marked)
 
-def pet_focused(img):
+def detect_pet_focus(img):
     """True if the pet focus view is showing in `img` - the "pet_focus" crop
     of STRAY_WINDOWS (its BACK button)."""
     crop = load_templates(STRAY_WINDOW_DIR).get("pet_focus")
@@ -1328,7 +1367,7 @@ def focus_pet(click_duration=CLICK_MOVE_DURATION):
     is focused after each click and stops clicking the moment it is. If the pet is already
     focused (the pet focus view's BACK button is on screen) there's nothing
     to click: it just returns True."""
-    if pet_focused(grab_screen()):
+    if detect_pet_focus(grab_screen()):
         print("[debug] focus_pet: the pet is already focused")
         return True
     img_a = grab_screen()
@@ -1348,7 +1387,7 @@ def focus_pet(click_duration=CLICK_MOVE_DURATION):
         print(f"[debug] focus_pet: clicking #{i} at ({x + w // 2}, {y + h // 2})...")
         hover_click(x + w // 2, y + h // 2, duration=click_duration)
         wait_interruptible(FOCUS_PET_CLICK_SETTLE)
-        if pet_focused(grab_screen()):
+        if detect_pet_focus(grab_screen()):
             print(f"[debug] focus_pet: focused after click #{i}, no more clicks needed")
             break
     else:
@@ -1357,7 +1396,7 @@ def focus_pet(click_duration=CLICK_MOVE_DURATION):
     save_focus_pet_debug(after, blobs, np.zeros_like(mask), top, name="debug_focus_pet_after.png", ignore=ignore)
     return True
 
-def backpack_tab_selected(pos):
+def is_backpack_tab_selected(pos):
     """True if the backpack category tab at `pos` is already selected (orange)."""
     x, y = pos
     hx, hy = TAB_HALF_SIZE
@@ -1368,7 +1407,7 @@ def backpack_tab_selected(pos):
 def select_backpack_tab(pos):
     """Click the backpack category tab at `pos` unless it's already selected:
     clicking a selected tab expands the backpack."""
-    if backpack_tab_selected(pos):
+    if is_backpack_tab_selected(pos):
         print("[debug] tab already selected, not clicking it")
         return
     hover_click(*pos)
@@ -1882,7 +1921,7 @@ def close_backpack_if_open():
     img = grab_screen()
     print(f"[debug] backpack left open, closing it... (expanded: {detect_backpack_expanded(img)}, "
           f"normal: {detect_backpack_normal(img)})")
-    cv2.imwrite(os.path.join(DEBUG_DIR, "debug_backpack_open.png"), img)
+    cv2.imwrite(os.path.join(IMAGES_DIR, "debug_backpack_open.png"), img)
     if detect_backpack_expanded(img):
         # Its BACK button closes it entirely; the key would only shrink it first.
         crop = load_templates(STRAY_WINDOW_DIR).get("backpack_back")
@@ -2112,6 +2151,71 @@ def detect_minigame_victory(img):
             return False
     return True
 
+def detect_minigame_overlay(img):
+    """Which minigame's overlay (MINIGAME_OVERLAYS, crops in
+    MINIGAME_OVERLAY_DIR) is on screen in `img`, or None."""
+    crops = load_templates(MINIGAME_OVERLAY_DIR)
+    best_name, best_score = None, MINIGAME_OVERLAY_THRESHOLD
+    for name, box in MINIGAME_OVERLAYS.items():
+        crop = crops.get(name)
+        score = template_score(img, crop, box) if crop is not None else 0.0
+        if score >= best_score:
+            best_name, best_score = name, score
+    return best_name
+
+class MinigameWatch:
+    """Keeps track of whether the minigame being played is on screen (its
+    overlay - detect_minigame_overlay()), fed one screenshot at a time by
+    minigame_won(). `problem` says why to stop, or None."""
+
+    def __init__(self, name):
+        self.name = name
+        self.began = time.time()
+        self.last_seen = None
+        self.start_grace_from = None   # set once the start wait is over
+
+    def update(self, img):
+        if detect_minigame_overlay(img) == self.name:
+            self.last_seen = time.time()
+
+    def start_wait_over(self):
+        self.start_grace_from = time.time()
+
+    @property
+    def problem(self):
+        now = time.time()
+        if self.last_seen is not None and now - self.last_seen > MINIGAME_OVERLAY_LOST_TIMEOUT:
+            return f"left the minigame (its overlay was gone for {MINIGAME_OVERLAY_LOST_TIMEOUT:g}s)"
+        if (self.last_seen is None and self.start_grace_from is not None
+                and now - self.start_grace_from > MINIGAME_OVERLAY_START_GRACE):
+            return f"never started (no overlay within {MINIGAME_OVERLAY_START_GRACE:g}s of the start wait)"
+        return None
+
+def exit_minigame():
+    """Click the "Exit Minigame" button (ref/popups/exit_minigame.png, bottom
+    left) if it's on screen. Returns True if it was."""
+    crop = load_templates(STRAY_WINDOW_DIR).get("exit_minigame")
+    if crop is None:
+        return False
+    score, center = find_template(grab_screen(), crop, EXIT_MINIGAME_BOX)
+    if score < EXIT_MINIGAME_THRESHOLD:
+        return False
+    hover_click(*center)
+    time.sleep(EXIT_MINIGAME_SETTLE)
+    return True
+
+def leave_stray_minigame():
+    """Top of a cycle: if a minigame's overlay is up that nothing is playing
+    - one dropped half way (focus lost, a stop), or entered some other way -
+    leave it with its Exit Minigame button, so the needs can be reached
+    again. Returns the minigame's name if it was left."""
+    name = detect_minigame_overlay(grab_screen())
+    if name is None or not exit_minigame():
+        return None
+    print(f"[debug] left a minigame nothing was playing: {name}")
+    log_run_event(f"left a stray minigame: {MINIGAME_LABELS.get(name, name)}")
+    return name
+
 _LAST_MINIGAME_POPUP_CHECK = 0.0
 
 def minigame_popup_checks():
@@ -2125,48 +2229,59 @@ def minigame_popup_checks():
     if not dismiss_stray_windows():
         detect_paycheck()
 
-def minigame_won():
-    """Run the popup checks if they're due, then detect_minigame_victory() on
-    a fresh screenshot."""
+def minigame_won(watch):
+    """Run the popup checks if they're due, then look at a fresh screenshot:
+    True on the victory screen (detect_minigame_victory()); either way `watch`
+    is told what the screenshot shows."""
     minigame_popup_checks()
-    return detect_minigame_victory(grab_screen())
+    img = grab_screen()
+    watch.update(img)
+    return detect_minigame_victory(img)
 
-def minigame_wait(duration):
+def minigame_wait(duration, watch):
     """wait_interruptible(), with the popup checks every
-    MINIGAME_POPUP_CHECK_INTERVAL - for the long waits of a minigame."""
+    MINIGAME_POPUP_CHECK_INTERVAL and `watch` kept up to date - for the long
+    waits of a minigame. Ends early if the minigame is plainly over."""
     end = time.time() + duration
     while time.time() < end:
         wait_interruptible(min(MINIGAME_POPUP_CHECK_INTERVAL, end - time.time()))
         minigame_popup_checks()
+        watch.update(grab_screen())
+        if watch.problem:
+            return
 
-def play_hauntlet(deadline):
-    """Hauntlet 2: wait HAUNTLET_START_WAIT for it to start (no needs can be
+def play_hauntlet_2(deadline, watch):
+    """Hauntlet 2: wait HAUNTLET_2_START_WAIT for it to start (no needs can be
     seen while it runs, and the lobby counts down first), then hold forward
-    until the victory screen shows. Returns True if it did before `deadline`."""
-    print(f"[debug] hauntlet: waiting {HAUNTLET_START_WAIT:g}s for it to start...")
-    minigame_wait(HAUNTLET_START_WAIT)
-    pydirectinput.keyDown(HAUNTLET_FORWARD_KEY)
+    until the victory screen shows - or the overlay says it's over. Returns
+    True if it was won before `deadline`."""
+    print(f"[debug] hauntlet 2: waiting {HAUNTLET_2_START_WAIT:g}s for it to start...")
+    minigame_wait(HAUNTLET_2_START_WAIT, watch)
+    watch.start_wait_over()
+    pydirectinput.keyDown(HAUNTLET_2_FORWARD_KEY)
     try:
-        while time.time() < deadline:
+        while time.time() < deadline and not watch.problem:
             wait_interruptible(MINIGAME_VICTORY_CHECK_INTERVAL)
-            if minigame_won():
+            if minigame_won(watch):
                 return True
     finally:
-        pydirectinput.keyUp(HAUNTLET_FORWARD_KEY)
+        pydirectinput.keyUp(HAUNTLET_2_FORWARD_KEY)
     return False
 
-def play_ghost_gallery(deadline):
+def play_ghost_gallery(deadline, watch):
     """Ghost Gallery: run about at random, jumping, with the mouse held in
     GHOST_GALLERY_HOLD-second holds (GHOST_GALLERY_HOLD_GAP apart), until the
-    victory screen shows. Returns True if it did before `deadline`."""
+    victory screen shows - or the overlay says it's over. Returns True if it
+    was won before `deadline`."""
     print(f"[debug] ghost gallery: waiting {GHOST_GALLERY_START_WAIT:g}s for it to start...")
-    minigame_wait(GHOST_GALLERY_START_WAIT)
-    while time.time() < deadline:
+    minigame_wait(GHOST_GALLERY_START_WAIT, watch)
+    watch.start_wait_over()
+    while time.time() < deadline and not watch.problem:
         pydirectinput.mouseDown()
         try:
             hold_until = time.time() + GHOST_GALLERY_HOLD
-            while time.time() < hold_until:
-                if minigame_won():
+            while time.time() < hold_until and not watch.problem:
+                if minigame_won(watch):
                     return True
                 key = random.choice(MOVE_KEYS)
                 pydirectinput.keyDown(key)
@@ -2181,13 +2296,14 @@ def play_ghost_gallery(deadline):
         wait_interruptible(GHOST_GALLERY_HOLD_GAP)
     return False
 
-MINIGAME_PLAYERS = {"hauntlet": play_hauntlet, "ghost_gallery": play_ghost_gallery}
+MINIGAME_PLAYERS = {"hauntlet_2": play_hauntlet_2, "ghost_gallery": play_ghost_gallery}
 
 def play_minigame(name):
     """Take the popup's Yes, play minigame `name` until its victory screen
-    shows, click NICE!, and respawn. Gives up (a logged failure) after
-    MINIGAME_MAX_DURATION. Counts as progress for the no-progress rejoin.
-    Returns True if it was won."""
+    shows, click NICE!, and respawn. Gives up (a logged failure) when the
+    overlay shows it's over or never started (MinigameWatch), or after
+    MINIGAME_MAX_DURATION - leaving it by its Exit Minigame button first.
+    Counts as progress for the no-progress rejoin. Returns True if it was won."""
     global LAST_PROGRESS
     label = MINIGAME_LABELS.get(name, name)
     print(f"[!] playing {label}")
@@ -2197,8 +2313,9 @@ def play_minigame(name):
     release_all_inputs()
     hover_click(*MINIGAME_POPUP_YES_POS)
     started = time.time()
+    watch = MinigameWatch(name)
     try:
-        won = MINIGAME_PLAYERS[name](started + MINIGAME_MAX_DURATION)
+        won = MINIGAME_PLAYERS[name](started + MINIGAME_MAX_DURATION, watch)
     finally:
         release_all_inputs()
     if won:
@@ -2206,7 +2323,9 @@ def play_minigame(name):
         log_run_event(f"minigame finished: {label} ({time.time() - started:.0f}s)")
         wait_interruptible(MINIGAME_FINISH_WAIT)
     else:
-        log_failure(f"{label} didn't reach the victory screen within {MINIGAME_MAX_DURATION:g}s")
+        reason = watch.problem or f"did not reach the victory screen within {MINIGAME_MAX_DURATION:g}s"
+        log_failure(f"{label} {reason}")
+        exit_minigame()
     LAST_PROGRESS = time.time()
     respawn_character()
     return won
@@ -2260,12 +2379,26 @@ def unscrew(in_task=False, play_minigames=True):
             return "rejoined"
     else:
         rejoin_game()
+        leave_stray_minigame()
     backpack_open = close_backpack_if_stuck(in_task)
     dismiss_stray_windows()
     played = minigame_popup(play=play_minigames) if HALLOWEEN else None
     if not backpack_open:
         detect_paycheck()
     return played
+
+def run_side_action(action):
+    """Run lure_collect() / tree_collect() with the in-task checks on (popups,
+    stray windows, a minigame can turn up while they walk about), like a need
+    handler. Returns the action's result - False if a minigame or a rejoin
+    took over (TaskInterrupted), so it's tried again next cycle."""
+    try:
+        with task_unscrew():
+            return action()
+    except TaskInterrupted as interruption:
+        print(f"[debug] {action.__name__} interrupted by {interruption.reason}")
+        log_run_event(f"{action.__name__} interrupted by {interruption.reason}")
+        return False
 
 def side_quest():
     """Runs once per cycle, right after unscrew(), unless side_quest_enabled
@@ -2282,14 +2415,14 @@ def side_quest():
     now = time.time()
 
     if config["money_collected"] < MONEY_COLLECTED_TARGET and now >= config["tree_timer"]:
-        if tree_collect():
+        if run_side_action(tree_collect):
             def harvested(c):
                 c["money_collected"] += TREE_HARVEST_YIELD
                 c["tree_timer"] = time.time() + TREE_CHECK_INTERVAL
             update_game_config(harvested)
 
     if now >= config["lure_timer"]:
-        if lure_collect():
+        if run_side_action(lure_collect):
             update_game_config(lambda c: c.update(lure_timer=time.time() + LURE_RECOLLECT_INTERVAL))
 
 # ============================================================================
@@ -2898,19 +3031,19 @@ class AdoptMeGUI:
             btn.grid(row=1 + i // 2, column=i % 2, sticky=tk.EW, padx=GUI_WIDGET_SPACING, pady=GUI_WIDGET_SPACING)
             self.action_buttons.append(btn)
         rows = 1 + (len(DEBUG_HANDLERS) + 1) // 2
-        tk.Button(parent, text="Report on the last run", command=self.show_run_report,
+        tk.Button(parent, text="Refresh debug", command=self.refresh_debug_folder,
                   font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=self.accent, fg=self.fg, cursor="hand2"
                   ).grid(row=rows, column=0, columnspan=2, sticky=tk.EW, padx=GUI_WIDGET_SPACING, pady=GUI_WIDGET_SPACING)
 
-    def show_run_report(self):
-        """Chart the current (or, if none has started, the last) run from the
-        log and open the picture."""
-        run = CURRENT_RUN_NUMBER or helper.latest_run(RUN_LOG_PATH)
-        path = write_run_report(run) if run is not None else None
-        if path is None:
-            print("[debug] no run in the log to report on")
-        elif hasattr(os, "startfile"):
-            os.startfile(path)
+    def refresh_debug_folder(self):
+        """Ask, then empty the debug folder (refresh_debug()). Not while a run
+        is going - it's writing there."""
+        if self.is_running:
+            print("[debug] stop the run before refreshing the debug folder")
+            return
+        if messagebox.askyesno("Refresh debug", "Delete everything in the debug folder (logs, images, recordings)?\n"
+                                                "The game config is kept."):
+            print(f"[debug] debug folder refreshed ({refresh_debug()} entries removed)")
 
     def test_handler(self, name, handler_cls):
         """Run one need handler on its own, outside the normal need-detection

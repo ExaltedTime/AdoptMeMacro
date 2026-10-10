@@ -43,11 +43,11 @@ MINIGAME_POPUP_YES_POS = (1049, 612)
 
 # Which minigame a popup is for: the first line of its title ("Ghost Gallery", "Hauntlet 2") is matched
 # against the crops in MINIGAME_TEMPLATE_DIR, searched for within MINIGAME_TITLE_BOX. A minigame is the
-# lower-cased file name (Ghost_gallery.png -> "ghost_gallery"); each one has an on/off switch in the game
+# lower-cased file name (ghost_gallery.png, hauntlet_2.png -> "ghost_gallery", "hauntlet_2"); each one has an on/off switch in the game
 # config ("<name>_enabled", off by default) - an off one is dismissed, an on one is played.
 MINIGAME_TITLE_BOX = (730, 410, 1200, 510)   # left, top, right, bottom
 MINIGAME_TITLE_MATCH_THRESHOLD = 0.85
-MINIGAME_LABELS = {"hauntlet": "Hauntlet 2", "ghost_gallery": "Ghost Gallery"}   # for the GUI and the logs
+MINIGAME_LABELS = {"hauntlet_2": "Hauntlet 2", "ghost_gallery": "Ghost Gallery"}   # for the GUI and the logs
 
 # Playing one. Both end on the victory screen (a red "GAME OVER!" banner over a green NICE! button), which
 # is looked for every MINIGAME_VICTORY_CHECK_INTERVAL seconds, then the button is clicked.
@@ -60,12 +60,25 @@ MINIGAME_VICTORY_BUTTON_TOLERANCE = 3
 MINIGAME_VICTORY_BUTTON_BOX = (860, 725, 1060, 800)
 MINIGAME_VICTORY_BUTTON_MIN_PIXELS = 2000
 MINIGAME_VICTORY_BUTTON_POS = (966, 762)
+# While one runs it has its own overlay along the top of the screen (Hauntlet 2: the ROOM counter beside the
+# timer and monitor; Ghost Gallery: the TIME LEFT / GHOST GALLERY / Score banner), and an "Exit Minigame"
+# button bottom left. Crops of each overlay (ref/overlays/<minigame>.png, found within its box here, at least
+# MINIGAME_OVERLAY_THRESHOLD) say whether the game is on: one that was seen and then isn't, for
+# MINIGAME_OVERLAY_LOST_TIMEOUT seconds, was left (game over, kicked out) - and one never seen within
+# MINIGAME_OVERLAY_START_GRACE seconds after its start wait never started.
+MINIGAME_OVERLAYS = {"hauntlet_2": (1040, 40, 1210, 135), "ghost_gallery": (840, 25, 1080, 120)}   # name: search box
+MINIGAME_OVERLAY_THRESHOLD = 0.7
+MINIGAME_OVERLAY_LOST_TIMEOUT = 10.0
+MINIGAME_OVERLAY_START_GRACE = 40.0
+EXIT_MINIGAME_BOX = (0, 990, 260, 1075)      # where ref/popups/exit_minigame.png is looked for
+EXIT_MINIGAME_THRESHOLD = 0.8
+EXIT_MINIGAME_SETTLE = 3.0                   # after clicking it
 MINIGAME_VICTORY_CHECK_INTERVAL = 1.0
 MINIGAME_POPUP_CHECK_INTERVAL = 4.0   # the popup checks (stray windows, paycheck) run this often while a minigame is played
 MINIGAME_MAX_DURATION = 600.0       # gives up (and logs a failure) if the victory screen hasn't shown by then
 MINIGAME_FINISH_WAIT = 5.0          # after clicking NICE!, before carrying on
-HAUNTLET_START_WAIT = 50.0          # waits this long after teleporting, then holds HAUNTLET_FORWARD_KEY
-HAUNTLET_FORWARD_KEY = "w"
+HAUNTLET_2_START_WAIT = 50.0          # waits this long after teleporting, then holds HAUNTLET_2_FORWARD_KEY
+HAUNTLET_2_FORWARD_KEY = "w"
 GHOST_GALLERY_START_WAIT = 5.0      # after teleporting, before it starts running about
 GHOST_GALLERY_HOLD = 5.0            # the mouse is held down in holds this long...
 GHOST_GALLERY_HOLD_GAP = 0.2        # ...with this short a pause between them
@@ -114,19 +127,25 @@ UNSCREW_TASK_INTERVAL = 4.0
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MINIGAME_TEMPLATE_DIR = os.path.join(SCRIPT_DIR, "ref", "halloween")
 STRAY_WINDOW_DIR = os.path.join(SCRIPT_DIR, "ref", "popups")
+MINIGAME_OVERLAY_DIR = os.path.join(SCRIPT_DIR, "ref", "overlays")
 NEEDS_DIR = os.path.join(SCRIPT_DIR, "needs")
 DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
-Path(NEEDS_DIR).mkdir(exist_ok=True)
-Path(DEBUG_DIR).mkdir(exist_ok=True)
+# debug/ holds two subfolders - images/ for every png (the debug_*.png views, failures/, reports/) and logs/ for
+# every text and json file - plus the game config, which stays in debug/ itself so "Refresh debug" (which
+# empties everything else) leaves it alone, and recordings/ for the run videos.
+IMAGES_DIR = os.path.join(DEBUG_DIR, "images")
+LOGS_DIR = os.path.join(DEBUG_DIR, "logs")
+for _directory in (NEEDS_DIR, DEBUG_DIR, IMAGES_DIR, LOGS_DIR):
+    Path(_directory).mkdir(exist_ok=True)
 
-RUN_LOG_PATH = os.path.join(DEBUG_DIR, "run_log.txt")      # appended to, never overwritten
-RUN_COUNTER_PATH = os.path.join(DEBUG_DIR, "run_counter.txt")  # holds the last-used run number
-GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")      # persisted game state - see load_game_config()
-OUTPUT_LOG_PATH = os.path.join(DEBUG_DIR, "output.log")    # everything the macro prints, timestamped - see log_output()
-FAILURE_DIR = os.path.join(DEBUG_DIR, "failures")          # a screenshot per failure - see log_failure()
+RUN_LOG_PATH = os.path.join(LOGS_DIR, "run_log.txt")        # appended to, never overwritten
+RUN_COUNTER_PATH = os.path.join(LOGS_DIR, "run_counter.txt")  # holds the last-used run number
+GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")       # persisted game state - see load_game_config()
+OUTPUT_LOG_PATH = os.path.join(LOGS_DIR, "output.log")      # everything the macro prints, timestamped - see log_output()
+STATUS_PATH = os.path.join(LOGS_DIR, "status.json")         # live "is it alive and what's it doing" summary - see write_status()
+FAILURE_DIR = os.path.join(IMAGES_DIR, "failures")          # a screenshot per failure - see log_failure()
+REPORTS_DIR = os.path.join(IMAGES_DIR, "reports")           # run<N>.png charts of a run - see helper.py
 RECORDINGS_DIR = os.path.join(DEBUG_DIR, "recordings")      # run videos - see RunRecorder
-REPORTS_DIR = os.path.join(DEBUG_DIR, "reports")            # run<N>.png charts of a run - see helper.py
-STATUS_PATH = os.path.join(DEBUG_DIR, "status.json")       # live "is it alive and what's it doing" summary - see write_status()
 OUTPUT_LOG_MAX_BYTES = 5 * 1024 * 1024   # output.log moves to output.log.old (replacing the last one) past this size
 MAX_FAILURE_SCREENSHOTS = 40             # oldest are deleted beyond this many
 
@@ -450,7 +469,7 @@ NEED_ICON_HOUGH_EDGE = 100          # Hough: Canny upper edge threshold
 NEED_ICON_HOUGH_VOTES = 25          # Hough: accumulator votes needed to accept a circle
 # The icons can't be recognised against a bright background (the Pizza Party's, say), so when
 # more than this fraction of the icon strip is brighter than this gray level it counts as unreadable
-# (need_bar_readable()) and "the icon is gone" can't be concluded from it.
+# (detect_need_bar_readable()) and "the icon is gone" can't be concluded from it.
 NEED_BAR_BRIGHT_LEVEL = 200
 NEED_BAR_MAX_BRIGHT_FRACTION = 0.5
 CIRCULARITY_EPSILON = 1e-6          # avoids dividing by zero when scoring circularity

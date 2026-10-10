@@ -248,7 +248,7 @@ immediate retry too. The one such case that is handled: the Pizza Party's
 background is near-white, which the icons can't be recognised against, so
 the pizza need looked "gone" a few seconds in - the handler returned early,
 the character respawned with the pizza still unserved, and it had to run
-twice. `need_bar_readable()` spots it (more than
+twice. `detect_need_bar_readable()` spots it (more than
 `NEED_BAR_MAX_BRIGHT_FRACTION` of the icon strip brighter than
 `NEED_BAR_BRIGHT_LEVEL`); while the icons are unreadable `_need_cleared()`
 returns `None`, which counts as neither a miss nor a sighting, so the wait
@@ -330,7 +330,7 @@ everything else).
 The GUI's **Debug** tab has a button per handler that runs it directly
 regardless of `ENABLED_NEEDS`.
 
-**Focusing the pet.** (Each click is followed by `FOCUS_PET_CLICK_SETTLE` and a `pet_focused()` check; the clicks stop at the first one that focuses it, and `FOCUS_PET_MENU_WAIT` is only waited if none did.) `pet` and `choose` both start with `focus_pet()`, which first checks whether the pet is already focused (`pet_focused()`: the BACK button's crop is on screen) and if so returns True with no clicks; otherwise it
+**Focusing the pet.** (Each click is followed by `FOCUS_PET_CLICK_SETTLE` and a `detect_pet_focus()` check; the clicks stop at the first one that focuses it, and `FOCUS_PET_MENU_WAIT` is only waited if none did.) `pet` and `choose` both start with `focus_pet()`, which first checks whether the pet is already focused (`detect_pet_focus()`: the BACK button's crop is on screen) and if so returns True with no clicks; otherwise it
 has no hardcoded position: it takes two screenshots of the bottom of the
 screen (below `FOCUS_PET_REGION_TOP_PERCENT`) `FOCUS_PET_FRAME_GAP` apart,
 and `moving_blobs()` diffs them - leaving out the macro's own window
@@ -462,7 +462,7 @@ check decides from the screen what's still needed. During setup a minigame is
 only declined (No, without "do not show again"), since setup's clicks toggle
 things and can't be abandoned halfway.
 
-**Backpack tabs.** The backpack remembers its last category tab, and clicking a tab that is already selected (orange background) expands the backpack. `select_backpack_tab()` therefore only clicks the vehicles / toys tab when `backpack_tab_selected()` doesn't see the orange tile.
+**Backpack tabs.** The backpack remembers its last category tab, and clicking a tab that is already selected (orange background) expands the backpack. `select_backpack_tab()` therefore only clicks the vehicles / toys tab when `is_backpack_tab_selected()` doesn't see the orange tile.
 
 **The BACK button.** The expanded backpack has a BACK button at the top
 (`ref/popups/backpack_back.png`, found within `BACKPACK_BACK_BOX`) that closes
@@ -506,11 +506,11 @@ its left - except the sick need's own "Ask Doctor Heart to heal your family?" di
 first line of the title (`MINIGAME_TITLE_BOX`) against the crops in
 `ref/halloween/` (`cv2.matchTemplate`, best score at least
 `MINIGAME_TITLE_MATCH_THRESHOLD`); a minigame's name is its file name,
-lower-cased (`Ghost_gallery.png` → `ghost_gallery`), so a new one is just a
+lower-cased (`ghost_gallery.png` → `ghost_gallery`, `hauntlet_2.png` → `hauntlet_2`), so a new one is just a
 new crop - plus an entry in `MINIGAME_LABELS` and a player in
 `MINIGAME_PLAYERS`.
 
-Each minigame has a switch in the game config (`hauntlet_enabled`,
+Each minigame has a switch in the game config (`hauntlet_2_enabled`,
 `ghost_gallery_enabled`, both **off** by default; "Play ..." checkboxes on the
 Options tab). `minigame_popup()`:
 - **switched off, or not recognised** - clicks `MINIGAME_POPUP_DONT_SHOW_POS`
@@ -532,8 +532,26 @@ found by exact color (`detect_minigame_victory()`, checked every
 out, and the character respawns. If the victory screen hasn't shown after
 `MINIGAME_MAX_DURATION` it gives up with a logged failure (and releases every
 input). A minigame counts as progress for the no-progress rejoin.
-- `play_hauntlet()` waits `HAUNTLET_START_WAIT` (50 s), then holds
-  `HAUNTLET_FORWARD_KEY` until victory.
+
+*Telling whether it is on.* Each minigame has an overlay along the top of the
+screen while it runs (Hauntlet 2: the ROOM counter; Ghost Gallery: the TIME
+LEFT / GHOST GALLERY / Score banner), recognised by a crop in
+`ref/overlays/<minigame>.png` within its box in `MINIGAME_OVERLAYS`
+(`detect_minigame_overlay()`, at least `MINIGAME_OVERLAY_THRESHOLD`). A
+`MinigameWatch` made by `play_minigame()` is fed every screenshot the player
+takes (`minigame_won()`, `minigame_wait()`): once the overlay has been seen,
+losing it for `MINIGAME_OVERLAY_LOST_TIMEOUT` (10 s) means the minigame was left
+(game over without the victory screen, kicked out) and it stops there; never
+seeing it within `MINIGAME_OVERLAY_START_GRACE` (40 s) of the start wait means it
+never started. Either is a logged failure with that reason, instead of waiting
+out `MINIGAME_MAX_DURATION` (600 s). On a failure `play_minigame()` first leaves
+the minigame with its Exit Minigame button (`exit_minigame()`:
+`ref/popups/exit_minigame.png` within `EXIT_MINIGAME_BOX`). The same button is
+used at the top of a cycle by `leave_stray_minigame()` - if an overlay is up and
+nothing is playing (a minigame dropped half way by a focus loss, run 321) it's
+left, logged as `left a stray minigame`, so the needs can be reached again.
+- `play_hauntlet_2()` waits `HAUNTLET_2_START_WAIT` (50 s), then holds
+  `HAUNTLET_2_FORWARD_KEY` until victory or until the overlay says it's over.
 - `play_ghost_gallery()` waits `GHOST_GALLERY_START_WAIT`, then holds the mouse
   in `GHOST_GALLERY_HOLD`-second holds (`GHOST_GALLERY_HOLD_GAP` apart) while
   running in random `MOVE_KEYS` directions with a jump, each for a random time
@@ -628,7 +646,7 @@ lure and tree actions are only reachable through `side_quest()`.
   3. Wait up to `REJOIN_WINDOW_TIMEOUT` for a Roblox window to exist, then up
      to `REJOIN_LOAD_TIMEOUT` for the game's green Play button
      (`REJOIN_PLAY_COLOR`) to show up around `REJOIN_JOIN_POS`
-     (`play_button_visible()`).
+     (`detect_play_button()`).
   4. Wait `REJOIN_PLAY_SETTLE`, click it, wait `REJOIN_AFTER_JOIN_WAIT` (15s),
      respawn and return `True`. A stage that times out starts the next attempt;
      after the last one it returns `False`.
@@ -640,9 +658,13 @@ lure and tree actions are only reachable through `side_quest()`.
 - **`lure_collect()`** - holds `a` for `LURE_COLLECT_WALK_DURATION` (2s),
   presses `KEY_INTERACT` (`e`) to collect the current lure's rewards,
   waits `LURE_COLLECT_SETTLE_DELAY` (1s), presses `KEY_INTERACT` again,
-  then calls `set_new_lure()`.
-- **`set_new_lure()`** - clicks `LURE_NEW_POS_1` then `LURE_NEW_POS_2`,
-  the two backpack clicks that place a fresh lure. Split out from
+  waits `UI_SETTLE` for the placement panel, calls `set_new_lure()` (and gives
+  up with False if that does), then respawns. `side_quest()` runs it - and
+  `tree_collect()` - through `run_side_action()`, inside `task_unscrew()` like a
+  need handler, so popups and stray windows are handled and a minigame or
+  rejoin (`TaskInterrupted`) just means it's tried again next cycle.
+- **`set_new_lure()`** - clicks `LURE_NEW_POS_1` then `LURE_NEW_POS_2`
+  (`UI_SETTLE` after each - they used to follow the key press with no wait), the two clicks that place a fresh lure. Split out from
   `lure_collect()` specifically so this placement step can be tested and
   tuned on its own, without walking to the old lure first each time.
 - **`tree_collect()`** - holds `d` for `TREE_COLLECT_WALK_DURATION` (2s),
@@ -895,7 +917,7 @@ exact values and rationale):
 
 | Group | Examples |
 |---|---|
-| Behavior flags | `ENABLED_NEEDS`, `STOP_HOTKEY`, `BACKPACK_*`, `HALLOWEEN`, `MINIGAME_*`, `HAUNTLET_*`, `GHOST_GALLERY_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
+| Behavior flags | `ENABLED_NEEDS`, `STOP_HOTKEY`, `BACKPACK_*`, `HALLOWEEN`, `MINIGAME_*`, `HAUNTLET_2_*`, `GHOST_GALLERY_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
 | Window / coordinates | `REFERENCE_WIDTH`, `REFERENCE_HEIGHT`, `REFERENCE_CENTER_X/Y`, `ROBLOX_RECT_TTL` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `NEED_GONE_*` |
 | Stuck needs | `NEED_STUCK_CHECKS` |
@@ -915,7 +937,15 @@ exact values and rationale):
 ## Debugging an unattended run
 
 Everything below is in `debug/` (git-ignored) so a run that broke while you
-were away can be read back afterwards:
+were away can be read back afterwards. The folder has two subfolders -
+`images/` (`IMAGES_DIR`: every png - the `debug_*.png` views, `failures/`,
+`reports/`) and `logs/` (`LOGS_DIR`: every text and json file - `output.log`,
+`run_log.txt`, `run_counter.txt`, `status.json`) - plus `recordings/` for the
+videos, and the game config (`.config`) in `debug/` itself. An older layout is
+moved into place at startup (`migrate_debug_layout()`). The Debug tab's
+**Refresh debug** button (`refresh_debug()`, after a confirmation, not while a
+run is going) empties all of it except `.config`; run numbers start from 1
+again, since the counter goes with the logs.
 
 - **`output.log`** - everything the macro prints (the same as the GUI
   console), one timestamped line each, appended to across runs. `log_output()`
@@ -928,8 +958,7 @@ were away can be read back afterwards:
 - **`reports/run<N>.png`** - a chart of one run, drawn from `run_log.txt` by
   `helper.py` with OpenCV (no extra dependency). Written automatically when a
   run stops (`write_run_report()`, in the `finally` of `run_workflow_loop()`)
-  and on demand by the Debug tab's "Report on the last run" button, which also
-  opens it. Four panels: needs resolved per unit of time (the unit is picked
+  (so there is no button for it). Four panels: needs resolved per unit of time (the unit is picked
   from `BUCKET_STEPS` so the run fills about `TARGET_BUCKETS` bars, stacked by
   basic / teleport / other need, with failures and rejoins marked); needs
   detected per check; average seconds per resolved need with how many there

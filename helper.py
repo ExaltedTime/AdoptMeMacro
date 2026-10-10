@@ -302,18 +302,6 @@ def draw_report(data, run, basic, teleport):
     return img
 
 
-def latest_run(log_path):
-    """The number (as text) of the last numbered run in the log, or None."""
-    last = None
-    if os.path.exists(log_path):
-        with open(log_path, encoding="utf-8", errors="replace") as f:
-            for raw in f:
-                m = LINE_RE.match(raw.rstrip("\n"))
-                if m and m.group(2).isdigit():
-                    last = m.group(2)
-    return last
-
-
 def generate_run_report(log_path, run, out_dir, basic=(), teleport=()):
     """Write run `run`'s report to <out_dir>/run<run>.png and return its path,
     or None if the run isn't in the log. Never raises: a report problem must

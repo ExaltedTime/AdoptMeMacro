@@ -333,7 +333,9 @@ regardless of `ENABLED_NEEDS`.
 **Focusing the pet.** `pet` and `choose` both start with `focus_pet()`, which
 has no hardcoded position: it takes two screenshots of the bottom of the
 screen (below `FOCUS_PET_REGION_TOP_PERCENT`) `FOCUS_PET_FRAME_GAP` apart,
-and `moving_blobs()` diffs them. Pixels that changed by more than
+and `moving_blobs()` diffs them - leaving out the macro's own window
+(`macro_window_reference_rect()`, plus `FOCUS_PET_IGNORE_MARGIN`), whose console
+scrolls and flickers and used to be picked up as a huge "moving" blob. Pixels that changed by more than
 `FOCUS_PET_DIFF_THRESHOLD` are closed together (`FOCUS_PET_MERGE_KERNEL`,
 since an up/down bob only changes the pet's top and bottom edges), blobs
 under `FOCUS_PET_MIN_AREA` are dropped as noise, and `focus_pet()` clicks
@@ -341,7 +343,7 @@ the center of every remaining blob, largest first. It returns `False` (and
 the handler skips the need) if nothing moved. It prints what it saw (how many
 blobs, each one's center, size and area) and writes
 `debug/debug_focus_pet.png` - the second frame with the changed pixels in
-red and a numbered box round every blob - plus
+red and a numbered box round every blob (the ignored area in blue) - plus
 `debug/debug_focus_pet_after.png`, the screen after the clicks and the menu
 wait, so a click that lands on the wrong thing (another player, a UI
 element) can be seen.

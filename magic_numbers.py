@@ -187,6 +187,7 @@ FOCUS_PET_FRAME_GAP = 0.1            # seconds between the two screenshots
 FOCUS_PET_DIFF_THRESHOLD = 25        # per-pixel brightness change that counts as movement (0-255)
 FOCUS_PET_MERGE_KERNEL = 25          # px; changed pixels this close together merge into one blob
 FOCUS_PET_MIN_AREA = 150             # px^2; smaller blobs are noise, not the pet
+FOCUS_PET_IGNORE_MARGIN = 20           # px around the macro's own window that focus_pet() ignores too
 FOCUS_PET_DEBUG_COLOR = (0, 255, 0)    # BGR, the boxes drawn on debug/debug_focus_pet.png
 FOCUS_PET_MENU_WAIT = 4.0            # wait after the clicks, for the pet's menu to open
 

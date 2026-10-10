@@ -1241,9 +1241,29 @@ def leave_and_rejoin(clean_leave=True):
 # NEED_HANDLER_CLASSES), since those only differ by a name/config, not by
 # behavior.
 
-def moving_blobs(img_a, img_b, top_percent=FOCUS_PET_REGION_TOP_PERCENT):
+def macro_window_reference_rect():
+    """The macro's own window as a (left, top, right, bottom) box in reference
+    space (plus FOCUS_PET_IGNORE_MARGIN), or None when there's no GUI or it
+    can't be measured. Its console scrolls and flickers, which looks like
+    movement to focus_pet()."""
+    if MACRO_WINDOW is None:
+        return None
+    measure = lambda: (MACRO_WINDOW.root.winfo_x(), MACRO_WINDOW.root.winfo_y(),
+                       MACRO_WINDOW.root.winfo_rootx() + MACRO_WINDOW.root.winfo_width(),
+                       MACRO_WINDOW.root.winfo_rooty() + MACRO_WINDOW.root.winfo_height())
+    box = MACRO_WINDOW.run_on_ui_thread(measure, timeout=1.0)
+    if box is None:
+        return None
+    left, top, width, height = roblox_rect()
+    scale_x, scale_y = REFERENCE_WIDTH / width, REFERENCE_HEIGHT / height
+    m = FOCUS_PET_IGNORE_MARGIN
+    return (int((box[0] - left) * scale_x) - m, int((box[1] - top) * scale_y) - m,
+            int((box[2] - left) * scale_x) + m, int((box[3] - top) * scale_y) + m)
+
+def moving_blobs(img_a, img_b, top_percent=FOCUS_PET_REGION_TOP_PERCENT, ignore=()):
     """Compare two same-size BGR screenshots over the bottom (1 - top_percent)
-    of the screen and return ([(x, y, w, h, area) per blob of pixels that
+    of the screen - leaving out every (left, top, right, bottom) box in
+    `ignore`, e.g. the macro's own window - and return ([(x, y, w, h, area) per blob of pixels that
     changed between them, largest first, in screen coordinates], the change
     mask of the region, its top row). Pure image logic, no input or waiting,
     so it can be tested on its own."""
@@ -1251,6 +1271,8 @@ def moving_blobs(img_a, img_b, top_percent=FOCUS_PET_REGION_TOP_PERCENT):
     diff = cv2.absdiff(cv2.cvtColor(img_a[top:], cv2.COLOR_BGR2GRAY),
                        cv2.cvtColor(img_b[top:], cv2.COLOR_BGR2GRAY))
     mask = (diff > FOCUS_PET_DIFF_THRESHOLD).astype(np.uint8) * PIXEL_MAX
+    for left, box_top, right, bottom in ignore:
+        mask[max(0, box_top - top):max(0, bottom - top), max(0, left):max(0, right)] = 0
     # An up/down bob only changes the pet's top and bottom edges, so close
     # the gap between them to get one blob per moving thing.
     kernel = np.ones((FOCUS_PET_MERGE_KERNEL, FOCUS_PET_MERGE_KERNEL), np.uint8)
@@ -1265,12 +1287,12 @@ def moving_blobs(img_a, img_b, top_percent=FOCUS_PET_REGION_TOP_PERCENT):
         blobs.append((x, top + y, w, h, int(area)))
     return blobs, mask, top
 
-def find_moving_blobs(img_a, img_b, top_percent=FOCUS_PET_REGION_TOP_PERCENT):
+def find_moving_blobs(img_a, img_b, top_percent=FOCUS_PET_REGION_TOP_PERCENT, ignore=()):
     """The (x, y) center of every blob moving_blobs() finds, largest first."""
-    blobs, _, _ = moving_blobs(img_a, img_b, top_percent)
+    blobs, _, _ = moving_blobs(img_a, img_b, top_percent, ignore)
     return [(x + w // 2, y + h // 2) for x, y, w, h, _ in blobs]
 
-def save_focus_pet_debug(img, blobs, mask, top, name="debug_focus_pet.png"):
+def save_focus_pet_debug(img, blobs, mask, top, name="debug_focus_pet.png", ignore=()):
     """Write debug/<name>: `img` (the second frame) with the searched region
     marked, the changed pixels in red, and a numbered box around every blob -
     so what focus_pet() thinks moved, and so where it clicks, can be seen."""
@@ -1278,6 +1300,8 @@ def save_focus_pet_debug(img, blobs, mask, top, name="debug_focus_pet.png"):
     region = marked[top:]
     region[mask > 0] = (0, 0, 255)
     cv2.line(marked, (0, top), (marked.shape[1], top), FOCUS_PET_DEBUG_COLOR, 1)
+    for left, box_top, right, bottom in ignore:   # ignored areas, in blue
+        cv2.rectangle(marked, (left, box_top), (right, bottom), (255, 0, 0), 2)
     for i, (x, y, w, h, area) in enumerate(blobs, 1):
         cv2.rectangle(marked, (x, y), (x + w, y + h), FOCUS_PET_DEBUG_COLOR, 2)
         cv2.putText(marked, f"{i}: {area}", (x, max(12, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, FOCUS_PET_DEBUG_COLOR, 2)
@@ -1287,19 +1311,20 @@ def focus_pet(click_duration=CLICK_MOVE_DURATION):
     """Click the pet to open its interaction menu. The pet is found by
     movement: two screenshots of the bottom of the screen FOCUS_PET_FRAME_GAP
     apart, then a click on the center of everything that moved (see
-    moving_blobs()). What it saw is printed and written to
+    moving_blobs(), which leaves out the macro's own window). What it saw is printed and written to
     debug/debug_focus_pet.png (the blobs, marked) - and what the screen looked
     like after the clicks to debug/debug_focus_pet_after.png. Returns True if
     anything was clicked, False if nothing moved."""
     img_a = grab_screen()
     wait_interruptible(FOCUS_PET_FRAME_GAP)
     img_b = grab_screen()
-    blobs, mask, top = moving_blobs(img_a, img_b)
+    ignore = [box for box in [macro_window_reference_rect()] if box is not None]
+    blobs, mask, top = moving_blobs(img_a, img_b, ignore=ignore)
     changed = int(np.count_nonzero(mask))
     print(f"[debug] focus_pet: {len(blobs)} moving blob(s), {changed} changed px below y={top}")
     for i, (x, y, w, h, area) in enumerate(blobs, 1):
         print(f"[debug] focus_pet:   #{i} center ({x + w // 2}, {y + h // 2}), {w}x{h}, area {area}")
-    save_focus_pet_debug(img_b, blobs, mask, top)
+    save_focus_pet_debug(img_b, blobs, mask, top, ignore=ignore)
     if not blobs:
         print("[debug] focus_pet: nothing moved, pet not found (see debug/debug_focus_pet.png)")
         return False
@@ -1308,7 +1333,7 @@ def focus_pet(click_duration=CLICK_MOVE_DURATION):
         hover_click(x + w // 2, y + h // 2, duration=click_duration)
     wait_interruptible(FOCUS_PET_MENU_WAIT)
     after = grab_screen()
-    save_focus_pet_debug(after, blobs, np.zeros_like(mask), top, name="debug_focus_pet_after.png")
+    save_focus_pet_debug(after, blobs, np.zeros_like(mask), top, name="debug_focus_pet_after.png", ignore=ignore)
     return True
 
 def equip_favorite_vehicle():

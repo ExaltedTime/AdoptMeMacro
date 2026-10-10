@@ -1337,6 +1337,22 @@ def focus_pet(click_duration=CLICK_MOVE_DURATION):
     save_focus_pet_debug(after, blobs, np.zeros_like(mask), top, name="debug_focus_pet_after.png", ignore=ignore)
     return True
 
+def backpack_tab_selected(pos):
+    """True if the backpack category tab at `pos` is already selected (orange)."""
+    x, y = pos
+    hx, hy = TAB_HALF_SIZE
+    tile = grab_screen()[y - hy:y + hy, x - hx:x + hx]
+    mask = exact_color_mask(tile, TAB_SELECTED_COLOR, TAB_SELECTED_TOLERANCE)
+    return np.count_nonzero(mask) >= TAB_SELECTED_MIN_PIXELS
+
+def select_backpack_tab(pos):
+    """Click the backpack category tab at `pos` unless it's already selected:
+    clicking a selected tab expands the backpack."""
+    if backpack_tab_selected(pos):
+        print("[debug] tab already selected, not clicking it")
+        return
+    hover_click(*pos)
+
 def equip_favorite_vehicle():
     """Open the backpack, select the first vehicle (the favorite, once
     setup_game() has filtered the backpack to favorites) and equip it, then
@@ -1347,7 +1363,7 @@ def equip_favorite_vehicle():
     wait_interruptible(UI_SETTLE)
 
     print("[debug] opening vehicles...")
-    hover_click(*RIDE_VEHICLES_POS)
+    select_backpack_tab(RIDE_VEHICLES_POS)
     wait_interruptible(UI_SETTLE)
 
     print("[debug] selecting first vehicle...")
@@ -1407,7 +1423,7 @@ class CatchNeedHandler(NeedHandler):
 
         # Navigate to toys
         print("[debug] opening toys...")
-        hover_click(*CATCH_TOYS_POS)
+        select_backpack_tab(CATCH_TOYS_POS)
         wait_interruptible(UI_SETTLE)
 
         # Click squeaky toy
@@ -1763,14 +1779,13 @@ def process_needs():
 # dismiss, recovering the game when it's gone wrong, and the timed chores.
 
 def detect_paycheck():
-    """Detect the paycheck popup by its CASH OUT button's exact color - only
-    within PAYCHECK_REGION and with at least PAYCHECK_MIN_PIXELS of it, since
-    that green is also the backpack's Select All button, among others - and,
-    if present, dismiss it. Returns True if the popup was detected and
-    dismissed, False otherwise."""
-    left, top, right, bottom = PAYCHECK_REGION
-    region = grab_screen()[top:bottom, left:right]
-    if np.count_nonzero(exact_color_mask(region, PAYCHECK_CASHOUT_COLOR)) < PAYCHECK_MIN_PIXELS:
+    """Detect the paycheck popup by the crop of its bank-card header
+    (ref/popups/paycheck.png, matched within PAYCHECK_BOX) and, if present,
+    dismiss it. Returns True if the popup was detected and dismissed, False
+    otherwise. Not by the green of its CASH OUT button, which the backpack's
+    tiles share."""
+    crop = load_templates(STRAY_WINDOW_DIR).get("paycheck")
+    if crop is None or template_score(grab_screen(), crop, PAYCHECK_BOX) < PAYCHECK_MATCH_THRESHOLD:
         return False
 
     print("[debug] paycheck popup detected, dismissing...")
@@ -1819,7 +1834,10 @@ def close_backpack_if_open():
     open."""
     if not is_roblox_focused() or not detect_backpack_open(grab_screen()):
         return False
-    print("[debug] backpack left open, closing it...")
+    img = grab_screen()
+    print(f"[debug] backpack left open, closing it... (expanded: {detect_backpack_expanded(img)}, "
+          f"normal: {detect_backpack_normal(img)})")
+    cv2.imwrite(os.path.join(DEBUG_DIR, "debug_backpack_open.png"), img)
     for _ in range(2):
         pydirectinput.press(KEY_BACKPACK)
         wait_interruptible(UI_SETTLE)

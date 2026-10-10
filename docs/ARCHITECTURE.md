@@ -394,11 +394,13 @@ the paycheck check. The stray windows and the minigame popup go before the
 paycheck check because their green buttons (Okay, Yes) are the same green as
 the paycheck's CASH OUT button, so `detect_paycheck()` would mistake them for
 one. For the same reason
-`detect_paycheck()` only counts that green inside `PAYCHECK_REGION` (the middle
-of the screen, around its dismiss positions) and with at least
-`PAYCHECK_MIN_PIXELS` of it: it used to look at the whole screen, and the
-backpack's green Select All button, left open on screen, made it "dismiss" a
-paycheck popup every cycle. `rejoin_game()` is the automatic recovery - see
+`detect_paycheck()` matches the crop of the popup's bank-card header
+(`ref/popups/paycheck.png`, within `PAYCHECK_BOX`) instead of counting green:
+it used to count green pixels, and the green tiles of an open backpack passed
+that, so it "dismissed" a paycheck every cycle - and its second dismiss click,
+`PAYCHECK_DISMISS_POS_2` (948, 627), lands on the little orange box next to the
+backpack's settings button, which expands the backpack.
+`rejoin_game()` is the automatic recovery - see
 [Automatic recovery](#stuck-needs).
 
 **Stray windows.** Two windows have been seen open on their own, covering
@@ -450,6 +452,8 @@ the character), `process_needs()` logs `<need> interrupted by a minigame` /
 check decides from the screen what's still needed. During setup a minigame is
 only declined (No, without "do not show again"), since setup's clicks toggle
 things and can't be abandoned halfway.
+
+**Backpack tabs.** The backpack remembers its last category tab, and clicking a tab that is already selected (orange background) expands the backpack. `select_backpack_tab()` therefore only clicks the vehicles / toys tab when `backpack_tab_selected()` doesn't see the orange tile.
 
 **Closing a backpack left open.** The backpack has two forms and both are
 detected. The *expanded* backpack (`detect_backpack_expanded()`) is recognised by
@@ -885,7 +889,7 @@ exact values and rationale):
 | Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
 | Debug logging | `OUTPUT_LOG_PATH`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_SCREENSHOTS` |
-| Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `DISCONNECT_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_REGION`, `PAYCHECK_MIN_PIXELS` |
+| Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `DISCONNECT_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_BOX`, `PAYCHECK_MATCH_THRESHOLD` |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
 | GUI | colors/fonts (`GUI_BG`, `GUI_FONT`, ...) and layout spacing (`GUI_OUTER_PADDING`, `GUI_ROW_SPACING`, ...) for the `tkinter` panel |

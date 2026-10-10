@@ -385,6 +385,7 @@ def load_game_config():
         "tree_timer": time.time(),  # likewise
         "side_quest_enabled": True, # whether side_quest() is allowed to run at all
         "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
+        "record_next_run": False,   # record the next run as a low quality video; cleared when that run starts
         **{f"{name}_enabled": False for name in MINIGAME_LABELS},  # which Halloween minigames get played (see minigame_popup())
         "private_server_link": "",  # used by leave_and_rejoin(); kept here, not in the source, since it's a join key
     }
@@ -2162,6 +2163,101 @@ def side_quest():
             update_game_config(lambda c: c.update(lure_timer=time.time() + LURE_RECOLLECT_INTERVAL))
 
 # ============================================================================
+# RUN RECORDING
+# ============================================================================
+
+class RunRecorder:
+    """Records the Roblox window to a low quality video (RECORD_WIDTH x
+    RECORD_HEIGHT at RECORD_FPS) from a background thread, each frame stamped
+    with the time so it lines up with output.log and run_log.txt. Stops by
+    itself after RECORD_MAX_MINUTES. MP4 where OpenCV can write it, otherwise
+    MJPG in an .avi."""
+
+    def __init__(self, path):
+        self.path = path
+        self.writer = None
+        self.thread = None
+        self.stop_event = threading.Event()
+
+    def start(self):
+        """Open the file and start recording. Returns False if no video file
+        could be opened (nothing is recorded then)."""
+        for extension, codec in ((".mp4", "mp4v"), (".avi", "MJPG")):
+            path = os.path.splitext(self.path)[0] + extension
+            writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*codec), RECORD_FPS, (RECORD_WIDTH, RECORD_HEIGHT))
+            if writer.isOpened():
+                self.path, self.writer = path, writer
+                self.thread = threading.Thread(target=self._record, daemon=True)
+                self.thread.start()
+                return True
+            writer.release()
+        return False
+
+    def _frame(self):
+        frame = cv2.resize(grab_screen(), (RECORD_WIDTH, RECORD_HEIGHT), interpolation=cv2.INTER_AREA)
+        cv2.putText(frame, time.strftime("%Y-%m-%d %H:%M:%S"), (6, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4)
+        cv2.putText(frame, time.strftime("%Y-%m-%d %H:%M:%S"), (6, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        return frame
+
+    def _record(self):
+        """Thread body: one frame per 1/RECORD_FPS seconds of real time (a
+        slow grab is made up for by repeating the last frame, so the video
+        runs at real speed)."""
+        started = time.time()
+        written = 0
+        frame = None
+        while not self.stop_event.is_set() and time.time() - started < RECORD_MAX_MINUTES * 60:
+            try:
+                frame = self._frame()
+            except Exception:
+                pass   # a failed grab repeats the last frame
+            due = int((time.time() - started) * RECORD_FPS) + 1
+            if frame is not None:
+                for _ in range(max(1, due - written)):
+                    self.writer.write(frame)
+                    written += 1
+            self.stop_event.wait(max(0.0, (written / RECORD_FPS) - (time.time() - started)))
+
+    def stop(self):
+        """Stop recording and close the file."""
+        self.stop_event.set()
+        if self.thread is not None:
+            self.thread.join(timeout=5.0)
+        if self.writer is not None:
+            self.writer.release()
+        size_mb = os.path.getsize(self.path) / (1024 * 1024) if os.path.exists(self.path) else 0
+        log_run_event(f"recording stopped: {os.path.basename(self.path)} ({size_mb:.0f} MB)")
+        print(f"[!] Recording saved: {self.path} ({size_mb:.0f} MB)")
+
+def start_recording_if_requested():
+    """If "Record the next run" is ticked (the record_next_run config switch):
+    clear it - it's for one run only, and the Options checkbox is unticked to
+    match - start a RunRecorder in RECORDINGS_DIR, named after the run number
+    and time, delete the oldest videos beyond MAX_RECORDINGS, and return the
+    recorder. Returns None if it isn't ticked or no video file could be opened
+    (which is logged)."""
+    if not load_game_config()["record_next_run"]:
+        return None
+    update_game_config(lambda c: c.update(record_next_run=False))
+    if MACRO_WINDOW is not None:
+        MACRO_WINDOW.run_on_ui_thread(lambda: MACRO_WINDOW.config_flag_vars["record_next_run"].set(False), timeout=1.0)
+    os.makedirs(RECORDINGS_DIR, exist_ok=True)
+    videos = sorted((os.path.join(RECORDINGS_DIR, f) for f in os.listdir(RECORDINGS_DIR)), key=os.path.getmtime)
+    for old in videos[:max(0, len(videos) - (MAX_RECORDINGS - 1))]:
+        try:
+            os.remove(old)
+        except OSError:
+            pass
+    recorder = RunRecorder(os.path.join(RECORDINGS_DIR, f"run{CURRENT_RUN_NUMBER}_{time.strftime('%Y%m%d_%H%M%S')}"))
+    if not recorder.start():
+        print("[!] Couldn't open a video file - not recording")
+        log_run_event("recording: couldn't open a video file")
+        return None
+    log_run_event(f"recording started: {os.path.basename(recorder.path)}")
+    print(f"[!] Recording this run to {recorder.path}")
+    return recorder
+
+# ============================================================================
 # WORKFLOWS
 # ============================================================================
 
@@ -2209,6 +2305,7 @@ def run_workflow_loop():
     reset_run_stats()
     LAST_REJOIN = LAST_PROGRESS = time.time()  # the hourly and no-progress rejoins count from here
     log_run_event("LOOP started")
+    recorder = start_recording_if_requested()
     print("\n" + "=" * 50)
     print(f"[LOOP] Starting continuous workflow (run {CURRENT_RUN_NUMBER})")
     print("=" * 50)
@@ -2250,6 +2347,8 @@ def run_workflow_loop():
                 focus_roblox_click()
                 needs_respawn = True  # where a half-finished handler left the character is unknown
     finally:
+        if recorder is not None:
+            recorder.stop()
         log_run_event("LOOP stopped")
         print("\n[LOOP] Stopped\n")
 
@@ -2483,6 +2582,7 @@ class AdoptMeGUI:
         self.config_flag_vars = {}
         for label, key in (("Run side quest", "side_quest_enabled"),
                            ("Resume after focus loss", "resume_on_focus_loss"),
+                           ("Record the next run (low quality video)", "record_next_run"),
                            *((f"Play {label}", f"{name}_enabled") for name, label in MINIGAME_LABELS.items())):
             var = tk.BooleanVar(value=config[key])
             self.config_flag_vars[key] = var

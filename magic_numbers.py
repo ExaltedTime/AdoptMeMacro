@@ -112,9 +112,18 @@ RUN_COUNTER_PATH = os.path.join(DEBUG_DIR, "run_counter.txt")  # holds the last-
 GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")      # persisted game state - see load_game_config()
 OUTPUT_LOG_PATH = os.path.join(DEBUG_DIR, "output.log")    # everything the macro prints, timestamped - see log_output()
 FAILURE_DIR = os.path.join(DEBUG_DIR, "failures")          # a screenshot per failure - see log_failure()
+RECORDINGS_DIR = os.path.join(DEBUG_DIR, "recordings")      # run videos - see RunRecorder
 STATUS_PATH = os.path.join(DEBUG_DIR, "status.json")       # live "is it alive and what's it doing" summary - see write_status()
 OUTPUT_LOG_MAX_BYTES = 5 * 1024 * 1024   # output.log moves to output.log.old (replacing the last one) past this size
 MAX_FAILURE_SCREENSHOTS = 40             # oldest are deleted beyond this many
+
+# Recording a run ("Record the next run" on the Options tab): low quality on purpose, a video of a whole
+# unattended run is large. Every frame has the time on it, to line it up with the logs.
+RECORD_WIDTH = 640
+RECORD_HEIGHT = 360
+RECORD_FPS = 4
+RECORD_MAX_MINUTES = 180                 # recording stops by itself after this long
+MAX_RECORDINGS = 5                       # oldest videos are deleted beyond this many
 
 # ============================================================================
 # SCREEN / INPUT SETUP

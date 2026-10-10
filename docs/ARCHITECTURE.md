@@ -772,6 +772,9 @@ actually on disk (so an old config missing a newer key still works), and
   workflow runs.
 - **`resume_on_focus_loss`** - the **Resume after focus loss** checkbox (default
   off); see [Stopping & focus safety](#stopping--focus-safety).
+- **`record_next_run`** - the **Record the next run (low quality video)**
+  checkbox (default off); see [Recording a run](#recording-a-run). Cleared, and
+  the checkbox unticked, when the run that it was for starts.
 - **`private_server_link`** - the private server link `leave_and_rejoin()`
   joins, typed into the GUI's entry box (saved when you press Enter or click
   away). It lives here rather than in `magic_numbers.py` because it's a key
@@ -841,6 +844,22 @@ knowing if you're modifying it:
   `output.log` only the first time (this is the "Waiting for a need..."
   counter).
 
+### Recording a run
+
+Tick **Record the next run (low quality video)** on the Options tab (the
+`record_next_run` config switch) and the next time the loop starts it records
+the Roblox window to `debug/recordings/run<N>_<time>.mp4` - then clears the
+switch, so it's one run only. `start_recording_if_requested()` starts a
+`RunRecorder`, which writes `RECORD_WIDTH` x `RECORD_HEIGHT` (640x360) frames at
+`RECORD_FPS` (4) from a background thread, each stamped with the time so the
+video lines up with `output.log` and `run_log.txt`; a slow grab is covered by
+repeating the last frame, so playback is real time. It stops when the loop
+ends or after `RECORD_MAX_MINUTES`, and only the newest `MAX_RECORDINGS` videos
+are kept. It's MP4 (`mp4v`) where OpenCV can write one, otherwise MJPG in an
+`.avi`; `recording started` / `recording stopped` (with the size) go in the run
+log. The picture is the Roblox window as the macro sees it, so the macro's own
+window shows up in it if it's on top.
+
 ## Configuration reference
 
 Every tunable number, timing, screen position and color range lives in
@@ -901,6 +920,7 @@ were away can be read back afterwards:
   rejoins and focus resumes, and the last resolved need
   and last failure. `RUN_STATS` holds the counters in memory.
 - **`debug_needs.png`** / **`debug_buttons.png`** - see below.
+- **`recordings/`** - run videos, see [Recording a run](#recording-a-run).
 - **`debug_focus_pet.png`** / **`debug_focus_pet_after.png`** - what
   `focus_pet()` saw and what the screen looked like after its clicks.
 

@@ -464,6 +464,14 @@ things and can't be abandoned halfway.
 
 **Backpack tabs.** The backpack remembers its last category tab, and clicking a tab that is already selected (orange background) expands the backpack. `select_backpack_tab()` therefore only clicks the vehicles / toys tab when `backpack_tab_selected()` doesn't see the orange tile.
 
+**The BACK button.** The expanded backpack has a BACK button at the top
+(`ref/popups/backpack_back.png`, found within `BACKPACK_BACK_BOX`) that closes
+it entirely, where the backpack key only shrinks it to the normal form first.
+`close_backpack_if_open()` clicks it when it sees the expanded form, and
+falls back to the key presses if it isn't found. The pet focus view has a BACK
+button too, but a different one: its `pet_focus` crop is searched for only in
+the top-left box, away from the expanded backpack's.
+
 **Closing a backpack left open.** The backpack has two forms and both are
 detected. The *expanded* backpack (`detect_backpack_expanded()`) is recognised by
 its purple header bar (`BACKPACK_HEADER_COLOR`) filling at least

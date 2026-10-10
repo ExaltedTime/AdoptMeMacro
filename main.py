@@ -1862,6 +1862,16 @@ def close_backpack_if_open():
     print(f"[debug] backpack left open, closing it... (expanded: {detect_backpack_expanded(img)}, "
           f"normal: {detect_backpack_normal(img)})")
     cv2.imwrite(os.path.join(DEBUG_DIR, "debug_backpack_open.png"), img)
+    if detect_backpack_expanded(img):
+        # Its BACK button closes it entirely; the key would only shrink it first.
+        crop = load_templates(STRAY_WINDOW_DIR).get("backpack_back")
+        score, center = find_template(img, crop, BACKPACK_BACK_BOX) if crop is not None else (0.0, None)
+        if score >= BACKPACK_BACK_MATCH_THRESHOLD:
+            hover_click(*center)
+            wait_interruptible(UI_SETTLE)
+            if not detect_backpack_open(grab_screen()):
+                log_run_event("backpack was left open - closed it (BACK)")
+                return True
     for _ in range(2):
         pydirectinput.press(KEY_BACKPACK)
         wait_interruptible(UI_SETTLE)
@@ -1997,6 +2007,16 @@ def template_score(img, crop, box):
     if crop.shape[0] > band.shape[0] or crop.shape[1] > band.shape[1]:
         return 0.0
     return float(cv2.minMaxLoc(cv2.matchTemplate(band, crop, cv2.TM_CCOEFF_NORMED))[1])
+
+def find_template(img, crop, box):
+    """Like template_score(), but also where: (score, (x, y) of the match's
+    center in `img`)."""
+    left, top, right, bottom = box
+    band = img[top:bottom, left:right]
+    if crop.shape[0] > band.shape[0] or crop.shape[1] > band.shape[1]:
+        return 0.0, None
+    _, score, _, (x, y) = cv2.minMaxLoc(cv2.matchTemplate(band, crop, cv2.TM_CCOEFF_NORMED))
+    return float(score), (left + x + crop.shape[1] // 2, top + y + crop.shape[0] // 2)
 
 def identify_minigame(img):
     """Which minigame the popup in `img` is for: the name whose title crop

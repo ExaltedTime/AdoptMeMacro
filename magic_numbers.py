@@ -242,6 +242,10 @@ BACKPACK_NORMAL_MIN_WHITE_FRACTION = 0.2
 # normal one open for a few seconds on purpose) only once it's been seen open on this many checks in a
 # row, UNSCREW_TASK_INTERVAL apart.
 BACKPACK_CLOSE_CONFIRMATIONS = 2
+# The EXPANDED backpack has its own BACK button (ref/popups/backpack_back.png, searched for within
+# BACKPACK_BACK_BOX): clicking it closes the backpack entirely, where the key only shrinks it to the normal form.
+BACKPACK_BACK_BOX = (700, 80, 1000, 200)
+BACKPACK_BACK_MATCH_THRESHOLD = 0.8
 
 # Ride need: positions for the backpack -> vehicles -> first vehicle -> equip
 # sequence, plus how long to hold each step.

@@ -519,7 +519,7 @@ Options tab). `minigame_popup()`:
   when the popup turns up while a handler is waiting in
   a handler's waits (see [Per-cycle checks while a task
   runs](#per-cycle-checks-while-a-task-runs)): the minigame is played right
-  then and the handler abandoned (`TaskInterrupted`) - where it left the
+  then and the handler abandoned (`TaskInterrupted`). Every held key and the mouse button are released first - at the start of `play_minigame()`, since the handler may have been holding one (a walk, the pet swipe) when it was interrupted, and again as the interruption is raised. Where it left the
   character is unknown afterwards, and the next check sees what is still
   needed.
 

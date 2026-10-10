@@ -731,8 +731,10 @@ def task_unscrew_tick():
         _IN_UNSCREW = False
         _LAST_TASK_UNSCREW = time.time()
     if played == "played":
+        release_all_inputs()
         raise TaskInterrupted("a minigame")
     if played == "rejoined":
+        release_all_inputs()
         raise TaskInterrupted("a rejoin")
 
 def wait_interruptible(duration):
@@ -2183,6 +2185,9 @@ def play_minigame(name):
     label = MINIGAME_LABELS.get(name, name)
     print(f"[!] playing {label}")
     log_run_event(f"minigame started: {label}")
+    # The handler this interrupted may be holding a key or the mouse button
+    # down (hold_key(), the pet swipe); that must not carry into the minigame.
+    release_all_inputs()
     hover_click(*MINIGAME_POPUP_YES_POS)
     started = time.time()
     try:

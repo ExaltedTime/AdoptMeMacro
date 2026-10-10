@@ -451,6 +451,8 @@ check decides from the screen what's still needed. During setup a minigame is
 only declined (No, without "do not show again"), since setup's clicks toggle
 things and can't be abandoned halfway.
 
+**Backpack tabs.** The backpack remembers its last category tab, and clicking a tab that is already selected (orange background) expands the backpack. `select_backpack_tab()` therefore only clicks the vehicles / toys tab when `backpack_tab_selected()` doesn't see the orange tile.
+
 **Closing a backpack left open.** The backpack has two forms and both are
 detected. The *expanded* backpack (`detect_backpack_expanded()`) is recognised by
 its purple header bar (`BACKPACK_HEADER_COLOR`) filling at least

@@ -1337,6 +1337,22 @@ def focus_pet(click_duration=CLICK_MOVE_DURATION):
     save_focus_pet_debug(after, blobs, np.zeros_like(mask), top, name="debug_focus_pet_after.png", ignore=ignore)
     return True
 
+def backpack_tab_selected(pos):
+    """True if the backpack category tab at `pos` is already selected (orange)."""
+    x, y = pos
+    hx, hy = TAB_HALF_SIZE
+    tile = grab_screen()[y - hy:y + hy, x - hx:x + hx]
+    mask = exact_color_mask(tile, TAB_SELECTED_COLOR, TAB_SELECTED_TOLERANCE)
+    return np.count_nonzero(mask) >= TAB_SELECTED_MIN_PIXELS
+
+def select_backpack_tab(pos):
+    """Click the backpack category tab at `pos` unless it's already selected:
+    clicking a selected tab expands the backpack."""
+    if backpack_tab_selected(pos):
+        print("[debug] tab already selected, not clicking it")
+        return
+    hover_click(*pos)
+
 def equip_favorite_vehicle():
     """Open the backpack, select the first vehicle (the favorite, once
     setup_game() has filtered the backpack to favorites) and equip it, then
@@ -1347,7 +1363,7 @@ def equip_favorite_vehicle():
     wait_interruptible(UI_SETTLE)
 
     print("[debug] opening vehicles...")
-    hover_click(*RIDE_VEHICLES_POS)
+    select_backpack_tab(RIDE_VEHICLES_POS)
     wait_interruptible(UI_SETTLE)
 
     print("[debug] selecting first vehicle...")
@@ -1407,7 +1423,7 @@ class CatchNeedHandler(NeedHandler):
 
         # Navigate to toys
         print("[debug] opening toys...")
-        hover_click(*CATCH_TOYS_POS)
+        select_backpack_tab(CATCH_TOYS_POS)
         wait_interruptible(UI_SETTLE)
 
         # Click squeaky toy

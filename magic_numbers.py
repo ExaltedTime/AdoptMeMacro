@@ -505,3 +505,11 @@ GUI_CONSOLE_FONT_SIZE = 7
 GUI_CONSOLE_HEIGHT = 14          # lines
 GUI_CONSOLE_WIDTH = 45           # chars
 GUI_RESPAWN_BUTTON_HEIGHT = 1    # lines
+
+# A backpack category tab that is already selected has an orange background; clicking it again expands the
+# backpack, so handlers only click a tab that isn't orange yet. The tile is TAB_HALF_SIZE (x, y) around its
+# click position, and counts as selected with at least TAB_SELECTED_MIN_PIXELS of TAB_SELECTED_COLOR in it.
+TAB_SELECTED_COLOR = (250, 149, 30)
+TAB_SELECTED_TOLERANCE = 12
+TAB_HALF_SIZE = (26, 18)
+TAB_SELECTED_MIN_PIXELS = 300

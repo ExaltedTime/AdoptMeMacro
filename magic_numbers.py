@@ -72,10 +72,33 @@ GHOST_GALLERY_STEP_MIN = 0.3        # while it's held, a random direction (MOVE_
 GHOST_GALLERY_STEP_MAX = 1.0        # for a random time between these
 
 # ============================================================================
+# STRAY WINDOWS
+# ============================================================================
+# Windows that open by accident (a misclick, the daily rewards after a join) and block everything: each is
+# recognised by a crop of its title in STRAY_WINDOW_DIR (file name = the name here), searched for within
+# "box", and closed by clicking "close_pos" - see dismiss_stray_windows(). The Trading Hub also throws up a
+# "Go to the Trading Hub to edit listings!" popup, found by its green Okay button and clicked first.
+STRAY_WINDOW_MATCH_THRESHOLD = 0.8
+STRAY_WINDOWS = {
+    "trading_hub": {"box": (580, 290, 1020, 400), "close_pos": (1278, 339)},
+    "star_rewards": {"box": (640, 385, 1060, 475), "close_pos": (1209, 441)},
+}
+STRAY_OKAY_BOX = (800, 637, 1120, 680)
+STRAY_OKAY_COLOR = (74, 198, 85)
+STRAY_OKAY_TOLERANCE = 3
+STRAY_OKAY_MIN_PIXELS = 5000      # the button is ~11000 exact-color px in that box
+STRAY_OKAY_POS = (962, 657)
+SETUP_STRAY_TRIES = 3             # setup closes up to this many stray windows before it starts
+STRAY_CLOSE_SETTLE = 1.0          # after a click, before looking again
+# While a need handler (or setup) is running, the per-cycle checks (unscrew()) also run, this often.
+UNSCREW_TASK_INTERVAL = 4.0
+
+# ============================================================================
 # PATHS
 # ============================================================================
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MINIGAME_TEMPLATE_DIR = os.path.join(SCRIPT_DIR, "ref", "halloween")
+STRAY_WINDOW_DIR = os.path.join(SCRIPT_DIR, "ref", "popups")
 NEEDS_DIR = os.path.join(SCRIPT_DIR, "needs")
 DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
 Path(NEEDS_DIR).mkdir(exist_ok=True)
@@ -160,6 +183,7 @@ FOCUS_PET_FRAME_GAP = 0.1            # seconds between the two screenshots
 FOCUS_PET_DIFF_THRESHOLD = 25        # per-pixel brightness change that counts as movement (0-255)
 FOCUS_PET_MERGE_KERNEL = 25          # px; changed pixels this close together merge into one blob
 FOCUS_PET_MIN_AREA = 150             # px^2; smaller blobs are noise, not the pet
+FOCUS_PET_DEBUG_COLOR = (0, 255, 0)    # BGR, the boxes drawn on debug/debug_focus_pet.png
 FOCUS_PET_MENU_WAIT = 4.0            # wait after the clicks, for the pet's menu to open
 
 # The 'choose' need's button is matched by its exact color rather than shape,

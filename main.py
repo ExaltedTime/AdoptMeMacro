@@ -27,6 +27,7 @@ import pydirectinput
 import pygetwindow as gw
 
 from magic_numbers import *
+import helper
 
 class TaskInterrupted(Exception):
     """Raised from inside a need handler's waits when something that can't
@@ -2467,11 +2468,20 @@ def run_workflow_loop():
         if recorder is not None:
             recorder.stop()
         log_run_event("LOOP stopped")
+        write_run_report(CURRENT_RUN_NUMBER)
         print("\n[LOOP] Stopped\n")
 
 # ============================================================================
 # GUI
 # ============================================================================
+
+def write_run_report(run):
+    """Chart run `run` from the log into REPORTS_DIR (see helper.py) and print
+    where it went. Returns the path, or None. Never raises."""
+    path = helper.generate_run_report(RUN_LOG_PATH, run, REPORTS_DIR, BUTTON_NAMES, TELEPORT_WALK_NEEDS)
+    if path:
+        print(f"[debug] run report: {path}")
+    return path
 
 class DebugCapture:
     """Replaces sys.stdout for the lifetime of the GUI: everything printed
@@ -2875,6 +2885,20 @@ class AdoptMeGUI:
                             font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
             btn.grid(row=1 + i // 2, column=i % 2, sticky=tk.EW, padx=GUI_WIDGET_SPACING, pady=GUI_WIDGET_SPACING)
             self.action_buttons.append(btn)
+        rows = 1 + (len(DEBUG_HANDLERS) + 1) // 2
+        tk.Button(parent, text="Report on the last run", command=self.show_run_report,
+                  font=(GUI_FONT, GUI_SECTION_FONT_SIZE), bg=self.accent, fg=self.fg, cursor="hand2"
+                  ).grid(row=rows, column=0, columnspan=2, sticky=tk.EW, padx=GUI_WIDGET_SPACING, pady=GUI_WIDGET_SPACING)
+
+    def show_run_report(self):
+        """Chart the current (or, if none has started, the last) run from the
+        log and open the picture."""
+        run = CURRENT_RUN_NUMBER or helper.latest_run(RUN_LOG_PATH)
+        path = write_run_report(run) if run is not None else None
+        if path is None:
+            print("[debug] no run in the log to report on")
+        elif hasattr(os, "startfile"):
+            os.startfile(path)
 
     def test_handler(self, name, handler_cls):
         """Run one need handler on its own, outside the normal need-detection

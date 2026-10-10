@@ -120,6 +120,7 @@ GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")      # persisted game stat
 OUTPUT_LOG_PATH = os.path.join(DEBUG_DIR, "output.log")    # everything the macro prints, timestamped - see log_output()
 FAILURE_DIR = os.path.join(DEBUG_DIR, "failures")          # a screenshot per failure - see log_failure()
 RECORDINGS_DIR = os.path.join(DEBUG_DIR, "recordings")      # run videos - see RunRecorder
+REPORTS_DIR = os.path.join(DEBUG_DIR, "reports")            # run<N>.png charts of a run - see helper.py
 STATUS_PATH = os.path.join(DEBUG_DIR, "status.json")       # live "is it alive and what's it doing" summary - see write_status()
 OUTPUT_LOG_MAX_BYTES = 5 * 1024 * 1024   # output.log moves to output.log.old (replacing the last one) past this size
 MAX_FAILURE_SCREENSHOTS = 40             # oldest are deleted beyond this many

@@ -4,7 +4,7 @@ Detailed technical walkthrough of `main.py`. This is for understanding or
 modifying the code - if you just want to run the macro, see the main
 [README](../README.md) instead.
 
-Almost everything lives in `main.py`, organized top to bottom as a sequence
+Almost everything lives in `main.py` (plus `helper.py`, the run-report chart - see [Debugging an unattended run](#debugging-an-unattended-run)), organized top to bottom as a sequence
 of `# === SECTION ===` blocks; this doc follows that same order. The one
 exception is `magic_numbers.py`, which holds every tunable constant (see
 [Configuration reference](#configuration-reference)) - `main.py` pulls
@@ -924,6 +924,18 @@ were away can be read back afterwards:
 - **`run_log.txt`** - the short version: one tagged line per notable event
   (needs detected, resolved with how long they took, popups dismissed,
   recoveries, stops, failures). Start here to see roughly what happened.
+- **`reports/run<N>.png`** - a chart of one run, drawn from `run_log.txt` by
+  `helper.py` with OpenCV (no extra dependency). Written automatically when a
+  run stops (`write_run_report()`, in the `finally` of `run_workflow_loop()`)
+  and on demand by the Debug tab's "Report on the last run" button, which also
+  opens it. Four panels: needs resolved per unit of time (the unit is picked
+  from `BUCKET_STEPS` so the run fills about `TARGET_BUCKETS` bars, stacked by
+  basic / teleport / other need, with failures and rejoins marked); needs
+  detected per check; average seconds per resolved need with how many there
+  were; and counts of failures by kind and other events. `parse_run()` reads
+  the log by the exact line wording `log_run_event()` writes, so a wording
+  change there needs the matching regex in `helper.py`. It never raises -
+  a report problem can't take a run down.
 - **`failures/`** - `log_failure(reason)` saves a screenshot of the whole
   screen named with the time, run number and reason, and also prints the
   reason, writes it to `run_log.txt` and counts it in the status file. It's

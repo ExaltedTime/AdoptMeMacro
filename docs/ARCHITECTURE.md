@@ -357,7 +357,7 @@ rather than a flat sleep after the fact.
 | Need | How it's handled |
 |---|---|
 | `hungry` / `thirsty` / `dirty` / `potty` / `sleepy` | `ButtonNeedHandler`: walk to the action buttons (`walk_to_buttons()`), refresh the button mapping (`refresh_button_mapping()`), click the matching one (`click_need_button()`), which then calls `wait_until_need_gone()` for that need name. |
-| `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → scroll up + click empty space, `CATCH_THROW_COUNT` (3) times, `CATCH_EMOTE_DELAY` apart → unequip. Always runs this exact sequence - no `wait_until_need_gone()` involved. |
+| `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → hold zoom-in → click empty space every `CATCH_THROW_INTERVAL` (0.5s) until the "catch" icon is confirmed gone (`click_until_need_gone()`, the same watcher thread `walk_alternating()` uses; at most `CATCH_MAX_WAIT`) → unequip. |
 | `pet` | `PetNeedHandler`: `focus_pet()` (see below), then hold the mouse down and trace a circle of radius `PET_CIRCLE_RADIUS` around screen center for `PET_CIRCLE_DURATION`. Same as `catch` - always the full fixed duration. |
 | `choose` | `ChooseNeedHandler`: `focus_pet()` (see below), find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. It doesn't wait for the icon to clear (it's gone at once; the next check confirms). |
 | `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then `equip_favorite_vehicle()` (backpack → vehicles → first vehicle → equip → close backpack), hold `r` (`KEY_HELICOPTER`) for `RIDE_R_HOLD_DURATION` (1s), then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT` (60s), ending early the moment "ride" is confirmed cleared (see below). |
@@ -420,6 +420,15 @@ its `close_pos`; for the Trading Hub it first clicks the popup's green Okay
 `STRAY_WINDOWS`. `setup_game()` also closes any before it starts, since an open
 one would take its clicks.
 
+Two more entries are the **character menu** (`character_menu.png`: the five
+buttons Profile / Emotions / Dances / Actions / Activities; a click in the
+middle of the screen dismisses it) and the **pet focus view** (`pet_focus.png`:
+the camera on the pet with a BACK button; `close_pos` is that button). Only
+`choose` and `pet` want the pet focused, so `pet_focus` is flagged
+`only_when_unwanted`: `dismiss_stray_windows()` skips it while
+`wanting_pet_focus()` is active (those two handlers), and clicks BACK in every
+other case - including mid-task, e.g. a throw click that focused the pet.
+
 A third entry, `respawn_confirm`, is the "Are you sure you want to respawn your
 character?" dialog (`ref/popups/respawn_confirm.png`; its `close_pos` is the
 Respawn button). `respawn_character()` presses esc, r and enter within a
@@ -454,6 +463,14 @@ only declined (No, without "do not show again"), since setup's clicks toggle
 things and can't be abandoned halfway.
 
 **Backpack tabs.** The backpack remembers its last category tab, and clicking a tab that is already selected (orange background) expands the backpack. `select_backpack_tab()` therefore only clicks the vehicles / toys tab when `backpack_tab_selected()` doesn't see the orange tile.
+
+**The BACK button.** The expanded backpack has a BACK button at the top
+(`ref/popups/backpack_back.png`, found within `BACKPACK_BACK_BOX`) that closes
+it entirely, where the backpack key only shrinks it to the normal form first.
+`close_backpack_if_open()` clicks it when it sees the expanded form, and
+falls back to the key presses if it isn't found. The pet focus view has a BACK
+button too, but a different one: its `pet_focus` crop is searched for only in
+the top-left box, away from the expanded backpack's.
 
 **Closing a backpack left open.** The backpack has two forms and both are
 detected. The *expanded* backpack (`detect_backpack_expanded()`) is recognised by

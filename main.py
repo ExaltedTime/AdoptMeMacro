@@ -1819,7 +1819,10 @@ def close_backpack_if_open():
     open."""
     if not is_roblox_focused() or not detect_backpack_open(grab_screen()):
         return False
-    print("[debug] backpack left open, closing it...")
+    img = grab_screen()
+    print(f"[debug] backpack left open, closing it... (expanded: {detect_backpack_expanded(img)}, "
+          f"normal: {detect_backpack_normal(img)})")
+    cv2.imwrite(os.path.join(DEBUG_DIR, "debug_backpack_open.png"), img)
     for _ in range(2):
         pydirectinput.press(KEY_BACKPACK)
         wait_interruptible(UI_SETTLE)

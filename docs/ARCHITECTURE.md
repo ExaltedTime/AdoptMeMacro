@@ -330,7 +330,7 @@ everything else).
 The GUI's **Debug** tab has a button per handler that runs it directly
 regardless of `ENABLED_NEEDS`.
 
-**Focusing the pet.** `pet` and `choose` both start with `focus_pet()`, which first checks whether the pet is already focused (`pet_focused()`: the BACK button's crop is on screen) and if so returns True with no clicks; otherwise it
+**Focusing the pet.** (Each click is followed by `FOCUS_PET_CLICK_SETTLE` and a `pet_focused()` check; the clicks stop at the first one that focuses it, and `FOCUS_PET_MENU_WAIT` is only waited if none did.) `pet` and `choose` both start with `focus_pet()`, which first checks whether the pet is already focused (`pet_focused()`: the BACK button's crop is on screen) and if so returns True with no clicks; otherwise it
 has no hardcoded position: it takes two screenshots of the bottom of the
 screen (below `FOCUS_PET_REGION_TOP_PERCENT`) `FOCUS_PET_FRAME_GAP` apart,
 and `moving_blobs()` diffs them - leaving out the macro's own window

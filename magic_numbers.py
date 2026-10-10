@@ -206,6 +206,7 @@ FOCUS_PET_MERGE_KERNEL = 25          # px; changed pixels this close together me
 FOCUS_PET_MIN_AREA = 150             # px^2; smaller blobs are noise, not the pet
 FOCUS_PET_IGNORE_MARGIN = 20           # px around the macro's own window that focus_pet() ignores too
 FOCUS_PET_DEBUG_COLOR = (0, 255, 0)    # BGR, the boxes drawn on debug/debug_focus_pet.png
+FOCUS_PET_CLICK_SETTLE = 1.0         # after each click, before checking whether the pet is focused now
 FOCUS_PET_MENU_WAIT = 4.0            # wait after the clicks, for the pet's menu to open
 
 # The 'choose' need's button is matched by its exact color rather than shape,

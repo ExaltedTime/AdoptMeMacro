@@ -1321,7 +1321,8 @@ def focus_pet(click_duration=CLICK_MOVE_DURATION):
     moving_blobs(), which leaves out the macro's own window). What it saw is printed and written to
     debug/debug_focus_pet.png (the blobs, marked) - and what the screen looked
     like after the clicks to debug/debug_focus_pet_after.png. Returns True if
-    anything was clicked, False if nothing moved. If the pet is already
+    anything was clicked, False if nothing moved. It looks at whether the pet
+    is focused after each click and stops clicking the moment it is. If the pet is already
     focused (the pet focus view's BACK button is on screen) there's nothing
     to click: it just returns True."""
     if pet_focused(grab_screen()):
@@ -1343,7 +1344,12 @@ def focus_pet(click_duration=CLICK_MOVE_DURATION):
     for i, (x, y, w, h, _) in enumerate(blobs, 1):
         print(f"[debug] focus_pet: clicking #{i} at ({x + w // 2}, {y + h // 2})...")
         hover_click(x + w // 2, y + h // 2, duration=click_duration)
-    wait_interruptible(FOCUS_PET_MENU_WAIT)
+        wait_interruptible(FOCUS_PET_CLICK_SETTLE)
+        if pet_focused(grab_screen()):
+            print(f"[debug] focus_pet: focused after click #{i}, no more clicks needed")
+            break
+    else:
+        wait_interruptible(FOCUS_PET_MENU_WAIT)
     after = grab_screen()
     save_focus_pet_debug(after, blobs, np.zeros_like(mask), top, name="debug_focus_pet_after.png", ignore=ignore)
     return True

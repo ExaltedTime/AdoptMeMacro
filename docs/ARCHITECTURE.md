@@ -854,7 +854,7 @@ switch, so it's one run only. `start_recording_if_requested()` starts a
 `RECORD_FPS` (4) from a background thread, each stamped with the time so the
 video lines up with `output.log` and `run_log.txt`; a slow grab is covered by
 repeating the last frame, so playback is real time. It stops when the loop
-ends or after `RECORD_MAX_MINUTES`, and only the newest `MAX_RECORDINGS` videos
+ends or after `RECORD_MAX_MINUTES` (480, 8 hours), and only the newest `MAX_RECORDINGS` videos
 are kept. It's MP4 (`mp4v`) where OpenCV can write one, otherwise MJPG in an
 `.avi`; `recording started` / `recording stopped` (with the size) go in the run
 log. The picture is the Roblox window as the macro sees it, so the macro's own

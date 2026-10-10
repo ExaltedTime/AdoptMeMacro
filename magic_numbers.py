@@ -122,7 +122,7 @@ MAX_FAILURE_SCREENSHOTS = 40             # oldest are deleted beyond this many
 RECORD_WIDTH = 640
 RECORD_HEIGHT = 360
 RECORD_FPS = 4
-RECORD_MAX_MINUTES = 180                 # recording stops by itself after this long
+RECORD_MAX_MINUTES = 480                 # recording stops by itself after this long
 MAX_RECORDINGS = 5                       # oldest videos are deleted beyond this many
 
 # ============================================================================

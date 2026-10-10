@@ -909,7 +909,8 @@ def click_need_button(need_name):
 # ============================================================================
 
 def respawn_character():
-    """Respawn the character (ESC, R, ENTER) and wait for it to settle."""
+    """Respawn the character (ESC, R, ENTER), make sure the respawn dialog
+    isn't left open (dismiss_stray_windows()), and wait for it to settle."""
     print("[debug] respawning...")
     if not focus_roblox_click():
         return
@@ -918,6 +919,13 @@ def respawn_character():
         time.sleep(RESPAWN_KEY_DURATION)
         pydirectinput.keyUp(key)
         time.sleep(RESPAWN_KEY_DURATION)
+    # The keys go in within a fraction of a second; if the Enter came before the
+    # "Are you sure you want to respawn your character?" dialog did, it's still
+    # open and blocks everything - click its Respawn (see STRAY_WINDOWS).
+    time.sleep(RESPAWN_CONFIRM_LOOK_DELAY)
+    for _ in range(2):
+        if dismiss_stray_windows() != "respawn_confirm":
+            break
     wait_interruptible(RESPAWN_WAIT)
     print("[debug] respawn complete")
 

@@ -416,6 +416,17 @@ its `close_pos`; for the Trading Hub it first clicks the popup's green Okay
 `STRAY_WINDOWS`. `setup_game()` also closes any before it starts, since an open
 one would take its clicks.
 
+A third entry, `respawn_confirm`, is the "Are you sure you want to respawn your
+character?" dialog (`ref/popups/respawn_confirm.png`; its `close_pos` is the
+Respawn button). `respawn_character()` presses esc, r and enter within a
+fraction of a second, and if the Enter lands before the dialog exists the
+dialog stays open and blocks everything after it (a screenshot of exactly that
+was seen after a minigame). So `respawn_character()` looks for it
+`RESPAWN_CONFIRM_LOOK_DELAY` after the keys and clicks Respawn if it's there;
+the in-task checks would also catch it. Each time one is closed it is a
+`stray window closed: respawn_confirm` line in the run log, so how often it
+happens can be counted.
+
 **Per-cycle checks while a task runs.** Waiting for the top of the next cycle
 would leave a popup, a stray window or an offered minigame in the way for the
 whole of a handler (a minute or two), and minigames are time-sensitive. So

@@ -82,6 +82,9 @@ STRAY_WINDOW_MATCH_THRESHOLD = 0.8
 STRAY_WINDOWS = {
     "trading_hub": {"box": (580, 290, 1020, 400), "close_pos": (1278, 339)},
     "star_rewards": {"box": (640, 385, 1060, 475), "close_pos": (1209, 441)},
+    # "Are you sure you want to respawn your character?" - what respawn_character()'s esc, r, enter leaves
+    # open when the Enter comes before the dialog does; "close_pos" is its Respawn button.
+    "respawn_confirm": {"box": (600, 330, 1320, 430), "close_pos": (850, 496)},
 }
 STRAY_OKAY_BOX = (800, 637, 1120, 680)
 STRAY_OKAY_COLOR = (74, 198, 85)
@@ -135,6 +138,7 @@ MATCH_ONLY_LEFT_HALF = True    # compare only the left half of each icon (a badg
 
 # Timing (seconds)
 RESPAWN_KEY_DURATION = 0.05    # how long each respawn key is held
+RESPAWN_CONFIRM_LOOK_DELAY = 0.5  # after the respawn keys, before checking the respawn dialog is gone
 RESPAWN_WAIT = 4.0             # settle time after respawning, before it's usable
 WALK_TO_BUTTONS_DURATION = 0.8 # time spent walking forward to reach the action buttons
 WALK_ALTERNATING_STEP = 1.0    # duration of each a/d press in alternating walk pattern

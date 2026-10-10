@@ -126,7 +126,9 @@ an extra walk from wherever the previous need left the character standing.
 - **NEED HANDLERS** - `NeedHandler` and one subclass per need (or per group
   of needs, via `partial()`). See [Need handlers](#need-handlers).
 - **PER-CYCLE CHECKS** - `unscrew()` and what it runs: `rejoin_game()`
-  (with `rejoin_reason()` / `detect_disconnect()`), `close_backpack_if_open()`,
+  (with `rejoin_reason()` / `detect_disconnect()`), `close_backpack_if_stuck()`
+  / `close_backpack_if_open()` (with `detect_backpack_expanded()` /
+  `detect_backpack_normal()`),
   `dismiss_stray_windows()`, `minigame_popup()`,
   `detect_paycheck()`; the `task_unscrew()` / `task_unscrew_tick()` hook that
   runs them during a task; and `side_quest()`.
@@ -383,7 +385,8 @@ calls `minigame_popup()`, which plays or dismisses the minigame popups
 (see below).
 
 Every cycle, `unscrew()` runs `rejoin_game()` first (nothing else works
-while disconnected), then `close_backpack_if_open()`, then
+while disconnected), then `close_backpack_if_stuck()` (the backpack, either
+form), then
 `dismiss_stray_windows()`, then `minigame_popup()` if `HALLOWEEN` is on, then
 the paycheck check. The stray windows and the minigame popup go before the
 paycheck check because their green buttons (Okay, Yes) are the same green as
@@ -419,28 +422,42 @@ whole of a handler (a minute or two), and minigames are time-sensitive. So
 `process_needs()` runs each handler - and `setup_game()` its steps - inside
 `task_unscrew()`, and during it every `wait_interruptible()` also runs
 `unscrew(in_task=True)` every `UNSCREW_TASK_INTERVAL` (only on the thread that
-started the task, and never from inside `unscrew()` itself). Mid-task
-`unscrew()` leaves out the rejoin and the backpack closing (the backpack is
-open on purpose), and the paycheck check is skipped while the expanded backpack
-is open. If a minigame is played, `TaskInterrupted` is raised: the handler is
-abandoned (the minigame respawned the character), `process_needs()` logs
-`<need> interrupted by a minigame`, doesn't count it as resolved or as a failed
-attempt, and the next check decides from the screen what's still needed. During
-setup a minigame is only declined (No, without "do not show again"), since
-setup's clicks toggle things and can't be abandoned halfway.
+started the task, and never from inside `unscrew()` itself). It's the same
+`unscrew()`, with two differences: the rejoin check only acts on a disconnect
+(`rejoin_game(kinds=("disconnect",))`; the scheduled and stalled rejoins wait
+for the top of a cycle), and the backpack is only closed once it has been seen
+open on `BACKPACK_CLOSE_CONFIRMATIONS` (2) checks in a row - a handler opens the
+normal backpack for a few seconds on purpose, so one sighting could be a
+handler in the middle of its steps, but two `UNSCREW_TASK_INTERVAL` apart is a
+backpack open for longer than any handler needs. The paycheck check is skipped
+while the backpack is still open. If a minigame is played, or a disconnect made
+it rejoin, `TaskInterrupted` is raised: the handler is abandoned (both respawn
+the character), `process_needs()` logs `<need> interrupted by a minigame` /
+`a rejoin`, doesn't count it as resolved or as a failed attempt, and the next
+check decides from the screen what's still needed. During setup a minigame is
+only declined (No, without "do not show again"), since setup's clicks toggle
+things and can't be abandoned halfway.
 
-**Closing a backpack left open.** No handler should have the backpack open
-between cycles, so one that is was left that way (a handler interrupted halfway,
-a toggle that got out of step). `detect_backpack_open()` recognises it by its
-purple header bar (`BACKPACK_HEADER_COLOR`) filling at least
-`BACKPACK_HEADER_MIN_FRACTION` of `BACKPACK_HEADER_BOX`; `close_backpack_if_open()`
-presses `KEY_BACKPACK` - but only while Roblox has the focus, so the key can't
-go to another window. What the header marks is the *expanded* backpack, which
-takes two presses: the first shrinks it to the normal backpack, the second
-closes that. After the first press the expanded header must be gone; if it
-isn't, a failure is logged and it stops rather than pressing again, since
-another press could just reopen it. (The normal backpack has no header to
-check, so the second press isn't verified.)
+**Closing a backpack left open.** The backpack has two forms and both are
+detected. The *expanded* backpack (`detect_backpack_expanded()`) is recognised by
+its purple header bar (`BACKPACK_HEADER_COLOR`) filling at least
+`BACKPACK_HEADER_MIN_FRACTION` of `BACKPACK_HEADER_BOX`; it should never be
+open during a task. The *normal* backpack (`detect_backpack_normal()`) - the
+small panel at the bottom of the screen that handlers open for a few seconds -
+is recognised by its purple frame (`BACKPACK_NORMAL_COLOR`, at least
+`BACKPACK_NORMAL_MIN_PIXELS` within `BACKPACK_NORMAL_PANEL_BOX`) together with
+the white of its item grid (`BACKPACK_NORMAL_WHITE_*`); the frame alone or the
+white alone isn't enough, since the white is also any bright scenery. The normal
+backpack's detection is calibrated on a single screenshot (`ref/test` is for
+more). `detect_backpack_open()` is either. `close_backpack_if_open()` presses
+`KEY_BACKPACK` - but only while Roblox has the focus, so the key can't go to
+another window - looks again, and presses once more if it's still open (the
+expanded backpack takes two presses: the first shrinks it to the normal one, the
+second closes that). If it's still open after the second press the key isn't
+doing what's expected, so a failure is logged and it stops rather than pressing
+again, since another press could just reopen it. `close_backpack_if_stuck()`
+decides *when*: at once at the top of a cycle, and mid-task only on the second
+sighting in a row (see above).
 
 **Minigame popups.** Halloween has two minigames that offer to teleport you -
 "Ghost Gallery is starting soon! Teleport there now?" and "Hauntlet 2 is
@@ -824,7 +841,7 @@ exact values and rationale):
 
 | Group | Examples |
 |---|---|
-| Behavior flags | `ENABLED_NEEDS`, `STOP_HOTKEY`, `BACKPACK_HEADER_*`, `HALLOWEEN`, `MINIGAME_*`, `HAUNTLET_*`, `GHOST_GALLERY_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
+| Behavior flags | `ENABLED_NEEDS`, `STOP_HOTKEY`, `BACKPACK_*`, `HALLOWEEN`, `MINIGAME_*`, `HAUNTLET_*`, `GHOST_GALLERY_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
 | Window / coordinates | `REFERENCE_WIDTH`, `REFERENCE_HEIGHT`, `REFERENCE_CENTER_X/Y`, `ROBLOX_RECT_TTL` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `NEED_GONE_*` |
 | Stuck needs | `NEED_STUCK_CHECKS` |

@@ -30,10 +30,12 @@ from magic_numbers import *
 
 class TaskInterrupted(Exception):
     """Raised from inside a need handler's waits when something that can't
-    wait (a minigame) took over the character: whatever the handler was
-    doing is abandoned. process_needs() catches it; the next check decides
-    from the screen what's still needed."""
-    pass
+    wait (a minigame, a rejoin) took over the character: whatever the handler
+    was doing is abandoned. process_needs() catches it; the next check
+    decides from the screen what's still needed. `reason` is for the log."""
+    def __init__(self, reason="something"):
+        super().__init__(reason)
+        self.reason = reason
 
 class StopRequested(Exception):
     """Raised to unwind out of a running workflow when the user presses [STOP].
@@ -715,7 +717,7 @@ def task_unscrew(play_minigames=True):
 
 def task_unscrew_tick():
     """The hook in wait_interruptible(): run the in-task checks if one is due.
-    Raises TaskInterrupted if a minigame was played."""
+    Raises TaskInterrupted if a minigame was played or the game was rejoined."""
     global _IN_UNSCREW, _LAST_TASK_UNSCREW
     if (not TASK_ACTIVE or _IN_UNSCREW or threading.get_ident() != TASK_THREAD
             or time.time() - _LAST_TASK_UNSCREW < UNSCREW_TASK_INTERVAL):
@@ -727,7 +729,9 @@ def task_unscrew_tick():
         _IN_UNSCREW = False
         _LAST_TASK_UNSCREW = time.time()
     if played == "played":
-        raise TaskInterrupted()
+        raise TaskInterrupted("a minigame")
+    if played == "rejoined":
+        raise TaskInterrupted("a rejoin")
 
 def wait_interruptible(duration):
     """Sleep for `duration`, in STOP_CHECK_INTERVAL chunks, checking
@@ -1692,13 +1696,13 @@ def process_needs():
             try:
                 with task_unscrew():
                     handled = handler.handle()
-            except TaskInterrupted:
-                # A minigame took over (play_minigame() already respawned):
-                # not resolved, and not a failed attempt either - the next
-                # check sees what's still on screen.
+            except TaskInterrupted as interruption:
+                # A minigame or a rejoin took over (both respawn): not
+                # resolved, and not a failed attempt either - the next check
+                # sees what's still on screen.
                 attempted.discard(need_name)
-                print(f"[debug] {need_name} interrupted by a minigame")
-                log_run_event(f"{need_name} interrupted by a minigame")
+                print(f"[debug] {need_name} interrupted by {interruption.reason}")
+                log_run_event(f"{need_name} interrupted by {interruption.reason}")
                 return True
             if not handled:
                 print(f"[debug] could not resolve '{need_name}' this pass, skipping")
@@ -1741,36 +1745,77 @@ def detect_paycheck():
     hover_click(*PAYCHECK_DISMISS_POS_2)
     return True
 
-def detect_backpack_open(img):
-    """True if the backpack is open in `img`: most of BACKPACK_HEADER_BOX is
-    the purple of its header bar."""
+def detect_backpack_expanded(img):
+    """True if the EXPANDED backpack is open in `img`: most of
+    BACKPACK_HEADER_BOX is the purple of its header bar."""
     left, top, right, bottom = BACKPACK_HEADER_BOX
     mask = exact_color_mask(img[top:bottom, left:right], BACKPACK_HEADER_COLOR, BACKPACK_HEADER_TOLERANCE)
     return np.count_nonzero(mask) / mask.size >= BACKPACK_HEADER_MIN_FRACTION
 
+def detect_backpack_normal(img):
+    """True if the NORMAL backpack is open in `img`: its purple frame within
+    BACKPACK_NORMAL_PANEL_BOX and the white of its item grid
+    (BACKPACK_NORMAL_WHITE_BOX), both - the white alone would also be any
+    bright scenery."""
+    left, top, right, bottom = BACKPACK_NORMAL_PANEL_BOX
+    frame = exact_color_mask(img[top:bottom, left:right], BACKPACK_NORMAL_COLOR, BACKPACK_NORMAL_TOLERANCE)
+    if np.count_nonzero(frame) < BACKPACK_NORMAL_MIN_PIXELS:
+        return False
+    left, top, right, bottom = BACKPACK_NORMAL_WHITE_BOX
+    grid = img[top:bottom, left:right]
+    white = np.count_nonzero(grid.min(axis=2) >= BACKPACK_NORMAL_WHITE_LEVEL)
+    return white / (grid.shape[0] * grid.shape[1]) >= BACKPACK_NORMAL_MIN_WHITE_FRACTION
+
+def detect_backpack_open(img):
+    """True if the backpack is open in `img`, in either form."""
+    return detect_backpack_expanded(img) or detect_backpack_normal(img)
+
+# How many in-task checks in a row have seen the backpack open (see
+# close_backpack_if_stuck()).
+_BACKPACK_STRIKES = 0
+
 def close_backpack_if_open():
-    """Close the backpack if it's open - it's run at the start of a cycle, when
-    no handler should have it open, so one that's open was left that way (a
-    handler interrupted halfway, a toggle that got out of step). What
-    detect_backpack_open() sees is the *expanded* backpack, which takes two
-    presses of KEY_BACKPACK: the first shrinks it to the normal backpack, the
-    second closes that. After the first press the expanded header must be
-    gone - if it isn't, the key isn't doing what's expected, so that's logged
-    as a failure and it stops instead of pressing again (another press could
-    just reopen it). Does nothing unless Roblox has the focus, so the key
-    can't go to another window. Returns True if it was open."""
+    """Close the backpack if it's open, in either form: press KEY_BACKPACK,
+    look again, and press once more if it's still open (the expanded one takes
+    two presses - the first shrinks it to the normal one, the second closes
+    that). If it's still open after the second press the key isn't doing what's
+    expected, so that's logged as a failure and it stops instead of pressing
+    again (another press could just reopen it). Does nothing unless Roblox has
+    the focus, so the key can't go to another window. Returns True if it was
+    open."""
     if not is_roblox_focused() or not detect_backpack_open(grab_screen()):
         return False
     print("[debug] backpack left open, closing it...")
-    pydirectinput.press(KEY_BACKPACK)
-    wait_interruptible(UI_SETTLE)
-    if detect_backpack_open(grab_screen()):
-        log_failure("backpack still expanded after pressing the backpack key")
-        return True
-    pydirectinput.press(KEY_BACKPACK)
-    wait_interruptible(UI_SETTLE)
-    log_run_event("backpack was left open - closed it")
+    for _ in range(2):
+        pydirectinput.press(KEY_BACKPACK)
+        wait_interruptible(UI_SETTLE)
+        if not detect_backpack_open(grab_screen()):
+            log_run_event("backpack was left open - closed it")
+            return True
+    log_failure("backpack still open after pressing the backpack key twice")
     return True
+
+def close_backpack_if_stuck(in_task):
+    """The backpack part of unscrew(). At the top of a cycle no handler has it
+    open, so it's closed at once (close_backpack_if_open()). During a task a
+    handler has the normal one open for a few seconds on purpose, so it's only
+    closed once it has been seen open on BACKPACK_CLOSE_CONFIRMATIONS checks
+    in a row - at UNSCREW_TASK_INTERVAL apart that's a backpack open for
+    longer than that, which a handler never needs. Returns True if it's still
+    open (a first sighting, mid-task)."""
+    global _BACKPACK_STRIKES
+    if not in_task:
+        close_backpack_if_open()
+        return False
+    if not is_roblox_focused() or not detect_backpack_open(grab_screen()):
+        _BACKPACK_STRIKES = 0
+        return False
+    _BACKPACK_STRIKES += 1
+    if _BACKPACK_STRIKES < BACKPACK_CLOSE_CONFIRMATIONS:
+        return True
+    _BACKPACK_STRIKES = 0
+    close_backpack_if_open()
+    return False
 
 def detect_disconnect(img):
     """True if the Roblox "Disconnected" dialog is on screen in `img`: most
@@ -1805,8 +1850,10 @@ def rejoin_reason():
         return "scheduled", f"{REJOIN_INTERVAL / 3600:g} hour(s) since the last rejoin"
     return None
 
-def rejoin_game():
-    """Recover when the game needs it (see rejoin_reason()): rejoin it
+def rejoin_game(kinds=None):
+    """Recover when the game needs it (see rejoin_reason()), or - with `kinds`
+    (e.g. ("disconnect",), for the mid-task check) - only when it needs it for
+    one of those reasons: rejoin it
     (leave_and_rejoin()), run setup_game() - the rejoin resets the game
     settings it sets - and clear the disabled needs and their detection
     history so every need gets a fresh chance. Returns True if it recovered,
@@ -1816,7 +1863,7 @@ def rejoin_game():
     Disconnected dialog and its error code if that's why. The clean esc/l/
     enter leave is skipped when the game is already gone."""
     found = rejoin_reason()
-    if found is None:
+    if found is None or (kinds is not None and found[0] not in kinds):
         return False
     kind, reason = found
     if kind == "scheduled":
@@ -2029,22 +2076,30 @@ def minigame_popup(play=True):
 def unscrew(in_task=False, play_minigames=True):
     """The per-cycle checks - run right after check_stop() at the top of every
     cycle, and, with `in_task`, every UNSCREW_TASK_INTERVAL seconds while a
-    need handler or setup is running (see task_unscrew()). In order: rejoin
-    if we've been disconnected (first, since nothing else works while
-    disconnected) and close the backpack if it was left open - both only at
-    the top of a cycle, since mid-task the backpack is open on purpose;
-    close stray windows (dismiss_stray_windows()); during Halloween, handle a
-    minigame popup; then the paycheck popup (mid-task not while the backpack
-    is open - its green Select All button would be mistaken for CASH OUT).
+    need handler or setup is running (see task_unscrew()). In order:
+      - rejoin if we've been disconnected (first, since nothing else works
+        while disconnected; mid-task only that, not the scheduled or stalled
+        rejoins, which wait for the top of a cycle);
+      - close the backpack, in either form (close_backpack_if_stuck(): at once
+        at the top of a cycle, mid-task once it's been seen open twice in a
+        row);
+      - close stray windows (dismiss_stray_windows());
+      - during Halloween, handle a minigame popup;
+      - the paycheck popup (not while the backpack is still open - its green
+        Select All button would be mistaken for CASH OUT).
     The stray windows and the minigame popup go before the paycheck check
     because their green buttons would otherwise be mistaken for CASH OUT too.
-    Returns "played" if a minigame was played, otherwise None."""
-    if not in_task:
+    Returns "played" if a minigame was played, "rejoined" if the game was
+    rejoined mid-task (the callers abandon the task), otherwise None."""
+    if in_task:
+        if rejoin_game(kinds=("disconnect",)):
+            return "rejoined"
+    else:
         rejoin_game()
-        close_backpack_if_open()
+    backpack_open = close_backpack_if_stuck(in_task)
     dismiss_stray_windows()
     played = minigame_popup(play=play_minigames) if HALLOWEEN else None
-    if not in_task or not detect_backpack_open(grab_screen()):
+    if not backpack_open:
         detect_paycheck()
     return played
 
@@ -2579,8 +2634,8 @@ class AdoptMeGUI:
             try:
                 with task_unscrew():
                     handler_cls().handle()
-            except TaskInterrupted:
-                print(f"[TEST] {name} interrupted by a minigame")
+            except TaskInterrupted as interruption:
+                print(f"[TEST] {name} interrupted by {interruption.reason}")
             print(f"[TEST] {name.capitalize()} handler complete\n")
         self.run_async(test)
 

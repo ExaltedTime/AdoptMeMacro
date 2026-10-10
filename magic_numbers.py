@@ -202,13 +202,27 @@ PAYCHECK_MIN_PIXELS = 200
 PAYCHECK_DISMISS_POS_1 = (946, 679)
 PAYCHECK_DISMISS_POS_2 = (948, 627)
 
-# The backpack is open when its purple header bar fills BACKPACK_HEADER_BOX (left, top, right, bottom) -
-# see detect_backpack_open(). unscrew() presses KEY_BACKPACK if it's open at the start of a cycle, when
-# no handler should have it open.
+# The EXPANDED backpack is open when its purple header bar fills BACKPACK_HEADER_BOX (left, top, right,
+# bottom) - see detect_backpack_expanded(). It should never be open during a task.
 BACKPACK_HEADER_COLOR = (143, 74, 255)
 BACKPACK_HEADER_TOLERANCE = 4
 BACKPACK_HEADER_BOX = (1090, 36, 1840, 70)
 BACKPACK_HEADER_MIN_FRACTION = 0.5
+# The NORMAL backpack (the small panel at the bottom of the screen, which handlers open for a few seconds):
+# its purple frame (BACKPACK_NORMAL_COLOR, at least BACKPACK_NORMAL_MIN_PIXELS of it within the panel box)
+# and the white of its item grid (at least BACKPACK_NORMAL_MIN_WHITE_FRACTION of the white box at or above
+# BACKPACK_NORMAL_WHITE_LEVEL) - see detect_backpack_normal(). Calibrated on a single screenshot.
+BACKPACK_NORMAL_COLOR = (150, 92, 255)
+BACKPACK_NORMAL_TOLERANCE = 12
+BACKPACK_NORMAL_PANEL_BOX = (712, 640, 1210, 930)
+BACKPACK_NORMAL_MIN_PIXELS = 800
+BACKPACK_NORMAL_WHITE_BOX = (850, 690, 1190, 920)
+BACKPACK_NORMAL_WHITE_LEVEL = 240
+BACKPACK_NORMAL_MIN_WHITE_FRACTION = 0.2
+# unscrew() closes either backpack at once at the start of a cycle; during a task (where a handler has the
+# normal one open for a few seconds on purpose) only once it's been seen open on this many checks in a
+# row, UNSCREW_TASK_INTERVAL apart.
+BACKPACK_CLOSE_CONFIRMATIONS = 2
 
 # Ride need: positions for the backpack -> vehicles -> first vehicle -> equip
 # sequence, plus how long to hold each step.

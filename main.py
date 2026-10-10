@@ -1847,7 +1847,10 @@ def detect_backpack_normal(img):
     """True if the NORMAL backpack is open in `img`: its purple frame within
     BACKPACK_NORMAL_PANEL_BOX and the white of its item grid
     (BACKPACK_NORMAL_WHITE_BOX), both - the white alone would also be any
-    bright scenery."""
+    bright scenery. Or its "BACKPACK" title crop."""
+    title = load_templates(STRAY_WINDOW_DIR).get("backpack_normal")
+    if title is not None and template_score(img, title, BACKPACK_NORMAL_TITLE_BOX) >= BACKPACK_NORMAL_TITLE_THRESHOLD:
+        return True
     left, top, right, bottom = BACKPACK_NORMAL_PANEL_BOX
     frame = exact_color_mask(img[top:bottom, left:right], BACKPACK_NORMAL_COLOR, BACKPACK_NORMAL_TOLERANCE)
     if np.count_nonzero(frame) < BACKPACK_NORMAL_MIN_PIXELS:
@@ -1997,7 +2000,11 @@ def detect_minigame_popup(img):
     apart - only that a minigame is offering to teleport you. Neither button
     color is unique on its own (the Yes green is also the paycheck's CASH OUT
     green, the No red is also the Exit Home button), so it needs both: the
-    Yes green, with the No red close by to its left."""
+    Yes green, with the No red close by to its left. Not the sick need's
+    doctor dialog, which looks the same but belongs to that handler."""
+    sick = load_templates(STRAY_WINDOW_DIR).get("sick_dialog")
+    if sick is not None and template_score(img, sick, SICK_DIALOG_BOX) >= SICK_DIALOG_MATCH_THRESHOLD:
+        return False
     ys, xs = np.where(exact_color_mask(img, MINIGAME_POPUP_YES_COLOR) > 0)
     if len(xs) < MINIGAME_POPUP_MIN_BUTTON_PIXELS:
         return False

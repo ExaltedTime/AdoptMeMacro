@@ -481,9 +481,10 @@ small panel at the bottom of the screen that handlers open for a few seconds -
 is recognised by its purple frame (`BACKPACK_NORMAL_COLOR`, at least
 `BACKPACK_NORMAL_MIN_PIXELS` within `BACKPACK_NORMAL_PANEL_BOX`) together with
 the white of its item grid (`BACKPACK_NORMAL_WHITE_*`); the frame alone or the
-white alone isn't enough, since the white is also any bright scenery. The normal
-backpack's detection is calibrated on a single screenshot (`ref/test` is for
-more). `detect_backpack_open()` is either. `close_backpack_if_open()` presses
+white alone isn't enough, since the white is also any bright scenery. It is also
+recognised by a crop of its "BACKPACK" title (`ref/popups/backpack_normal.png`,
+`BACKPACK_NORMAL_TITLE_*`), because the color check, tuned on one screenshot,
+missed another (`ref/test` is for more). `detect_backpack_open()` is either. `close_backpack_if_open()` presses
 `KEY_BACKPACK` - but only while Roblox has the focus, so the key can't go to
 another window - looks again, and presses once more if it's still open (the
 expanded backpack takes two presses: the first shrinks it to the normal one, the
@@ -501,7 +502,7 @@ color is unique alone (Yes green = `PAYCHECK_CASHOUT_COLOR`, No red = the
 Exit Home button), so it needs the Yes green (`MINIGAME_POPUP_YES_COLOR`, at
 least `MINIGAME_POPUP_MIN_BUTTON_PIXELS` px) with the No red
 (`MINIGAME_POPUP_NO_COLOR`) within `MINIGAME_POPUP_NO_MAX_DX` / `_DY` px to
-its left. `identify_minigame()` then says which one it is: it matches the
+its left - except the sick need's own "Ask Doctor Heart to heal your family?" dialog, which has the same Yes/No look but is the sick handler's to answer (its Yes is `SICK_FINAL_CLICK_POS`): `ref/popups/sick_dialog.png`, within `SICK_DIALOG_BOX`, makes the detector ignore it. (Before that, the every-4s in-task check took it for a minigame popup and clicked its decline positions in the middle of the sick sequence - `unknown` popups clustered in the sick handler in the logs.) `identify_minigame()` then says which one it is: it matches the
 first line of the title (`MINIGAME_TITLE_BOX`) against the crops in
 `ref/halloween/` (`cv2.matchTemplate`, best score at least
 `MINIGAME_TITLE_MATCH_THRESHOLD`); a minigame's name is its file name,

@@ -93,6 +93,11 @@ STRAY_WINDOWS = {
     # it's backed out of unless one of those handlers is running - see wanting_pet_focus().
     "pet_focus": {"box": (400, 60, 700, 180), "close_pos": (545, 120), "only_when_unwanted": True},
 }
+# The sick need's own "Ask Doctor Heart to heal your family?" Yes/No dialog (ref/popups/sick_dialog.png, found
+# within SICK_DIALOG_BOX) has the same Yes green + No red as a minigame popup; it is the sick handler's to
+# answer (SICK_FINAL_CLICK_POS is its Yes), so detect_minigame_popup() ignores it.
+SICK_DIALOG_BOX = (700, 400, 1220, 700)
+SICK_DIALOG_MATCH_THRESHOLD = 0.8
 STRAY_OKAY_BOX = (800, 637, 1120, 680)
 STRAY_OKAY_COLOR = (74, 198, 85)
 STRAY_OKAY_TOLERANCE = 3
@@ -245,6 +250,11 @@ BACKPACK_NORMAL_MIN_WHITE_FRACTION = 0.2
 # unscrew() closes either backpack at once at the start of a cycle; during a task (where a handler has the
 # normal one open for a few seconds on purpose) only once it's been seen open on this many checks in a
 # row, UNSCREW_TASK_INTERVAL apart.
+# The normal backpack is also recognised by a crop of its "BACKPACK" title (ref/popups/backpack_normal.png, found
+# within BACKPACK_NORMAL_TITLE_BOX with a match of at least BACKPACK_NORMAL_TITLE_THRESHOLD): the color check
+# above was tuned on one screenshot and missed another.
+BACKPACK_NORMAL_TITLE_BOX = (700, 600, 1000, 690)
+BACKPACK_NORMAL_TITLE_THRESHOLD = 0.8
 BACKPACK_CLOSE_CONFIRMATIONS = 2
 # The EXPANDED backpack has its own BACK button (ref/popups/backpack_back.png, searched for within
 # BACKPACK_BACK_BOX): clicking it closes the backpack entirely, where the key only shrinks it to the normal form.
@@ -308,7 +318,7 @@ TELEPORT_WALK_NEEDS_HALLOWEEN = {
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 20.0),), helicopter=True),
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.8), ("a", 10))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("s", 20),), helicopter=True),
-    "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 5.0), ("w", 1.5)),
+    "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 5.0), ("w", 0.8)),
                     final_click=SICK_FINAL_CLICK_POS),
 }
 

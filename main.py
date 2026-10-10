@@ -1408,8 +1408,27 @@ class WalkNeedHandler(NeedHandler):
         walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")
         return True
 
+def click_until_need_gone(pos, interval, max_wait, need_name):
+    """Click `pos` every `interval` seconds for at most `max_wait` - or less,
+    once `need_name` is confirmed gone (the watcher thread walk_alternating()
+    uses)."""
+    print(f"[debug] clicking {pos} every {interval}s for up to {max_wait}s until {need_name} clears...")
+    cleared_event = threading.Event()
+    stop_event = threading.Event()
+    watcher = threading.Thread(target=_watch_need_gone, args=(need_name, cleared_event, stop_event), daemon=True)
+    watcher.start()
+    try:
+        deadline = time.time() + max_wait
+        while time.time() < deadline and not cleared_event.is_set():
+            hover_click(*pos)
+            wait_interruptible(interval)
+    finally:
+        stop_event.set()
+        watcher.join(timeout=NEED_WATCH_JOIN_TIMEOUT)
+
 class CatchNeedHandler(NeedHandler):
-    """The 'catch' need requires opening backpack, equipping a toy, then throwing it."""
+    """The 'catch' need requires opening backpack, equipping a toy, then throwing it
+    (clicking) until the need clears, then unequipping it."""
 
     def handle(self):
         print("[!] CATCH NEED")
@@ -1448,11 +1467,8 @@ class CatchNeedHandler(NeedHandler):
         # Zoom in, to avoid focusing the pet on toy throw
         hold_key(KEY_ZOOM_IN, CATCH_ZOOM_DURATION)
         
-        # Click empty space to throw, with a delay between throws
-        for i in range(CATCH_THROW_COUNT):
-            print(f"[debug] throw {i + 1}/{CATCH_THROW_COUNT}...")
-            hover_click(*EMPTY_POS)
-            wait_interruptible(CATCH_EMOTE_DELAY)
+        # Click empty space to throw, every CATCH_THROW_INTERVAL, until the need clears
+        click_until_need_gone(EMPTY_POS, CATCH_THROW_INTERVAL, CATCH_MAX_WAIT, "catch")
 
         # Unequip the toy
         print("[debug] unequipping toy...")
@@ -1471,6 +1487,10 @@ class PetNeedHandler(NeedHandler):
             return False
 
         print("[debug] focusing pet...")
+        with wanting_pet_focus():
+            return self._pet()
+
+    def _pet(self):
         if not focus_pet(PET_FOCUS_CLICK_DURATION):
             return False
         wait_interruptible(UI_SETTLE)
@@ -1517,6 +1537,10 @@ class ChooseNeedHandler(NeedHandler):
             return False
 
         print("[debug] focusing pet...")
+        with wanting_pet_focus():
+            return self._choose()
+
+    def _choose(self):
         if not focus_pet():
             return False
         wait_interruptible(UI_SETTLE)
@@ -1985,6 +2009,21 @@ def identify_minigame(img):
             best_name, best_score = name, score
     return best_name
 
+# True while a handler that needs the pet focused (choose, pet) is running;
+# the "pet_focus" stray window is left alone then.
+PET_FOCUS_WANTED = False
+
+@contextlib.contextmanager
+def wanting_pet_focus():
+    """Within this block dismiss_stray_windows() doesn't back out of the pet
+    focus view."""
+    global PET_FOCUS_WANTED
+    PET_FOCUS_WANTED = True
+    try:
+        yield
+    finally:
+        PET_FOCUS_WANTED = False
+
 def dismiss_stray_windows():
     """Close any window from STRAY_WINDOWS that's open (found by its title
     crop in STRAY_WINDOW_DIR): the Trading Hub the macro can open by a
@@ -1999,6 +2038,8 @@ def dismiss_stray_windows():
     for name, crop in load_templates(STRAY_WINDOW_DIR).items():
         config = STRAY_WINDOWS.get(name)
         if config is None or template_score(img, crop, config["box"]) < STRAY_WINDOW_MATCH_THRESHOLD:
+            continue
+        if config.get("only_when_unwanted") and PET_FOCUS_WANTED:
             continue
         print(f"[debug] stray window open: {name}, closing it...")
         log_run_event(f"stray window closed: {name}")

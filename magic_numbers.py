@@ -85,6 +85,12 @@ STRAY_WINDOWS = {
     # "Are you sure you want to respawn your character?" - what respawn_character()'s esc, r, enter leaves
     # open when the Enter comes before the dialog does; "close_pos" is its Respawn button.
     "respawn_confirm": {"box": (600, 330, 1320, 430), "close_pos": (850, 496)},
+    # The five-button character menu (Profile, Emotions, Dances, Actions, Activities): a click in the middle of
+    # the screen dismisses it.
+    "character_menu": {"box": (840, 450, 1080, 540), "close_pos": (960, 540)},
+    # The camera-on-the-pet view with its BACK button. Only choose and pet want it ("only_when_unwanted"), so
+    # it's backed out of unless one of those handlers is running - see wanting_pet_focus().
+    "pet_focus": {"box": (400, 60, 700, 180), "close_pos": (545, 120), "only_when_unwanted": True},
 }
 STRAY_OKAY_BOX = (800, 637, 1120, 680)
 STRAY_OKAY_COLOR = (74, 198, 85)
@@ -166,8 +172,8 @@ STOP_HOTKEY = "p"              # a letter or digit: pressing it, in any window, 
 STOP_HOTKEY_POLL_INTERVAL = 0.05  # how often the key is looked at (seconds)
 CONSOLE_DRAIN_INTERVAL_MS = 50   # how often queued output is put on the GUI console (see DebugCapture)
 CATCH_WAIT_AFTER_EQUIP = 1.0   # wait after equipping toy before throwing
-CATCH_EMOTE_DELAY = 5.0       # delay between throw clicks
-CATCH_THROW_COUNT = 3          # number of times the toy is thrown
+CATCH_THROW_INTERVAL = 0.5     # the toy is thrown (a click) this often until the need clears
+CATCH_MAX_WAIT = 60.0          # ...for at most this long
 CATCH_ZOOM_DURATION = 2.0      # seconds the zoom-in key is held before throwing
 PET_CIRCLE_DURATION = 8.0     # how long to make circles with mouse
 PET_CIRCLE_RADIUS = 100                # amplitude (px) of the up/down sine motion around screen center

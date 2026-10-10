@@ -385,6 +385,7 @@ def load_game_config():
         "tree_timer": time.time(),  # likewise
         "side_quest_enabled": True, # whether side_quest() is allowed to run at all
         "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
+        "record_next_run": False,   # record the next run as a low quality video; cleared when that run starts
         **{f"{name}_enabled": False for name in MINIGAME_LABELS},  # which Halloween minigames get played (see minigame_popup())
         "private_server_link": "",  # used by leave_and_rejoin(); kept here, not in the source, since it's a join key
     }
@@ -909,7 +910,8 @@ def click_need_button(need_name):
 # ============================================================================
 
 def respawn_character():
-    """Respawn the character (ESC, R, ENTER) and wait for it to settle."""
+    """Respawn the character (ESC, R, ENTER), make sure the respawn dialog
+    isn't left open (dismiss_stray_windows()), and wait for it to settle."""
     print("[debug] respawning...")
     if not focus_roblox_click():
         return
@@ -918,6 +920,13 @@ def respawn_character():
         time.sleep(RESPAWN_KEY_DURATION)
         pydirectinput.keyUp(key)
         time.sleep(RESPAWN_KEY_DURATION)
+    # The keys go in within a fraction of a second; if the Enter came before the
+    # "Are you sure you want to respawn your character?" dialog did, it's still
+    # open and blocks everything - click its Respawn (see STRAY_WINDOWS).
+    time.sleep(RESPAWN_CONFIRM_LOOK_DELAY)
+    for _ in range(2):
+        if dismiss_stray_windows() != "respawn_confirm":
+            break
     wait_interruptible(RESPAWN_WAIT)
     print("[debug] respawn complete")
 
@@ -1233,9 +1242,29 @@ def leave_and_rejoin(clean_leave=True):
 # NEED_HANDLER_CLASSES), since those only differ by a name/config, not by
 # behavior.
 
-def moving_blobs(img_a, img_b, top_percent=FOCUS_PET_REGION_TOP_PERCENT):
+def macro_window_reference_rect():
+    """The macro's own window as a (left, top, right, bottom) box in reference
+    space (plus FOCUS_PET_IGNORE_MARGIN), or None when there's no GUI or it
+    can't be measured. Its console scrolls and flickers, which looks like
+    movement to focus_pet()."""
+    if MACRO_WINDOW is None:
+        return None
+    measure = lambda: (MACRO_WINDOW.root.winfo_x(), MACRO_WINDOW.root.winfo_y(),
+                       MACRO_WINDOW.root.winfo_rootx() + MACRO_WINDOW.root.winfo_width(),
+                       MACRO_WINDOW.root.winfo_rooty() + MACRO_WINDOW.root.winfo_height())
+    box = MACRO_WINDOW.run_on_ui_thread(measure, timeout=1.0)
+    if box is None:
+        return None
+    left, top, width, height = roblox_rect()
+    scale_x, scale_y = REFERENCE_WIDTH / width, REFERENCE_HEIGHT / height
+    m = FOCUS_PET_IGNORE_MARGIN
+    return (int((box[0] - left) * scale_x) - m, int((box[1] - top) * scale_y) - m,
+            int((box[2] - left) * scale_x) + m, int((box[3] - top) * scale_y) + m)
+
+def moving_blobs(img_a, img_b, top_percent=FOCUS_PET_REGION_TOP_PERCENT, ignore=()):
     """Compare two same-size BGR screenshots over the bottom (1 - top_percent)
-    of the screen and return ([(x, y, w, h, area) per blob of pixels that
+    of the screen - leaving out every (left, top, right, bottom) box in
+    `ignore`, e.g. the macro's own window - and return ([(x, y, w, h, area) per blob of pixels that
     changed between them, largest first, in screen coordinates], the change
     mask of the region, its top row). Pure image logic, no input or waiting,
     so it can be tested on its own."""
@@ -1243,6 +1272,8 @@ def moving_blobs(img_a, img_b, top_percent=FOCUS_PET_REGION_TOP_PERCENT):
     diff = cv2.absdiff(cv2.cvtColor(img_a[top:], cv2.COLOR_BGR2GRAY),
                        cv2.cvtColor(img_b[top:], cv2.COLOR_BGR2GRAY))
     mask = (diff > FOCUS_PET_DIFF_THRESHOLD).astype(np.uint8) * PIXEL_MAX
+    for left, box_top, right, bottom in ignore:
+        mask[max(0, box_top - top):max(0, bottom - top), max(0, left):max(0, right)] = 0
     # An up/down bob only changes the pet's top and bottom edges, so close
     # the gap between them to get one blob per moving thing.
     kernel = np.ones((FOCUS_PET_MERGE_KERNEL, FOCUS_PET_MERGE_KERNEL), np.uint8)
@@ -1257,12 +1288,12 @@ def moving_blobs(img_a, img_b, top_percent=FOCUS_PET_REGION_TOP_PERCENT):
         blobs.append((x, top + y, w, h, int(area)))
     return blobs, mask, top
 
-def find_moving_blobs(img_a, img_b, top_percent=FOCUS_PET_REGION_TOP_PERCENT):
+def find_moving_blobs(img_a, img_b, top_percent=FOCUS_PET_REGION_TOP_PERCENT, ignore=()):
     """The (x, y) center of every blob moving_blobs() finds, largest first."""
-    blobs, _, _ = moving_blobs(img_a, img_b, top_percent)
+    blobs, _, _ = moving_blobs(img_a, img_b, top_percent, ignore)
     return [(x + w // 2, y + h // 2) for x, y, w, h, _ in blobs]
 
-def save_focus_pet_debug(img, blobs, mask, top, name="debug_focus_pet.png"):
+def save_focus_pet_debug(img, blobs, mask, top, name="debug_focus_pet.png", ignore=()):
     """Write debug/<name>: `img` (the second frame) with the searched region
     marked, the changed pixels in red, and a numbered box around every blob -
     so what focus_pet() thinks moved, and so where it clicks, can be seen."""
@@ -1270,6 +1301,8 @@ def save_focus_pet_debug(img, blobs, mask, top, name="debug_focus_pet.png"):
     region = marked[top:]
     region[mask > 0] = (0, 0, 255)
     cv2.line(marked, (0, top), (marked.shape[1], top), FOCUS_PET_DEBUG_COLOR, 1)
+    for left, box_top, right, bottom in ignore:   # ignored areas, in blue
+        cv2.rectangle(marked, (left, box_top), (right, bottom), (255, 0, 0), 2)
     for i, (x, y, w, h, area) in enumerate(blobs, 1):
         cv2.rectangle(marked, (x, y), (x + w, y + h), FOCUS_PET_DEBUG_COLOR, 2)
         cv2.putText(marked, f"{i}: {area}", (x, max(12, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, FOCUS_PET_DEBUG_COLOR, 2)
@@ -1279,19 +1312,20 @@ def focus_pet(click_duration=CLICK_MOVE_DURATION):
     """Click the pet to open its interaction menu. The pet is found by
     movement: two screenshots of the bottom of the screen FOCUS_PET_FRAME_GAP
     apart, then a click on the center of everything that moved (see
-    moving_blobs()). What it saw is printed and written to
+    moving_blobs(), which leaves out the macro's own window). What it saw is printed and written to
     debug/debug_focus_pet.png (the blobs, marked) - and what the screen looked
     like after the clicks to debug/debug_focus_pet_after.png. Returns True if
     anything was clicked, False if nothing moved."""
     img_a = grab_screen()
     wait_interruptible(FOCUS_PET_FRAME_GAP)
     img_b = grab_screen()
-    blobs, mask, top = moving_blobs(img_a, img_b)
+    ignore = [box for box in [macro_window_reference_rect()] if box is not None]
+    blobs, mask, top = moving_blobs(img_a, img_b, ignore=ignore)
     changed = int(np.count_nonzero(mask))
     print(f"[debug] focus_pet: {len(blobs)} moving blob(s), {changed} changed px below y={top}")
     for i, (x, y, w, h, area) in enumerate(blobs, 1):
         print(f"[debug] focus_pet:   #{i} center ({x + w // 2}, {y + h // 2}), {w}x{h}, area {area}")
-    save_focus_pet_debug(img_b, blobs, mask, top)
+    save_focus_pet_debug(img_b, blobs, mask, top, ignore=ignore)
     if not blobs:
         print("[debug] focus_pet: nothing moved, pet not found (see debug/debug_focus_pet.png)")
         return False
@@ -1300,7 +1334,7 @@ def focus_pet(click_duration=CLICK_MOVE_DURATION):
         hover_click(x + w // 2, y + h // 2, duration=click_duration)
     wait_interruptible(FOCUS_PET_MENU_WAIT)
     after = grab_screen()
-    save_focus_pet_debug(after, blobs, np.zeros_like(mask), top, name="debug_focus_pet_after.png")
+    save_focus_pet_debug(after, blobs, np.zeros_like(mask), top, name="debug_focus_pet_after.png", ignore=ignore)
     return True
 
 def equip_favorite_vehicle():
@@ -2129,6 +2163,101 @@ def side_quest():
             update_game_config(lambda c: c.update(lure_timer=time.time() + LURE_RECOLLECT_INTERVAL))
 
 # ============================================================================
+# RUN RECORDING
+# ============================================================================
+
+class RunRecorder:
+    """Records the Roblox window to a low quality video (RECORD_WIDTH x
+    RECORD_HEIGHT at RECORD_FPS) from a background thread, each frame stamped
+    with the time so it lines up with output.log and run_log.txt. Stops by
+    itself after RECORD_MAX_MINUTES. MP4 where OpenCV can write it, otherwise
+    MJPG in an .avi."""
+
+    def __init__(self, path):
+        self.path = path
+        self.writer = None
+        self.thread = None
+        self.stop_event = threading.Event()
+
+    def start(self):
+        """Open the file and start recording. Returns False if no video file
+        could be opened (nothing is recorded then)."""
+        for extension, codec in ((".mp4", "mp4v"), (".avi", "MJPG")):
+            path = os.path.splitext(self.path)[0] + extension
+            writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*codec), RECORD_FPS, (RECORD_WIDTH, RECORD_HEIGHT))
+            if writer.isOpened():
+                self.path, self.writer = path, writer
+                self.thread = threading.Thread(target=self._record, daemon=True)
+                self.thread.start()
+                return True
+            writer.release()
+        return False
+
+    def _frame(self):
+        frame = cv2.resize(grab_screen(), (RECORD_WIDTH, RECORD_HEIGHT), interpolation=cv2.INTER_AREA)
+        cv2.putText(frame, time.strftime("%Y-%m-%d %H:%M:%S"), (6, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4)
+        cv2.putText(frame, time.strftime("%Y-%m-%d %H:%M:%S"), (6, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        return frame
+
+    def _record(self):
+        """Thread body: one frame per 1/RECORD_FPS seconds of real time (a
+        slow grab is made up for by repeating the last frame, so the video
+        runs at real speed)."""
+        started = time.time()
+        written = 0
+        frame = None
+        while not self.stop_event.is_set() and time.time() - started < RECORD_MAX_MINUTES * 60:
+            try:
+                frame = self._frame()
+            except Exception:
+                pass   # a failed grab repeats the last frame
+            due = int((time.time() - started) * RECORD_FPS) + 1
+            if frame is not None:
+                for _ in range(max(1, due - written)):
+                    self.writer.write(frame)
+                    written += 1
+            self.stop_event.wait(max(0.0, (written / RECORD_FPS) - (time.time() - started)))
+
+    def stop(self):
+        """Stop recording and close the file."""
+        self.stop_event.set()
+        if self.thread is not None:
+            self.thread.join(timeout=5.0)
+        if self.writer is not None:
+            self.writer.release()
+        size_mb = os.path.getsize(self.path) / (1024 * 1024) if os.path.exists(self.path) else 0
+        log_run_event(f"recording stopped: {os.path.basename(self.path)} ({size_mb:.0f} MB)")
+        print(f"[!] Recording saved: {self.path} ({size_mb:.0f} MB)")
+
+def start_recording_if_requested():
+    """If "Record the next run" is ticked (the record_next_run config switch):
+    clear it - it's for one run only, and the Options checkbox is unticked to
+    match - start a RunRecorder in RECORDINGS_DIR, named after the run number
+    and time, delete the oldest videos beyond MAX_RECORDINGS, and return the
+    recorder. Returns None if it isn't ticked or no video file could be opened
+    (which is logged)."""
+    if not load_game_config()["record_next_run"]:
+        return None
+    update_game_config(lambda c: c.update(record_next_run=False))
+    if MACRO_WINDOW is not None:
+        MACRO_WINDOW.run_on_ui_thread(lambda: MACRO_WINDOW.config_flag_vars["record_next_run"].set(False), timeout=1.0)
+    os.makedirs(RECORDINGS_DIR, exist_ok=True)
+    videos = sorted((os.path.join(RECORDINGS_DIR, f) for f in os.listdir(RECORDINGS_DIR)), key=os.path.getmtime)
+    for old in videos[:max(0, len(videos) - (MAX_RECORDINGS - 1))]:
+        try:
+            os.remove(old)
+        except OSError:
+            pass
+    recorder = RunRecorder(os.path.join(RECORDINGS_DIR, f"run{CURRENT_RUN_NUMBER}_{time.strftime('%Y%m%d_%H%M%S')}"))
+    if not recorder.start():
+        print("[!] Couldn't open a video file - not recording")
+        log_run_event("recording: couldn't open a video file")
+        return None
+    log_run_event(f"recording started: {os.path.basename(recorder.path)}")
+    print(f"[!] Recording this run to {recorder.path}")
+    return recorder
+
+# ============================================================================
 # WORKFLOWS
 # ============================================================================
 
@@ -2176,6 +2305,7 @@ def run_workflow_loop():
     reset_run_stats()
     LAST_REJOIN = LAST_PROGRESS = time.time()  # the hourly and no-progress rejoins count from here
     log_run_event("LOOP started")
+    recorder = start_recording_if_requested()
     print("\n" + "=" * 50)
     print(f"[LOOP] Starting continuous workflow (run {CURRENT_RUN_NUMBER})")
     print("=" * 50)
@@ -2217,6 +2347,8 @@ def run_workflow_loop():
                 focus_roblox_click()
                 needs_respawn = True  # where a half-finished handler left the character is unknown
     finally:
+        if recorder is not None:
+            recorder.stop()
         log_run_event("LOOP stopped")
         print("\n[LOOP] Stopped\n")
 
@@ -2450,6 +2582,7 @@ class AdoptMeGUI:
         self.config_flag_vars = {}
         for label, key in (("Run side quest", "side_quest_enabled"),
                            ("Resume after focus loss", "resume_on_focus_loss"),
+                           ("Record the next run (low quality video)", "record_next_run"),
                            *((f"Play {label}", f"{name}_enabled") for name, label in MINIGAME_LABELS.items())):
             var = tk.BooleanVar(value=config[key])
             self.config_flag_vars[key] = var

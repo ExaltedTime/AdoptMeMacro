@@ -82,6 +82,9 @@ STRAY_WINDOW_MATCH_THRESHOLD = 0.8
 STRAY_WINDOWS = {
     "trading_hub": {"box": (580, 290, 1020, 400), "close_pos": (1278, 339)},
     "star_rewards": {"box": (640, 385, 1060, 475), "close_pos": (1209, 441)},
+    # "Are you sure you want to respawn your character?" - what respawn_character()'s esc, r, enter leaves
+    # open when the Enter comes before the dialog does; "close_pos" is its Respawn button.
+    "respawn_confirm": {"box": (600, 330, 1320, 430), "close_pos": (850, 496)},
 }
 STRAY_OKAY_BOX = (800, 637, 1120, 680)
 STRAY_OKAY_COLOR = (74, 198, 85)
@@ -109,9 +112,18 @@ RUN_COUNTER_PATH = os.path.join(DEBUG_DIR, "run_counter.txt")  # holds the last-
 GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")      # persisted game state - see load_game_config()
 OUTPUT_LOG_PATH = os.path.join(DEBUG_DIR, "output.log")    # everything the macro prints, timestamped - see log_output()
 FAILURE_DIR = os.path.join(DEBUG_DIR, "failures")          # a screenshot per failure - see log_failure()
+RECORDINGS_DIR = os.path.join(DEBUG_DIR, "recordings")      # run videos - see RunRecorder
 STATUS_PATH = os.path.join(DEBUG_DIR, "status.json")       # live "is it alive and what's it doing" summary - see write_status()
 OUTPUT_LOG_MAX_BYTES = 5 * 1024 * 1024   # output.log moves to output.log.old (replacing the last one) past this size
 MAX_FAILURE_SCREENSHOTS = 40             # oldest are deleted beyond this many
+
+# Recording a run ("Record the next run" on the Options tab): low quality on purpose, a video of a whole
+# unattended run is large. Every frame has the time on it, to line it up with the logs.
+RECORD_WIDTH = 640
+RECORD_HEIGHT = 360
+RECORD_FPS = 4
+RECORD_MAX_MINUTES = 480                 # recording stops by itself after this long
+MAX_RECORDINGS = 5                       # oldest videos are deleted beyond this many
 
 # ============================================================================
 # SCREEN / INPUT SETUP
@@ -135,6 +147,7 @@ MATCH_ONLY_LEFT_HALF = True    # compare only the left half of each icon (a badg
 
 # Timing (seconds)
 RESPAWN_KEY_DURATION = 0.05    # how long each respawn key is held
+RESPAWN_CONFIRM_LOOK_DELAY = 0.5  # after the respawn keys, before checking the respawn dialog is gone
 RESPAWN_WAIT = 4.0             # settle time after respawning, before it's usable
 WALK_TO_BUTTONS_DURATION = 0.8 # time spent walking forward to reach the action buttons
 WALK_ALTERNATING_STEP = 1.0    # duration of each a/d press in alternating walk pattern
@@ -183,6 +196,7 @@ FOCUS_PET_FRAME_GAP = 0.1            # seconds between the two screenshots
 FOCUS_PET_DIFF_THRESHOLD = 25        # per-pixel brightness change that counts as movement (0-255)
 FOCUS_PET_MERGE_KERNEL = 25          # px; changed pixels this close together merge into one blob
 FOCUS_PET_MIN_AREA = 150             # px^2; smaller blobs are noise, not the pet
+FOCUS_PET_IGNORE_MARGIN = 20           # px around the macro's own window that focus_pet() ignores too
 FOCUS_PET_DEBUG_COLOR = (0, 255, 0)    # BGR, the boxes drawn on debug/debug_focus_pet.png
 FOCUS_PET_MENU_WAIT = 4.0            # wait after the clicks, for the pet's menu to open
 

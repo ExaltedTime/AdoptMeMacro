@@ -333,7 +333,9 @@ regardless of `ENABLED_NEEDS`.
 **Focusing the pet.** `pet` and `choose` both start with `focus_pet()`, which
 has no hardcoded position: it takes two screenshots of the bottom of the
 screen (below `FOCUS_PET_REGION_TOP_PERCENT`) `FOCUS_PET_FRAME_GAP` apart,
-and `moving_blobs()` diffs them. Pixels that changed by more than
+and `moving_blobs()` diffs them - leaving out the macro's own window
+(`macro_window_reference_rect()`, plus `FOCUS_PET_IGNORE_MARGIN`), whose console
+scrolls and flickers and used to be picked up as a huge "moving" blob. Pixels that changed by more than
 `FOCUS_PET_DIFF_THRESHOLD` are closed together (`FOCUS_PET_MERGE_KERNEL`,
 since an up/down bob only changes the pet's top and bottom edges), blobs
 under `FOCUS_PET_MIN_AREA` are dropped as noise, and `focus_pet()` clicks
@@ -341,7 +343,7 @@ the center of every remaining blob, largest first. It returns `False` (and
 the handler skips the need) if nothing moved. It prints what it saw (how many
 blobs, each one's center, size and area) and writes
 `debug/debug_focus_pet.png` - the second frame with the changed pixels in
-red and a numbered box round every blob - plus
+red and a numbered box round every blob (the ignored area in blue) - plus
 `debug/debug_focus_pet_after.png`, the screen after the clicks and the menu
 wait, so a click that lands on the wrong thing (another player, a UI
 element) can be seen.
@@ -415,6 +417,17 @@ its `close_pos`; for the Trading Hub it first clicks the popup's green Okay
 (`STRAY_OKAY_*`) if that's showing. A new window is a new crop plus an entry in
 `STRAY_WINDOWS`. `setup_game()` also closes any before it starts, since an open
 one would take its clicks.
+
+A third entry, `respawn_confirm`, is the "Are you sure you want to respawn your
+character?" dialog (`ref/popups/respawn_confirm.png`; its `close_pos` is the
+Respawn button). `respawn_character()` presses esc, r and enter within a
+fraction of a second, and if the Enter lands before the dialog exists the
+dialog stays open and blocks everything after it (a screenshot of exactly that
+was seen after a minigame). So `respawn_character()` looks for it
+`RESPAWN_CONFIRM_LOOK_DELAY` after the keys and clicks Respawn if it's there;
+the in-task checks would also catch it. Each time one is closed it is a
+`stray window closed: respawn_confirm` line in the run log, so how often it
+happens can be counted.
 
 **Per-cycle checks while a task runs.** Waiting for the top of the next cycle
 would leave a popup, a stray window or an offered minigame in the way for the
@@ -759,6 +772,9 @@ actually on disk (so an old config missing a newer key still works), and
   workflow runs.
 - **`resume_on_focus_loss`** - the **Resume after focus loss** checkbox (default
   off); see [Stopping & focus safety](#stopping--focus-safety).
+- **`record_next_run`** - the **Record the next run (low quality video)**
+  checkbox (default off); see [Recording a run](#recording-a-run). Cleared, and
+  the checkbox unticked, when the run that it was for starts.
 - **`private_server_link`** - the private server link `leave_and_rejoin()`
   joins, typed into the GUI's entry box (saved when you press Enter or click
   away). It lives here rather than in `magic_numbers.py` because it's a key
@@ -828,6 +844,22 @@ knowing if you're modifying it:
   `output.log` only the first time (this is the "Waiting for a need..."
   counter).
 
+### Recording a run
+
+Tick **Record the next run (low quality video)** on the Options tab (the
+`record_next_run` config switch) and the next time the loop starts it records
+the Roblox window to `debug/recordings/run<N>_<time>.mp4` - then clears the
+switch, so it's one run only. `start_recording_if_requested()` starts a
+`RunRecorder`, which writes `RECORD_WIDTH` x `RECORD_HEIGHT` (640x360) frames at
+`RECORD_FPS` (4) from a background thread, each stamped with the time so the
+video lines up with `output.log` and `run_log.txt`; a slow grab is covered by
+repeating the last frame, so playback is real time. It stops when the loop
+ends or after `RECORD_MAX_MINUTES` (480, 8 hours), and only the newest `MAX_RECORDINGS` videos
+are kept. It's MP4 (`mp4v`) where OpenCV can write one, otherwise MJPG in an
+`.avi`; `recording started` / `recording stopped` (with the size) go in the run
+log. The picture is the Roblox window as the macro sees it, so the macro's own
+window shows up in it if it's on top.
+
 ## Configuration reference
 
 Every tunable number, timing, screen position and color range lives in
@@ -888,6 +920,7 @@ were away can be read back afterwards:
   rejoins and focus resumes, and the last resolved need
   and last failure. `RUN_STATS` holds the counters in memory.
 - **`debug_needs.png`** / **`debug_buttons.png`** - see below.
+- **`recordings/`** - run videos, see [Recording a run](#recording-a-run).
 - **`debug_focus_pet.png`** / **`debug_focus_pet_after.png`** - what
   `focus_pet()` saw and what the screen looked like after its clicks.
 

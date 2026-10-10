@@ -208,11 +208,12 @@ CHOOSE_SLOW_MOVE_DURATION = 1.0  # deliberate, slow mouse travel to the found bu
 # The paycheck popup's CASH OUT button, matched by exact color the same way
 # as CHOOSE_BUTTON_COLOR above.
 PAYCHECK_CASHOUT_COLOR = (74, 198, 85)
-# That green is everywhere in the game (the backpack's Select All button, the Play and Yes buttons...), so
-# it only counts inside PAYCHECK_REGION (left, top, right, bottom, around the dismiss positions below), and
-# only with at least PAYCHECK_MIN_PIXELS of it.
-PAYCHECK_REGION = (700, 540, 1220, 800)
-PAYCHECK_MIN_PIXELS = 200
+# That green is everywhere in the game (the backpack's tab tiles and Select All button, the Play and Yes
+# buttons...), so it only counts when it fills PAYCHECK_BUTTON_BOX (left, top, right, bottom - exactly the
+# CASH OUT button) by at least PAYCHECK_MIN_FRACTION. The real button measures 0.73; small green tiles
+# can't fill that much of it.
+PAYCHECK_BUTTON_BOX = (770, 603, 1152, 648)
+PAYCHECK_MIN_FRACTION = 0.5
 PAYCHECK_DISMISS_POS_1 = (946, 679)
 PAYCHECK_DISMISS_POS_2 = (948, 627)
 

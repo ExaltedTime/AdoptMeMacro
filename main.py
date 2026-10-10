@@ -1780,13 +1780,14 @@ def process_needs():
 
 def detect_paycheck():
     """Detect the paycheck popup by its CASH OUT button's exact color - only
-    within PAYCHECK_REGION and with at least PAYCHECK_MIN_PIXELS of it, since
+    filling PAYCHECK_BUTTON_BOX by at least PAYCHECK_MIN_FRACTION, since
     that green is also the backpack's Select All button, among others - and,
     if present, dismiss it. Returns True if the popup was detected and
     dismissed, False otherwise."""
-    left, top, right, bottom = PAYCHECK_REGION
+    left, top, right, bottom = PAYCHECK_BUTTON_BOX
     region = grab_screen()[top:bottom, left:right]
-    if np.count_nonzero(exact_color_mask(region, PAYCHECK_CASHOUT_COLOR)) < PAYCHECK_MIN_PIXELS:
+    mask = exact_color_mask(region, PAYCHECK_CASHOUT_COLOR)
+    if np.count_nonzero(mask) / mask.size < PAYCHECK_MIN_FRACTION:
         return False
 
     print("[debug] paycheck popup detected, dismissing...")

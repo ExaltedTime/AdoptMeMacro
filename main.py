@@ -1032,9 +1032,8 @@ def setup_game():
     """Setup: lock the house, set the backpack's item filter to favorites
     only, then disable trades (disable_trades()). Not part of the cycle -
     only run on demand (the GUI's Setup button), and after a rejoin. Stray
-    windows are closed first - a join opens the daily Star Rewards, whose
-    window used to eat every click here, leaving the favorites filter unset -
-    and the in-task checks run throughout (minigames only declined)."""
+    windows are closed first, since an open one would take its clicks, and
+    the in-task checks run throughout (minigames only declined)."""
     with task_unscrew(play_minigames=False):
         return _setup_steps()
 
@@ -1891,10 +1890,10 @@ def dismiss_stray_windows():
     """Close any window from STRAY_WINDOWS that's open (found by its title
     crop in STRAY_WINDOW_DIR): the Trading Hub the macro can open by a
     misclick - first its "Go to the Trading Hub to edit listings!" popup, by
-    the green Okay button - and the daily Star Rewards that opens after a
-    join. They cover the screen and everything the macro clicks, and the
-    paycheck check mistakes their green buttons for CASH OUT. Returns the name
-    of the window closed, or None."""
+    the green Okay button - and the Star Rewards, which opens once a day.
+    They cover the screen, the need icons are hidden while they're open, and
+    the paycheck check mistakes their green buttons for CASH OUT. Returns the
+    name of the window closed, or None."""
     img = grab_screen()
     for name, crop in load_templates(STRAY_WINDOW_DIR).items():
         config = STRAY_WINDOWS.get(name)

@@ -396,19 +396,22 @@ backpack's green Select All button, left open on screen, made it "dismiss" a
 paycheck popup every cycle. `rejoin_game()` is the automatic recovery - see
 [Automatic recovery](#stuck-needs).
 
-**Stray windows.** Two windows can open by accident and then block everything,
-and the clicks the macro makes keep landing on them: the Trading Hub (a
-misclicked `choose` can open it, and it throws up a "Go to the Trading Hub to
-edit listings!" popup on top) and the daily Star Rewards that opens after a
-join - which also ate the clicks of the setup that follows a rejoin, leaving
-the backpack's favorites filter unset, so the vehicle steps then equipped the
-wrong thing. `dismiss_stray_windows()` recognises each by a crop of its title
+**Stray windows.** Two windows have been seen open on their own, covering
+the screen: the Trading Hub (how it got opened isn't known; a misclicking
+`choose` is the suspect - see `debug/debug_focus_pet.png`; it throws up a "Go
+to the Trading Hub to edit listings!" popup on top) and the Star Rewards, which
+opens once a day, at no known moment. While one is open the need icons are
+hidden, so nothing is detected and nothing gets done; run 308's two 20-minute
+stalls (a `paycheck popup dismissed` line every cycle, no `detected:` lines)
+were these windows - the macro's paycheck clicks don't close them, and their
+green buttons look like CASH OUT.
+`dismiss_stray_windows()` recognises each by a crop of its title
 in `ref/popups/` (`trading_hub.png`, `star_rewards.png`; matched within the
 `box` in `STRAY_WINDOWS`, at least `STRAY_WINDOW_MATCH_THRESHOLD`) and clicks
 its `close_pos`; for the Trading Hub it first clicks the popup's green Okay
-(`STRAY_OKAY_*`) if that's showing. They also hid the victory screen's GAME
-OVER! banner, which is how a minigame could look unfinished. A new window is a
-new crop plus an entry in `STRAY_WINDOWS`.
+(`STRAY_OKAY_*`) if that's showing. A new window is a new crop plus an entry in
+`STRAY_WINDOWS`. `setup_game()` also closes any before it starts, since an open
+one would take its clicks.
 
 **Per-cycle checks while a task runs.** Waiting for the top of the next cycle
 would leave a popup, a stray window or an offered minigame in the way for the

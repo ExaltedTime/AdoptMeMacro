@@ -74,7 +74,7 @@ GHOST_GALLERY_STEP_MAX = 1.0        # for a random time between these
 # ============================================================================
 # STRAY WINDOWS
 # ============================================================================
-# Windows that open by accident (a misclick, the daily rewards after a join) and block everything: each is
+# Windows that open by accident (a misclick) or on their own (the daily Star Rewards) and block everything: each is
 # recognised by a crop of its title in STRAY_WINDOW_DIR (file name = the name here), searched for within
 # "box", and closed by clicking "close_pos" - see dismiss_stray_windows(). The Trading Hub also throws up a
 # "Go to the Trading Hub to edit listings!" popup, found by its green Okay button and clicked first.

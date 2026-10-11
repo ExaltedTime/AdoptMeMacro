@@ -93,10 +93,13 @@ an extra walk from wherever the previous need left the character standing.
   find things by their exact pixel color rather than their shape (the
   choose need's button, the popups and the Play button all work this way).
 - **STATE** - this module's own mutable state: `STOP_FLAG`;
-  `BUTTON_POSITIONS`, the in-memory cache of the last-detected action
+  the `State` object, `state` (a dataclass holding all of this module's
+  mutable state - the run number, `last_progress`, `last_rejoin`, the stuck-need
+  tracking and the in-task check flags; `State.snapshot()` is saved with every
+  failure), including `state.button_positions`, the in-memory cache of the last-detected action
   button positions (never persisted to disk - see
   [Persisted game config](#persisted-game-config)); and
-  `ATTEMPT_STREAKS` / `ATTEMPTED_LAST` / `DISABLED_THIS_RUN`, which back
+  `state.attempt_streaks` / `state.attempted_last` / `state.disabled_needs`, which back
   [Stuck needs](#stuck-needs). Every fixed
   config/tuning value lives in `magic_numbers.py` instead - see
   [Configuration reference](#configuration-reference).
@@ -106,7 +109,7 @@ an extra walk from wherever the previous need left the character standing.
   [Debugging an unattended run](#debugging-an-unattended-run).
 - **GAME CONFIG** - `load_game_config()`/`save_game_config()`: the state
   that *does* persist across separate launches of the script (unlike
-  `BUTTON_POSITIONS` above) - see [Persisted game config](#persisted-game-config).
+  `state.button_positions` above) - see [Persisted game config](#persisted-game-config).
 - **ICON PROCESSING** - `preprocess_icon()` / `icon_signature()` / `compare_signatures()`. See
   [Need-icon matching](#need-icon-matching).
 - **NEED ICON DETECTION** - `detect_need_icons()`, `find_matching_need()`,
@@ -298,7 +301,7 @@ the buttons:
    `BUTTON_MAX_COUNT` (5), then sort left-to-right.
 6. `refresh_button_mapping()` zips that left-to-right order against
    `BUTTON_NAMES = ["hungry", "thirsty", "dirty", "potty", "sleepy"]` and
-   stores the result in `BUTTON_POSITIONS`. This assumes the five buttons
+   stores the result in `state.button_positions`. This assumes the five buttons
    are always laid out in that fixed order on screen - if Roblox ever
    changes that order, this mapping (and only this mapping) would need
    updating.
@@ -581,15 +584,15 @@ logged and skipped for this pass with no respawn, same as a disabled need
 Needs are resolved one per check, so a need can sit through several checks
 just waiting its turn - that isn't being stuck. What is: `record_detection()`
 compares each check with the needs the *previous pass attempted*
-(`ATTEMPTED_LAST`). An attempted need still on screen has its streak in
-`ATTEMPT_STREAKS` raised; one that's gone has it dropped. When an *enabled*
+(`state.attempted_last`). An attempted need still on screen has its streak in
+`state.attempt_streaks` raised; one that's gone has it dropped. When an *enabled*
 need's streak reaches `NEED_STUCK_CHECKS` (5) - it's supposed to be getting
-resolved, yet it never goes away - it's added to `DISABLED_THIS_RUN` and
+resolved, yet it never goes away - it's added to `state.disabled_needs` and
 `get_need_handler()` returns `None` for it from then on, same as a need that
 isn't in `ENABLED_NEEDS`. A single check without it, even one that detects
 nothing at all, breaks the streak.
 
-`DISABLED_THIS_RUN` lasts for the life of the process only - it isn't saved
+`state.disabled_needs` lasts for the life of the process only - it isn't saved
 to the game config, so relaunching the script gives every need a fresh
 chance - while the streaks are also reset (`reset_need_tracking()`) at the
 start of every workflow run, so a streak never spans a stop and restart.
@@ -605,17 +608,17 @@ asks `rejoin_reason()` whether the game needs rejoining. In order:
 2. *Stuck* - `DISABLED_NEEDS_REJOIN_THRESHOLD` (4) needs have been disabled as
    stuck.
 3. *Stalled* - no need has been resolved for `NO_PROGRESS_REJOIN_INTERVAL`
-   (20 minutes; `LAST_PROGRESS`, set when the loop starts, whenever a need is
+   (20 minutes; `state.last_progress`, set when the loop starts, whenever a need is
    resolved and by every successful `leave_and_rejoin()`): the game is up but
    nothing is working, whatever the cause.
 4. *Scheduled* - it has been `REJOIN_INTERVAL` (an hour) since the last
-   rejoin (`LAST_REJOIN`, set when the loop starts and by every successful
+   rejoin (`state.last_rejoin`, set when the loop starts and by every successful
    `leave_and_rejoin()`): a refresh of a client that has been up a long time.
 
 If so, it runs `leave_and_rejoin()` (see [Side actions](#side-actions)) -
 without the clean esc/l/enter leave for a disconnect, since there's no game
 to leave - then `setup_game()` (the rejoin resets the settings it sets), then
-clears `DISABLED_THIS_RUN` and the streaks so every need gets a fresh
+clears `state.disabled_needs` and the streaks so every need gets a fresh
 chance, and the workflow carries on. A disconnect, stuck or stalled recovery counts as
 a failure: `log_failure()` saves a screenshot first, which shows the dialog
 and its error code. A scheduled rejoin isn't one: it's a line in the run log,
@@ -693,7 +696,7 @@ windows](#per-cycle-checks)) and runs inside `task_unscrew()`.
   gear), clicks the six `SETUP_TRADES_*` positions (settings → settings menu →
   interaction tab → trading setting → "no one" → close) and brings the
   window back in a `finally`, so a stop mid-way can't leave it buried. The
-  worker thread can't touch Tk directly, so `MACRO_WINDOW` (the GUI) runs
+  worker thread can't touch Tk directly, so `state.macro_window` (the GUI) runs
   the two window changes on Tk's thread via `run_on_ui_thread()`.
 
 ### Checking a need in parallel with movement
@@ -805,7 +808,7 @@ is worse than the small delay this cooperative approach costs instead.
 `GAME_CONFIG_PATH` (`debug/.config`, a JSON file) is the macro's one piece
 of state that survives separate launches of the script - everything else
 either lives in `needs/` (the learned reference icons) or is cheap to
-redetect fresh, like `BUTTON_POSITIONS`: detected every single time the
+redetect fresh, like `state.button_positions`: detected every single time the
 character walks to the buttons, so there's nothing gained by saving it -
 it's never trusted across a run anyway, and a stale save would just be
 actively wrong if the screen resolution or Roblox's UI ever changed
@@ -989,7 +992,9 @@ again, since the counter goes with the logs.
   screen), `need_icons.png` (the strip the need icons are read from, so a
   misread icon can be seen at once; missing when Roblox couldn't be captured)
   and `info.txt` (the reason, the needs last detected, the disabled needs and
-  how long ago a need was last resolved). It also prints the reason, writes it
+  how long ago a need was last resolved) and `state.json` (the whole `State`
+  object and `RUN_STATS` as they were, for working out what the macro believed
+  at that moment). It also prints the reason, writes it
   to `run_log.txt` and counts it in the status file. It's called when a handler
   can't resolve a need, a need is still showing after `NEED_GONE_MAX_WAIT`, a
   need is disabled as stuck, a recovery starts or fails, Roblox loses focus
@@ -1021,3 +1026,13 @@ resolution or Roblox's UI, check `debug/debug_needs.png` and
 `debug/debug_buttons.png` first - both are overwritten every detection
 pass and show exactly what the macro is looking at - before tuning any of
 these.
+
+## Automated checks
+
+`.github/workflows/check.yml` runs on every push and pull request (GitHub
+Actions, a temporary Linux machine): `pyflakes` on `main.py`,
+`magic_numbers.py` and `tools/check_constants.py` (syntax errors, undefined
+names, unused imports, duplicate definitions), then
+`python tools/check_constants.py`, which fails on a `cfg.NAME` in `main.py`
+that `magic_numbers.py` doesn't define. It can't run the macro itself - that
+needs Windows, a screen and Roblox.

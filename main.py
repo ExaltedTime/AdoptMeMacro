@@ -15,6 +15,8 @@
 
 import os, sys, re, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib, shutil
 from collections import Counter, defaultdict
+from dataclasses import dataclass, field, fields
+from typing import Any, Optional
 from abc import ABC, abstractmethod
 from functools import partial
 import tkinter as tk
@@ -225,52 +227,83 @@ def find_exact_color(img, rgb):
 # STATE
 # ============================================================================
 # This module's own mutable state, changed while the macro runs - everything
-# else (fixed config/tuning values) lives in magic_numbers.py instead.
+# else (fixed config/tuning values) lives in magic_numbers.py instead. It is
+# all in one `State` object, `state`, so it can be saved with a failure
+# (State.snapshot()) and reset or replaced in one place.
 
 STOP_FLAG = False
 
-# The GUI object (set by AdoptMeGUI), so macro code running on the worker
-# thread can send the macro window to the back and bring it up again - see
-# send_macro_window_to_back(). None when running without the GUI.
-MACRO_WINDOW = None
+@dataclass
+class State:
+    # The GUI object (set by AdoptMeGUI), so macro code running on the worker
+    # thread can send the macro window to the back and bring it up again - see
+    # send_macro_window_to_back(). None when running without the GUI.
+    macro_window: Any = None
+    # When the game was last (re)joined: set when the loop starts and by every
+    # successful leave_and_rejoin(); rejoin_reason() schedules the next hourly
+    # refresh REJOIN_INTERVAL after it. None until then.
+    last_rejoin: Optional[float] = None
+    # When a need was last resolved (or the loop started, or the game was last
+    # rejoined): rejoin_reason() rejoins after NO_PROGRESS_REJOIN_INTERVAL
+    # without any. None until the loop starts.
+    last_progress: Optional[float] = None
+    # Detected action-button screen positions, keyed by need name (e.g. "hungry").
+    # Populated by refresh_button_mapping() each time the macro walks to the
+    # buttons, so this is a same-run cache, not persisted state - there's
+    # nothing gained from saving it to disk since it's never trusted across a
+    # run anyway (screen layout can change between sessions).
+    button_positions: dict = field(default_factory=dict)
+    # The run number of the currently executing workflow (run_workflow_loop()),
+    # set by next_run_number() at the start of each. Every log_run_event() call
+    # tags its line with this, so entries from different runs can be told apart
+    # in the shared RUN_LOG_PATH file.
+    run_number: Optional[int] = None
+    # Stuck-need tracking (see record_detection()): how many times in a row each
+    # need was attempted and still showed on the next check, and which needs the
+    # last pass attempted. Reset by reset_need_tracking() at the start of every
+    # workflow run and after a rejoin, so a streak never spans a stop and restart.
+    attempt_streaks: dict = field(default_factory=dict)
+    attempted_last: set = field(default_factory=set)
+    # True while the last "detected:" line in the run log was "none matched", so
+    # an unrecognised icon sitting on screen is logged once, not on every check.
+    none_matched_logged: bool = False
+    # Needs switched off for the rest of this launch of the script because they
+    # kept showing up without ever clearing. Deliberately not persisted (unlike
+    # the game config): relaunching the script gives every enabled need a fresh
+    # chance.
+    disabled_needs: set = field(default_factory=set)
+    # The in-task checks (see task_unscrew()): whether a need handler or setup
+    # is running and its thread, whether it may play a minigame, when the checks
+    # last ran, and whether they are running now.
+    task_active: bool = False
+    task_play_minigames: bool = True
+    task_thread: Optional[int] = None
+    last_task_unscrew: float = 0.0
+    in_unscrew: bool = False
+    # How many in-task checks in a row have seen the backpack open (see
+    # close_backpack_if_stuck()).
+    backpack_strikes: int = 0
+    # True while a handler that wants the pet focused runs (see wanting_pet_focus()).
+    pet_focus_wanted: bool = False
+    # When the minigame popup checks last ran, and how many "quiet:" lines have
+    # been logged for the current stretch with no need resolved.
+    last_minigame_popup_check: float = 0.0
+    quiet_reported: int = 0
 
-# When the game was last (re)joined: set when the loop starts and by every
-# successful leave_and_rejoin(); rejoin_reason() schedules the next hourly
-# refresh REJOIN_INTERVAL after it. None until then.
-LAST_REJOIN = None
+    def snapshot(self):
+        """The state as a JSON-friendly dict (the GUI object left out), for
+        saving with a failure."""
+        out = {}
+        for item in fields(self):
+            value = getattr(self, item.name)
+            if item.name == "macro_window":
+                value = None if value is None else "set"
+            elif isinstance(value, set):
+                value = sorted(value)
+            out[item.name] = value
+        return out
 
-# When a need was last resolved (or the loop started, or the game was last
-# rejoined): rejoin_reason() rejoins after NO_PROGRESS_REJOIN_INTERVAL
-# without any. None until the loop starts.
-LAST_PROGRESS = None
-
-# Detected action-button screen positions, keyed by need name (e.g. "hungry").
-# Populated by refresh_button_mapping() each time the macro walks to the
-# buttons, so this is a same-run cache, not persisted state - there's
-# nothing gained from saving it to disk since it's never trusted across a
-# run anyway (screen layout can change between sessions).
-BUTTON_POSITIONS = {}
-
-# The run number of the currently executing workflow (run_workflow_loop()), set by next_run_number() at the start of each. Every
-# log_run_event() call tags its line with this, so entries from different
-# runs can be told apart in the shared RUN_LOG_PATH file.
-CURRENT_RUN_NUMBER = None
-
-# Stuck-need tracking (see record_detection()): how many times in a row each
-# need was attempted and still showed on the next check, and which needs the
-# last pass attempted. Reset by reset_need_tracking() at the start of every
-# workflow run and after a rejoin, so a streak never spans a stop and restart.
-ATTEMPT_STREAKS = {}
-ATTEMPTED_LAST = set()
-# True while the last "detected:" line in the run log was "none matched", so
-# an unrecognised icon sitting on screen is logged once, not on every check.
-NONE_MATCHED_LOGGED = False
-
-# Needs switched off for the rest of this launch of the script because they
-# kept showing up without ever clearing. Deliberately not persisted (unlike
-# the game config): relaunching the script gives every enabled need a fresh
-# chance.
-DISABLED_THIS_RUN = set()
+state = State()
 
 # ============================================================================
 # LOGGING
@@ -326,17 +359,16 @@ def next_run_number():
 
 def reset_need_tracking():
     """Forget the stuck-need streaks (see record_detection())."""
-    global ATTEMPTED_LAST, NONE_MATCHED_LOGGED
-    ATTEMPT_STREAKS.clear()
-    ATTEMPTED_LAST = set()
-    NONE_MATCHED_LOGGED = False
+    state.attempt_streaks.clear()
+    state.attempted_last = set()
+    state.none_matched_logged = False
 
 def log_run_event(message):
     """Append one timestamped line to RUN_LOG_PATH, tagged with
     CURRENT_RUN_NUMBER."""
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     with open(cfg.RUN_LOG_PATH, "a") as f:
-        f.write(f"[{timestamp}] [RUN {CURRENT_RUN_NUMBER}] {message}\n")
+        f.write(f"[{timestamp}] [RUN {state.run_number}] {message}\n")
 
 # What the macro knows about how this run is going, written to STATUS_PATH by
 # write_status() so it can be checked without opening the GUI.
@@ -386,13 +418,14 @@ def save_failure_report(reason):
     """Save what was going on when `reason` went wrong, as a folder in
     FAILURE_DIR named with the time, run number and reason: screen.png (the
     whole screen, to see what has focus too), need_icons.png (the strip the
-    need icons are read from, when Roblox could be captured) and info.txt
-    (the run's state). Deletes the oldest beyond MAX_FAILURE_FOLDERS. Returns
+    need icons are read from, when Roblox could be captured), info.txt (a
+    short summary) and state.json (the whole State object and RUN_STATS, as
+    they were). Deletes the oldest beyond MAX_FAILURE_FOLDERS. Returns
     "<folder>/screen.png", or None if it couldn't (never raises - it's called
     while something else is already going wrong)."""
     try:
         slug = re.sub(r"[^a-z0-9]+", "_", reason.lower()).strip("_")[:40]
-        name = f"{time.strftime('%Y%m%d_%H%M%S')}_run{CURRENT_RUN_NUMBER}_{slug}"
+        name = f"{time.strftime('%Y%m%d_%H%M%S')}_run{state.run_number}_{slug}"
         folder = os.path.join(cfg.FAILURE_DIR, name)
         os.makedirs(folder, exist_ok=True)
         cv2.imwrite(os.path.join(folder, "screen.png"), grab_full_screen())
@@ -400,12 +433,14 @@ def save_failure_report(reason):
             cv2.imwrite(os.path.join(folder, "need_icons.png"), need_icon_strip(grab_screen()))
         except Exception:
             pass   # Roblox isn't there to capture - the full screenshot shows why
-        since = f"{time.time() - LAST_PROGRESS:.0f}s ago" if LAST_PROGRESS else "never"
+        since = f"{time.time() - state.last_progress:.0f}s ago" if state.last_progress else "never"
         with open(os.path.join(folder, "info.txt"), "w", encoding="utf-8") as f:
-            f.write(f"reason: {reason}\ntime: {time.strftime('%Y-%m-%d %H:%M:%S')}\nrun: {CURRENT_RUN_NUMBER}\n"
+            f.write(f"reason: {reason}\ntime: {time.strftime('%Y-%m-%d %H:%M:%S')}\nrun: {state.run_number}\n"
                     f"last detected: {', '.join(RUN_STATS['last_detected']) or 'nothing'}\n"
-                    f"disabled needs: {', '.join(sorted(DISABLED_THIS_RUN)) or 'none'}\n"
+                    f"disabled needs: {', '.join(sorted(state.disabled_needs)) or 'none'}\n"
                     f"last need resolved: {since}\n")
+        with open(os.path.join(folder, "state.json"), "w", encoding="utf-8") as f:
+            json.dump({"state": state.snapshot(), "run_stats": RUN_STATS}, f, indent=2, default=str)
         for old in sorted(os.listdir(cfg.FAILURE_DIR))[:-cfg.MAX_FAILURE_FOLDERS]:
             path = os.path.join(cfg.FAILURE_DIR, old)
             shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
@@ -419,7 +454,7 @@ def write_status():
     STATUS_PATH (replacing it atomically). Never raises."""
     try:
         status = {**RUN_STATS, "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
-                  "disabled_needs": sorted(DISABLED_THIS_RUN)}
+                  "disabled_needs": sorted(state.disabled_needs)}
         tmp = cfg.STATUS_PATH + ".tmp"
         with open(tmp, "w") as f:
             json.dump(status, f, indent=2)
@@ -441,7 +476,7 @@ def log_failure(reason, screenshot=True):
 
 def reset_run_stats():
     """Start the status counters afresh (a workflow was just started)."""
-    RUN_STATS.update(run=CURRENT_RUN_NUMBER, started=time.strftime("%Y-%m-%d %H:%M:%S"), cycles=0,
+    RUN_STATS.update(run=state.run_number, started=time.strftime("%Y-%m-%d %H:%M:%S"), cycles=0,
                      last_detected=[], resolved={}, failed={}, failures=0, quiet_minutes=0, cpu_percent=None, memory_mb=None, recoveries=0, disconnects=0, scheduled_rejoins=0, focus_resumes=0,
                      last_resolved=None, last_failure=None)
     write_status()
@@ -650,9 +685,9 @@ def prompt_rename_need(icon_img, idx):
     cv2.imwrite(temp_path, preprocess_icon(icon_img))
 
     prompt = "Need name (hungry/thirsty/dirty/potty/sleepy/catch/walk/other):"
-    if MACRO_WINDOW is not None:
-        answer = MACRO_WINDOW.run_on_ui_thread(
-            lambda: simpledialog.askstring("New need", prompt, parent=MACRO_WINDOW.root), timeout=None)
+    if state.macro_window is not None:
+        answer = state.macro_window.run_on_ui_thread(
+            lambda: simpledialog.askstring("New need", prompt, parent=state.macro_window.root), timeout=None)
         focus_roblox_click()   # the dialog took the focus
     else:
         print(f"[!] {prompt} ", end="", flush=True)
@@ -800,11 +835,6 @@ def hover_click(x, y, duration=cfg.CLICK_MOVE_DURATION):
 # then, so a popup, a stray window or a minigame doesn't wait for the handler
 # to finish. Only on the thread that started the task, and never from inside
 # unscrew() itself.
-TASK_ACTIVE = False
-TASK_PLAY_MINIGAMES = True
-TASK_THREAD = None
-_IN_UNSCREW = False
-_LAST_TASK_UNSCREW = 0.0
 
 @contextlib.contextmanager
 def task_unscrew(play_minigames=True):
@@ -812,28 +842,26 @@ def task_unscrew(play_minigames=True):
     UNSCREW_TASK_INTERVAL seconds. With `play_minigames` False (setup) an
     offered minigame is only declined, never played - setup can't be
     abandoned halfway, since its clicks toggle things."""
-    global TASK_ACTIVE, TASK_PLAY_MINIGAMES, TASK_THREAD, _LAST_TASK_UNSCREW
-    previous = (TASK_ACTIVE, TASK_PLAY_MINIGAMES, TASK_THREAD)
-    TASK_ACTIVE, TASK_PLAY_MINIGAMES, TASK_THREAD = True, play_minigames, threading.get_ident()
-    _LAST_TASK_UNSCREW = time.time()
+    previous = (state.task_active, state.task_play_minigames, state.task_thread)
+    state.task_active, state.task_play_minigames, state.task_thread = True, play_minigames, threading.get_ident()
+    state.last_task_unscrew = time.time()
     try:
         yield
     finally:
-        TASK_ACTIVE, TASK_PLAY_MINIGAMES, TASK_THREAD = previous
+        state.task_active, state.task_play_minigames, state.task_thread = previous
 
 def task_unscrew_tick():
     """The hook in wait_interruptible(): run the in-task checks if one is due.
     Raises TaskInterrupted if a minigame was played, the game was rejoined or a popup spoiled the task."""
-    global _IN_UNSCREW, _LAST_TASK_UNSCREW
-    if (not TASK_ACTIVE or _IN_UNSCREW or threading.get_ident() != TASK_THREAD
-            or time.time() - _LAST_TASK_UNSCREW < cfg.UNSCREW_TASK_INTERVAL):
+    if (not state.task_active or state.in_unscrew or threading.get_ident() != state.task_thread
+            or time.time() - state.last_task_unscrew < cfg.UNSCREW_TASK_INTERVAL):
         return
-    _IN_UNSCREW = True
+    state.in_unscrew = True
     try:
-        played = unscrew(in_task=True, play_minigames=TASK_PLAY_MINIGAMES)
+        played = unscrew(in_task=True, play_minigames=state.task_play_minigames)
     finally:
-        _IN_UNSCREW = False
-        _LAST_TASK_UNSCREW = time.time()
+        state.in_unscrew = False
+        state.last_task_unscrew = time.time()
     if played == "played":
         release_all_inputs()
         raise TaskInterrupted("a minigame")
@@ -980,7 +1008,7 @@ def refresh_button_mapping():
     Always clears any previous mapping first, even on failure, so a failed
     detection can never leave a stale (possibly wrong) position behind for
     click_need_button() to use."""
-    BUTTON_POSITIONS.clear()
+    state.button_positions.clear()
 
     positions = detect_buttons(save_debug=True)
     if not positions:
@@ -992,7 +1020,7 @@ def refresh_button_mapping():
     for i, (cx, cy) in enumerate(positions):
         if i < len(cfg.BUTTON_NAMES):
             name = cfg.BUTTON_NAMES[i]
-            BUTTON_POSITIONS[name] = (cx, cy)
+            state.button_positions[name] = (cx, cy)
             print(f"[!] Button {i + 1}: '{name}' @ ({cx}, {cy})")
 
     print("\n[!] BUTTON MAPPING REFRESHED\n")
@@ -1005,10 +1033,10 @@ def click_need_button(need_name):
     already been called this cycle. Returns True if a mapped button was
     actually found and clicked, False otherwise - the caller must not treat
     this need as resolved (or respawn) on a False return."""
-    if need_name not in BUTTON_POSITIONS:
+    if need_name not in state.button_positions:
         print(f"[!] WARNING: no button mapped for '{need_name}'")
         return False
-    button_x, button_y = BUTTON_POSITIONS[need_name]
+    button_x, button_y = state.button_positions[need_name]
     print(f"[!] CLICKING: {need_name}")
     if not click_button(button_x, button_y, need_name):
         return False
@@ -1199,13 +1227,13 @@ def send_macro_window_to_back():
     """Drop the macro's own window behind everything (it's normally
     always-on-top and covers part of the Roblox UI). Safe to call from the
     worker thread: the change runs on Tk's thread and this waits for it."""
-    if MACRO_WINDOW is not None:
-        MACRO_WINDOW.run_on_ui_thread(MACRO_WINDOW.send_to_back)
+    if state.macro_window is not None:
+        state.macro_window.run_on_ui_thread(state.macro_window.send_to_back)
 
 def bring_macro_window_to_front():
     """Undo send_macro_window_to_back()."""
-    if MACRO_WINDOW is not None:
-        MACRO_WINDOW.run_on_ui_thread(MACRO_WINDOW.bring_to_front)
+    if state.macro_window is not None:
+        state.macro_window.run_on_ui_thread(state.macro_window.bring_to_front)
 
 def disable_trades():
     """Set the game's trade setting to "no one". The macro window covers the
@@ -1292,7 +1320,6 @@ def leave_and_rejoin(clean_leave=True):
     Returns True once back in the game, False if every attempt failed (or
     the saved link isn't a valid private server link). `clean_leave` is
     passed on to close_roblox()."""
-    global LAST_REJOIN, LAST_PROGRESS
     link = load_game_config()["private_server_link"].strip()
     server = None
     if link:
@@ -1337,7 +1364,7 @@ def leave_and_rejoin(clean_leave=True):
         print(f"[debug] waiting {cfg.REJOIN_AFTER_JOIN_WAIT}s, then respawning...")
         wait_stoppable(cfg.REJOIN_AFTER_JOIN_WAIT)
         respawn_character()
-        LAST_REJOIN = LAST_PROGRESS = time.time()
+        state.last_rejoin = state.last_progress = time.time()
         print("[!] Rejoin complete!")
         return True
 
@@ -1360,12 +1387,12 @@ def macro_window_reference_rect():
     space (plus FOCUS_PET_IGNORE_MARGIN), or None when there's no GUI or it
     can't be measured. Its console scrolls and flickers, which looks like
     movement to focus_pet()."""
-    if MACRO_WINDOW is None:
+    if state.macro_window is None:
         return None
-    measure = lambda: (MACRO_WINDOW.root.winfo_x(), MACRO_WINDOW.root.winfo_y(),
-                       MACRO_WINDOW.root.winfo_rootx() + MACRO_WINDOW.root.winfo_width(),
-                       MACRO_WINDOW.root.winfo_rooty() + MACRO_WINDOW.root.winfo_height())
-    box = MACRO_WINDOW.run_on_ui_thread(measure, timeout=1.0)
+    measure = lambda: (state.macro_window.root.winfo_x(), state.macro_window.root.winfo_y(),
+                       state.macro_window.root.winfo_rootx() + state.macro_window.root.winfo_width(),
+                       state.macro_window.root.winfo_rooty() + state.macro_window.root.winfo_height())
+    box = state.macro_window.run_on_ui_thread(measure, timeout=1.0)
     if box is None:
         return None
     left, top, width, height = roblox_rect()
@@ -1812,7 +1839,7 @@ def get_need_handler(need_name):
     """Return the handler for a detected need, or None if it's not
     currently enabled (see ENABLED_NEEDS), was disabled for this run (see
     record_detection()), or the macro doesn't know it."""
-    if need_name not in cfg.ENABLED_NEEDS or need_name in DISABLED_THIS_RUN:
+    if need_name not in cfg.ENABLED_NEEDS or need_name in state.disabled_needs:
         return None
     handler_cls = NEED_HANDLER_CLASSES.get(need_name)
     return handler_cls() if handler_cls else None
@@ -1825,19 +1852,18 @@ def record_detection(detected):
     even once, breaks the streak. (A need merely waiting its turn behind
     others doesn't count - only attempts do.) Call this for every check,
     including ones that detect nothing."""
-    global ATTEMPTED_LAST
-    for need_name in ATTEMPTED_LAST:
+    for need_name in state.attempted_last:
         if need_name in detected:
-            ATTEMPT_STREAKS[need_name] = ATTEMPT_STREAKS.get(need_name, 0) + 1
+            state.attempt_streaks[need_name] = state.attempt_streaks.get(need_name, 0) + 1
         else:
-            ATTEMPT_STREAKS.pop(need_name, None)
-    ATTEMPTED_LAST = set()
-    stuck = {n for n, count in ATTEMPT_STREAKS.items() if count >= cfg.NEED_STUCK_CHECKS} & (cfg.ENABLED_NEEDS - DISABLED_THIS_RUN)
+            state.attempt_streaks.pop(need_name, None)
+    state.attempted_last = set()
+    stuck = {n for n, count in state.attempt_streaks.items() if count >= cfg.NEED_STUCK_CHECKS} & (cfg.ENABLED_NEEDS - state.disabled_needs)
     for need_name in sorted(stuck):
-        DISABLED_THIS_RUN.add(need_name)
+        state.disabled_needs.add(need_name)
         print(f"[!] {need_name} still there after {cfg.NEED_STUCK_CHECKS} attempts in a row - disabling it for this run")
         log_failure(f"{need_name} stuck for {cfg.NEED_STUCK_CHECKS} attempts - disabled for this run "
-                    f"({len(DISABLED_THIS_RUN)} disabled now: {', '.join(sorted(DISABLED_THIS_RUN))})")
+                    f"({len(state.disabled_needs)} disabled now: {', '.join(sorted(state.disabled_needs))})")
 
 def process_needs():
     """Detect needs on screen and resolve the first one that can be: its
@@ -1849,7 +1875,6 @@ def process_needs():
     False) is skipped for the next one, with no respawn. Returns False if
     nothing was resolved - including when nothing was on screen, which
     prints nothing (the caller shows a waiting line instead)."""
-    global LAST_PROGRESS, ATTEMPTED_LAST, NONE_MATCHED_LOGGED
     if not focus_roblox_click():
         return False
 
@@ -1875,10 +1900,10 @@ def process_needs():
     if names:
         print(f"\n[!] Found {len(found_icons)} icon(s): " + ", ".join(f"{n} ({s:.4f})" for n, s in matched_needs))
         log_run_event(f"detected: {', '.join(names)}")
-        NONE_MATCHED_LOGGED = False
-    elif not NONE_MATCHED_LOGGED:
+        state.none_matched_logged = False
+    elif not state.none_matched_logged:
         log_run_event(f"detected: none matched ({len(found_icons)} icon(s) on screen)")
-        NONE_MATCHED_LOGGED = True
+        state.none_matched_logged = True
     RUN_STATS["last_detected"] = names
     record_detection(names)
 
@@ -1914,13 +1939,13 @@ def process_needs():
             seconds = time.time() - started
             RUN_STATS["resolved"][need_name] = RUN_STATS["resolved"].get(need_name, 0) + 1
             RUN_STATS["last_resolved"] = {"need": need_name, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
-            LAST_PROGRESS = time.time()
+            state.last_progress = time.time()
             log_run_event(f"resolved: {need_name} ({seconds:.0f}s)")
             write_status()
             return True
         return False
     finally:
-        ATTEMPTED_LAST = attempted
+        state.attempted_last = attempted
 
 # ============================================================================
 # PER-CYCLE CHECKS
@@ -1974,7 +1999,6 @@ def detect_backpack_open(img):
 
 # How many in-task checks in a row have seen the backpack open (see
 # close_backpack_if_stuck()).
-_BACKPACK_STRIKES = 0
 
 def close_backpack_if_open(step=""):
     """Close the backpack if it's open, in either form: press KEY_BACKPACK,
@@ -2027,17 +2051,16 @@ def close_backpack_if_stuck(in_task):
     in a row - at UNSCREW_TASK_INTERVAL apart that's a backpack open for
     longer than that, which a handler never needs. Returns True if it's still
     open (a first sighting, mid-task)."""
-    global _BACKPACK_STRIKES
     if not in_task:
         close_backpack_if_open()
         return False
     if not is_roblox_focused() or not detect_backpack_open(grab_screen()):
-        _BACKPACK_STRIKES = 0
+        state.backpack_strikes = 0
         return False
-    _BACKPACK_STRIKES += 1
-    if _BACKPACK_STRIKES < cfg.BACKPACK_CLOSE_CONFIRMATIONS:
+    state.backpack_strikes += 1
+    if state.backpack_strikes < cfg.BACKPACK_CLOSE_CONFIRMATIONS:
         return True
-    _BACKPACK_STRIKES = 0
+    state.backpack_strikes = 0
     close_backpack_if_open()
     return False
 
@@ -2066,11 +2089,11 @@ def rejoin_reason():
         return "disconnect", "Roblox isn't running"
     if detect_disconnect(grab_screen()):
         return "disconnect", "disconnected from the game"
-    if len(DISABLED_THIS_RUN) >= cfg.DISABLED_NEEDS_REJOIN_THRESHOLD:
-        return "stuck", f"{len(DISABLED_THIS_RUN)} needs disabled ({', '.join(sorted(DISABLED_THIS_RUN))})"
-    if LAST_PROGRESS is not None and time.time() - LAST_PROGRESS >= cfg.NO_PROGRESS_REJOIN_INTERVAL:
+    if len(state.disabled_needs) >= cfg.DISABLED_NEEDS_REJOIN_THRESHOLD:
+        return "stuck", f"{len(state.disabled_needs)} needs disabled ({', '.join(sorted(state.disabled_needs))})"
+    if state.last_progress is not None and time.time() - state.last_progress >= cfg.NO_PROGRESS_REJOIN_INTERVAL:
         return "stalled", f"no need resolved for {cfg.NO_PROGRESS_REJOIN_INTERVAL / 60:g} minutes"
-    if LAST_REJOIN is not None and time.time() - LAST_REJOIN >= cfg.REJOIN_INTERVAL:
+    if state.last_rejoin is not None and time.time() - state.last_rejoin >= cfg.REJOIN_INTERVAL:
         return "scheduled", f"{cfg.REJOIN_INTERVAL / 3600:g} hour(s) since the last rejoin"
     return None
 
@@ -2103,7 +2126,7 @@ def rejoin_game(kinds=None):
         log_failure("recovery: rejoin failed, will try again next cycle")
         return False
     setup_game()
-    DISABLED_THIS_RUN.clear()
+    state.disabled_needs.clear()
     reset_need_tracking()
     log_run_event("recovery complete: rejoined, setup run, disabled needs cleared")
     print("[!] Recovery complete - carrying on")
@@ -2173,18 +2196,16 @@ def identify_minigame(img):
 
 # True while a handler that needs the pet focused (choose, pet) is running;
 # the "pet_focus" stray window is left alone then.
-PET_FOCUS_WANTED = False
 
 @contextlib.contextmanager
 def wanting_pet_focus():
     """Within this block dismiss_stray_windows() doesn't back out of the pet
     focus view."""
-    global PET_FOCUS_WANTED
-    PET_FOCUS_WANTED = True
+    state.pet_focus_wanted = True
     try:
         yield
     finally:
-        PET_FOCUS_WANTED = False
+        state.pet_focus_wanted = False
 
 def dismiss_stray_windows():
     """Close any window from STRAY_WINDOWS that's open (found by its title
@@ -2201,7 +2222,7 @@ def dismiss_stray_windows():
         config = cfg.STRAY_WINDOWS.get(name)
         if config is None or template_score(img, crop, config["box"]) < cfg.STRAY_WINDOW_MATCH_THRESHOLD:
             continue
-        if config.get("only_when_unwanted") and PET_FOCUS_WANTED:
+        if config.get("only_when_unwanted") and state.pet_focus_wanted:
             continue
         print(f"[debug] stray window open: {name}, closing it...")
         log_run_event(f"stray window closed: {name}")
@@ -2269,16 +2290,14 @@ class MinigameWatch:
             return f"never started (no overlay within {cfg.MINIGAME_OVERLAY_START_GRACE:g}s of the start wait)"
         return None
 
-_LAST_MINIGAME_POPUP_CHECK = 0.0
 
 def minigame_popup_checks():
     """The popups that can turn up mid-minigame - stray windows and the
     paycheck - checked at most every MINIGAME_POPUP_CHECK_INTERVAL. (The
     in-task unscrew() can't run here: the minigame is itself played from it.)"""
-    global _LAST_MINIGAME_POPUP_CHECK
-    if time.time() - _LAST_MINIGAME_POPUP_CHECK < cfg.MINIGAME_POPUP_CHECK_INTERVAL:
+    if time.time() - state.last_minigame_popup_check < cfg.MINIGAME_POPUP_CHECK_INTERVAL:
         return
-    _LAST_MINIGAME_POPUP_CHECK = time.time()
+    state.last_minigame_popup_check = time.time()
     if not dismiss_stray_windows():
         detect_paycheck()
 
@@ -2357,7 +2376,6 @@ def play_minigame(name):
     overlay shows it's over or never started (MinigameWatch), or after
     MINIGAME_MAX_DURATION.
     Counts as progress for the no-progress rejoin. Returns True if it was won."""
-    global LAST_PROGRESS
     label = cfg.MINIGAME_LABELS.get(name, name)
     print(f"[!] playing {label}")
     log_run_event(f"minigame started: {label}")
@@ -2378,7 +2396,7 @@ def play_minigame(name):
     else:
         reason = watch.problem or f"did not reach the victory screen within {cfg.MINIGAME_MAX_DURATION:g}s"
         log_failure(f"{label} {reason}")
-    LAST_PROGRESS = time.time()
+    state.last_progress = time.time()
     respawn_character()
     return won
 
@@ -2557,8 +2575,8 @@ def start_recording_if_requested():
     if not load_game_config()["record_next_run"]:
         return None
     update_game_config(lambda c: c.update(record_next_run=False))
-    if MACRO_WINDOW is not None:
-        MACRO_WINDOW.run_on_ui_thread(lambda: MACRO_WINDOW.config_flag_vars["record_next_run"].set(False), timeout=1.0)
+    if state.macro_window is not None:
+        state.macro_window.run_on_ui_thread(lambda: state.macro_window.config_flag_vars["record_next_run"].set(False), timeout=1.0)
     os.makedirs(cfg.RECORDINGS_DIR, exist_ok=True)
     videos = sorted((os.path.join(cfg.RECORDINGS_DIR, f) for f in os.listdir(cfg.RECORDINGS_DIR)), key=os.path.getmtime)
     for old in videos[:max(0, len(videos) - (cfg.MAX_RECORDINGS - 1))]:
@@ -2566,7 +2584,7 @@ def start_recording_if_requested():
             os.remove(old)
         except OSError:
             pass
-    recorder = RunRecorder(os.path.join(cfg.RECORDINGS_DIR, f"run{CURRENT_RUN_NUMBER}_{time.strftime('%Y%m%d_%H%M%S')}"))
+    recorder = RunRecorder(os.path.join(cfg.RECORDINGS_DIR, f"run{state.run_number}_{time.strftime('%Y%m%d_%H%M%S')}"))
     if not recorder.start():
         print("[!] Couldn't open a video file - not recording")
         log_run_event("recording: couldn't open a video file")
@@ -2633,7 +2651,6 @@ class ResourceMonitor(threading.Thread):
             if memory is not None:
                 log_run_event(f"resources: cpu {percent:.1f}% mem {memory:.0f}MB")
 
-_QUIET_REPORTED = 0
 
 def check_quiet():
     """Every cycle: note in RUN_STATS how many whole minutes no need has been
@@ -2641,13 +2658,12 @@ def check_quiet():
     QUIET_LOG_INTERVAL of it, so a stretch where nothing happens (the loop
     alive but stuck, or the need bar unreadable) shows in the log well before
     the NO_PROGRESS_REJOIN_INTERVAL rejoin."""
-    global _QUIET_REPORTED
-    quiet = time.time() - LAST_PROGRESS if LAST_PROGRESS else 0.0
+    quiet = time.time() - state.last_progress if state.last_progress else 0.0
     RUN_STATS["quiet_minutes"] = int(quiet // 60)
     reports = int(quiet // cfg.QUIET_LOG_INTERVAL)
-    if reports > _QUIET_REPORTED:
+    if reports > state.quiet_reported:
         log_run_event(f"quiet: no need resolved for {reports * cfg.QUIET_LOG_INTERVAL / 60:g} min")
-    _QUIET_REPORTED = reports
+    state.quiet_reported = reports
 
 def run_full_cycle():
     """One cycle: keep checking for needs, waiting NEED_CHECK_RETRY_DELAY
@@ -2682,18 +2698,18 @@ def run_workflow_loop():
     propagate on up to run_async()'s worker (via the bare `finally`, not
     `except`) so the GUI still reports [STOPPED] correctly; the finally
     just prints locally first."""
-    global STOP_FLAG, CURRENT_RUN_NUMBER, LAST_REJOIN, LAST_PROGRESS
+    global STOP_FLAG
     STOP_FLAG = False
-    CURRENT_RUN_NUMBER = next_run_number()
+    state.run_number = next_run_number()
     reset_need_tracking()
     reset_run_stats()
-    LAST_REJOIN = LAST_PROGRESS = time.time()  # the hourly and no-progress rejoins count from here
+    state.last_rejoin = state.last_progress = time.time()  # the hourly and no-progress rejoins count from here
     log_run_event("LOOP started")
     recorder = start_recording_if_requested()
     monitor = ResourceMonitor()
     monitor.start()
     print("\n" + "=" * 50)
-    print(f"[LOOP] Starting continuous workflow (run {CURRENT_RUN_NUMBER})")
+    print(f"[LOOP] Starting continuous workflow (run {state.run_number})")
     print("=" * 50)
 
     # Respawn once up front so the loop always starts from a known state,
@@ -2721,9 +2737,9 @@ def run_workflow_loop():
                 # between, so it can't fight you for the window forever.
                 if not load_game_config()["resume_on_focus_loss"]:
                     raise
-                if LAST_PROGRESS != progress_at_loss:
+                if state.last_progress != progress_at_loss:
                     focus_losses = 0
-                progress_at_loss = LAST_PROGRESS
+                progress_at_loss = state.last_progress
                 focus_losses += 1
                 if focus_losses > cfg.FOCUS_RESUME_MAX_IN_A_ROW:
                     log_failure(f"Roblox lost focus {focus_losses} times in a row - giving up")
@@ -2739,7 +2755,7 @@ def run_workflow_loop():
         if recorder is not None:
             recorder.stop()
         log_run_event("LOOP stopped")
-        write_run_report(CURRENT_RUN_NUMBER)
+        write_run_report(state.run_number)
         print("\n[LOOP] Stopped\n")
 
 # ============================================================================
@@ -3172,8 +3188,7 @@ class DebugCapture:
 
 class AdoptMeGUI:
     def __init__(self, root):
-        global MACRO_WINDOW
-        MACRO_WINDOW = self
+        state.macro_window = self
         self.root = root
         self.root.title("Adopt Me Macro")
         self.root.geometry(cfg.GUI_GEOMETRY)

@@ -20,11 +20,9 @@ Suggestions from reading through the code, none of them started. Roughly in orde
 ## Organization
 
 - [ ] `tests/`: the pure parts are easy to test with the Windows-only imports stubbed - `need_bar_readable()`, `record_detection()`, `parse_server_link()`, `exact_color_mask()`, `DebugCapture`, `format_duration()`. Use lossless PNG fixtures (compressed `.webp` screenshots don't match exact colours)
-- [ ] A GitHub Action running pyflakes and the tests on every push
 
 ## Code
 
-- [ ] Several functions share state through bare globals; a small `State` object (or class) would make them testable and remove the `global` statements
 - [ ] `STOP_FLAG` as a `threading.Event`, rather than a bool read from other threads
 - [ ] The teleport and walk handlers are already table-driven; the button handlers, `catch` and `pet` could be too (a list of steps instead of code), which also makes the timing tuning item easier
 - [ ] Use the `logging` module instead of `print("[debug] ...")`, so levels and the console/file split come for free and the on-screen console can hide debug lines

@@ -74,6 +74,7 @@ MINIGAME_VICTORY_CHECK_INTERVAL = 1.0
 MINIGAME_POPUP_CHECK_INTERVAL = 4.0   # the popup checks (stray windows, paycheck) run this often while a minigame is played
 MINIGAME_MAX_DURATION = 600.0       # gives up (and logs a failure) if the victory screen hasn't shown by then
 MINIGAME_FINISH_WAIT = 5.0          # after clicking NICE!, before carrying on
+MINIGAME_VICTORY_CLICK_TRIES = 3      # NICE! clicks before giving up on the win screen closing
 MINIGAME_START_WAIT = 50.0          # both minigames wait this long after teleporting, before they act (Hauntlet 2 then holds
                                     # HAUNTLET_2_FORWARD_KEY, Ghost Gallery starts running about)
 HAUNTLET_2_FORWARD_KEY = "w"
@@ -300,8 +301,10 @@ GENERAL_TELEPORT_POS_2 = (895, 705)
 GENERAL_TELEPORT_POS_3 = (1048, 658)
 TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing spot
 TELEPORT_WALK_STEP_GAP = 4.0      # pause between consecutive steps of a teleport-walk need's sequence
+SICK_PRE_E_WAIT = 2.0             # after the sick need's walk, before pressing 'e' (let the character come to rest)
 SICK_CONFIRM_WAIT = 7.0           # wait after pressing 'e' and before the sick need's final click
 
+NEED_GONE_SLOW_MAX_WAIT = 90.0   # the same for cafe and beach, which were seen clearing ~80s after their walk
 TELEPORT_PETS_TAB_POS = (817, 713)       # nursery: pets tab
 TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
 SICK_FINAL_CLICK_POS = (1045, 660)       # click after the sick need's walk
@@ -322,7 +325,7 @@ TELEPORT_WALK_NEEDS_NORMAL: dict[str, dict[str, Any]] = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),)),
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 1.2), ("a", 10.0))),
-    "cafe":    dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 3.1), ("s", 8.0), ("d", 4))),
+    "cafe":    dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 3.1), ("s", 8.0), ("d", 4)), max_wait=NEED_GONE_SLOW_MAX_WAIT),
     "salon":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 2.5), ("w", 15.0))),
     "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 2.0), ("a", 5.5), ("s", 3.0))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 0.1), ("d", 3.0), ("s", 2.2), ("d", 15.0), ("w",20.0))),
@@ -333,7 +336,7 @@ TELEPORT_WALK_NEEDS_NORMAL: dict[str, dict[str, Any]] = {
 # outside Halloween.
 TELEPORT_WALK_NEEDS_HALLOWEEN: dict[str, dict[str, Any]] = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 7.7),), helicopter=True),
-    "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 20.0),), helicopter=True),
+    "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 20.0),), helicopter=True, max_wait=NEED_GONE_SLOW_MAX_WAIT),
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.8), ("a", 10))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("s", 20),), helicopter=True),
     "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 3.0), ("w", 0.8)),
@@ -415,7 +418,7 @@ REJOIN_LEAVE_KEYS = ("esc", "l", "enter")
 REJOIN_LEAVE_KEY_GAP = 0.25        # between those keys (Natro uses the same)
 REJOIN_MIN_LEAVE_HEIGHT = 500      # px; the L shortcut only works in a Roblox window at least this tall
 REJOIN_CLOSE_WAIT = 5.0            # after closing, before relaunching (relaunching too soon gives Roblox error 264)
-REJOIN_INTERVAL = 60 * 60          # while the loop runs, rejoin this often (seconds) even if nothing is wrong, to
+REJOIN_INTERVAL = 2 * 60 * 60      # while the loop runs, rejoin this often (seconds) even if nothing is wrong, to
                                    # refresh a client that has been up a long time; also gives stuck needs a fresh chance
 NO_PROGRESS_REJOIN_INTERVAL = 20 * 60  # while the loop runs, rejoin if no need has been resolved for this long (seconds)
 NO_DETECTION_RESPAWN_INTERVAL = 4 * 60  # while the loop runs, respawn if no need has been *detected* for this long (seconds); counts

@@ -263,7 +263,7 @@ class State:
     # send_macro_window_to_back(). None when running without the GUI.
     macro_window: Any = None
     # When the game was last (re)joined: set when the loop starts and by every
-    # successful leave_and_rejoin(); rejoin_reason() schedules the next hourly
+    # successful leave_and_rejoin(); rejoin_reason() schedules the next
     # refresh REJOIN_INTERVAL after it. None until then.
     last_rejoin: Optional[float] = None
     # When a need was last resolved (or the loop started, or the game was last
@@ -312,6 +312,10 @@ class State:
     # Where each need's icon was last recognised in the need bar (reference
     # space, centre), by need name - see icon_gone_by_frame_change().
     need_icon_positions: dict[str, tuple[int, int]] = field(default_factory=dict)
+    # Each need's icon as it last looked when the bar could be read (identify_icons()): what
+    # icon_gone_by_frame_change() looks for when it can't read the bar - its stored position can be
+    # another need's icon by then, the others having shifted about.
+    need_icon_crops: dict[str, Image] = field(default_factory=dict)
     # How many in-task checks in a row have seen the backpack open (see
     # close_backpack_if_stuck()).
     backpack_strikes: int = 0
@@ -332,6 +336,8 @@ class State:
                 value = None if value is None else "set"
             elif isinstance(value, set):
                 value = sorted(value)
+            elif item.name == "need_icon_crops":
+                value = {name: f"image {crop.shape[1]}x{crop.shape[0]}" for name, crop in list(value.items())}   # pictures: not JSON
             out[item.name] = value
         return out
 
@@ -369,8 +375,11 @@ def refresh_debug() -> int:
         path = os.path.join(cfg.DEBUG_DIR, name)
         if path == cfg.GAME_CONFIG_PATH:
             continue
-        shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
-        removed += 1
+        try:
+            shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
+            removed += 1
+        except OSError as error:   # a locked file (a video still open, say): leave it, carry on with the rest
+            print(f"[!] couldn't delete {name}: {error}")
     for directory in (cfg.IMAGES_DIR, cfg.LOGS_DIR):
         os.makedirs(directory, exist_ok=True)
     return removed
@@ -554,9 +563,15 @@ def reset_run_stats() -> None:
 # Game state that needs to persist across separate launches of the script
 # (unlike BUTTON_POSITIONS/CURRENT_RUN_NUMBER above) - see side_quest().
 
-def load_game_config() -> dict[str, Any]:
-    """Load GAME_CONFIG_PATH, or these defaults if it doesn't exist yet
-    (first run, or reset via reset_game_config())."""
+# The GUI (Tk main thread) and the workflow (run_async's worker thread) both
+# read and write this file, so every access goes through the functions below,
+# each holding this one lock - a reader can never see a half-written file (it
+# would read as "no config" and silently give the defaults: the private server
+# link gone, the minigames switched off).
+GAME_CONFIG_LOCK = threading.Lock()
+
+def _read_game_config() -> dict[str, Any]:
+    """load_game_config() without taking the lock (for callers that hold it)."""
     defaults = {
         "money_collected": 0,
         "lure_timer": time.time(),  # due immediately on a fresh config
@@ -577,23 +592,32 @@ def load_game_config() -> dict[str, Any]:
         config.setdefault("hauntlet_2_enabled", config.pop("hauntlet_enabled"))
     return {**defaults, **config}
 
-def save_game_config(config: dict[str, Any]) -> None:
-    """Persist `config` (as returned by load_game_config()) to GAME_CONFIG_PATH."""
-    with open(cfg.GAME_CONFIG_PATH, "w") as f:
-        json.dump(config, f)
+def load_game_config() -> dict[str, Any]:
+    """Load GAME_CONFIG_PATH, or these defaults if it doesn't exist yet
+    (first run, or reset via reset_game_config())."""
+    with GAME_CONFIG_LOCK:
+        return _read_game_config()
 
-# The GUI (Tk main thread) and the workflow (run_async's worker thread) both
-# write this file, so every change goes through update_game_config() /
-# reset_game_config() - a load-modify-save under one lock - rather than
-# holding a loaded dict across a long action and saving it afterwards,
-# which could silently undo a checkbox clicked in the meantime.
-GAME_CONFIG_LOCK = threading.Lock()
+def save_game_config(config: dict[str, Any]) -> None:
+    """Persist `config` (as returned by load_game_config()) to GAME_CONFIG_PATH.
+    Written to a temporary file and moved into place, so a crash partway
+    can't leave a truncated config behind (which would read as the defaults).
+    Callers outside this section hold GAME_CONFIG_LOCK - use
+    update_game_config()."""
+    tmp = cfg.GAME_CONFIG_PATH + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(config, f)
+        os.replace(tmp, cfg.GAME_CONFIG_PATH)
+    except OSError:
+        with open(cfg.GAME_CONFIG_PATH, "w") as f:   # the move wasn't allowed (the file is open elsewhere): write it in place
+            json.dump(config, f)
 
 def update_game_config(mutate: Callable[[dict[str, Any]], Any]) -> dict[str, Any]:
     """Load the config, call mutate(config) to change it in place, save it,
     and return it - all atomically with respect to other callers."""
     with GAME_CONFIG_LOCK:
-        config = load_game_config()
+        config = _read_game_config()
         mutate(config)
         save_game_config(config)
         return config
@@ -602,13 +626,13 @@ def reset_game_config() -> None:
     """Delete GAME_CONFIG_PATH so the next load starts from the defaults -
     except the private server link, which isn't progress and is kept."""
     with GAME_CONFIG_LOCK:
-        link = load_game_config()["private_server_link"]
+        link = _read_game_config()["private_server_link"]
         try:
             os.remove(cfg.GAME_CONFIG_PATH)
         except FileNotFoundError:
             pass
         if link:
-            save_game_config({**load_game_config(), "private_server_link": link})
+            save_game_config({**_read_game_config(), "private_server_link": link})
 
 # ============================================================================
 # ICON PROCESSING
@@ -787,6 +811,10 @@ def identify_icons(found_icons: list[tuple[int, int, int]], full_img: Image) -> 
         need_name, score = find_matching_need(icon_variants(full_img, cx, cy))
         if need_name:
             state.need_icon_positions[need_name] = (cx, cy)
+            r = cfg.ICON_CROP_RADIUS
+            crop = full_img[cy - r:cy + r + 1, cx - r:cx + r + 1] if cx >= r and cy >= r else None
+            if crop is not None and crop.shape[:2] == (2 * r + 1, 2 * r + 1):
+                state.need_icon_crops[need_name] = crop.copy()
         yield idx, icon_img, need_name, score
 
 def detect_need_bar_readable(img: Image) -> bool:
@@ -811,6 +839,11 @@ def scan_needs(fresh: bool = False) -> tuple[list[Optional[str]], bool]:
 
 # The icon region being watched while the need bar is unreadable: {"need", "pos", "crop"} - see icon_gone_by_frame_change().
 _ICON_WATCH: dict[str, Any] = {"need": None, "pos": None, "crop": None}
+
+def reset_icon_watch() -> None:
+    """Forget the icon being watched: each wait for a need to clear starts from the picture of its icon taken
+    when it was last read, not from where an earlier wait for the same need happened to leave off."""
+    _ICON_WATCH.update(need=None, pos=None, crop=None)
 
 def icon_region(pos: tuple[int, int]) -> Optional[Image]:
     """The square around a need icon centred on `pos` (ICON_CROP_RADIUS each
@@ -870,8 +903,13 @@ def icon_gone_by_frame_change(need_name: str) -> Optional[bool]:
         return None
     watch = _ICON_WATCH
     if watch["need"] != need_name or watch["crop"] is None:
-        watch.update(need=need_name, pos=pos, crop=here)
-        return None
+        stored = state.need_icon_crops.get(need_name)
+        if stored is None:
+            watch.update(need=need_name, pos=pos, crop=here)
+            return None
+        # What is at the stored position now may be another need's icon (the others shift as they clear):
+        # search for the icon as it looked when it was last read instead, so a clear is noticed at the first look.
+        watch.update(need=need_name, pos=pos, crop=stored)
     found = locate_icon(watch["crop"], pos[1])
     if found is None:
         wait_interruptible(cfg.NEED_GONE_FLICKER_RECHECK_DELAY)
@@ -879,7 +917,7 @@ def icon_gone_by_frame_change(need_name: str) -> Optional[bool]:
         if found is None:
             print(f"[debug] {need_name}: need bar unreadable, and its icon is no longer in the bar")
             log_run_event(f"{need_name} icon gone by frame change - the need bar is unreadable")
-            watch.update(need=None, pos=None, crop=None)
+            reset_icon_watch()
             return True
     now = icon_region(found)
     if now is None:
@@ -903,7 +941,7 @@ def _need_cleared(need_name: str) -> Optional[bool]:
         names, readable = scan_needs(fresh=attempt > 0)   # the second look must not just repeat the first
         if not readable:
             return icon_gone_by_frame_change(need_name)
-        _ICON_WATCH.update(need=None, pos=None, crop=None)   # readable again: a later unreadable stretch starts afresh
+        reset_icon_watch()   # readable again: a later unreadable stretch starts afresh
         if need_name in names:
             return False
         if attempt == 0:
@@ -922,6 +960,7 @@ def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAI
     minigames that turn up meanwhile are handled by the unscrew() checks
     wait_interruptible() runs during a task.) Interruptible."""
     print(f"[debug] waiting up to {max_wait}s for {need_name} to clear...")
+    reset_icon_watch()
     deadline = time.time() + max_wait
     unreadable = False
     while True:
@@ -951,6 +990,7 @@ def _watch_need_gone(need_name: str, cleared_event: threading.Event, stop_event:
     main thread's check_running() calls are allowed to unwind the workflow, so
     this thread must never let StopRequested/FocusLost escape uncaught."""
     try:
+        reset_icon_watch()
         while not stop_event.is_set():
             if stop_event.wait(cfg.NEED_GONE_POLL_INTERVAL):
                 return
@@ -1965,6 +2005,7 @@ class TeleportWalkNeedHandler(NeedHandler):
 
         final_click = self.config.get("final_click")
         if final_click:
+            wait_interruptible(cfg.SICK_PRE_E_WAIT)
             pydirectinput.press("e")
             wait_interruptible(cfg.SICK_CONFIRM_WAIT)
             print(f"[debug] clicking {final_click}...")
@@ -2554,6 +2595,20 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
 
 MINIGAME_PLAYERS = {"hauntlet_2": play_hauntlet_2, "ghost_gallery": play_ghost_gallery}
 
+def click_nice_until_gone() -> bool:
+    """Click the win screen's NICE! button, wait MINIGAME_FINISH_WAIT, and
+    look again: while the win screen is still up (the click missed, or the
+    screen was still animating in) click once more, up to
+    MINIGAME_VICTORY_CLICK_TRIES times in all. Returns True if it's gone."""
+    for attempt in range(cfg.MINIGAME_VICTORY_CLICK_TRIES):
+        hover_click(*cfg.MINIGAME_VICTORY_BUTTON_POS)
+        wait_interruptible(cfg.MINIGAME_FINISH_WAIT)
+        if not detect_minigame_victory(grab_screen()):
+            return True
+        print(f"[debug] win screen still up after click {attempt + 1}")
+    log_failure("minigame win screen would not close")
+    return False
+
 def play_minigame(name: str) -> bool:
     """Take the popup's Yes, play minigame `name` until its victory screen
     shows, click NICE!, and respawn. Gives up (a logged failure) when the
@@ -2574,15 +2629,33 @@ def play_minigame(name: str) -> bool:
     finally:
         release_all_inputs()
     if won:
-        hover_click(*cfg.MINIGAME_VICTORY_BUTTON_POS)
         log_run_event(f"minigame finished: {label} ({time.time() - started:.0f}s)")
-        wait_interruptible(cfg.MINIGAME_FINISH_WAIT)
+        click_nice_until_gone()
     else:
         reason = watch.problem or f"did not reach the victory screen within {cfg.MINIGAME_MAX_DURATION:g}s"
         log_failure(f"{label} {reason}")
     state.last_progress = state.last_detection = time.time()
     respawn_character()
     return won
+
+def close_minigame_win_screen(abandon: bool = True) -> bool:
+    """If the minigame win screen (detect_minigame_victory()) is up - whether
+    the macro was playing that minigame or not: one that ended after the
+    macro had stopped watching it, say - click NICE! and wait
+    MINIGAME_FINISH_WAIT. With `abandon` (the default) it then counts as
+    progress and the character is respawned, as after a minigame it played
+    itself (the win screen has put it back in the world somewhere unknown);
+    without (setup, which can't be abandoned halfway) only the click is made.
+    Returns True if the screen was there."""
+    if not detect_minigame_victory(grab_screen()):
+        return False
+    print("[debug] minigame win screen is up, clicking NICE!...")
+    log_run_event("minigame win screen closed")
+    click_nice_until_gone()
+    if abandon:
+        state.last_progress = state.last_detection = time.time()
+        respawn_character()
+    return True
 
 def minigame_popup(play: bool = True) -> Optional[str]:
     """Halloween only (see HALLOWEEN): handles a minigame popup (see
@@ -2621,15 +2694,18 @@ def unscrew(in_task: bool = False, play_minigames: bool = True) -> Optional[str]
         at the top of a cycle, mid-task once it's been seen open twice in a
         row);
       - close stray windows (dismiss_stray_windows());
-      - during Halloween, handle a minigame popup;
+      - during Halloween, close a minigame win screen if one is up
+        (close_minigame_win_screen()) and handle a minigame popup;
       - the paycheck popup (not while the backpack is still open - its green
         Select All button would be mistaken for CASH OUT).
     The stray windows and the minigame popup go before the paycheck check
     because their green buttons would otherwise be mistaken for CASH OUT too.
     Returns "played" if a minigame was played, "rejoined" if the game was
     rejoined mid-task or "aborted" if a stray window that spoils the task was
-    closed (see "abort_task" in STRAY_WINDOWS; never with `play_minigames`
-    False, i.e. in setup, which can't be abandoned halfway) - the callers
+    closed (see "abort_task" in STRAY_WINDOWS) or a paycheck popup was
+    dismissed - its clicks and the dismissal leave the backpack and the
+    character in an unknown state, so the task starts over (never with
+    `play_minigames` False, i.e. in setup, which can't be abandoned halfway) - the callers
     abandon the task - otherwise None."""
     if in_task:
         if rejoin_game(kinds=("disconnect",)):
@@ -2638,10 +2714,12 @@ def unscrew(in_task: bool = False, play_minigames: bool = True) -> Optional[str]
         rejoin_game()
     backpack_open = close_backpack_if_stuck(in_task)
     closed = dismiss_stray_windows()
+    if cfg.HALLOWEEN and close_minigame_win_screen(abandon=play_minigames):
+        if play_minigames:
+            return "played"    # back in the world somewhere unknown: the task is abandoned like after a minigame
     played = minigame_popup(play=play_minigames) if cfg.HALLOWEEN else None
-    if not backpack_open:
-        detect_paycheck()
-    if in_task and play_minigames and played is None and closed and cfg.STRAY_WINDOWS[closed].get("abort_task"):
+    paycheck = detect_paycheck() if not backpack_open else False
+    if in_task and play_minigames and played is None and (paycheck or (closed and cfg.STRAY_WINDOWS[closed].get("abort_task"))):
         return "aborted"   # (not setup, which can't be abandoned halfway - that is `play_minigames` False)
     return played
 
@@ -2743,8 +2821,12 @@ class RunRecorder:
 
     def _frame(self) -> Image:
         frame = cv2.resize(grab_screen(), (cfg.RECORD_WIDTH, cfg.RECORD_HEIGHT), interpolation=cv2.INTER_AREA)
-        cv2.putText(frame, time.strftime("%Y-%m-%d %H:%M:%S"), (6, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4)
-        cv2.putText(frame, time.strftime("%Y-%m-%d %H:%M:%S"), (6, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        (text_w, text_h), baseline = cv2.getTextSize(stamp, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
+        # White text on a solid black box: it stays readable over any scene (an outline smeared in the video
+        # compression) - the corner of the screen it covers is given up.
+        cv2.rectangle(frame, (0, 0), (text_w + 12, text_h + baseline + 12), (0, 0, 0), -1)
+        cv2.putText(frame, stamp, (6, text_h + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
         return frame
 
     def _record(self) -> None:
@@ -2861,7 +2943,10 @@ class ResourceMonitor(threading.Thread):
             run_stats.cpu_percent = round(percent, 1)
             run_stats.memory_mb = None if memory is None else round(memory)
             if memory is not None:
-                log_run_event(f"resources: cpu {percent:.1f}% mem {memory:.0f}MB")
+                try:
+                    log_run_event(f"resources: cpu {percent:.1f}% mem {memory:.0f}MB")
+                except OSError:
+                    pass   # a transient write failure: sample again next time
 
 
 def check_quiet() -> None:
@@ -2932,7 +3017,7 @@ def run_workflow_loop() -> None:
     state.run_number = next_run_number()
     reset_need_tracking()
     reset_run_stats()
-    state.last_rejoin = state.last_progress = state.last_detection = time.time()  # the hourly and no-progress rejoins count from here
+    state.last_rejoin = state.last_progress = state.last_detection = time.time()  # the scheduled and no-progress rejoins count from here
     log_run_event("LOOP started")
     recorder = start_recording_if_requested()
     print("\n" + "=" * 50)
@@ -3071,7 +3156,7 @@ def parse_run(log_path: str, run: Union[int, str]) -> Optional[dict[str, Any]]:
             data["events"]["quiet periods logged"] += 1
         elif text.startswith("FAILURE: "):
             data["failures"].append((t, text[len("FAILURE: "):]))
-        elif text.startswith("scheduled rejoin") or text.startswith("recovery complete"):
+        elif text.startswith("recovery complete"):   # once per rejoin ("scheduled rejoin" is logged at its start too)
             data["rejoins"].append(t)
             data["events"]["rejoins"] += 1
         elif text.startswith("paycheck popup"):
@@ -3212,7 +3297,7 @@ def draw_report(data: dict[str, Any], run: Union[int, str], basic: set[str], tel
     n_buckets = max(1, int(np.ceil(duration / step)))
     stacks: list[defaultdict[str, int]] = [defaultdict(int) for _ in range(n_buckets)]
     for t, need, _ in data["resolved"]:
-        stacks[min(n_buckets - 1, int((t - start) // step))][need_group(need, basic, teleport)] += 1
+        stacks[max(0, min(n_buckets - 1, int((t - start) // step)))][need_group(need, basic, teleport)] += 1
     peak = max([sum(s.values()) for s in stacks] + [1])
     y_max = nice_max(peak)
     panel = Panel(img, (20, 50, width - 20, 560), f"Needs resolved per {unit_label(step)}",
@@ -3317,7 +3402,9 @@ def generate_run_report(log_path: str, run: Union[int, str], out_dir: str, basic
             return None
         os.makedirs(out_dir, exist_ok=True)
         path = os.path.join(out_dir, f"run{run}.png")
-        cv2.imwrite(path, draw_report(data, run, set(basic), set(teleport)))
+        if not cv2.imwrite(path, draw_report(data, run, set(basic), set(teleport))):
+            print(f"[!] couldn't write the run report to {path}")
+            return None
         return path
     except Exception as error:
         print(f"[!] couldn't write the run report: {error}")
@@ -3471,6 +3558,16 @@ class AdoptMeGUI:
 
         self.is_running = False
         self.watch_stop_hotkey()
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
+
+    def close(self) -> None:
+        """The window's X button: stop whatever is running and let go of every key and the mouse before the
+        process ends - the worker is a daemon thread, which dies with the process before its own cleanup can run
+        (a movement key or the mouse button would stay held down in the game)."""
+        STOP_EVENT.set()
+        time.sleep(cfg.STOP_CHECK_INTERVAL * 3)   # the worker notices the stop within a check or two and releases what it holds
+        release_all_inputs()
+        self.root.destroy()
 
     def watch_stop_hotkey(self) -> None:
         """Start a background thread that stops a running macro the moment
@@ -3495,8 +3592,11 @@ class AdoptMeGUI:
         """STOP_HOTKEY was pressed: stop, same as the [STOP] button, and say so."""
         if self.is_running:
             print(f"\n[!] '{cfg.STOP_HOTKEY.upper()}' pressed")
-            log_run_event(f"stopped with the {cfg.STOP_HOTKEY.upper()} key")
-            self.stop()
+            self.stop()   # first: a failing log write must not keep the macro running
+            try:
+                log_run_event(f"stopped with the {cfg.STOP_HOTKEY.upper()} key")
+            except OSError:
+                pass
 
     def create_ui(self) -> None:
         """Build every widget. Any button that kicks off a background action
@@ -3671,6 +3771,7 @@ class AdoptMeGUI:
         self._set_running_ui(True)
 
         def worker():
+            final_status = "[ERROR]"   # bound before anything can fail, so the finally below always re-enables the UI
             try:
                 func()
                 final_status = "[DONE]"
@@ -3681,6 +3782,11 @@ class AdoptMeGUI:
                 # misreport a clean stop as "[ERROR]".
                 log_run_event("stopped by the user")
                 final_status = "[STOPPED]"
+            except TaskInterrupted as interruption:
+                # The GUI's Setup button ran setup_game() with the in-task checks on, and a disconnect made them
+                # rejoin the game - which ran setup itself. The action is done, not crashed.
+                log_run_event(f"interrupted by {interruption.reason}")
+                final_status = "[DONE]"
             except FocusLost:
                 # Same reasoning as StopRequested above - must come before
                 # the generic Exception handler.

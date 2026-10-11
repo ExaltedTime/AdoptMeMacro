@@ -1,6 +1,8 @@
 """The daily money reset, the Debug tab's run-every-need sequence, and judging an icon gone by how its place changes."""
 import datetime
 import os
+import threading
+import time
 
 import cv2
 import numpy as np
@@ -386,3 +388,183 @@ def test_real_bright_bar_the_awaited_icon_is_followed_and_then_seen_to_go(macro,
         gone[y - 28:y + 29, x - 28:x + 29] = part[y - 28:y + 29, x - 28:x + 29]
     watch["screen"] = gone
     assert macro.icon_gone_by_frame_change("pizza") is True
+
+
+def test_a_need_cleared_while_the_bar_was_unreadable_is_seen_even_when_a_neighbour_took_its_place(macro, watch):
+    """Run 3, 17:09: the sick icon cleared but its stored position held another icon by then (the others had shifted
+    left), so the icon at that position was followed instead and the wait ran out. The icon as last read is searched for."""
+    full = bar_screen(0, 1, 2, 3, 4)
+    x, y = ICONS[1]
+    macro.state.need_icon_positions["pizza"] = (x, y)                                  # where it was last read ...
+    macro.state.need_icon_crops["pizza"] = full[y - 28:y + 29, x - 28:x + 29].copy()   # ... and how it looked
+    after = bar_screen(0)                                                              # index 1 cleared; 2, 3, 4 slid left a slot
+    for i in (2, 3, 4):
+        part = bar_screen(i, shifted_left=1)
+        nx, ny = ICONS[i][0] - SLOT, ICONS[i][1]
+        after[ny - 28:ny + 29, nx - 28:nx + 29] = part[ny - 28:ny + 29, nx - 28:nx + 29]
+    watch["screen"] = after
+    assert macro.icon_gone_by_frame_change("pizza") is True                            # at the very first look
+
+
+def test_each_wait_starts_from_the_icon_as_last_read_not_from_an_earlier_wait(macro, monkeypatch):
+    """An earlier wait for the same need that ended on a timeout leaves its last picture in the watch; if that was
+    the wrong thing (a neighbour), the next wait must not carry on from it."""
+    macro._ICON_WATCH.update(need="pizza", pos=(1, 1), crop=np.zeros((57, 57, 3), np.uint8))
+    seen = []
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
+    monkeypatch.setattr(macro, "_need_cleared", lambda name: seen.append(dict(macro._ICON_WATCH)) or True)
+    macro.wait_until_need_gone("pizza", max_wait=10)
+    assert seen and seen[0] == {"need": None, "pos": None, "crop": None}
+    macro._ICON_WATCH.update(need="pizza", pos=(1, 1), crop=np.zeros((57, 57, 3), np.uint8))
+    stop = threading.Event()
+    stop.set()
+    macro._watch_need_gone("pizza", threading.Event(), stop)                    # the walking watcher thread's body
+    assert macro._ICON_WATCH["need"] is None
+
+
+def test_the_stored_icon_is_found_again_when_it_has_only_moved(macro, watch):
+    full = bar_screen(0, 1, 2, 3, 4)
+    x, y = ICONS[3]
+    macro.state.need_icon_positions["pizza"] = (x, y)
+    macro.state.need_icon_crops["pizza"] = full[y - 28:y + 29, x - 28:x + 29].copy()
+    watch["screen"] = bar_screen(0, 3)                                                # 3 is still there, and 1 and 2 are not
+    assert macro.icon_gone_by_frame_change("pizza") is False
+
+
+def test_identify_icons_keeps_each_icon_as_it_was_read(macro, monkeypatch):
+    img = np.full((120, 300, 3), 200, np.uint8)
+    monkeypatch.setattr(macro, "find_matching_need", lambda variants: ("hungry", 0.99))
+    monkeypatch.setattr(macro, "check_running", lambda: None)
+    list(macro.identify_icons([(100, 60, 27)], img))
+    assert macro.state.need_icon_crops["hungry"].shape == (57, 57, 3) and macro.state.need_icon_positions["hungry"] == (100, 60)
+
+
+# --- the minigame win screen, closed whenever it is up ------------------------------------------------
+
+@pytest.fixture
+def winner(macro, monkeypatch):
+    """A screen showing the minigame win screen (banner and NICE! button), with the things unscrew() does around it stubbed."""
+    screen = bright_screen()
+    cfg = macro.cfg
+    for box, color in ((cfg.MINIGAME_VICTORY_BANNER_BOX, cfg.MINIGAME_VICTORY_BANNER_COLOR), (cfg.MINIGAME_VICTORY_BUTTON_BOX, cfg.GREEN_BUTTON_COLOR)):
+        left, top, right, bottom = box
+        screen[top:bottom, left:right] = color[::-1]
+    state = {"screen": screen, "sticky": 0}      # "sticky": clicks the win screen survives
+    respawns = []
+
+    def click(x, y, duration=0):
+        macro.clicks.append((x, y))
+        if state["sticky"] > 0:
+            state["sticky"] -= 1
+        else:
+            state["screen"] = bright_screen()
+
+    monkeypatch.setattr(macro, "hover_click", click)
+    monkeypatch.setattr(macro, "grab_screen", lambda: state["screen"])
+    monkeypatch.setattr(macro, "respawn_character", lambda: respawns.append(1))
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
+    monkeypatch.setattr(macro, "rejoin_game", lambda kinds=None: False)
+    monkeypatch.setattr(macro, "close_backpack_if_stuck", lambda in_task: False)
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: None)
+    monkeypatch.setattr(macro, "detect_paycheck", lambda: False)
+    monkeypatch.setattr(macro.cfg, "HALLOWEEN", True)
+    state["respawns"] = respawns
+    return state
+
+
+def test_a_win_screen_is_closed_and_the_character_respawned(macro, winner):
+    assert macro.close_minigame_win_screen() is True
+    assert macro.cfg.MINIGAME_VICTORY_BUTTON_POS in macro.clicks and winner["respawns"] == [1]
+    assert "minigame win screen closed" in open(macro.cfg.RUN_LOG_PATH).read()
+    assert macro.state.last_progress is not None
+
+
+def test_a_click_that_missed_is_repeated(macro, winner):
+    winner["sticky"] = 1
+    assert macro.close_minigame_win_screen() is True
+    assert macro.clicks.count(macro.cfg.MINIGAME_VICTORY_BUTTON_POS) == 2 and winner["respawns"] == [1]
+
+
+def test_a_win_screen_that_will_not_close_is_retried_then_reported(macro, winner):
+    winner["sticky"] = 99
+    macro.close_minigame_win_screen()
+    assert macro.clicks.count(macro.cfg.MINIGAME_VICTORY_BUTTON_POS) == macro.cfg.MINIGAME_VICTORY_CLICK_TRIES
+    assert "would not close" in open(macro.cfg.RUN_LOG_PATH).read()
+
+
+def test_the_real_win_screen_is_recognised(macro):
+    import cv2
+    screen = bright_screen()
+    for box, name in ((macro.cfg.MINIGAME_VICTORY_BANNER_BOX, "win_banner.png"), (macro.cfg.MINIGAME_VICTORY_BUTTON_BOX, "win_button.png")):
+        crop = cv2.imread(f"tests/fixtures/{name}")
+        left, top, right, bottom = box
+        screen[top:top + crop.shape[0], left:left + crop.shape[1]] = crop
+    assert macro.detect_minigame_victory(screen) is True
+
+
+def test_no_win_screen_means_nothing_happens(macro, winner):
+    winner["screen"] = bright_screen()
+    assert macro.close_minigame_win_screen() is False
+    assert not macro.clicks and winner["respawns"] == []
+
+
+def test_the_green_button_alone_is_not_a_win_screen(macro, winner):
+    screen = bright_screen()
+    left, top, right, bottom = macro.cfg.MINIGAME_VICTORY_BUTTON_BOX
+    screen[top:bottom, left:right] = macro.cfg.GREEN_BUTTON_COLOR[::-1]
+    winner["screen"] = screen                                    # a popup's Yes, an Okay: the banner rules them out
+    assert macro.close_minigame_win_screen() is False
+
+
+def test_every_cycle_checks_for_the_win_screen_and_abandons_the_task(macro, winner):
+    assert macro.unscrew() == "played"
+    assert macro.cfg.MINIGAME_VICTORY_BUTTON_POS in macro.clicks and winner["respawns"] == [1]
+
+
+def test_setup_only_clicks_nice_and_carries_on(macro, winner, monkeypatch):
+    monkeypatch.setattr(macro, "minigame_popup", lambda play=True: None)
+    assert macro.unscrew(in_task=True, play_minigames=False) is None
+    assert macro.cfg.MINIGAME_VICTORY_BUTTON_POS in macro.clicks and winner["respawns"] == []
+
+
+def test_the_win_screen_is_only_looked_for_while_halloween_is_on(macro, winner, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "HALLOWEEN", False)
+    assert macro.unscrew() is None and not macro.clicks
+
+
+def test_the_scheduled_rejoin_is_two_hours(macro, monkeypatch):
+    assert macro.cfg.REJOIN_INTERVAL == 2 * 60 * 60
+    macro.state.last_rejoin = time.time() - 119 * 60
+    macro.state.last_progress = time.time()
+    monkeypatch.setattr(macro.gw, "getAllWindows", lambda: [type("W", (), {"title": "Roblox"})()])
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((1080, 1920, 3), np.uint8))
+    assert macro.rejoin_reason() is None
+    macro.state.last_rejoin = time.time() - 121 * 60
+    assert macro.rejoin_reason()[0] == "scheduled"
+
+
+# --- a paycheck popup mid-task restarts the task -------------------------------------------------------
+
+@pytest.fixture
+def quiet_screen(macro, monkeypatch):
+    """unscrew() with nothing on screen but a paycheck popup that detect_paycheck() reports."""
+    monkeypatch.setattr(macro, "grab_screen", bright_screen)
+    monkeypatch.setattr(macro, "rejoin_game", lambda kinds=None: False)
+    monkeypatch.setattr(macro, "close_backpack_if_stuck", lambda in_task: False)
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: None)
+    monkeypatch.setattr(macro.cfg, "HALLOWEEN", False)
+
+
+def test_a_paycheck_mid_task_aborts_the_task(macro, quiet_screen, monkeypatch):
+    monkeypatch.setattr(macro, "detect_paycheck", lambda: True)
+    assert macro.unscrew(in_task=True) == "aborted"
+
+
+def test_a_paycheck_at_the_top_of_a_cycle_does_not_abort(macro, quiet_screen, monkeypatch):
+    monkeypatch.setattr(macro, "detect_paycheck", lambda: True)
+    assert macro.unscrew() is None
+
+
+def test_setup_is_not_aborted_by_a_paycheck(macro, quiet_screen, monkeypatch):
+    monkeypatch.setattr(macro, "detect_paycheck", lambda: True)
+    assert macro.unscrew(in_task=True, play_minigames=False) is None

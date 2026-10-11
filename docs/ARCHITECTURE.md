@@ -276,8 +276,12 @@ its full length - and ending it isn't logged as a failure.
 **Judging an icon by how it changes between looks.** A need's icon has a
 timer: a section of its circle that slowly grows and changes colour (it is
 the progress of serving the need). While the bar can't be read,
-`icon_gone_by_frame_change()` records the icon at its last recognised place
-(`State.need_icon_positions`, set by `identify_icons()`), and every later look
+`icon_gone_by_frame_change()` takes the icon as it looked when it was last
+read (`State.need_icon_crops`, with its place in `State.need_icon_positions`,
+both set by `identify_icons()` - the place alone can hold another need's icon by
+now, the others having shifted while the walk ran: run 3's sick, 17:09, was
+followed as its neighbour and never seen to clear), searches the whole bar for it
+at the first look, and then every later look
 searches the whole bar for the icon *as it looked at the previous look*
 (`locate_icon()`: normalised correlation of the white ring and glyph, which the
 timer's colour change leaves alone). Found at a match of at least
@@ -290,9 +294,12 @@ that ends the wait (logged as `<need> icon gone by frame change`). Measured on
 real frames of the salon icon, the same icon scores 0.90-1.0 whatever its
 timer shows or where it has shifted to (the timer alone changes 22-39% of the
 circle between two looks), a neighbouring icon or a bright background 0.3-0.56.
-The first look only records the icon, so one that went before then isn't
-noticed (the wait runs out as before), and the comparison starts afresh
-whenever the bar is readable again. The timer is deliberately not visible to
+Without a stored picture (the need was never read while the bar was readable)
+the first look only records what is at the stored place, so one that went before
+then isn't noticed (the wait runs out as before). Each wait starts afresh
+(`reset_icon_watch()`, at the start of `wait_until_need_gone()` and of the
+walking watcher thread, and whenever the bar is readable again), so a wait never
+carries on from where an earlier wait for the same need left off. The timer is deliberately not visible to
 the black-and-white icon matching, which is why this is a separate check. On a real
 Pizza Party frame (`tests/fixtures/pizza_party_bar.png`: the bar is 79% bright, so
 unreadable; the circles are still found, but the icons score only 0.84-0.89
@@ -411,7 +418,7 @@ rather than a flat sleep after the fact.
 | `pet` | `PetNeedHandler`: `focus_pet()` (see below), then hold the mouse down and swipe once down from `PET_SWIPE_START_OFFSET` above screen center to `PET_SWIPE_END_OFFSET` below it over `PET_SWIPE_DURATION` (8s). Same as `catch` - always the full fixed duration. |
 | `choose` | `ChooseNeedHandler`: `focus_pet()` (see below), find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. It doesn't wait for the icon to clear (it's gone at once; the next check confirms). |
 | `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then `equip_favorite_vehicle()` (backpack → vehicles → first vehicle → equip → close backpack), hold `r` (`KEY_HELICOPTER`) for `RIDE_R_HOLD_DURATION` (1s), then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT` (75s), ending early the moment "ride" is confirmed cleared (see below). |
-| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`), `helicopter` (see below) and `max_wait` (how long to wait for the need to clear afterwards; default `NEED_GONE_MAX_WAIT`, 75s). Which table is used depends on `HALLOWEEN` - see below. |
+| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`), `helicopter` (see below) and `max_wait` (how long to wait for the need to clear afterwards; default `NEED_GONE_MAX_WAIT`, 75s; `cafe` and `beach` use `NEED_GONE_SLOW_MAX_WAIT`, 90s, as they were seen clearing about 80s after their walk). `sick` waits `SICK_PRE_E_WAIT` after its last hold before pressing `e`. Which table is used depends on `HALLOWEEN` - see below. |
 | `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")` - up to `NEED_GONE_MAX_WAIT` (75s), same early-exit as `ride` above. |
 
 **Helicopter.** A teleport-walk entry can fly instead of walk. `HELICOPTER_REQUIRED`
@@ -439,7 +446,11 @@ calls `minigame_popup()`, which plays or dismisses the minigame popups
 Every cycle, `unscrew()` runs `rejoin_game()` first (nothing else works
 while disconnected), then `close_backpack_if_stuck()` (the backpack, either
 form), then
-`dismiss_stray_windows()`, then `minigame_popup()` if `HALLOWEEN` is on, then
+`dismiss_stray_windows()`, then, if `HALLOWEEN` is on, `close_minigame_win_screen()`
+(whenever the minigame win screen is up - the red GAME OVER! banner and the green
+NICE! button, `detect_minigame_victory()` - NICE! is clicked, the character
+respawned and the task abandoned, even if the macro wasn't playing that minigame;
+in setup only the click is made) and `minigame_popup()`, then
 the paycheck check. The stray windows and the minigame popup go before the
 paycheck check because their green buttons (Okay, Yes) are the same green as
 the paycheck's CASH OUT button, so `detect_paycheck()` would mistake them for
@@ -485,7 +496,7 @@ other case - including mid-task, e.g. a throw click that focused the pet.
 flagged `abort_task`: when it is closed while a need handler is running,
 `unscrew(in_task=True)` returns `"aborted"` and `task_unscrew_tick()` raises
 `TaskInterrupted("a popup")`, so the need is abandoned and run again from the
-start on the next check (logged as "<need> interrupted by a popup"). Setup never aborts this way (it can't be abandoned halfway), so the popup is just closed there.
+start on the next check (logged as "<need> interrupted by a popup"). A paycheck popup dismissed mid-task does the same: its clicks and the dismissal leave the backpack and the character in an unknown state (run 3, 17:51: it landed in the middle of `teleport_to()`, which carried on and walked the cafe route from the house). Setup never aborts this way (it can't be abandoned halfway), so the popup is just closed there.
 
 A third entry, `respawn_confirm`, is the "Are you sure you want to respawn your
 character?" dialog (`ref/popups/respawn_confirm.png`; its `close_pos` is the
@@ -589,8 +600,10 @@ Options tab). `minigame_popup()`:
 victory screen instead - a red GAME OVER! banner over a green NICE! button,
 found by exact color (`detect_minigame_victory()`, checked every
 `MINIGAME_VICTORY_CHECK_INTERVAL`), which is the same for both. While it plays, `minigame_popup_checks()` runs `dismiss_stray_windows()` and `detect_paycheck()` every `MINIGAME_POPUP_CHECK_INTERVAL` (4s), including during the start waits (`minigame_wait()`) - the in-task `unscrew()` can't, since the minigame is played from it. Then NICE!
-(`MINIGAME_VICTORY_BUTTON_POS`) is clicked, `MINIGAME_FINISH_WAIT` is waited
-out, and the character respawns. If the victory screen hasn't shown after
+(`MINIGAME_VICTORY_BUTTON_POS`) is clicked and `MINIGAME_FINISH_WAIT` waited
+out (`click_nice_until_gone()`, which looks again and clicks up to
+`MINIGAME_VICTORY_CLICK_TRIES` times while the win screen is still up, logging a
+failure if it never closes), and the character respawns. If the victory screen hasn't shown after
 `MINIGAME_MAX_DURATION` it gives up with a logged failure (and releases every
 input). A minigame counts as progress for the no-progress rejoin.
 
@@ -653,7 +666,7 @@ asks `rejoin_reason()` whether the game needs rejoining. In order:
    (20 minutes; `state.last_progress`, set when the loop starts, whenever a need is
    resolved and by every successful `leave_and_rejoin()`): the game is up but
    nothing is working, whatever the cause.
-4. *Scheduled* - it has been `REJOIN_INTERVAL` (an hour) since the last
+4. *Scheduled* - it has been `REJOIN_INTERVAL` (two hours) since the last
    rejoin (`state.last_rejoin`, set when the loop starts and by every successful
    `leave_and_rejoin()`): a refresh of a client that has been up a long time.
 
@@ -923,10 +936,15 @@ During a run, this file is read and updated by:
   doesn't lose progress already made.
 
 The GUI (Tk's main thread) and the workflow (`run_async`'s worker thread)
-both write this file, so every change goes through
-`update_game_config(mutate)` - a load-modify-save under a lock - or
+both read and write this file, so every access holds one lock
+(`GAME_CONFIG_LOCK`): a change goes through
+`update_game_config(mutate)` - a load-modify-save under it - or
 `reset_game_config()` (deletes the file, so the next load is all defaults;
-the GUI then refreshes its checkboxes to match). `side_quest()`
+the GUI then refreshes its checkboxes to match), and `load_game_config()`
+takes it too, so a reader can't see the file mid-write (which reads as "no
+config", the defaults: an empty private server link, the minigames off).
+`save_game_config()` writes a temporary file and moves it into place, so a
+crash partway can't leave a truncated config either. `side_quest()`
 deliberately doesn't hold a loaded config across a long
 action and save it afterwards - that could silently undo a checkbox
 clicked in the meantime.
@@ -941,7 +959,9 @@ knowing if you're modifying it:
   background daemon thread (so Tkinter's main loop never blocks), and
   *always* re-enables them in a `finally` block - normal finish, a
   `StopRequested`/`FocusLost`, or an unexpected exception all take the
-  same path back to a usable UI. `[STOP]` is deliberately excluded from
+  same path back to a usable UI. A `TaskInterrupted` (the Setup button's
+  `setup_game()` cut short by a disconnect, whose rejoin ran setup itself) is
+  logged and counts as done, not as a crash. `final_status` is bound before the `try`, so even a failing log write inside an `except` can't leave the buttons disabled. Closing the window (the X) stops the run and releases every key and the mouse first (`AdoptMeGUI.close()`), since the daemon worker would otherwise die with a key still held; the stop hotkey stops before it logs. "Refresh debug" skips an entry it can't delete (a video still open) instead of abandoning half the folder. `[STOP]` is deliberately excluded from
   `action_buttons`, since it must stay clickable while something is
   running.
 - **The main row** (loop/stop) gives both buttons their own
@@ -1069,7 +1089,7 @@ again, since the counter goes with the logs.
   misread icon can be seen at once; missing when Roblox couldn't be captured)
   and `info.txt` (the reason, the needs last detected, the disabled needs and
   how long ago a need was last resolved) and `state.json` (the whole `State`
-  object and `run_stats` (a `RunStats` dataclass) as they were, for working out what the macro believed
+  object - the stored need icon pictures as their sizes - and `run_stats` (a `RunStats` dataclass) as they were, for working out what the macro believed
   at that moment). It also prints the reason, writes it
   to `run_log.txt` and counts it in the status file. It's called when a handler
   can't resolve a need, a need is still showing after `NEED_GONE_MAX_WAIT`, a

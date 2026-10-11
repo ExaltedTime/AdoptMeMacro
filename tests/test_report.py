@@ -54,13 +54,13 @@ def test_parse_run_counts_detections_failures_rejoins_and_resources(macro, tmp_p
     data = macro.parse_run(write_log(tmp_path), 328)
     assert [(matched, icons) for _, matched, icons in data["detected"]] == [(4, 4), (0, 3)]
     assert [macro.failure_kind(text) for _, text in data["failures"]] == ["pizza still", "pizza still", "Roblox isn't".lower()]
-    assert len(data["rejoins"]) == 2                                  # the recovery and the scheduled one
+    assert len(data["rejoins"]) == 1                                  # a rejoin is logged twice (its start and "recovery complete"): counted once
     assert [(cpu, mem) for _, cpu, mem in data["resources"]] == [(3.2, 215), (4.0, 220)]
 
 
 def test_parse_run_event_counts(macro, tmp_path):
     events = macro.parse_run(write_log(tmp_path), 328)["events"]
-    assert dict(events) == {"rejoins": 2, "minigames won": 1, "needs interrupted": 1, "paycheck popups": 1,
+    assert dict(events) == {"rejoins": 1, "minigames won": 1, "needs interrupted": 1, "paycheck popups": 1,
                             "stray windows closed": 1, "backpacks closed": 1, "minigame popups declined": 1,
                             "quiet periods logged": 1, "idle respawns": 1}
 

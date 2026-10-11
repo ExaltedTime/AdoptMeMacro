@@ -4,6 +4,7 @@ import os
 import threading
 import time
 
+import numpy as np
 import pytest
 
 
@@ -57,8 +58,10 @@ def test_write_status_has_the_documented_keys_and_is_valid_json(macro):
 def test_state_snapshot_is_json_friendly(macro):
     macro.state.disabled_needs.add("pizza")
     macro.state.macro_window = object()
+    macro.state.need_icon_crops["sick"] = np.zeros((57, 57, 3), np.uint8)       # pictures must not end up in the JSON
     snapshot = macro.state.snapshot()
     assert snapshot["disabled_needs"] == ["pizza"] and snapshot["macro_window"] == "set"
+    assert snapshot["need_icon_crops"] == {"sick": "image 57x57"}
     json.dumps(snapshot)
 
 
@@ -336,6 +339,12 @@ def test_teleport_needs_wait_for_the_need_to_clear_up_to_the_configured_time(mac
     assert waited == [expected] == [macro.cfg.NEED_GONE_MAX_WAIT]
 
 
+@pytest.mark.parametrize("need", ["cafe", "beach"])
+def test_the_slow_needs_wait_longer(macro, need):
+    entry = macro.cfg.TELEPORT_WALK_NEEDS_HALLOWEEN.get(need) or macro.cfg.TELEPORT_WALK_NEEDS_NORMAL[need]
+    assert entry["max_wait"] == macro.cfg.NEED_GONE_SLOW_MAX_WAIT > macro.cfg.NEED_GONE_MAX_WAIT
+
+
 def test_a_need_can_set_its_own_wait(macro, monkeypatch):
     waited = []
     monkeypatch.setitem(macro.cfg.TELEPORT_WALK_NEEDS, "camping", {**macro.cfg.TELEPORT_WALK_NEEDS["camping"], "max_wait": 150.0})
@@ -417,3 +426,116 @@ def test_an_unreadable_bar_is_not_a_failure(need_gone, macro, monkeypatch):
     need_gone["script"](*[([], False)] * 20)
     macro.wait_until_need_gone("hungry", max_wait=10)
     assert "failures" not in need_gone
+
+
+
+def test_config_reads_never_see_a_half_written_file(macro, monkeypatch, tmp_path):
+    """The GUI thread and the worker both read and write the config: a reader must never get the defaults
+    because it looked while the file was being rewritten (the private server link would read as empty)."""
+    monkeypatch.setattr(macro.cfg, "GAME_CONFIG_PATH", str(tmp_path / ".config"))
+    macro.update_game_config(lambda c: c.update(private_server_link="https://link", filler="x" * 200000))
+    stop = threading.Event()
+
+    def write():
+        i = 0
+        while not stop.is_set():
+            i += 1
+            macro.update_game_config(lambda c: c.update(money_collected=i))
+
+    writer = threading.Thread(target=write)
+    writer.start()
+    try:
+        end = time.time() + 0.7
+        while time.time() < end:
+            assert macro.load_game_config()["private_server_link"] == "https://link"
+    finally:
+        stop.set()
+        writer.join()
+    assert not (tmp_path / ".config.tmp").exists()
+
+
+def test_a_button_action_cut_short_by_a_rejoin_is_done_not_a_crash(macro, monkeypatch):
+    """The Setup button runs setup_game() under the in-task checks; a disconnect rejoins (and sets up) mid-way and
+    raises TaskInterrupted, which the worker must not report as a crash."""
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.is_running = False
+    statuses = []
+    gui._set_running_ui = lambda running, status_text=None: statuses.append((running, status_text))
+    gui.root = type("Root", (), {"after": lambda self, ms, fn: fn()})()
+
+    def interrupted():
+        raise macro.TaskInterrupted("a rejoin")
+
+    macro.AdoptMeGUI.run_async(gui, interrupted)
+    deadline = time.time() + 5
+    while gui.is_running and time.time() < deadline:
+        time.sleep(0.01)
+    assert statuses[-1] == (False, "[DONE]")
+    assert "interrupted by a rejoin" in open(macro.cfg.RUN_LOG_PATH).read()
+    assert not any("crashed" in line for line in open(macro.cfg.RUN_LOG_PATH))
+
+
+def test_a_failing_log_write_cannot_leave_the_ui_disabled(macro, monkeypatch):
+    """final_status must be bound before any except block can fail (the buttons stayed disabled otherwise)."""
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.is_running = False
+    statuses = []
+    gui._set_running_ui = lambda running, status_text=None: statuses.append((running, status_text))
+    gui.root = type("Root", (), {"after": lambda self, ms, fn: fn()})()
+
+    def broken_log(message):
+        raise PermissionError("run_log.txt is locked")
+
+    monkeypatch.setattr(macro, "log_run_event", broken_log)
+    monkeypatch.setattr(macro, "save_failure_report", lambda reason: None)
+
+    def stopped():
+        raise macro.StopRequested()
+
+    macro.AdoptMeGUI.run_async(gui, stopped)
+    deadline = time.time() + 5
+    while not (statuses and statuses[-1][0] is False) and time.time() < deadline:
+        time.sleep(0.01)
+    assert statuses[-1] == (False, "[ERROR]") and gui.is_running is False
+
+
+def test_refresh_debug_carries_on_past_a_locked_entry(macro, monkeypatch, tmp_path):
+    debug = tmp_path / "debug"
+    for folder in ("images", "logs", "recordings"):
+        (debug / folder).mkdir(parents=True)
+        (debug / folder / "x.txt").write_text("x")
+    (debug / ".config").write_text("{}")
+    for name, value in (("DEBUG_DIR", str(debug)), ("IMAGES_DIR", str(debug / "images")), ("LOGS_DIR", str(debug / "logs")),
+                        ("GAME_CONFIG_PATH", str(debug / ".config"))):
+        monkeypatch.setattr(macro.cfg, name, value)
+    real_rmtree = macro.shutil.rmtree
+
+    def rmtree(path, *args, **kwargs):
+        if path.endswith("recordings"):
+            raise PermissionError("a video is still open")
+        real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(macro.shutil, "rmtree", rmtree)
+    assert macro.refresh_debug() == 2                                  # images and logs went, recordings stayed
+    assert (debug / "images").is_dir() and (debug / "logs").is_dir() and (debug / ".config").exists()
+
+
+def test_the_stop_hotkey_stops_even_if_the_log_cannot_be_written(macro, monkeypatch):
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.is_running = True
+    gui.status = type("Label", (), {"config": lambda self, **kw: None})()
+    monkeypatch.setattr(macro, "log_run_event", lambda message: (_ for _ in ()).throw(PermissionError("locked")))
+    macro.STOP_EVENT.clear()
+    gui.stop_by_hotkey()
+    assert macro.STOP_EVENT.is_set()
+
+
+def test_a_run_whose_clock_stepped_back_still_gets_a_report(macro, tmp_path):
+    """Local-time stamps go backwards at the end of daylight saving: negative offsets must not index the bars from the end."""
+    log = tmp_path / "log.txt"
+    log.write_text("\n".join([
+        "[2026-10-25 02:30:00] [RUN 9] LOOP started",
+        "[2026-10-25 02:40:00] [RUN 9] resolved: hungry (20s)",
+        "[2026-10-25 02:10:00] [RUN 9] resolved: hungry (20s)",     # an hour back
+        "[2026-10-25 03:30:00] [RUN 9] LOOP stopped"]) + "\n")
+    assert macro.generate_run_report(str(log), 9, str(tmp_path)) is not None

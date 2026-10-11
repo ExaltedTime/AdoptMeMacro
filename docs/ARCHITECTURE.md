@@ -248,9 +248,9 @@ wait: it clears at once, and the next check sees that) - polls
 `scan_needs()` (one detect-and-match pass; the circle search may be skipped
 while the strip is unchanged, except for the second look of each check, which is
 always a real search) every
-`NEED_GONE_POLL_INTERVAL` until the target need is missing
-`NEED_GONE_CONFIRMATIONS` times in a row (any sighting resets the count
-back to zero), up to `NEED_GONE_MAX_WAIT` total (the teleport-walk needs wait
+`NEED_GONE_POLL_INTERVAL` (3.5s) until a check finds the target need gone - one
+check is enough; each check looks twice, as described below - up to
+`NEED_GONE_MAX_WAIT` total (the teleport-walk needs wait
 up to `TELEPORT_NEED_GONE_MAX_WAIT`, 90s, instead - they time out by
 themselves in the game and camping was seen clearing ~66s after its walk - or
 an entry's own `max_wait`).
@@ -259,8 +259,8 @@ Each individual check goes through `_need_cleared()`, which re-samples
 once more, `NEED_GONE_FLICKER_RECHECK_DELAY` later, before a miss is
 allowed to count: the icon can drop out of a single detection pass for a
 frame (or against a momentarily busy background) without the need having
-actually cleared, and a bare miss-streak alone isn't enough to tell that
-apart from the real thing. This only guards against a one-frame flicker -
+actually cleared. (There used to be a further three-misses-in-a-row
+confirmation on top of this; it was removed to speed up resolving.) This only guards against a one-frame flicker -
 a detection failure caused by a *sustained* background change behind the
 icon isn't something this re-check can fix, since it'll fail again on the
 immediate retry too. The one such case that is handled: the Pizza Party's
@@ -729,14 +729,14 @@ windows](#per-cycle-checks)) and runs inside `task_unscrew()`.
 
 `walk_alternating()` (used by `ride` and `walk`) takes an optional
 `need_name`. When given, it starts a background thread
-(`_watch_need_gone()`) that polls whether that need has cleared *while*
+(`_watch_need_gone()`) that checks every `NEED_GONE_POLL_INTERVAL` whether that need has cleared *while*
 the character is still alternating back and forth, instead of only
 checking once the full duration has elapsed - the main loop breaks out
 early (via a shared `threading.Event`) the moment the background thread
-confirms it, rather than always running the full `total_duration`. The
-background thread uses the same miss-confirmation as
-`wait_until_need_gone()` (`NEED_GONE_CONFIRMATIONS`, debounced by the
-shared `_need_cleared()` helper - see
+finds it gone, rather than always running the full `total_duration`. The
+background thread makes the same check as
+`wait_until_need_gone()` (the shared `_need_cleared()` helper, which looks
+twice - see
 [Waiting for a need to clear](#waiting-for-a-need-to-clear)), just
 interleaved with the movement instead of run after it.
 

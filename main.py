@@ -821,10 +821,10 @@ def _need_cleared(need_name: str) -> Optional[bool]:
 
 def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAIT, poll_interval: float = cfg.NEED_GONE_POLL_INTERVAL) -> None:
     """Wait for `need_name`'s icon to stop being detected, for at most
-    `max_wait` seconds - whichever happens first. The icon must be missing
-    NEED_GONE_CONFIRMATIONS checks in a row (any sighting resets the count),
-    so a single missed detection can't end the wait early - see
-    _need_cleared() for how each individual check is itself debounced.
+    `max_wait` seconds - whichever happens first. It is looked for every
+    `poll_interval` seconds, and one check that finds it gone ends the wait:
+    a single missed detection can't end it early because each check looks
+    twice, a moment apart (see _need_cleared()).
     While the icons can't be read (a bright background, see
     detect_need_bar_readable()) nothing counts as a miss, so that wait runs its
     full length - and ending it isn't logged as a failure. (Popups and
@@ -832,7 +832,6 @@ def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAI
     wait_interruptible() runs during a task.) Interruptible."""
     print(f"[debug] waiting up to {max_wait}s for {need_name} to clear...")
     deadline = time.time() + max_wait
-    misses = 0
     unreadable = False
     while True:
         remaining = deadline - time.time()
@@ -843,40 +842,28 @@ def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAI
                 print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
                 log_failure(f"{need_name} still showing after {max_wait}s")
             return
-        wait_interruptible(min(cfg.NEED_GONE_CONFIRM_INTERVAL if misses else poll_interval, remaining))
+        wait_interruptible(min(poll_interval, remaining))
         cleared = _need_cleared(need_name)
         unreadable = cleared is None
-        if not cleared:
-            misses = 0
-            continue
-
-        misses += 1
-        print(f"[debug] {need_name} not detected ({misses}/{cfg.NEED_GONE_CONFIRMATIONS})")
-        if misses >= cfg.NEED_GONE_CONFIRMATIONS:
+        if cleared:
             print(f"[debug] {need_name} cleared")
             return
 
 def _watch_need_gone(need_name: str, cleared_event: threading.Event, stop_event: threading.Event) -> None:
     """Background-thread body for walk_alternating()'s optional `need_name`:
-    polls whether the need has cleared *while* the character is still
-    moving, using the same miss-confirmation (NEED_GONE_CONFIRMATIONS,
-    debounced by _need_cleared()) wait_until_need_gone() uses standalone -
-    just running alongside the movement instead of after it. Sets
-    `cleared_event` the moment it's confirmed. Exits quietly - without
-    raising - the instant `stop_event` is set (the walk ended on its own)
-    or STOP_EVENT/focus loss is noticed: only the main thread's
-    check_running() calls are allowed to unwind the workflow, so this
-    thread must never let StopRequested/FocusLost escape uncaught."""
-    misses = 0
+    checks whether the need has cleared (_need_cleared()) every
+    NEED_GONE_POLL_INTERVAL *while* the character is still moving - the same
+    check wait_until_need_gone() makes standalone, just running alongside the
+    movement instead of after it. Sets `cleared_event` the moment it finds it
+    gone. Exits quietly - without raising - the instant `stop_event` is set
+    (the walk ended on its own) or STOP_EVENT/focus loss is noticed: only the
+    main thread's check_running() calls are allowed to unwind the workflow, so
+    this thread must never let StopRequested/FocusLost escape uncaught."""
     try:
         while not stop_event.is_set():
-            if stop_event.wait(cfg.NEED_GONE_CONFIRM_INTERVAL):
+            if stop_event.wait(cfg.NEED_GONE_POLL_INTERVAL):
                 return
-            if _need_cleared(need_name) is not True:
-                misses = 0
-                continue
-            misses += 1
-            if misses >= cfg.NEED_GONE_CONFIRMATIONS:
+            if _need_cleared(need_name) is True:
                 cleared_event.set()
                 return
     except (StopRequested, FocusLost):
@@ -2169,9 +2156,10 @@ def rejoin_reason() -> Optional[tuple[str, str]]:
           (see State.last_progress): the game is up but nothing is working;
       "scheduled" - it has been REJOIN_INTERVAL since the last rejoin (see
           State.last_rejoin)."""
-    if any(w.title == cfg.ROBLOX_CRASH_WINDOW_TITLE for w in gw.getAllWindows()):
+    windows = gw.getAllWindows()   # listed once (a Windows call that reads every window's title) for both questions
+    if any(w.title == cfg.ROBLOX_CRASH_WINDOW_TITLE for w in windows):
         return "disconnect", "Roblox crashed"
-    if not roblox_windows():
+    if not any("roblox" in w.title.lower() for w in windows):
         return "disconnect", "Roblox isn't running"
     if detect_disconnect(grab_screen()):
         return "disconnect", "disconnected from the game"

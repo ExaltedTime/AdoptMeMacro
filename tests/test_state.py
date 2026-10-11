@@ -134,7 +134,8 @@ def test_respawns_after_the_interval_then_waits_a_full_interval_again(macro, res
 def test_the_idle_respawn_does_not_touch_the_progress_clock(macro, respawns, monkeypatch):
     """The 20 minute no-progress rejoin counts from last_progress, which a respawn must leave alone."""
     import numpy as np
-    monkeypatch.setattr(macro, "roblox_windows", lambda: [object()])          # Roblox is running...
+    window = type("Window", (), {"title": "Roblox"})()
+    monkeypatch.setattr(macro.gw, "getAllWindows", lambda: [window])           # Roblox is running...
     monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((1080, 1920, 3), np.uint8))   # ...and not disconnected
     stalled = time.time() - macro.cfg.NO_PROGRESS_REJOIN_INTERVAL - 5
     macro.state.last_progress = stalled
@@ -346,3 +347,73 @@ def test_a_need_can_set_its_own_wait(macro, monkeypatch):
     monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=60.0, **kw: waited.append(max_wait))
     macro.TeleportWalkNeedHandler("camping").handle()
     assert waited == [150.0]
+
+
+def test_rejoin_reason_lists_the_windows_once(macro, monkeypatch):
+    import numpy as np
+    calls = []
+    window = type("Window", (), {"title": "Roblox"})()
+    monkeypatch.setattr(macro.gw, "getAllWindows", lambda: calls.append(1) or [window])
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((1080, 1920, 3), np.uint8))
+    assert macro.rejoin_reason() is None
+    assert calls == [1]
+
+
+def test_rejoin_reason_knows_a_crashed_or_missing_roblox(macro, monkeypatch):
+    crash = type("Window", (), {"title": macro.cfg.ROBLOX_CRASH_WINDOW_TITLE})()
+    other = type("Window", (), {"title": "Notepad"})()
+    monkeypatch.setattr(macro.gw, "getAllWindows", lambda: [other, crash])
+    assert macro.rejoin_reason() == ("disconnect", "Roblox crashed")
+    monkeypatch.setattr(macro.gw, "getAllWindows", lambda: [other])
+    assert macro.rejoin_reason() == ("disconnect", "Roblox isn't running")
+
+
+@pytest.fixture
+def need_gone(macro, monkeypatch):
+    """wait_until_need_gone() with scripted scan results: scans[i] is what the i-th look at the screen sees."""
+    log = {"waits": [], "scans": []}
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: log["waits"].append(round(duration, 2)))
+    monkeypatch.setattr(macro, "check_focus", lambda: None)
+    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: log.setdefault("failures", []).append(reason))
+
+    def script(*results):
+        queue = list(results)
+
+        def scan_needs(fresh=False):
+            log["scans"].append(fresh)
+            return queue.pop(0) if queue else (["hungry"], True)
+        monkeypatch.setattr(macro, "scan_needs", scan_needs)
+    log["script"] = script
+    return log
+
+
+def test_the_wait_ends_at_the_first_check_that_finds_the_need_gone(need_gone, macro):
+    need_gone["script"]((["hungry"], True), ([], True), ([], True))      # check 1: still there; check 2: gone on both looks
+    macro.wait_until_need_gone("hungry", max_wait=60)
+    assert need_gone["scans"] == [False, False, True]                      # the second look of the last check was a fresh search
+    assert [w for w in need_gone["waits"] if w > 1] == [macro.cfg.NEED_GONE_POLL_INTERVAL] * 2   # polled every 3.5s, no extra confirmations
+    assert macro.cfg.NEED_GONE_POLL_INTERVAL == 3.5 and "failures" not in need_gone
+
+
+def test_a_flicker_on_the_first_look_does_not_end_the_wait(need_gone, macro):
+    need_gone["script"]((([]), True), (["hungry"], True), (["hungry"], True), ([], True), ([], True))
+    macro.wait_until_need_gone("hungry", max_wait=60)
+    assert len(need_gone["scans"]) == 5                                    # check 1 missed it once but saw it on the second look
+
+
+def test_a_need_that_never_clears_is_a_failure_after_the_wait(need_gone, macro, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(macro.time, "time", lambda: clock[0])
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: clock.__setitem__(0, clock[0] + duration))
+    need_gone["script"]()                                                  # always still there
+    macro.wait_until_need_gone("hungry", max_wait=10)
+    assert need_gone["failures"] == ["hungry still showing after 10s"]
+
+
+def test_an_unreadable_bar_is_not_a_failure(need_gone, macro, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(macro.time, "time", lambda: clock[0])
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: clock.__setitem__(0, clock[0] + duration))
+    need_gone["script"](*[([], False)] * 20)
+    macro.wait_until_need_gone("hungry", max_wait=10)
+    assert "failures" not in need_gone

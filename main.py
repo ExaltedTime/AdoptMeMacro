@@ -2787,8 +2787,6 @@ def run_workflow_loop() -> None:
     state.last_rejoin = state.last_progress = state.last_detection = time.time()  # the hourly and no-progress rejoins count from here
     log_run_event("LOOP started")
     recorder = start_recording_if_requested()
-    monitor = ResourceMonitor()
-    monitor.start()
     print("\n" + "=" * 50)
     print(f"[LOOP] Starting continuous workflow (run {state.run_number})")
     print("=" * 50)
@@ -2799,6 +2797,8 @@ def run_workflow_loop() -> None:
 
     loop_num = 0
     focus_losses, progress_at_loss = 0, None
+    monitor = ResourceMonitor()
+    monitor.start()
     try:
         while True:
             loop_num += 1

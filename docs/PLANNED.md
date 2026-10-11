@@ -1,7 +1,7 @@
 # Add next
 
 - [ ] Pet focusing for choose and pet sometimes breaks
-- [ ] Check what happens after a minigame ends: `play_minigame()` respawns afterwards, which is only right if the game then puts you back where the needs can be handled (the button needs walk from the spawn point)
+- [ ] Add logic to the minigames
 - [ ] Tune the timings and make the clicks not hard-coded
       
 # Ideas from Natro Macro

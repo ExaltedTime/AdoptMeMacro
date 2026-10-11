@@ -340,7 +340,7 @@ def log_run_event(message):
 # What the macro knows about how this run is going, written to STATUS_PATH by
 # write_status() so it can be checked without opening the GUI.
 RUN_STATS = {"run": None, "started": None, "cycles": 0, "last_detected": [], "resolved": {}, "failed": {},
-             "failures": 0, "recoveries": 0, "disconnects": 0, "scheduled_rejoins": 0, "focus_resumes": 0, "last_resolved": None, "last_failure": None}
+             "failures": 0, "quiet_minutes": 0, "cpu_percent": None, "memory_mb": None, "recoveries": 0, "disconnects": 0, "scheduled_rejoins": 0, "focus_resumes": 0, "last_resolved": None, "last_failure": None}
 
 OUTPUT_LOG_LOCK = threading.Lock()
 _output_at_line_start = True
@@ -364,21 +364,36 @@ def log_output(text):
     except OSError:
         pass
 
-def save_failure_screenshot(reason):
-    """Save a screenshot of the whole screen to FAILURE_DIR, named with the
-    time, run number and `reason`, and delete the oldest beyond
-    MAX_FAILURE_SCREENSHOTS. Returns the file name, or None if it couldn't
-    (never raises - it's called while something else is already going wrong)."""
+def save_failure_report(reason):
+    """Save what was going on when `reason` went wrong, as a folder in
+    FAILURE_DIR named with the time, run number and reason: screen.png (the
+    whole screen, to see what has focus too), need_icons.png (the strip the
+    need icons are read from, when Roblox could be captured) and info.txt
+    (the run's state). Deletes the oldest beyond MAX_FAILURE_FOLDERS. Returns
+    "<folder>/screen.png", or None if it couldn't (never raises - it's called
+    while something else is already going wrong)."""
     try:
-        os.makedirs(FAILURE_DIR, exist_ok=True)
         slug = re.sub(r"[^a-z0-9]+", "_", reason.lower()).strip("_")[:40]
-        name = f"{time.strftime('%Y%m%d_%H%M%S')}_run{CURRENT_RUN_NUMBER}_{slug}.png"
-        cv2.imwrite(os.path.join(FAILURE_DIR, name), grab_full_screen())  # the whole screen, to see what has focus too
-        for old in sorted(os.listdir(FAILURE_DIR))[:-MAX_FAILURE_SCREENSHOTS]:
-            os.remove(os.path.join(FAILURE_DIR, old))
-        return name
+        name = f"{time.strftime('%Y%m%d_%H%M%S')}_run{CURRENT_RUN_NUMBER}_{slug}"
+        folder = os.path.join(FAILURE_DIR, name)
+        os.makedirs(folder, exist_ok=True)
+        cv2.imwrite(os.path.join(folder, "screen.png"), grab_full_screen())
+        try:
+            cv2.imwrite(os.path.join(folder, "need_icons.png"), need_icon_strip(grab_screen()))
+        except Exception:
+            pass   # Roblox isn't there to capture - the full screenshot shows why
+        since = f"{time.time() - LAST_PROGRESS:.0f}s ago" if LAST_PROGRESS else "never"
+        with open(os.path.join(folder, "info.txt"), "w", encoding="utf-8") as f:
+            f.write(f"reason: {reason}\ntime: {time.strftime('%Y-%m-%d %H:%M:%S')}\nrun: {CURRENT_RUN_NUMBER}\n"
+                    f"last detected: {', '.join(RUN_STATS['last_detected']) or 'nothing'}\n"
+                    f"disabled needs: {', '.join(sorted(DISABLED_THIS_RUN)) or 'none'}\n"
+                    f"last need resolved: {since}\n")
+        for old in sorted(os.listdir(FAILURE_DIR))[:-MAX_FAILURE_FOLDERS]:
+            path = os.path.join(FAILURE_DIR, old)
+            shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
+        return f"{name}/screen.png"
     except Exception as e:
-        print(f"[!] couldn't save a failure screenshot: {e}")
+        print(f"[!] couldn't save a failure report: {e}")
         return None
 
 def write_status():
@@ -398,7 +413,7 @@ def log_failure(reason, screenshot=True):
     """Record that something went wrong: print it, add it to the run log,
     save a screenshot of what was on screen, and note it in the status
     file. Doesn't change what the macro does next."""
-    shot = save_failure_screenshot(reason) if screenshot else None
+    shot = save_failure_report(reason) if screenshot else None
     detail = f"{reason}" + (f" (screenshot: failures/{shot})" if shot else "")
     print(f"[!] FAILURE: {detail}")
     log_run_event(f"FAILURE: {detail}")
@@ -409,7 +424,7 @@ def log_failure(reason, screenshot=True):
 def reset_run_stats():
     """Start the status counters afresh (a workflow was just started)."""
     RUN_STATS.update(run=CURRENT_RUN_NUMBER, started=time.strftime("%Y-%m-%d %H:%M:%S"), cycles=0,
-                     last_detected=[], resolved={}, failed={}, failures=0, recoveries=0, disconnects=0, scheduled_rejoins=0, focus_resumes=0,
+                     last_detected=[], resolved={}, failed={}, failures=0, quiet_minutes=0, cpu_percent=None, memory_mb=None, recoveries=0, disconnects=0, scheduled_rejoins=0, focus_resumes=0,
                      last_resolved=None, last_failure=None)
     write_status()
 
@@ -509,6 +524,11 @@ def extract_icon(img, cx, cy, radius, padding=ICON_EXTRACT_PADDING):
     y0, y1 = max(0, cy - r), min(img.shape[0], cy + r)
     return img[y0:y1, x0:x1].copy()
 
+def need_icon_strip(img):
+    """The part of `img` (the Roblox window) the need icons are looked for in."""
+    h, w = img.shape[:2]
+    return img[0:int(h * NEED_ICON_TOP_PERCENT), 0:int(w * NEED_ICON_WIDTH_PERCENT)]
+
 def detect_need_icons(save_debug=False):
     """Detect the circular need icons at the top of the screen. Icons are
     found by their round outline (Hough circles, within a fixed radius
@@ -518,7 +538,7 @@ def detect_need_icons(save_debug=False):
     img = grab_screen()
     h, w = img.shape[:2]
 
-    top_strip = img[0:int(h * NEED_ICON_TOP_PERCENT), 0:int(w * NEED_ICON_WIDTH_PERCENT)].copy()
+    top_strip = need_icon_strip(img).copy()
     top_strip[0:int(h * NEED_ICON_BLANK_HEIGHT), 0:int(w * NEED_ICON_BLANK_WIDTH)] = 0
 
     gray = cv2.medianBlur(cv2.cvtColor(top_strip, cv2.COLOR_BGR2GRAY), NEED_ICON_BLUR_KERNEL)
@@ -1128,8 +1148,7 @@ def _setup_steps():
     hover_click(*SETUP_CONFIRM_POS)
     wait_interruptible(UI_SETTLE)
     print("[debug] closing backpack...")
-    pydirectinput.press(KEY_BACKPACK)
-    wait_interruptible(UI_SETTLE)
+    close_backpack("setup")
 
     disable_trades()
 
@@ -1446,8 +1465,7 @@ def equip_favorite_vehicle():
     wait_interruptible(UI_SETTLE)
 
     print("[debug] closing backpack...")
-    pydirectinput.press(KEY_BACKPACK)
-    wait_interruptible(UI_SETTLE)
+    close_backpack("equipping the vehicle")
 
 class NeedHandler(ABC):
     """Reacts to one detected need. Subclass this to add a new need."""
@@ -1528,8 +1546,7 @@ class CatchNeedHandler(NeedHandler):
 
         # Close backpack with 'b' key
         print("[debug] closing backpack...")
-        pydirectinput.press(KEY_BACKPACK)
-        wait_interruptible(UI_SETTLE)
+        close_backpack("equipping the toy")
 
         # Wait before throwing
         print(f"[debug] waiting {CATCH_WAIT_AFTER_EQUIP}s before throwing...")
@@ -1919,15 +1936,15 @@ def detect_backpack_open(img):
 # close_backpack_if_stuck()).
 _BACKPACK_STRIKES = 0
 
-def close_backpack_if_open():
+def close_backpack_if_open(step=""):
     """Close the backpack if it's open, in either form: press KEY_BACKPACK,
     look again, and press once more if it's still open (the expanded one takes
     two presses - the first shrinks it to the normal one, the second closes
     that). If it's still open after the second press the key isn't doing what's
     expected, so that's logged as a failure and it stops instead of pressing
     again (another press could just reopen it). Does nothing unless Roblox has
-    the focus, so the key can't go to another window. Returns True if it was
-    open."""
+    the focus, so the key can't go to another window. `step` names what just
+    ran (see close_backpack()), for the log. Returns True if it was open."""
     if not is_roblox_focused() or not detect_backpack_open(grab_screen()):
         return False
     img = grab_screen()
@@ -1942,16 +1959,25 @@ def close_backpack_if_open():
             hover_click(*center)
             wait_interruptible(UI_SETTLE)
             if not detect_backpack_open(grab_screen()):
-                log_run_event("backpack was left open - closed it (BACK)")
+                log_run_event("backpack was left open - closed it (BACK)" + (f" after {step}" if step else ""))
                 return True
     for _ in range(2):
         pydirectinput.press(KEY_BACKPACK)
         wait_interruptible(UI_SETTLE)
         if not detect_backpack_open(grab_screen()):
-            log_run_event("backpack was left open - closed it")
+            log_run_event("backpack was left open - closed it" + (f" after {step}" if step else ""))
             return True
     log_failure("backpack still open after pressing the backpack key twice")
     return True
+
+def close_backpack(step):
+    """End of a click sequence (`step` names it, for the log): press the
+    backpack key, then check it really closed - a misplaced click earlier can
+    have expanded the backpack, when the key only shrinks it - and close it
+    properly if not (close_backpack_if_open())."""
+    pydirectinput.press(KEY_BACKPACK)
+    wait_interruptible(UI_SETTLE)
+    close_backpack_if_open(step)
 
 def close_backpack_if_stuck(in_task):
     """The backpack part of unscrew(). At the top of a cycle no handler has it
@@ -2518,6 +2544,71 @@ def format_duration(seconds):
     minutes, secs = divmod(int(seconds), 60)
     return f"{minutes}m {secs:02d}s" if minutes else f"{secs}s"
 
+def process_memory_mb():
+    """This process's memory use in MB (its working set on Windows), or None
+    if it can't be read."""
+    try:
+        if os.name == "nt":
+            from ctypes import wintypes
+            class MemoryCounters(ctypes.Structure):
+                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
+                    (name, ctypes.c_size_t) for name in (
+                        "PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage", "QuotaPagedPoolUsage",
+                        "QuotaPeakNonPagedPoolUsage", "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage")]
+            counters = MemoryCounters()
+            counters.cb = ctypes.sizeof(counters)
+            kernel32, psapi = ctypes.windll.kernel32, ctypes.windll.psapi
+            kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+            psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(MemoryCounters), wintypes.DWORD]
+            if not psapi.GetProcessMemoryInfo(kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb):
+                return None
+            return counters.WorkingSetSize / 1048576
+        with open("/proc/self/statm") as f:
+            return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 1048576
+    except Exception:
+        return None
+
+class ResourceMonitor(threading.Thread):
+    """Every RESOURCE_LOG_INTERVAL while the loop runs, logs this script's CPU
+    use (percent of the whole machine, over the interval just gone) and memory
+    - "resources: cpu 2.4% mem 215MB" - and keeps the latest in RUN_STATS. The
+    run report charts them. Stopped by stop()."""
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.stopped = threading.Event()
+
+    def stop(self):
+        self.stopped.set()
+
+    def run(self):
+        wall, cpu = time.time(), time.process_time()
+        while not self.stopped.wait(RESOURCE_LOG_INTERVAL):
+            now_wall, now_cpu = time.time(), time.process_time()
+            percent = 100 * (now_cpu - cpu) / max(1e-6, (now_wall - wall) * (os.cpu_count() or 1))
+            wall, cpu = now_wall, now_cpu
+            memory = process_memory_mb()
+            RUN_STATS["cpu_percent"] = round(percent, 1)
+            RUN_STATS["memory_mb"] = None if memory is None else round(memory)
+            if memory is not None:
+                log_run_event(f"resources: cpu {percent:.1f}% mem {memory:.0f}MB")
+
+_QUIET_REPORTED = 0
+
+def check_quiet():
+    """Every cycle: note in RUN_STATS how many whole minutes no need has been
+    resolved for, and log "quiet: no need resolved for N min" each
+    QUIET_LOG_INTERVAL of it, so a stretch where nothing happens (the loop
+    alive but stuck, or the need bar unreadable) shows in the log well before
+    the NO_PROGRESS_REJOIN_INTERVAL rejoin."""
+    global _QUIET_REPORTED
+    quiet = time.time() - LAST_PROGRESS if LAST_PROGRESS else 0.0
+    RUN_STATS["quiet_minutes"] = int(quiet // 60)
+    reports = int(quiet // QUIET_LOG_INTERVAL)
+    if reports > _QUIET_REPORTED:
+        log_run_event(f"quiet: no need resolved for {reports * QUIET_LOG_INTERVAL / 60:g} min")
+    _QUIET_REPORTED = reports
+
 def run_full_cycle():
     """One cycle: keep checking for needs, waiting NEED_CHECK_RETRY_DELAY
     between checks whenever none are found (showing how long it has been
@@ -2532,6 +2623,7 @@ def run_full_cycle():
         # that succeeds, every wait from here on does check_running().
         check_stop()
         RUN_STATS["cycles"] += 1
+        check_quiet()
         write_status()
         unscrew()
         side_quest()
@@ -2558,6 +2650,8 @@ def run_workflow_loop():
     LAST_REJOIN = LAST_PROGRESS = time.time()  # the hourly and no-progress rejoins count from here
     log_run_event("LOOP started")
     recorder = start_recording_if_requested()
+    monitor = ResourceMonitor()
+    monitor.start()
     print("\n" + "=" * 50)
     print(f"[LOOP] Starting continuous workflow (run {CURRENT_RUN_NUMBER})")
     print("=" * 50)
@@ -2601,6 +2695,7 @@ def run_workflow_loop():
                 focus_roblox_click()
                 needs_respawn = True  # where a half-finished handler left the character is unknown
     finally:
+        monitor.stop()
         if recorder is not None:
             recorder.stop()
         log_run_event("LOOP stopped")
@@ -2628,6 +2723,7 @@ LINE_RE = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] \[RUN ([^\]]+)\] (.
 RESOLVED_RE = re.compile(r"^resolved: (\S+) \((\d+)s\)$")
 DETECTED_RE = re.compile(r"^detected: (.*)$")
 NONE_MATCHED_RE = re.compile(r"^none matched")
+RESOURCES_RE = re.compile(r"^resources: cpu ([\d.]+)% mem (\d+)MB$")
 MINIGAME_RE = re.compile(r"^minigame (started|finished): (.*?)(?: \(\d+s\))?$")
 
 TARGET_BUCKETS = 40
@@ -2657,7 +2753,7 @@ def parse_run(log_path, run):
     the log at `log_path`, as a dict, or None if the run isn't in it:
       start, end - epoch seconds of the first and last line;
       resolved - [(t, need, seconds)]; detected - [(t, matched, icons)] per check;
-      failures - [(t, text)]; rejoins - [t]; events - Counter of everything else."""
+      failures - [(t, text)]; rejoins - [t]; resources - [(t, cpu %, memory MB)]; events - Counter of everything else."""
     run = str(run)
     lines = []
     if not os.path.exists(log_path):
@@ -2670,7 +2766,7 @@ def parse_run(log_path, run):
     if not lines:
         return None
     data = {"start": lines[0][0], "end": lines[-1][0], "resolved": [], "detected": [],
-            "failures": [], "rejoins": [], "events": Counter()}
+            "failures": [], "rejoins": [], "resources": [], "events": Counter()}
     for t, text in lines:
         if m := RESOLVED_RE.match(text):
             data["resolved"].append((t, m.group(1), int(m.group(2))))
@@ -2682,6 +2778,10 @@ def parse_run(log_path, run):
             else:
                 names = [n for n in body.split(", ") if n]
                 data["detected"].append((t, len(names), len(names)))
+        elif m := RESOURCES_RE.match(text):
+            data["resources"].append((t, float(m.group(1)), int(m.group(2))))
+        elif text.startswith("quiet: "):
+            data["events"]["quiet periods logged"] += 1
         elif text.startswith("FAILURE: "):
             data["failures"].append((t, text[len("FAILURE: "):]))
         elif text.startswith("scheduled rejoin") or text.startswith("recovery complete"):
@@ -2810,7 +2910,7 @@ def time_ticks(duration, unit=1, max_ticks=8):
 
 def draw_report(data, run, basic, teleport):
     """The report image (BGR numpy array) for parse_run()'s `data`."""
-    width, height = 1600, 1100
+    width, height = 1600, 1660
     img = np.full((height, width, 3), COLOR_BG, np.uint8)
     duration = max(1.0, data["end"] - data["start"])
     start = data["start"]
@@ -2902,6 +3002,21 @@ def draw_report(data, run, basic, teleport):
             break
         draw_text(img, f"{count:>4}  {label}", left, y, 0.5)
         y += 22
+
+    # 5. the script's own CPU and memory use
+    for box, title, column, color, unit in (
+            ((20, 1090, 800, 1650), "Script CPU use (% of the machine)", 1, COLOR_BASIC, "%"),
+            ((820, 1090, width - 20, 1650), "Script memory (MB)", 2, COLOR_TELEPORT, "MB")):
+        values = [r[column] for r in data["resources"]]
+        top_value = nice_max(max(values + [1]))
+        panel = Panel(img, box, title, duration, top_value, time_ticks(duration))
+        if values:
+            points = np.array([[panel.x(r[0] - start), panel.y(r[column])] for r in data["resources"]], np.int32)
+            cv2.polylines(img, [points], False, color, 2, cv2.LINE_AA)
+            draw_text(img, f"mean {np.mean(values):.1f}{unit}, max {max(values):.1f}{unit}",
+                      panel.plot[0] + 10, panel.plot[1] + 16, 0.45)
+        else:
+            draw_text(img, "no samples (run too short, or an older log)", panel.plot[0] + 10, panel.plot[1] + 20, 0.45)
     return img
 
 

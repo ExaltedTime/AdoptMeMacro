@@ -143,11 +143,11 @@ RUN_COUNTER_PATH = os.path.join(LOGS_DIR, "run_counter.txt")  # holds the last-u
 GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")       # persisted game state - see load_game_config()
 OUTPUT_LOG_PATH = os.path.join(LOGS_DIR, "output.log")      # everything the macro prints, timestamped - see log_output()
 STATUS_PATH = os.path.join(LOGS_DIR, "status.json")         # live "is it alive and what's it doing" summary - see write_status()
-FAILURE_DIR = os.path.join(IMAGES_DIR, "failures")          # a screenshot per failure - see log_failure()
+FAILURE_DIR = os.path.join(IMAGES_DIR, "failures")          # a folder per failure (screenshot, need icons, info) - see log_failure()
 REPORTS_DIR = os.path.join(IMAGES_DIR, "reports")           # run<N>.png charts of a run - see the RUN REPORT section of main.py
 RECORDINGS_DIR = os.path.join(DEBUG_DIR, "recordings")      # run videos - see RunRecorder
 OUTPUT_LOG_MAX_BYTES = 5 * 1024 * 1024   # output.log moves to output.log.old (replacing the last one) past this size
-MAX_FAILURE_SCREENSHOTS = 40             # oldest are deleted beyond this many
+MAX_FAILURE_FOLDERS = 100                # oldest failure folders are deleted beyond this many
 
 # Recording a run ("Record the next run" on the Options tab): low quality on purpose, a video of a whole
 # unattended run is large. Every frame has the time on it, to line it up with the logs.
@@ -419,6 +419,8 @@ REJOIN_CLOSE_WAIT = 5.0            # after closing, before relaunching (relaunch
 REJOIN_INTERVAL = 60 * 60          # while the loop runs, rejoin this often (seconds) even if nothing is wrong, to
                                    # refresh a client that has been up a long time; also gives stuck needs a fresh chance
 NO_PROGRESS_REJOIN_INTERVAL = 20 * 60  # while the loop runs, rejoin if no need has been resolved for this long (seconds)
+QUIET_LOG_INTERVAL = 5 * 60        # while no need is being resolved, log "quiet: no need resolved for N min" every this often (seconds)
+RESOURCE_LOG_INTERVAL = 60.0       # how often the macro logs its own CPU and memory use while the loop runs (seconds)
 REJOIN_MAX_ATTEMPTS = 3            # close -> launch -> wait cycles before giving up
 REJOIN_WINDOW_TIMEOUT = 240.0      # most it waits for the Roblox window to appear after launching (Natro: 4 minutes,
                                    # as Roblox may be installing an update first)

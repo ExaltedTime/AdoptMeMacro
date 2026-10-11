@@ -126,7 +126,7 @@ an extra walk from wherever the previous need left the character standing.
 - **NEED HANDLERS** - `NeedHandler` and one subclass per need (or per group
   of needs, via `partial()`). See [Need handlers](#need-handlers).
 - **PER-CYCLE CHECKS** - `unscrew()` and what it runs: `rejoin_game()`
-  (with `rejoin_reason()` / `detect_disconnect()`), `close_backpack_if_stuck()`
+  (with `rejoin_reason()` / `detect_disconnect()`), The click sequences that open the backpack (setup, equipping a vehicle or toy) end with `close_backpack(step)`: the key press, then `close_backpack_if_open(step)`, so a backpack a misplaced click expanded is closed on the spot and the log line says after which step ("... closed it after equipping the toy"). `close_backpack_if_stuck()`
   / `close_backpack_if_open()` (with `detect_backpack_expanded()` /
   `detect_backpack_normal()`),
   `dismiss_stray_windows()`, `minigame_popup()`,
@@ -930,7 +930,7 @@ exact values and rationale):
 | Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN/MAX_RADIUS`, `NEED_ICON_HOUGH_*` |
 | Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
-| Debug logging | `OUTPUT_LOG_PATH`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_SCREENSHOTS` |
+| Debug logging | `OUTPUT_LOG_PATH`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `DISCONNECT_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_BOX`, `PAYCHECK_MATCH_THRESHOLD` |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
@@ -957,33 +957,45 @@ again, since the counter goes with the logs.
 - **`run_log.txt`** - the short version: one tagged line per notable event
   (needs detected, resolved with how long they took, popups dismissed,
   recoveries, stops, failures). Start here to see roughly what happened.
+  Two kinds of line are written on a timer while the loop runs:
+  `quiet: no need resolved for N min` (every `QUIET_LOG_INTERVAL`, by
+  `check_quiet()` at the top of each cycle, while nothing is being resolved -
+  well before the `NO_PROGRESS_REJOIN_INTERVAL` rejoin) and
+  `resources: cpu X% mem YMB` (every `RESOURCE_LOG_INTERVAL`, from the
+  `ResourceMonitor` thread: the script's own CPU use as a percentage of the
+  whole machine, and its memory). The run report charts the resources.
 - **`reports/run<N>.png`** - a chart of one run, drawn from `run_log.txt` by
   `generate_run_report()` in `main.py` with OpenCV (no extra dependency). Written automatically when a
   run stops (`write_run_report()`, in the `finally` of `run_workflow_loop()`)
-  (so there is no button for it). Four panels: needs resolved per unit of time (the unit is picked
+  (so there is no button for it). Five panels: needs resolved per unit of time (the unit is picked
   from `BUCKET_STEPS` so the run fills about `TARGET_BUCKETS` bars, stacked by
   basic / teleport / other need, with failures and rejoins marked); needs
   detected per check; average seconds per resolved need with how many there
-  were; and counts of failures by kind and other events. `parse_run()` reads
+  were; counts of failures by kind and other events; and the script's own CPU and memory use over time. `parse_run()` reads
   the log by the exact line wording `log_run_event()` writes, so a wording
   change there needs the matching regex in the RUN REPORT section of `main.py`. It never raises -
   a report problem can't take a run down.
-- **`failures/`** - `log_failure(reason)` saves a screenshot of the whole
-  screen named with the time, run number and reason, and also prints the
-  reason, writes it to `run_log.txt` and counts it in the status file. It's
-  called when a handler can't resolve a need, a need is still showing after
-  `NEED_GONE_MAX_WAIT`, a need is disabled as stuck, a recovery starts or
-  fails, Roblox loses focus and stops the run, and when the run crashes (the
-  full traceback is in `output.log`). It never raises, since it runs while
-  something else is already wrong. The oldest screenshots beyond
-  `MAX_FAILURE_SCREENSHOTS` (40) are deleted.
+- **`failures/`** - `log_failure(reason)` saves a folder named with the
+  time, run number and reason (`save_failure_report()`): `screen.png` (the whole
+  screen), `need_icons.png` (the strip the need icons are read from, so a
+  misread icon can be seen at once; missing when Roblox couldn't be captured)
+  and `info.txt` (the reason, the needs last detected, the disabled needs and
+  how long ago a need was last resolved). It also prints the reason, writes it
+  to `run_log.txt` and counts it in the status file. It's called when a handler
+  can't resolve a need, a need is still showing after `NEED_GONE_MAX_WAIT`, a
+  need is disabled as stuck, a recovery starts or fails, Roblox loses focus
+  and stops the run, and when the run crashes (the full traceback is in
+  `output.log`). It never raises, since it runs while something else is
+  already wrong. The oldest folders beyond `MAX_FAILURE_FOLDERS` (100) are
+  deleted.
 - **`status.json`** - rewritten every cycle and on every failure/resolved
   need (`write_status()`): the run number and start time, time of the last
   update (if that's old, the macro is stuck or dead), cycle count, the needs
   last detected, how many of each need were resolved or failed, the needs
   currently disabled, the number of recoveries, disconnects, scheduled
-  rejoins and focus resumes, and the last resolved need
-  and last failure. `RUN_STATS` holds the counters in memory.
+  rejoins and focus resumes, how many whole minutes no need has been resolved
+  for (`quiet_minutes`), the script's latest CPU and memory use, and the last
+  resolved need and last failure. `RUN_STATS` holds the counters in memory.
 - **`debug_needs.png`** / **`debug_buttons.png`** - see below.
 - **`recordings/`** - run videos, see [Recording a run](#recording-a-run).
 - **`debug_focus_pet.png`** / **`debug_focus_pet_after.png`** - what

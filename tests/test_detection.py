@@ -264,7 +264,7 @@ def test_backpack_title_marks_the_normal_backpack(macro):
 
 
 def test_minigame_popup_is_a_green_yes_with_a_red_no_beside_it(macro):
-    yes, no = macro.cfg.MINIGAME_POPUP_YES_COLOR, macro.cfg.MINIGAME_POPUP_NO_COLOR
+    yes, no = macro.cfg.GREEN_BUTTON_COLOR, macro.cfg.MINIGAME_POPUP_NO_COLOR
     img = blank()
     img[600:640, 1000:1140] = yes[::-1]          # the colours are RGB, the image BGR
     assert not macro.detect_minigame_popup(img)  # Yes alone (a paycheck's button, say) isn't one
@@ -274,7 +274,7 @@ def test_minigame_popup_is_a_green_yes_with_a_red_no_beside_it(macro):
 
 def test_sick_dialog_is_not_a_minigame_popup(macro):
     """The doctor's Yes/No dialog has the same two colours, but it is the sick handler's to answer."""
-    yes, no = macro.cfg.MINIGAME_POPUP_YES_COLOR, macro.cfg.MINIGAME_POPUP_NO_COLOR
+    yes, no = macro.cfg.GREEN_BUTTON_COLOR, macro.cfg.MINIGAME_POPUP_NO_COLOR
     screen = blank()
     screen[600:640, 1000:1140] = yes[::-1]
     screen[600:640, 800:940] = no[::-1]

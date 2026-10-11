@@ -1464,7 +1464,7 @@ def detect_play_button(img: Image) -> bool:
     x, y = cfg.REJOIN_JOIN_POS
     half_w, half_h = cfg.REJOIN_PLAY_BOX
     box = img[max(0, y - half_h):y + half_h, max(0, x - half_w):x + half_w]
-    mask = exact_color_mask(box, cfg.REJOIN_PLAY_COLOR, cfg.REJOIN_PLAY_COLOR_TOLERANCE)
+    mask = exact_color_mask(box, cfg.GREEN_BUTTON_COLOR, cfg.GREEN_BUTTON_TOLERANCE)
     return int(np.count_nonzero(mask)) >= cfg.REJOIN_PLAY_MIN_PIXELS
 
 def leave_and_rejoin(clean_leave: bool = True) -> bool:
@@ -1779,7 +1779,7 @@ class CatchNeedHandler(NeedHandler):
         hold_key(cfg.KEY_ZOOM_IN, cfg.CATCH_ZOOM_DURATION)
         
         # Click empty space to throw, every CATCH_THROW_INTERVAL, until the need clears
-        click_until_need_gone(cfg.EMPTY_POS, cfg.CATCH_THROW_INTERVAL, cfg.CATCH_MAX_WAIT, "catch")
+        click_until_need_gone(cfg.EMPTY_POS, cfg.CATCH_THROW_INTERVAL, cfg.NEED_GONE_MAX_WAIT, "catch")
 
         # Unequip the toy
         print("[debug] unequipping toy...")
@@ -1970,7 +1970,7 @@ class TeleportWalkNeedHandler(NeedHandler):
             print(f"[debug] clicking {final_click}...")
             hover_click(*final_click)
 
-        wait_until_need_gone(self.name, max_wait=self.config.get("max_wait", cfg.TELEPORT_NEED_GONE_MAX_WAIT))
+        wait_until_need_gone(self.name, max_wait=self.config.get("max_wait", cfg.NEED_GONE_MAX_WAIT))
 
         print(f"[!] {self.name.capitalize()} complete!")
         return True
@@ -2315,7 +2315,7 @@ def detect_minigame_popup(img: Image) -> bool:
     sick = load_templates(cfg.STRAY_WINDOW_DIR).get("sick_dialog")
     if sick is not None and template_score(img, sick, cfg.SICK_DIALOG_BOX) >= cfg.SICK_DIALOG_MATCH_THRESHOLD:
         return False
-    ys, xs = np.where(exact_color_mask(img, cfg.MINIGAME_POPUP_YES_COLOR) > 0)
+    ys, xs = np.where(exact_color_mask(img, cfg.GREEN_BUTTON_COLOR) > 0)
     if len(xs) < cfg.MINIGAME_POPUP_MIN_BUTTON_PIXELS:
         return False
     yes_x, yes_y = int(xs.mean()), int(ys.mean())
@@ -2412,7 +2412,7 @@ def dismiss_stray_windows() -> Optional[str]:
         log_run_event(f"stray window closed: {name}")
         if name == "trading_hub":
             left, top, right, bottom = cfg.STRAY_OKAY_BOX
-            okay = exact_color_mask(img[top:bottom, left:right], cfg.STRAY_OKAY_COLOR, cfg.STRAY_OKAY_TOLERANCE)
+            okay = exact_color_mask(img[top:bottom, left:right], cfg.GREEN_BUTTON_COLOR, cfg.GREEN_BUTTON_TOLERANCE)
             if np.count_nonzero(okay) >= cfg.STRAY_OKAY_MIN_PIXELS:
                 hover_click(*cfg.STRAY_OKAY_POS)
         hover_click(*config["close_pos"])
@@ -2427,7 +2427,7 @@ def detect_minigame_victory(img: Image) -> bool:
     for color, tolerance, box, minimum in (
             (cfg.MINIGAME_VICTORY_BANNER_COLOR, cfg.MINIGAME_VICTORY_BANNER_TOLERANCE,
              cfg.MINIGAME_VICTORY_BANNER_BOX, cfg.MINIGAME_VICTORY_BANNER_MIN_PIXELS),
-            (cfg.MINIGAME_VICTORY_BUTTON_COLOR, cfg.MINIGAME_VICTORY_BUTTON_TOLERANCE,
+            (cfg.GREEN_BUTTON_COLOR, cfg.GREEN_BUTTON_TOLERANCE,
              cfg.MINIGAME_VICTORY_BUTTON_BOX, cfg.MINIGAME_VICTORY_BUTTON_MIN_PIXELS)):
         left, top, right, bottom = box
         if np.count_nonzero(exact_color_mask(img[top:bottom, left:right], color, tolerance)) < minimum:

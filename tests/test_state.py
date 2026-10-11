@@ -333,7 +333,7 @@ def test_teleport_needs_wait_for_the_need_to_clear_up_to_the_configured_time(mac
     monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
     monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=60.0, **kw: waited.append(max_wait))
     assert macro.TeleportWalkNeedHandler(need).handle() is True
-    assert waited == [expected] == [macro.cfg.TELEPORT_NEED_GONE_MAX_WAIT] == [macro.cfg.NEED_GONE_MAX_WAIT]
+    assert waited == [expected] == [macro.cfg.NEED_GONE_MAX_WAIT]
 
 
 def test_a_need_can_set_its_own_wait(macro, monkeypatch):

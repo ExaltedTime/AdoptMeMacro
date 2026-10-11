@@ -32,7 +32,10 @@ HALLOWEEN = True
 # The "Ghost Gallery / Hauntlet 2 is starting soon! Teleport there now?" popups (one layout) are recognised by their
 # Yes button (green) with its No button (red) close to the left - see detect_minigame_popup().
 # Dismissing it ticks "Do not show again this session", then clicks No.
-MINIGAME_POPUP_YES_COLOR = (74, 198, 85)    # same green as PAYCHECK_CASHOUT_COLOR
+# The green of Adopt Me's buttons (a popup's Yes, NICE!, Okay, Play, the paycheck's Cash Out): every green button is found by this
+# colour, within GREEN_BUTTON_TOLERANCE per channel (the popup's Yes by the exact colour) in case of compression/scaling.
+GREEN_BUTTON_COLOR = (74, 198, 85)
+GREEN_BUTTON_TOLERANCE = 3
 MINIGAME_POPUP_NO_COLOR = (216, 42, 63)
 MINIGAME_POPUP_MIN_BUTTON_PIXELS = 1000     # a button is ~5000 exact-color px; fewer is noise
 MINIGAME_POPUP_NO_MAX_DX = 300              # No button must be within this many px left of Yes...
@@ -55,8 +58,6 @@ MINIGAME_VICTORY_BANNER_COLOR = (255, 45, 89)
 MINIGAME_VICTORY_BANNER_TOLERANCE = 4
 MINIGAME_VICTORY_BANNER_BOX = (740, 255, 1190, 370)
 MINIGAME_VICTORY_BANNER_MIN_PIXELS = 3000
-MINIGAME_VICTORY_BUTTON_COLOR = (74, 198, 85)
-MINIGAME_VICTORY_BUTTON_TOLERANCE = 3
 MINIGAME_VICTORY_BUTTON_BOX = (860, 725, 1060, 800)
 MINIGAME_VICTORY_BUTTON_MIN_PIXELS = 2000
 MINIGAME_VICTORY_BUTTON_POS = (966, 762)
@@ -112,8 +113,6 @@ STRAY_WINDOWS: dict[str, dict[str, Any]] = {
 SICK_DIALOG_BOX = (700, 400, 1220, 700)
 SICK_DIALOG_MATCH_THRESHOLD = 0.8
 STRAY_OKAY_BOX = (800, 637, 1120, 680)
-STRAY_OKAY_COLOR = (74, 198, 85)
-STRAY_OKAY_TOLERANCE = 3
 STRAY_OKAY_MIN_PIXELS = 5000      # the button is ~11000 exact-color px in that box
 STRAY_OKAY_POS = (962, 657)
 SETUP_STRAY_TRIES = 3             # setup closes up to this many stray windows before it starts
@@ -200,7 +199,6 @@ STOP_HOTKEY_POLL_INTERVAL = 0.05  # how often the key is looked at (seconds)
 CONSOLE_DRAIN_INTERVAL_MS = 50   # how often queued output is put on the GUI console (see DebugCapture)
 CATCH_WAIT_AFTER_EQUIP = 1.0   # wait after equipping toy before throwing
 CATCH_THROW_INTERVAL = 0.5     # the toy is thrown (a click) this often until the need clears
-CATCH_MAX_WAIT = 60.0          # ...for at most this long
 CATCH_ZOOM_DURATION = 2.0      # seconds the zoom-in key is held before throwing
 PET_SWIPE_DURATION = 8.0      # how long the one downward swipe (mouse held down) takes
 PET_SWIPE_START_OFFSET = -15           # px from screen center the swipe starts at (negative = above it)
@@ -242,7 +240,6 @@ CHOOSE_SLOW_MOVE_DURATION = 1.0  # deliberate, slow mouse travel to the found bu
 
 # The paycheck popup's CASH OUT button, matched by exact color the same way
 # as CHOOSE_BUTTON_COLOR above.
-PAYCHECK_CASHOUT_COLOR = (74, 198, 85)
 # The popup itself is recognised by a crop of its bank-card header ("BANK of Adopt Me!", ref/popups/paycheck.png)
 # found within PAYCHECK_BOX (left, top, right, bottom) with a match of at least PAYCHECK_MATCH_THRESHOLD.
 PAYCHECK_BOX = (740, 400, 1180, 490)
@@ -320,7 +317,7 @@ HELICOPTER_HOLD_DURATION = 4.0     # then hold KEY_HELICOPTER this long
 # wait for the need to clear. Each entry: where to teleport, the
 # (key, seconds) holds to perform in order, optionally a `final_click`
 # position to click after the last hold, optionally `helicopter` (above) and optionally
-# `max_wait` (how long to wait for the need to clear afterwards; default TELEPORT_NEED_GONE_MAX_WAIT).
+# `max_wait` (how long to wait for the need to clear afterwards; default NEED_GONE_MAX_WAIT).
 TELEPORT_WALK_NEEDS_NORMAL: dict[str, dict[str, Any]] = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),)),
@@ -352,11 +349,9 @@ DISABLED_NEEDS_REJOIN_THRESHOLD = 4  # this many needs disabled for the run (see
                                      # badly wrong: rejoin the game, run setup, and give every need a fresh chance
 NEED_STUCK_CHECKS = 5            # an enabled need still on screen after this many attempts in a row is
                                   # disabled for the rest of the run - see record_detection()
-NEED_GONE_MAX_WAIT = 75.0        # most wait_until_need_gone() ever waits for an icon to disappear -
-                                  # also reused as walk_alternating()'s total duration cap for walk/ride
-TELEPORT_NEED_GONE_MAX_WAIT = 75.0   # the same wait, for the teleport-walk needs after their walk (they time out by themselves in the game;
-                                  # camping was seen clearing ~66s after it) - an entry of TELEPORT_WALK_NEEDS can override it
-                                  # with its own `max_wait`
+NEED_GONE_MAX_WAIT = 75.0        # most any need is waited on to clear: wait_until_need_gone() (the teleport-walk needs and the button
+                                  # needs; they time out by themselves in the game, and camping was seen clearing ~66s after its walk),
+                                  # and the total duration of the walk/ride/catch actions that end early once it has cleared
 NEED_GONE_POLL_INTERVAL = 3.5    # how often to check for the icon during that wait (and, while walking, from the watcher thread)
 NEED_GONE_FLICKER_RECHECK_DELAY = 0.3  # before counting any single miss, re-sample this soon after -
                                         # the icon can flash for a frame (or briefly drop out against a
@@ -434,8 +429,6 @@ REJOIN_LOAD_TIMEOUT = 180.0        # most it waits for the game's Play popup aft
 REJOIN_POLL_INTERVAL = 1.0         # how often it looks at the screen while waiting
 # The game has loaded once its green Play button is on screen around REJOIN_JOIN_POS.
 REJOIN_JOIN_POS = (910, 817)       # the Play button - clicked once it has loaded
-REJOIN_PLAY_COLOR = (74, 198, 85)  # same green as PAYCHECK_CASHOUT_COLOR
-REJOIN_PLAY_COLOR_TOLERANCE = 3    # per channel, in case of compression/scaling
 REJOIN_PLAY_BOX = (120, 25)        # half width, half height of the area around REJOIN_JOIN_POS checked for it
 REJOIN_PLAY_MIN_PIXELS = 2000      # the button is ~15000 px of that color; fewer is something else
 REJOIN_PLAY_SETTLE = 1.0           # wait after the button appears, before clicking it

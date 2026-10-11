@@ -16,6 +16,7 @@ from __future__ import annotations
 # See README.md for an explanation of how the code is organized and how it behaves.
 
 import os, sys, re, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib, shutil
+import datetime
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, Union
@@ -308,6 +309,9 @@ class State:
     task_thread: Optional[int] = None
     last_task_unscrew: float = 0.0
     in_unscrew: bool = False
+    # Where each need's icon was last recognised in the need bar (reference
+    # space, centre), by need name - see icon_gone_by_frame_change().
+    need_icon_positions: dict[str, tuple[int, int]] = field(default_factory=dict)
     # How many in-task checks in a row have seen the backpack open (see
     # close_backpack_if_stuck()).
     backpack_strikes: int = 0
@@ -557,6 +561,7 @@ def load_game_config() -> dict[str, Any]:
         "money_collected": 0,
         "lure_timer": time.time(),  # due immediately on a fresh config
         "tree_timer": time.time(),  # likewise
+        "money_reset_boundary": None,   # the last daily MONEY_RESET_HOUR reset side_quest() has dealt with (None: not yet)
         "side_quest_enabled": True, # whether side_quest() is allowed to run at all
         "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
         "record_next_run": False,   # record the next run as a low quality video; cleared when that run starts
@@ -780,6 +785,8 @@ def identify_icons(found_icons: list[tuple[int, int, int]], full_img: Image) -> 
         check_running()
         icon_img = extract_icon(full_img, cx, cy, cfg.ICON_CROP_RADIUS)
         need_name, score = find_matching_need(icon_variants(full_img, cx, cy))
+        if need_name:
+            state.need_icon_positions[need_name] = (cx, cy)
         yield idx, icon_img, need_name, score
 
 def detect_need_bar_readable(img: Image) -> bool:
@@ -802,17 +809,77 @@ def scan_needs(fresh: bool = False) -> tuple[list[Optional[str]], bool]:
         return [], False
     return [name for _, _, name, _ in identify_icons(found_icons, full_img)], True
 
+# The icon region being watched while the need bar is unreadable: {"need", "pos", "crop"} - see icon_gone_by_frame_change().
+_ICON_WATCH: dict[str, Any] = {"need": None, "pos": None, "crop": None}
+
+def icon_region(pos: tuple[int, int]) -> Optional[Image]:
+    """The square around a need icon centred on `pos` (ICON_CROP_RADIUS each
+    way), captured now - or None if it would reach past the screen's edge."""
+    radius = cfg.ICON_CROP_RADIUS
+    x0, y0 = pos[0] - radius, pos[1] - radius
+    if x0 < 0 or y0 < 0:
+        return None
+    return grab_screen_region(x0, y0, 2 * radius + 1, 2 * radius + 1)
+
+def icon_region_change(before: Image, after: Image) -> float:
+    """The fraction of the circle of an icon-sized square that differs between
+    two captures by more than ICON_FRAME_CHANGE_LEVEL on any colour channel."""
+    size = before.shape[0]
+    yy, xx = np.ogrid[:size, :size]
+    inside = (yy - size // 2) ** 2 + (xx - size // 2) ** 2 <= (size // 2) ** 2
+    changed = cv2.absdiff(before, after).max(axis=2) > cfg.ICON_FRAME_CHANGE_LEVEL
+    return float(np.count_nonzero(changed & inside) / np.count_nonzero(inside))
+
+def icon_gone_by_frame_change(need_name: str) -> Optional[bool]:
+    """Whether `need_name`'s icon is gone, judged from how its place in the
+    need bar changes between looks - for when the bar can't be read by
+    matching icons (a bright background, see detect_need_bar_readable()).
+    A need's icon fills its circle with a timer: a darker section that slowly
+    grows. So a circle that stays much as it was, or changes only a little,
+    is still there; one that has changed over more than ICON_GONE_CHANGE_FRACTION
+    of its area since the last look - and is still that different a moment
+    later (NEED_GONE_FLICKER_RECHECK_DELAY, so a one-frame change doesn't
+    count) - is gone. The icon's place is where it was last recognised
+    (State.need_icon_positions). The first look only records the circle (None:
+    nothing to compare yet), so an icon that went before that is not noticed,
+    and the wait runs out as it did before. None too if the place isn't known."""
+    pos = state.need_icon_positions.get(need_name)
+    here = icon_region(pos) if pos is not None else None
+    if pos is None or here is None:
+        return None
+    watch = _ICON_WATCH
+    if watch["need"] != need_name or watch["pos"] != pos or watch["crop"] is None:
+        watch.update(need=need_name, pos=pos, crop=here)
+        return None
+    change = icon_region_change(watch["crop"], here)
+    print(f"[debug] {need_name}: need bar unreadable, its icon's place changed {change:.0%} since the last look")
+    if change < cfg.ICON_GONE_CHANGE_FRACTION:
+        watch["crop"] = here          # still there (or the timer creeping on): compare the next look with this one
+        return False
+    wait_interruptible(cfg.NEED_GONE_FLICKER_RECHECK_DELAY)
+    again = icon_region(pos)
+    if again is None:
+        return None
+    if icon_region_change(watch["crop"], again) >= cfg.ICON_GONE_CHANGE_FRACTION:
+        log_run_event(f"{need_name} icon gone by frame change ({change:.0%}) - the need bar is unreadable")
+        watch.update(need=None, pos=None, crop=None)
+        return True
+    watch["crop"] = again             # it was a one-frame change
+    return False
+
 def _need_cleared(need_name: str) -> Optional[bool]:
     """True if `need_name`'s icon is missing on two quick checks in a row
     (NEED_GONE_FLICKER_RECHECK_DELAY apart, the second one a fresh circle
     search) - the single-frame-flicker guard shared by wait_until_need_gone()
     and _watch_need_gone() below.
-    None if the icons couldn't be read (see detect_need_bar_readable()): that's
-    neither cleared nor not cleared."""
+    While the icons can't be read (see detect_need_bar_readable()) the answer
+    comes from icon_gone_by_frame_change() instead - None if that can't tell
+    either: neither cleared nor not cleared."""
     for attempt in range(2):
         names, readable = scan_needs(fresh=attempt > 0)   # the second look must not just repeat the first
         if not readable:
-            return None
+            return icon_gone_by_frame_change(need_name)
+        _ICON_WATCH.update(need=None, pos=None, crop=None)   # readable again: a later unreadable stretch starts afresh
         if need_name in names:
             return False
         if attempt == 0:
@@ -2567,16 +2634,43 @@ def run_side_action(action: Callable[[], bool]) -> bool:
         log_run_event(f"{action.__name__} interrupted by {interruption.reason}")
         return False
 
+def last_money_reset_time(now: float) -> float:
+    """The most recent daily reset moment (MONEY_RESET_HOUR o'clock, local
+    time) at or before `now`, as a timestamp."""
+    moment = datetime.datetime.fromtimestamp(now)
+    boundary = moment.replace(hour=cfg.MONEY_RESET_HOUR, minute=0, second=0, microsecond=0)
+    if boundary > moment:
+        boundary -= datetime.timedelta(days=1)
+    return boundary.timestamp()
+
+def reset_money_if_due(config: dict[str, Any]) -> dict[str, Any]:
+    """The tree's money total starts again from 0 every day at
+    MONEY_RESET_HOUR. `config["money_reset_boundary"]` is the last such
+    moment already dealt with; when a later one has passed the total is reset
+    (and, like each harvest, saved at once). The first time it is seen (a
+    fresh or older config) it is only recorded, not acted on, so an update
+    doesn't wipe the day's total. Returns the config as it is now."""
+    boundary = last_money_reset_time(time.time())
+    recorded = config["money_reset_boundary"]
+    if recorded is not None and recorded >= boundary:
+        return config
+    if recorded is None:
+        return update_game_config(lambda c: c.update(money_reset_boundary=boundary))
+    print(f"[!] money total reset (daily at {cfg.MONEY_RESET_HOUR}:00): {config['money_collected']} -> 0")
+    log_run_event(f"money total reset: {config['money_collected']} -> 0")
+    return update_game_config(lambda c: c.update(money_collected=0, money_reset_boundary=boundary))
+
 def side_quest() -> None:
     """Runs once per cycle, right after unscrew(), unless side_quest_enabled
     is off in GAME_CONFIG_PATH: tends to the money tree and the lure using
     state persisted there. The tree is checked at most once per
     TREE_CHECK_INTERVAL, and money_collected only ever goes up (by
     TREE_HARVEST_YIELD per harvest, until it reaches MONEY_COLLECTED_TARGET)
-    - resetting it back down means resetting the config. Each piece of
+    until reset_money_if_due() starts it from 0 again at MONEY_RESET_HOUR
+    each day (or the config is reset). Each piece of
     progress is saved the moment its action succeeds, so a stop partway
     through doesn't lose it."""
-    config = load_game_config()
+    config = reset_money_if_due(load_game_config())
     if not config["side_quest_enabled"]:
         return
     now = time.time()
@@ -3217,6 +3311,30 @@ def write_run_report(run: Union[int, str]) -> Optional[str]:
         print(f"[debug] run report: {path}")
     return path
 
+def run_all_need_handlers(handlers: Optional[dict[str, Callable[[], NeedHandler]]] = None) -> dict[str, str]:
+    """Run every need handler (default: DEBUG_HANDLERS, whether or not it is in
+    ENABLED_NEEDS) once, one after another - the Debug tab's "test every
+    need" button. Each runs with the in-task checks on, like a real need, and
+    the character is respawned after it, since the handlers walk from the
+    spawn point. A stop ends the whole sequence (StopRequested propagates).
+    Prints and returns how each went: "done", "failed" (the handler returned
+    False) or "interrupted by ...", keyed by need."""
+    handlers = DEBUG_HANDLERS if handlers is None else handlers
+    results: dict[str, str] = {}
+    print(f"\n[TEST] Running all {len(handlers)} need handlers, one after another...")
+    for i, (name, handler_cls) in enumerate(handlers.items(), 1):
+        check_stop()
+        print(f"\n[TEST] ({i}/{len(handlers)}) {name}...")
+        try:
+            with task_unscrew():
+                results[name] = "done" if handler_cls().handle() else "failed"
+        except TaskInterrupted as interruption:
+            results[name] = f"interrupted by {interruption.reason}"
+        print(f"[TEST] {name}: {results[name]}")
+        respawn_character()
+    print("\n[TEST] Summary: " + ", ".join(f"{name} {result}" for name, result in results.items()) + "\n")
+    return results
+
 class DebugCapture:
     """Replaces sys.stdout for the lifetime of the GUI: everything printed
     anywhere in the macro goes to the on-screen console - every line
@@ -3439,18 +3557,11 @@ class AdoptMeGUI:
         # action_buttons: they must stay usable while a workflow is running,
         # which is safe since update_game_config() is locked.
         config = load_game_config()
-        self.config_flag_vars = {}
+        self.config_flag_vars: dict[str, tk.BooleanVar] = {}
         for label, key in (("Run side quest", "side_quest_enabled"),
                            ("Resume after focus loss", "resume_on_focus_loss"),
-                           ("Record the next run (low quality video)", "record_next_run"),
                            *((f"Play {label}", f"{name}_enabled") for name, label in cfg.MINIGAME_LABELS.items())):
-            var = tk.BooleanVar(value=config[key])
-            self.config_flag_vars[key] = var
-            tk.Checkbutton(options_tab, text=label, variable=var,
-                           command=lambda k=key, v=var: self.set_config_flag(k, v.get()),  # type: ignore[misc]
-                           font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.bg, fg=self.fg,
-                           selectcolor=self.bg, activebackground=self.bg, activeforeground=self.fg,
-                           anchor=tk.W, cursor="hand2").pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
+            self.add_config_checkbox(options_tab, label, key, config)
 
         tk.Label(options_tab, text="Private server link", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
                  bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X)
@@ -3461,12 +3572,9 @@ class AdoptMeGUI:
         server_link_entry.bind("<FocusOut>", lambda e: self.save_server_link())
         server_link_entry.bind("<Return>", lambda e: self.save_server_link())
 
-        tk.Button(options_tab, text="Reset Config", command=self.reset_config,
-                  font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_STOP_COLOR, fg=self.fg,
-                  height=cfg.GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2").pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
-
-        # Debug tab: one button per need handler, regardless of whether it's in
-        # ENABLED_NEEDS, so any handler can be run on its own.
+        # Debug tab: two subtabs - the need handlers (one button each, regardless
+        # of whether it's in ENABLED_NEEDS, so any can be run on its own, plus
+        # one that runs them all in turn) and everything else.
         self.build_debug_tab(debug_tab)
 
         # Debug console
@@ -3584,6 +3692,19 @@ class AdoptMeGUI:
     def run_workflow_loop(self) -> None:
         self.run_async(run_workflow_loop)
 
+    def add_config_checkbox(self, parent: Any, label: str, key: str, config: dict[str, Any]) -> None:
+        """A checkbox for the persisted on/off switch `key` (see
+        load_game_config()). Deliberately not in action_buttons: they must stay
+        usable while a workflow is running, which is safe since
+        update_game_config() is locked."""
+        var = tk.BooleanVar(value=config[key])
+        self.config_flag_vars[key] = var
+        tk.Checkbutton(parent, text=label, variable=var,
+                       command=lambda k=key, v=var: self.set_config_flag(k, v.get()),  # type: ignore[misc]
+                       font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.bg, fg=self.fg,
+                       selectcolor=self.bg, activebackground=self.bg, activeforeground=self.fg,
+                       anchor=tk.W, cursor="hand2").pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
+
     def set_config_flag(self, key: str, value: Any) -> None:
         """Persist one of the config's on/off switches (a checkbox was clicked)."""
         update_game_config(lambda c: c.update({key: value}))
@@ -3607,23 +3728,48 @@ class AdoptMeGUI:
         print("[!] Config reset to defaults")
 
     def build_debug_tab(self, parent: Any) -> None:
-        """Fill the Debug tab with a two-column grid of [TEST] buttons, one
-        per entry in DEBUG_HANDLERS."""
-        tk.Label(parent, text="Run a need handler on its own", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"),
-                 bg=self.bg, fg=self.accent).grid(row=0, column=0, columnspan=2, sticky=tk.W,
-                                                   padx=cfg.GUI_ROW_SPACING, pady=(cfg.GUI_ROW_SPACING, cfg.GUI_WIDGET_SPACING))
+        """The Debug tab: a Needs subtab (build_needs_tab()) and an Other one
+        (build_other_tab())."""
+        subtabs = ttk.Notebook(parent)
+        subtabs.pack(fill=tk.BOTH, expand=True)
+        needs_tab = tk.Frame(subtabs, bg=self.bg)
+        other_tab = tk.Frame(subtabs, bg=self.bg)
+        subtabs.add(needs_tab, text="Needs")
+        subtabs.add(other_tab, text="Other")
+        self.build_needs_tab(needs_tab)
+        self.build_other_tab(other_tab)
+
+    def build_needs_tab(self, parent: Any) -> None:
+        """Fill the Needs subtab: a button that runs every need handler in turn,
+        then a two-column grid of [TEST] buttons, one per entry in
+        DEBUG_HANDLERS."""
         for col in range(2):
             parent.grid_columnconfigure(col, weight=1, uniform="debug")
+        btn_all = tk.Button(parent, text="Test every need, one after another", command=self.test_all_handlers,
+                            font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"), bg=cfg.GUI_LOOP_COLOR, fg=self.fg, cursor="hand2")
+        btn_all.grid(row=0, column=0, columnspan=2, sticky=tk.EW, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+        self.action_buttons.append(btn_all)
+        tk.Label(parent, text="Or run one need handler on its own", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"),
+                 bg=self.bg, fg=self.accent).grid(row=1, column=0, columnspan=2, sticky=tk.W,
+                                                   padx=cfg.GUI_ROW_SPACING, pady=(cfg.GUI_ROW_SPACING, cfg.GUI_WIDGET_SPACING))
         for i, (name, handler_cls) in enumerate(DEBUG_HANDLERS.items()):
             btn = tk.Button(parent, text=name.capitalize(),
                             command=lambda n=name, c=handler_cls: self.test_handler(n, c),  # type: ignore[misc]
                             font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
-            btn.grid(row=1 + i // 2, column=i % 2, sticky=tk.EW, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+            btn.grid(row=2 + i // 2, column=i % 2, sticky=tk.EW, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
             self.action_buttons.append(btn)
-        rows = 1 + (len(DEBUG_HANDLERS) + 1) // 2
+
+    def build_other_tab(self, parent: Any) -> None:
+        """Fill the Other subtab: record the next run, refresh the debug
+        folder, reset the config."""
+        self.add_config_checkbox(parent, "Record the next run (low quality video)", "record_next_run", load_game_config())
         tk.Button(parent, text="Refresh debug", command=self.refresh_debug_folder,
                   font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.accent, fg=self.fg, cursor="hand2"
-                  ).grid(row=rows, column=0, columnspan=2, sticky=tk.EW, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+                  ).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+        tk.Button(parent, text="Reset Config", command=self.reset_config,
+                  font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_STOP_COLOR, fg=self.fg,
+                  height=cfg.GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2"
+                  ).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
 
     def refresh_debug_folder(self) -> None:
         """Ask, then empty the debug folder (refresh_debug()). Not while a run
@@ -3634,6 +3780,11 @@ class AdoptMeGUI:
         if messagebox.askyesno("Refresh debug", "Delete everything in the debug folder (logs, images, recordings)?\n"
                                                 "The game config is kept."):
             print(f"[debug] debug folder refreshed ({refresh_debug()} entries removed)")
+
+    def test_all_handlers(self) -> None:
+        """Run every need handler in DEBUG_HANDLERS once, one after another
+        (run_all_need_handlers())."""
+        self.run_async(run_all_need_handlers)
 
     def test_handler(self, name: str, handler_cls: Callable[[], NeedHandler]) -> None:
         """Run one need handler on its own, outside the normal need-detection

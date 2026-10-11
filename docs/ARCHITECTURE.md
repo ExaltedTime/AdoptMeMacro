@@ -270,8 +270,24 @@ the character respawned with the pizza still unserved, and it had to run
 twice. `detect_need_bar_readable()` spots it (more than
 `NEED_BAR_MAX_BRIGHT_FRACTION` of the icon strip brighter than
 `NEED_BAR_BRIGHT_LEVEL`); while the icons are unreadable `_need_cleared()`
-returns `None`, which counts as neither a miss nor a sighting, so the wait
-runs its full `NEED_GONE_MAX_WAIT` - and ending it isn't logged as a failure.
+falls back to `icon_gone_by_frame_change()` (below); if that can't tell either it
+returns `None`, which counts as neither a miss nor a sighting, so the wait runs
+its full length - and ending it isn't logged as a failure.
+
+**Judging an icon by how its place changes.** A need's icon has a timer: a
+darker section of its circle that slowly grows. While the bar can't be read,
+`icon_gone_by_frame_change()` watches the circle where the need's icon was
+last recognised (`State.need_icon_positions`, set by `identify_icons()`): a
+circle that stays as it was, or changes only a little between looks (the timer
+creeping on), is still there; one with more than `ICON_GONE_CHANGE_FRACTION`
+(half) of it changed by more than `ICON_FRAME_CHANGE_LEVEL` - and still that
+different `NEED_GONE_FLICKER_RECHECK_DELAY` later - is gone, which ends the
+wait (logged as `<need> icon gone by frame change`). The first look only
+records the circle, so an icon that went before then isn't noticed (the wait
+runs out as before), and the comparison starts afresh whenever the bar is
+readable again. The timer is deliberately not visible to the black-and-white
+icon matching, which is why this is a separate check. The thresholds have not
+yet been tuned on real frames of an unreadable bar.
 Popups, stray windows and minigames that turn up during the wait are handled
 by the `unscrew()` checks that `wait_interruptible()` runs during a task - see
 [Per-cycle checks while a task runs](#per-cycle-checks-while-a-task-runs).
@@ -346,8 +362,11 @@ teleport-walk needs `cafe`, `salon`, `sick`, `pizza`, `school`, `beach`,
 `camping`, `bored` (called out with their own inline comment in the set
 literal, since they leave the map and run considerably longer than
 everything else).
-The GUI's **Debug** tab has a button per handler that runs it directly
-regardless of `ENABLED_NEEDS`.
+The GUI's **Debug** tab has a **Needs** subtab with a button per handler that
+runs it directly regardless of `ENABLED_NEEDS`, and a button that runs every
+handler once, one after another (`run_all_need_handlers()`: each with the
+in-task checks on, the character respawned after each, a stop ends the
+whole sequence, and a summary of how each went printed at the end).
 
 **Focusing the pet.** (Each click is followed by `FOCUS_PET_CLICK_SETTLE` and a `detect_pet_focus()` check; the clicks stop at the first one that focuses it, and `FOCUS_PET_MENU_WAIT` is only waited if none did.) `pet` and `choose` both start with `focus_pet()`, which first checks whether the pet is already focused (`detect_pet_focus()`: the BACK button's crop is on screen) and if so returns True with no clicks; otherwise it
 has no hardcoded position: it takes two screenshots of the bottom of the
@@ -851,9 +870,15 @@ actually on disk (so an old config missing a newer key still works), and
 `save_game_config()` overwrites the whole file:
 
 - **`money_collected`** - how much `tree_collect()` has yielded so far,
-  in `TREE_HARVEST_YIELD` (16) increments. Only ever goes up - there's no
-  code path that lowers it, by design (see `side_quest()` below); the
-  GUI's **Reset Config** button puts it back to 0.
+  in `TREE_HARVEST_YIELD` (16) increments. It goes up with each harvest and
+  is put back to 0 every day at `MONEY_RESET_HOUR` (17:00, local time) by
+  `reset_money_if_due()` (see `side_quest()` below), or by the Debug tab's
+  **Reset Config** button.
+- **`money_reset_boundary`** - the last daily reset moment already dealt with
+  (a timestamp; `None` on a fresh or older config). `side_quest()` compares it
+  with the most recent 17:00 (`last_money_reset_time()`): a later one means the
+  total is reset and the new moment saved. The first time it is seen (`None`) it
+  is only recorded, so updating doesn't wipe the day's total.
 - **`tree_timer`** / **`lure_timer`** - the timestamps `tree_collect()` /
   `lure_collect()` are next due. Both default to "due immediately"
   (`time.time()`) when the config is fresh.
@@ -863,7 +888,7 @@ actually on disk (so an old config missing a newer key still works), and
 - **`resume_on_focus_loss`** - the **Resume after focus loss** checkbox (default
   off); see [Stopping & focus safety](#stopping--focus-safety).
 - **`record_next_run`** - the **Record the next run (low quality video)**
-  checkbox (default off); see [Recording a run](#recording-a-run). Cleared, and
+  checkbox on the Debug tab's Other subtab (default off); see [Recording a run](#recording-a-run). Cleared, and
   the checkbox unticked, when the run that it was for starts.
 - **`private_server_link`** - the private server link `leave_and_rejoin()`
   joins, typed into the GUI's entry box (saved when you press Enter or click
@@ -874,7 +899,8 @@ During a run, this file is read and updated by:
 
 - **`side_quest()`** - called right after `unscrew()`, every cycle of
   `run_full_cycle()`'s loop (so on the same cadence as the paycheck
-  check); does nothing if `side_quest_enabled` is off. While
+  check); first applies the daily money reset (`reset_money_if_due()`), then does
+  nothing if `side_quest_enabled` is off. While
   `money_collected` is below `MONEY_COLLECTED_TARGET` (200) *and*
   `tree_timer` has passed, it calls `tree_collect()`, adds
   `TREE_HARVEST_YIELD`, and pushes `tree_timer` `TREE_CHECK_INTERVAL`
@@ -922,8 +948,10 @@ knowing if you're modifying it:
   flatten Tk's default border/focus-ring rendering.
 - The **Main** tab has the loop/stop row and the Respawn, Setup and Leave &
   rejoin buttons; the **Options** tab holds the persisted switches (Run side
-  quest, Resume after focus loss), the private server link and Reset Config;
-  the **Debug** tab has a button per need handler.
+  quest, Resume after focus loss, Play <minigame>) and the private server link;
+  the **Debug** tab has two subtabs: **Needs** (a button that tests every need
+  in turn, and one per need handler) and **Other** (Record the next run,
+  Refresh debug, Reset Config).
 - **`DebugCapture`** redirects `sys.stdout` into the on-screen console
   (`self.debug_text`) for the lifetime of the GUI, so every `print()`
   anywhere in the macro shows up there automatically (`write()` only logs
@@ -936,7 +964,7 @@ knowing if you're modifying it:
 
 ### Recording a run
 
-Tick **Record the next run (low quality video)** on the Options tab (the
+Tick **Record the next run (low quality video)** on the Debug tab's Other subtab (the
 `record_next_run` config switch) and the next time the loop starts it records
 the Roblox window to `debug/recordings/run<N>_<time>.mp4` - then clears the
 switch, so it's one run only. `start_recording_if_requested()` starts a
@@ -967,10 +995,10 @@ exact values and rationale):
 | Window / coordinates | `REFERENCE_WIDTH`, `REFERENCE_HEIGHT`, `REFERENCE_CENTER_X/Y`, `ROBLOX_RECT_TTL` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `STOP_CLICK_GRACE`, `NEED_GONE_*`, `TELEPORT_NEED_GONE_MAX_WAIT` |
 | Stuck needs | `NEED_STUCK_CHECKS` |
-| Icon readability | `NEED_BAR_BRIGHT_LEVEL`, `NEED_BAR_MAX_BRIGHT_FRACTION` |
+| Icon readability | `NEED_BAR_BRIGHT_LEVEL`, `NEED_BAR_MAX_BRIGHT_FRACTION`, `ICON_FRAME_CHANGE_LEVEL`, `ICON_GONE_CHANGE_FRACTION` |
 | Pet focusing | `FOCUS_PET_REGION_TOP_PERCENT`, `FOCUS_PET_FRAME_GAP`, `FOCUS_PET_DIFF_THRESHOLD`, `FOCUS_PET_MERGE_KERNEL`, `FOCUS_PET_MIN_AREA` |
 | Screen positions | `CATCH_*_POS`, `EMPTY_POS`, `RIDE_*_POS`, `LURE_NEW_POS_*`, `SETUP_*_POS` |
-| Side quest / setup | `TREE_HARVEST_YIELD`, `MONEY_COLLECTED_TARGET`, `TREE_CHECK_INTERVAL`, `LURE_RECOLLECT_INTERVAL`, `LURE_COLLECT_*`, `TREE_COLLECT_*` |
+| Side quest / setup | `TREE_HARVEST_YIELD`, `MONEY_COLLECTED_TARGET`, `TREE_CHECK_INTERVAL`, `MONEY_RESET_HOUR`, `LURE_RECOLLECT_INTERVAL`, `LURE_COLLECT_*`, `TREE_COLLECT_*` |
 | Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN/MAX_RADIUS`, `NEED_ICON_HOUGH_*`, `NEED_STRIP_*` (when the circle search is skipped) |
 | Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
@@ -989,7 +1017,7 @@ were away can be read back afterwards. The folder has two subfolders -
 `run_log.txt`, `run_counter.txt`, `status.json`, and `runs/`, one `run<N>.txt` per run) - plus `recordings/` for the
 videos, and the game config (`.config`) in `debug/` itself. An older layout is
 moved into place at startup (`migrate_debug_layout()`). The Debug tab's
-**Refresh debug** button (`refresh_debug()`, after a confirmation, not while a
+Other subtab's **Refresh debug** button (`refresh_debug()`, after a confirmation, not while a
 run is going) empties all of it except `.config`; run numbers start from 1
 again, since the counter goes with the logs.
 
@@ -1097,6 +1125,7 @@ clicks instead of making them. They cover:
 - `test_detection.py` - the need-strip capture and its cache, and the
   popups and stray windows against the real crops in `ref/`;
 - `test_loop.py` - the whole workflow loop run for a moment with the game stubbed out (idle respawns, the resource monitor starting and stopping, the report being written);
+- `test_features.py` - the daily money reset, the run-every-need sequence and judging an icon gone by how its place changes;
 - `test_report.py` - the run-report parser against the exact log wording the
   macro writes (a round trip through `log_run_event()`), the chart itself,
   and the constant check.

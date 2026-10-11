@@ -386,9 +386,10 @@ TREE_HARVEST_YIELD = 16           # money_collected added to the persisted total
 
 # side_quest(): how often to tend the money tree/lure, and the money_collected
 # target that pauses tree harvesting (see load_game_config()/save_game_config()).
-# money_collected only ever goes up here - resetting it means deleting
-# GAME_CONFIG_PATH by hand.
+# money_collected only goes up here, until it is reset to 0 every day at MONEY_RESET_HOUR
+# (local time - see side_quest()), or by the Debug tab's Reset Config.
 MONEY_COLLECTED_TARGET = 200
+MONEY_RESET_HOUR = 17                  # the tree's money total starts again from 0 at this hour (0-23, local time) every day
 TREE_CHECK_INTERVAL = 10 * 60          # seconds (10 minutes) between tree harvests
 LURE_RECOLLECT_INTERVAL = 4 * 60 * 60  # seconds (4 hours)
 
@@ -485,6 +486,10 @@ NEED_ICON_HOUGH_VOTES = 25          # Hough: accumulator votes needed to accept 
 # (detect_need_bar_readable()) and "the icon is gone" can't be concluded from it.
 NEED_BAR_BRIGHT_LEVEL = 200
 NEED_BAR_MAX_BRIGHT_FRACTION = 0.5
+# While the bar is unreadable the wait watches each icon's place for change instead (see icon_gone_by_frame_change()):
+ICON_FRAME_CHANGE_LEVEL = 40       # a pixel counts as changed if any channel moved by more than this between two looks
+ICON_GONE_CHANGE_FRACTION = 0.5    # an icon is gone when more than this fraction of its circle has changed (the timer's darker
+                                   # section creeping on changes far less between two looks)
 CIRCULARITY_EPSILON = 1e-6          # avoids dividing by zero when scoring circularity
 PIXEL_MAX = 255                     # max value of an 8-bit pixel channel
 

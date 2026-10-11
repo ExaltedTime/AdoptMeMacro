@@ -187,6 +187,13 @@ instead, to show what else was on it.
    blurred grayscale strip. Icons are found by their round outline, not
    their color, so event badges overlapping an icon, differently colored
    icons and busy backgrounds (grass, scenery) don't affect detection.
+   The search is skipped while the strip (as cropped and blanked above) is
+   practically unchanged since it last ran: when fewer than
+   `NEED_STRIP_MAX_CHANGED_FRACTION` of its pixels moved by more than
+   `NEED_STRIP_CHANGED_LEVEL`, the last result is reused (at most
+   `NEED_STRIP_MAX_REUSES` times in a row, and never when saving the debug
+   image). An icon appearing or going changes far more than that. Only the
+   strip is compared, never the whole screen.
 
 Each detected icon is cropped out of the full screenshot at a fixed
 radius (`ICON_CROP_RADIUS` + `ICON_EXTRACT_PADDING` px of margin) and handed
@@ -951,7 +958,7 @@ again, since the counter goes with the logs.
 
 - **`output.log`** - everything the macro prints (the same as the GUI
   console), one timestamped line each, appended to across runs. `log_output()`
-  is called by `DebugCapture`, so this only exists while the GUI is up. Past
+  is called by `DebugCapture`, so this only exists while the GUI is up. The file stays open between writes (flushed after each one, so a crash loses nothing); `close_output_log()` closes it before **Refresh debug** deletes it, since Windows won't delete an open file. Past
   `OUTPUT_LOG_MAX_BYTES` (5 MB) it moves to `output.log.old`, replacing the
   previous one.
 - **`run_log.txt`** - the short version: one tagged line per notable event

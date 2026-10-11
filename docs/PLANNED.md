@@ -35,7 +35,6 @@ Suggestions from reading through the code, none of them started. Roughly in orde
 
 ## Optimization
 
-- [ ] `log_output()` reopens the file for every write; keep one handle open (flushed) instead
 - [ ] `detect_need_icons()` grabs the whole screen and then crops the top strip; grab only that region (`mss` can capture a sub-rectangle), and share one grab between the readability check and the detection
 
 ## Reliability

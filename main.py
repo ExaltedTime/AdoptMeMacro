@@ -299,6 +299,7 @@ def refresh_debug():
     numbers start from 1 again, since the counter goes with the logs. Returns
     the number of entries removed."""
     removed = 0
+    close_output_log()
     for name in os.listdir(DEBUG_DIR):
         path = os.path.join(DEBUG_DIR, name)
         if path == GAME_CONFIG_PATH:
@@ -344,23 +345,40 @@ RUN_STATS = {"run": None, "started": None, "cycles": 0, "last_detected": [], "re
 
 OUTPUT_LOG_LOCK = threading.Lock()
 _output_at_line_start = True
+_output_log = None   # the open output.log, kept open between writes (see log_output())
+
+def close_output_log():
+    """Close output.log if it's open (it reopens on the next write). Needed
+    before anything deletes or moves the file - on Windows an open file can't
+    be - e.g. refresh_debug()."""
+    global _output_log
+    with OUTPUT_LOG_LOCK:
+        if _output_log is not None:
+            _output_log.close()
+            _output_log = None
 
 def log_output(text):
     """Append `text` (whatever was just printed) to OUTPUT_LOG_PATH, with a
     timestamp at the start of every line. Called by DebugCapture, so it's
-    everything the GUI console shows, kept on disk. Never raises. Past
-    OUTPUT_LOG_MAX_BYTES the file moves to output.log.old first."""
-    global _output_at_line_start
+    everything the GUI console shows, kept on disk. The file stays open
+    between calls and is flushed after each one, so nothing is lost if the
+    macro dies. Never raises. Past OUTPUT_LOG_MAX_BYTES the file moves to
+    output.log.old and a new one starts."""
+    global _output_at_line_start, _output_log
     try:
         with OUTPUT_LOG_LOCK:
-            if os.path.exists(OUTPUT_LOG_PATH) and os.path.getsize(OUTPUT_LOG_PATH) > OUTPUT_LOG_MAX_BYTES:
+            if _output_log is None:
+                _output_log = open(OUTPUT_LOG_PATH, "a", encoding="utf-8")
+            for piece in text.splitlines(keepends=True):
+                if _output_at_line_start:
+                    _output_log.write(time.strftime("[%Y-%m-%d %H:%M:%S] "))
+                _output_log.write(piece)
+                _output_at_line_start = piece.endswith("\n")
+            _output_log.flush()
+            if _output_log.tell() > OUTPUT_LOG_MAX_BYTES:
+                _output_log.close()
+                _output_log = None
                 os.replace(OUTPUT_LOG_PATH, OUTPUT_LOG_PATH + ".old")
-            with open(OUTPUT_LOG_PATH, "a", encoding="utf-8") as f:
-                for piece in text.splitlines(keepends=True):
-                    if _output_at_line_start:
-                        f.write(time.strftime("[%Y-%m-%d %H:%M:%S] "))
-                    f.write(piece)
-                    _output_at_line_start = piece.endswith("\n")
     except OSError:
         pass
 
@@ -529,23 +547,45 @@ def need_icon_strip(img):
     h, w = img.shape[:2]
     return img[0:int(h * NEED_ICON_TOP_PERCENT), 0:int(w * NEED_ICON_WIDTH_PERCENT)]
 
+# The strip the icons were last searched for in, and what was found: while the strip looks the same, the circle
+# search is skipped (see detect_need_icons()).
+_NEED_STRIP_CACHE = {"strip": None, "found": [], "reuses": 0}
+
+def strip_changed_fraction(before, after):
+    """The fraction of pixels that differ between two same-size strips by more than NEED_STRIP_CHANGED_LEVEL."""
+    changed = cv2.absdiff(before, after).max(axis=2) > NEED_STRIP_CHANGED_LEVEL
+    return np.count_nonzero(changed) / changed.size
+
 def detect_need_icons(save_debug=False):
     """Detect the circular need icons at the top of the screen. Icons are
     found by their round outline (Hough circles, within a fixed radius
     range), not by color, so event badges overlapping an icon, differently
-    colored icons and busy backgrounds don't affect detection. Returns
-    ((cx, cy, radius) per icon, left to right) and the full screenshot."""
+    colored icons and busy backgrounds don't affect detection. The circle
+    search is skipped, reusing the last result, while the strip the icons sit
+    in is practically unchanged since it was last searched (at most
+    NEED_STRIP_MAX_CHANGED_FRACTION of it changed, and no more than
+    NEED_STRIP_MAX_REUSES times running); an icon appearing or going changes
+    far more than that. Returns ((cx, cy, radius) per icon, left to right) and
+    the full screenshot."""
     img = grab_screen()
     h, w = img.shape[:2]
 
     top_strip = need_icon_strip(img).copy()
     top_strip[0:int(h * NEED_ICON_BLANK_HEIGHT), 0:int(w * NEED_ICON_BLANK_WIDTH)] = 0
 
-    gray = cv2.medianBlur(cv2.cvtColor(top_strip, cv2.COLOR_BGR2GRAY), NEED_ICON_BLUR_KERNEL)
-    circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, dp=1, minDist=NEED_ICON_MIN_DISTANCE,
-                               param1=NEED_ICON_HOUGH_EDGE, param2=NEED_ICON_HOUGH_VOTES,
-                               minRadius=NEED_ICON_MIN_RADIUS, maxRadius=NEED_ICON_MAX_RADIUS)
-    found = [] if circles is None else sorted((int(x), int(y), int(r)) for x, y, r in circles[0])
+    cache = _NEED_STRIP_CACHE
+    if (not save_debug and cache["strip"] is not None and cache["strip"].shape == top_strip.shape
+            and cache["reuses"] < NEED_STRIP_MAX_REUSES
+            and strip_changed_fraction(cache["strip"], top_strip) < NEED_STRIP_MAX_CHANGED_FRACTION):
+        cache["reuses"] += 1
+        found = list(cache["found"])
+    else:
+        gray = cv2.medianBlur(cv2.cvtColor(top_strip, cv2.COLOR_BGR2GRAY), NEED_ICON_BLUR_KERNEL)
+        circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, dp=1, minDist=NEED_ICON_MIN_DISTANCE,
+                                   param1=NEED_ICON_HOUGH_EDGE, param2=NEED_ICON_HOUGH_VOTES,
+                                   minRadius=NEED_ICON_MIN_RADIUS, maxRadius=NEED_ICON_MAX_RADIUS)
+        found = [] if circles is None else sorted((int(x), int(y), int(r)) for x, y, r in circles[0])
+        cache.update(strip=top_strip, found=found, reuses=0)
 
     if save_debug:
         debug_img = top_strip.copy()

@@ -61,18 +61,14 @@ MINIGAME_VICTORY_BUTTON_BOX = (860, 725, 1060, 800)
 MINIGAME_VICTORY_BUTTON_MIN_PIXELS = 2000
 MINIGAME_VICTORY_BUTTON_POS = (966, 762)
 # While one runs it has its own overlay along the top of the screen (Hauntlet 2: the ROOM counter beside the
-# timer and monitor; Ghost Gallery: the TIME LEFT / GHOST GALLERY / Score banner), and an "Exit Minigame"
-# button bottom left. Crops of each overlay (ref/overlays/<minigame>.png, found within its box here, at least
+# timer and monitor; Ghost Gallery: the TIME LEFT / GHOST GALLERY / Score banner). Crops of each overlay (ref/overlays/<minigame>.png, found within its box here, at least
 # MINIGAME_OVERLAY_THRESHOLD) say whether the game is on: one that was seen and then isn't, for
 # MINIGAME_OVERLAY_LOST_TIMEOUT seconds, was left (game over, kicked out) - and one never seen within
 # MINIGAME_OVERLAY_START_GRACE seconds after its start wait never started.
 MINIGAME_OVERLAYS = {"hauntlet_2": (1040, 40, 1210, 135), "ghost_gallery": (840, 25, 1080, 120)}   # name: search box
 MINIGAME_OVERLAY_THRESHOLD = 0.7
 MINIGAME_OVERLAY_LOST_TIMEOUT = 10.0
-MINIGAME_OVERLAY_START_GRACE = 40.0
-EXIT_MINIGAME_BOX = (0, 990, 260, 1075)      # where ref/popups/exit_minigame.png is looked for
-EXIT_MINIGAME_THRESHOLD = 0.8
-EXIT_MINIGAME_SETTLE = 3.0                   # after clicking it
+MINIGAME_OVERLAY_START_GRACE = 60.0
 MINIGAME_VICTORY_CHECK_INTERVAL = 1.0
 MINIGAME_POPUP_CHECK_INTERVAL = 4.0   # the popup checks (stray windows, paycheck) run this often while a minigame is played
 MINIGAME_MAX_DURATION = 600.0       # gives up (and logs a failure) if the victory screen hasn't shown by then

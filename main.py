@@ -2191,31 +2191,6 @@ class MinigameWatch:
             return f"never started (no overlay within {MINIGAME_OVERLAY_START_GRACE:g}s of the start wait)"
         return None
 
-def exit_minigame():
-    """Click the "Exit Minigame" button (ref/popups/exit_minigame.png, bottom
-    left) if it's on screen. Returns True if it was."""
-    crop = load_templates(STRAY_WINDOW_DIR).get("exit_minigame")
-    if crop is None:
-        return False
-    score, center = find_template(grab_screen(), crop, EXIT_MINIGAME_BOX)
-    if score < EXIT_MINIGAME_THRESHOLD:
-        return False
-    hover_click(*center)
-    time.sleep(EXIT_MINIGAME_SETTLE)
-    return True
-
-def leave_stray_minigame():
-    """Top of a cycle: if a minigame's overlay is up that nothing is playing
-    - one dropped half way (focus lost, a stop), or entered some other way -
-    leave it with its Exit Minigame button, so the needs can be reached
-    again. Returns the minigame's name if it was left."""
-    name = detect_minigame_overlay(grab_screen())
-    if name is None or not exit_minigame():
-        return None
-    print(f"[debug] left a minigame nothing was playing: {name}")
-    log_run_event(f"left a stray minigame: {MINIGAME_LABELS.get(name, name)}")
-    return name
-
 _LAST_MINIGAME_POPUP_CHECK = 0.0
 
 def minigame_popup_checks():
@@ -2302,7 +2277,7 @@ def play_minigame(name):
     """Take the popup's Yes, play minigame `name` until its victory screen
     shows, click NICE!, and respawn. Gives up (a logged failure) when the
     overlay shows it's over or never started (MinigameWatch), or after
-    MINIGAME_MAX_DURATION - leaving it by its Exit Minigame button first.
+    MINIGAME_MAX_DURATION.
     Counts as progress for the no-progress rejoin. Returns True if it was won."""
     global LAST_PROGRESS
     label = MINIGAME_LABELS.get(name, name)
@@ -2325,7 +2300,6 @@ def play_minigame(name):
     else:
         reason = watch.problem or f"did not reach the victory screen within {MINIGAME_MAX_DURATION:g}s"
         log_failure(f"{label} {reason}")
-        exit_minigame()
     LAST_PROGRESS = time.time()
     respawn_character()
     return won
@@ -2379,7 +2353,6 @@ def unscrew(in_task=False, play_minigames=True):
             return "rejoined"
     else:
         rejoin_game()
-        leave_stray_minigame()
     backpack_open = close_backpack_if_stuck(in_task)
     dismiss_stray_windows()
     played = minigame_popup(play=play_minigames) if HALLOWEEN else None

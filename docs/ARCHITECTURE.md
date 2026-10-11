@@ -542,14 +542,9 @@ LEFT / GHOST GALLERY / Score banner), recognised by a crop in
 takes (`minigame_won()`, `minigame_wait()`): once the overlay has been seen,
 losing it for `MINIGAME_OVERLAY_LOST_TIMEOUT` (10 s) means the minigame was left
 (game over without the victory screen, kicked out) and it stops there; never
-seeing it within `MINIGAME_OVERLAY_START_GRACE` (40 s) of the start wait means it
+seeing it within `MINIGAME_OVERLAY_START_GRACE` (60 s) of the start wait means it
 never started. Either is a logged failure with that reason, instead of waiting
-out `MINIGAME_MAX_DURATION` (600 s). On a failure `play_minigame()` first leaves
-the minigame with its Exit Minigame button (`exit_minigame()`:
-`ref/popups/exit_minigame.png` within `EXIT_MINIGAME_BOX`). The same button is
-used at the top of a cycle by `leave_stray_minigame()` - if an overlay is up and
-nothing is playing (a minigame dropped half way by a focus loss, run 321) it's
-left, logged as `left a stray minigame`, so the needs can be reached again.
+out `MINIGAME_MAX_DURATION` (600 s).
 - `play_hauntlet_2()` waits `HAUNTLET_2_START_WAIT` (50 s), then holds
   `HAUNTLET_2_FORWARD_KEY` until victory or until the overlay says it's over.
 - `play_ghost_gallery()` waits `GHOST_GALLERY_START_WAIT`, then holds the mouse

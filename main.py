@@ -85,6 +85,15 @@ def check_focus():
         print("\n[!] Roblox is no longer focused")
         raise FocusLost()
 
+def stop_pressed_soon():
+    """True if [STOP] is pressed within STOP_CLICK_GRACE. Clicking the button
+    takes the focus from Roblox on mouse-down, a moment before the click sets
+    STOP_FLAG, so a FocusLost seen right then is really the user stopping."""
+    end = time.time() + STOP_CLICK_GRACE
+    while time.time() < end and not STOP_FLAG:
+        time.sleep(0.05)
+    return STOP_FLAG
+
 def check_running():
     """Raise StopRequested or FocusLost if the workflow should not continue
     right now. This is the single checkpoint used everywhere - inside
@@ -2563,6 +2572,8 @@ def run_workflow_loop():
                 run_full_cycle()
                 wait_interruptible(LOOP_DELAY)
             except FocusLost:
+                if stop_pressed_soon():
+                    raise StopRequested()
                 # Only stops the run unless "Resume after focus loss" is
                 # ticked - and even then gives up after
                 # FOCUS_RESUME_MAX_IN_A_ROW losses with no need resolved in
@@ -3252,8 +3263,12 @@ class AdoptMeGUI:
             except FocusLost:
                 # Same reasoning as StopRequested above - must come before
                 # the generic Exception handler.
-                log_failure("stopped: Roblox lost focus")
-                final_status = "[STOPPED: Roblox not focused]"
+                if stop_pressed_soon():
+                    log_run_event("stopped by the user")
+                    final_status = "[STOPPED]"
+                else:
+                    log_failure("stopped: Roblox lost focus")
+                    final_status = "[STOPPED: Roblox not focused]"
             except Exception as e:
                 print(f"\n[ERROR] {e}\n{traceback.format_exc()}")
                 log_failure(f"crashed: {type(e).__name__}: {e}")

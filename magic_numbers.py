@@ -333,7 +333,7 @@ TELEPORT_WALK_NEEDS_HALLOWEEN = {
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 20.0),), helicopter=True),
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.8), ("a", 10))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("s", 20),), helicopter=True),
-    "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 5.0), ("w", 0.8)),
+    "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 3.0), ("w", 0.8)),
                     final_click=SICK_FINAL_CLICK_POS),
 }
 
@@ -442,6 +442,7 @@ ROBLOX_CRASH_WINDOW_TITLE = "Roblox Crash"
 # Gives up after this many focus losses in a row without a need being resolved in between, so it can't
 # fight you for the window forever.
 FOCUS_RESUME_MAX_IN_A_ROW = 5
+STOP_CLICK_GRACE = 0.6    # after a focus loss, how long to wait for a [STOP] press that is still mid-click (pressing it takes the focus first)
 FOCUS_RESUME_DELAY = 3.0   # wait before taking the window back, so whatever took it is out of the way
 
 # Window focus click (near top edge, right of center)

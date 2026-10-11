@@ -19,7 +19,6 @@ Suggestions from reading through the code, none of them started. Roughly in orde
 
 ## Organization
 
-- [ ] Replace `from magic_numbers import *` with `import magic_numbers as cfg` (or split the constants per module): linters can then catch typos and missing constants, which the star import hides
 - [ ] `tests/`: the pure parts are easy to test with the Windows-only imports stubbed - `need_bar_readable()`, `record_detection()`, `parse_server_link()`, `exact_color_mask()`, `DebugCapture`, `format_duration()`. Use lossless PNG fixtures (compressed `.webp` screenshots don't match exact colours)
 - [ ] A GitHub Action running pyflakes and the tests on every push
 

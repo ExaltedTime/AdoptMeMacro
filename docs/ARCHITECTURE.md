@@ -8,8 +8,10 @@ Almost everything lives in `main.py` (including the run-report chart - see [Debu
 of `# === SECTION ===` blocks; this doc follows that same order. The one
 exception is `magic_numbers.py`, which holds every tunable constant (see
 [Configuration reference](#configuration-reference)) - `main.py` pulls
-them all in with `from magic_numbers import *` and refers to them by bare
-name everywhere else.
+does `import magic_numbers as cfg` and refers to them as `cfg.NAME`
+everywhere else (`tools/check_constants.py` fails on a `cfg.` name that
+`magic_numbers.py` doesn't define - a typo pyflakes can't see). The docs below
+still write constants by their bare name.
 
 ## The workflow lifecycle
 
@@ -917,8 +919,8 @@ window shows up in it if it's on top.
 
 Every tunable number, timing, screen position and color range lives in
 `magic_numbers.py`, not `main.py` - it's the one file to edit for a moved
-button, a slower computer, or a different monitor. `main.py` does `from
-magic_numbers import *` and refers to everything there by bare name.
+button, a slower computer, or a different monitor. `main.py` does `import
+magic_numbers as cfg` and refers to everything there as `cfg.NAME`.
 `ENABLED_NEEDS` is the first thing defined in it, since it's the setting
 most likely to need editing. Everything else falls into one of these
 groups (see the comments next to each constant in `magic_numbers.py` for

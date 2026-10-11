@@ -250,7 +250,10 @@ while the strip is unchanged, except for the second look of each check, which is
 always a real search) every
 `NEED_GONE_POLL_INTERVAL` until the target need is missing
 `NEED_GONE_CONFIRMATIONS` times in a row (any sighting resets the count
-back to zero), up to `NEED_GONE_MAX_WAIT` total.
+back to zero), up to `NEED_GONE_MAX_WAIT` total (the teleport-walk needs wait
+up to `TELEPORT_NEED_GONE_MAX_WAIT`, 90s, instead - they time out by
+themselves in the game and camping was seen clearing ~66s after its walk - or
+an entry's own `max_wait`).
 
 Each individual check goes through `_need_cleared()`, which re-samples
 once more, `NEED_GONE_FLICKER_RECHECK_DELAY` later, before a miss is
@@ -377,7 +380,7 @@ rather than a flat sleep after the fact.
 | `pet` | `PetNeedHandler`: `focus_pet()` (see below), then hold the mouse down and swipe once down from `PET_SWIPE_START_OFFSET` above screen center to `PET_SWIPE_END_OFFSET` below it over `PET_SWIPE_DURATION` (8s). Same as `catch` - always the full fixed duration. |
 | `choose` | `ChooseNeedHandler`: `focus_pet()` (see below), find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. It doesn't wait for the icon to clear (it's gone at once; the next check confirms). |
 | `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then `equip_favorite_vehicle()` (backpack → vehicles → first vehicle → equip → close backpack), hold `r` (`KEY_HELICOPTER`) for `RIDE_R_HOLD_DURATION` (1s), then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT` (60s), ending early the moment "ride" is confirmed cleared (see below). |
-| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`), and `helicopter` (see below). Which table is used depends on `HALLOWEEN` - see below. |
+| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`), `helicopter` (see below) and `max_wait` (how long to wait for the need to clear afterwards; default `TELEPORT_NEED_GONE_MAX_WAIT`, 90s). Which table is used depends on `HALLOWEEN` - see below. |
 | `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")` - up to `NEED_GONE_MAX_WAIT` (60s), same early-exit as `ride` above. |
 
 **Helicopter.** A teleport-walk entry can fly instead of walk. `HELICOPTER_REQUIRED`
@@ -961,7 +964,7 @@ exact values and rationale):
 |---|---|
 | Behavior flags | `ENABLED_NEEDS`, `STOP_HOTKEY`, `BACKPACK_*`, `HALLOWEEN`, `MINIGAME_*`, `HAUNTLET_2_*`, `GHOST_GALLERY_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
 | Window / coordinates | `REFERENCE_WIDTH`, `REFERENCE_HEIGHT`, `REFERENCE_CENTER_X/Y`, `ROBLOX_RECT_TTL` |
-| Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `STOP_CLICK_GRACE`, `NEED_GONE_*` |
+| Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `STOP_CLICK_GRACE`, `NEED_GONE_*`, `TELEPORT_NEED_GONE_MAX_WAIT` |
 | Stuck needs | `NEED_STUCK_CHECKS` |
 | Icon readability | `NEED_BAR_BRIGHT_LEVEL`, `NEED_BAR_MAX_BRIGHT_FRACTION` |
 | Pet focusing | `FOCUS_PET_REGION_TOP_PERCENT`, `FOCUS_PET_FRAME_GAP`, `FOCUS_PET_DIFF_THRESHOLD`, `FOCUS_PET_MERGE_KERNEL`, `FOCUS_PET_MIN_AREA` |
@@ -970,7 +973,7 @@ exact values and rationale):
 | Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN/MAX_RADIUS`, `NEED_ICON_HOUGH_*`, `NEED_STRIP_*` (when the circle search is skipped) |
 | Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
-| Debug logging | `OUTPUT_LOG_PATH`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
+| Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_BOX`, `PAYCHECK_MATCH_THRESHOLD` |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
@@ -982,7 +985,7 @@ Everything below is in `debug/` (git-ignored) so a run that broke while you
 were away can be read back afterwards. The folder has two subfolders -
 `images/` (`IMAGES_DIR`: every png - the `debug_*.png` views, `failures/`,
 `reports/`) and `logs/` (`LOGS_DIR`: every text and json file - `output.log`,
-`run_log.txt`, `run_counter.txt`, `status.json`) - plus `recordings/` for the
+`run_log.txt`, `run_counter.txt`, `status.json`, and `runs/`, one `run<N>.txt` per run) - plus `recordings/` for the
 videos, and the game config (`.config`) in `debug/` itself. An older layout is
 moved into place at startup (`migrate_debug_layout()`). The Debug tab's
 **Refresh debug** button (`refresh_debug()`, after a confirmation, not while a
@@ -997,6 +1000,10 @@ again, since the counter goes with the logs.
 - **`run_log.txt`** - the short version: one tagged line per notable event
   (needs detected, resolved with how long they took, popups dismissed,
   recoveries, stops, failures). Start here to see roughly what happened.
+  Every line is also written to its own run's file, `logs/runs/run<N>.txt`
+  (`RUN_LOGS_DIR`, by `log_run_event()`), so one run can be read or shared on
+  its own; lines logged before any run has started (`RUN None`) are only in
+  the combined file, and the run report still reads the combined one.
   Two kinds of line are written on a timer while the loop runs:
   `quiet: no need resolved for N min` (every `QUIET_LOG_INTERVAL`, by
   `check_quiet()` at the top of each cycle, while nothing is being resolved -

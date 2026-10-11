@@ -50,7 +50,7 @@ def macro(tmp_path, monkeypatch):
     """main.py with a fresh State and RunStats, every file it writes redirected into tmp_path, and the
     things that would touch the game (clicks, keys, sleeping) replaced by recorders."""
     cfg = main.cfg
-    for name, value in (("RUN_LOG_PATH", tmp_path / "run_log.txt"), ("STATUS_PATH", tmp_path / "status.json"),
+    for name, value in (("RUN_LOG_PATH", tmp_path / "run_log.txt"), ("RUN_LOGS_DIR", tmp_path / "runs"), ("STATUS_PATH", tmp_path / "status.json"),
                         ("OUTPUT_LOG_PATH", tmp_path / "output.log"), ("FAILURE_DIR", tmp_path / "failures"),
                         ("REPORTS_DIR", tmp_path / "reports")):
         monkeypatch.setattr(cfg, name, str(value))

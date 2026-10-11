@@ -393,10 +393,19 @@ def reset_need_tracking() -> None:
 
 def log_run_event(message: str) -> None:
     """Append one timestamped line to RUN_LOG_PATH, tagged with
-    state.run_number."""
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    state.run_number - and, when a run number is set, to that run's own
+    file, RUN_LOGS_DIR/run<N>.txt (lines logged before any run has started
+    only go to RUN_LOG_PATH)."""
+    line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [RUN {state.run_number}] {message}\n"
     with open(cfg.RUN_LOG_PATH, "a") as f:
-        f.write(f"[{timestamp}] [RUN {state.run_number}] {message}\n")
+        f.write(line)
+    if state.run_number is not None:
+        try:
+            os.makedirs(cfg.RUN_LOGS_DIR, exist_ok=True)
+            with open(os.path.join(cfg.RUN_LOGS_DIR, f"run{state.run_number}.txt"), "a") as f:
+                f.write(line)
+        except OSError:
+            pass   # the combined log above has it
 
 # What the macro knows about how this run is going, written to STATUS_PATH by
 # write_status() so it can be checked without opening the GUI.
@@ -1883,7 +1892,7 @@ class TeleportWalkNeedHandler(NeedHandler):
             print(f"[debug] clicking {final_click}...")
             hover_click(*final_click)
 
-        wait_until_need_gone(self.name)
+        wait_until_need_gone(self.name, max_wait=self.config.get("max_wait", cfg.TELEPORT_NEED_GONE_MAX_WAIT))
 
         print(f"[!] {self.name.capitalize()} complete!")
         return True

@@ -139,6 +139,7 @@ for _directory in (NEEDS_DIR, DEBUG_DIR, IMAGES_DIR, LOGS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
 RUN_LOG_PATH = os.path.join(LOGS_DIR, "run_log.txt")        # appended to, never overwritten
+RUN_LOGS_DIR = os.path.join(LOGS_DIR, "runs")                 # run<N>.txt: this run's lines of the log on their own - see log_run_event()
 RUN_COUNTER_PATH = os.path.join(LOGS_DIR, "run_counter.txt")  # holds the last-used run number
 GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")       # persisted game state - see load_game_config()
 OUTPUT_LOG_PATH = os.path.join(LOGS_DIR, "output.log")      # everything the macro prints, timestamped - see log_output()
@@ -318,7 +319,8 @@ HELICOPTER_HOLD_DURATION = 4.0     # then hold KEY_HELICOPTER this long
 # Needs that teleport somewhere and walk (see TeleportWalkNeedHandler), then
 # wait for the need to clear. Each entry: where to teleport, the
 # (key, seconds) holds to perform in order, optionally a `final_click`
-# position to click after the last hold, and optionally `helicopter` (above).
+# position to click after the last hold, optionally `helicopter` (above) and optionally
+# `max_wait` (how long to wait for the need to clear afterwards; default TELEPORT_NEED_GONE_MAX_WAIT).
 TELEPORT_WALK_NEEDS_NORMAL: dict[str, dict[str, Any]] = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),)),
@@ -352,6 +354,9 @@ NEED_STUCK_CHECKS = 5            # an enabled need still on screen after this ma
                                   # disabled for the rest of the run - see record_detection()
 NEED_GONE_MAX_WAIT = 60.0        # most wait_until_need_gone() ever waits for an icon to disappear -
                                   # also reused as walk_alternating()'s total duration cap for walk/ride
+TELEPORT_NEED_GONE_MAX_WAIT = 90.0   # the same wait, for the teleport-walk needs after their walk: they time out by themselves in the game,
+                                  # and camping was seen clearing ~66s after it (a 60s wait logged a failure) - an entry of
+                                  # TELEPORT_WALK_NEEDS can override it with its own `max_wait`
 NEED_GONE_POLL_INTERVAL = 5.0    # how often to re-check for the icon during that wait
 NEED_GONE_CONFIRMATIONS = 3      # consecutive checks that must all miss the icon before it counts as cleared
 NEED_GONE_CONFIRM_INTERVAL = 1.0 # pause between those confirming checks

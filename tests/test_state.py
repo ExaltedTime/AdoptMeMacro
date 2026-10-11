@@ -296,3 +296,53 @@ def test_a_second_disconnect_during_setup_does_not_end_the_run(macro, monkeypatc
     assert not macro.state.disabled_needs
     log = open(macro.cfg.RUN_LOG_PATH).read()
     assert "setup interrupted by a rejoin" in log and "recovery complete" in log
+
+
+def test_every_run_gets_its_own_log_file_and_the_combined_log_keeps_everything(macro):
+    macro.log_run_event("before any run")                     # no run number yet: only in the combined log
+    macro.state.run_number = 7
+    macro.log_run_event("resolved: hungry (28s)")
+    macro.state.run_number = 8
+    macro.log_run_event("detected: pizza")
+    macro.log_run_event("resolved: pizza (80s)")
+    own = os.path.join(macro.cfg.RUN_LOGS_DIR)
+    assert sorted(os.listdir(own)) == ["run7.txt", "run8.txt"]
+    assert open(os.path.join(own, "run7.txt")).read().count("\n") == 1
+    eight = open(os.path.join(own, "run8.txt")).read().splitlines()
+    assert len(eight) == 2 and all("[RUN 8]" in line for line in eight)
+    combined = open(macro.cfg.RUN_LOG_PATH).read().splitlines()
+    assert len(combined) == 4 and "[RUN None] before any run" in combined[0]
+    assert macro.parse_run(macro.cfg.RUN_LOG_PATH, 8)["resolved"][0][1:] == ("pizza", 80)    # the report still reads the combined log
+
+
+def test_a_run_log_that_cannot_be_written_does_not_lose_the_combined_line(macro, monkeypatch):
+    macro.state.run_number = 3
+    monkeypatch.setattr(macro.cfg, "RUN_LOGS_DIR", os.path.join(macro.cfg.RUN_LOG_PATH, "not-a-folder"))   # a path under a file
+    macro.log_run_event("resolved: hungry (28s)")
+    assert "resolved: hungry" in open(macro.cfg.RUN_LOG_PATH).read()
+
+
+@pytest.mark.parametrize("need, expected", [("camping", 90.0), ("pizza", 90.0)])
+def test_teleport_needs_wait_longer_for_the_need_to_clear(macro, monkeypatch, need, expected):
+    waited = []
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "teleport_to", lambda pos: None)
+    monkeypatch.setattr(macro, "equip_favorite_vehicle", lambda: None)       # camping flies while Halloween is on
+    monkeypatch.setattr(macro, "hold_key", lambda key, duration: None)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
+    monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=60.0, **kw: waited.append(max_wait))
+    assert macro.TeleportWalkNeedHandler(need).handle() is True
+    assert waited == [expected] and macro.cfg.TELEPORT_NEED_GONE_MAX_WAIT > macro.cfg.NEED_GONE_MAX_WAIT
+
+
+def test_a_need_can_set_its_own_wait(macro, monkeypatch):
+    waited = []
+    monkeypatch.setitem(macro.cfg.TELEPORT_WALK_NEEDS, "camping", {**macro.cfg.TELEPORT_WALK_NEEDS["camping"], "max_wait": 150.0})
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "teleport_to", lambda pos: None)
+    monkeypatch.setattr(macro, "equip_favorite_vehicle", lambda: None)       # camping flies while Halloween is on
+    monkeypatch.setattr(macro, "hold_key", lambda key, duration: None)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
+    monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=60.0, **kw: waited.append(max_wait))
+    macro.TeleportWalkNeedHandler("camping").handle()
+    assert waited == [150.0]

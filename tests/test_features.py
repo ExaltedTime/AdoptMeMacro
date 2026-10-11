@@ -491,3 +491,30 @@ def test_the_scheduled_rejoin_is_two_hours(macro, monkeypatch):
     assert macro.rejoin_reason() is None
     macro.state.last_rejoin = time.time() - 121 * 60
     assert macro.rejoin_reason()[0] == "scheduled"
+
+
+# --- a paycheck popup mid-task restarts the task -------------------------------------------------------
+
+@pytest.fixture
+def quiet_screen(macro, monkeypatch):
+    """unscrew() with nothing on screen but a paycheck popup that detect_paycheck() reports."""
+    monkeypatch.setattr(macro, "grab_screen", bright_screen)
+    monkeypatch.setattr(macro, "rejoin_game", lambda kinds=None: False)
+    monkeypatch.setattr(macro, "close_backpack_if_stuck", lambda in_task: False)
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: None)
+    monkeypatch.setattr(macro.cfg, "HALLOWEEN", False)
+
+
+def test_a_paycheck_mid_task_aborts_the_task(macro, quiet_screen, monkeypatch):
+    monkeypatch.setattr(macro, "detect_paycheck", lambda: True)
+    assert macro.unscrew(in_task=True) == "aborted"
+
+
+def test_a_paycheck_at_the_top_of_a_cycle_does_not_abort(macro, quiet_screen, monkeypatch):
+    monkeypatch.setattr(macro, "detect_paycheck", lambda: True)
+    assert macro.unscrew() is None
+
+
+def test_setup_is_not_aborted_by_a_paycheck(macro, quiet_screen, monkeypatch):
+    monkeypatch.setattr(macro, "detect_paycheck", lambda: True)
+    assert macro.unscrew(in_task=True, play_minigames=False) is None

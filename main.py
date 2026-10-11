@@ -2669,8 +2669,10 @@ def unscrew(in_task: bool = False, play_minigames: bool = True) -> Optional[str]
     because their green buttons would otherwise be mistaken for CASH OUT too.
     Returns "played" if a minigame was played, "rejoined" if the game was
     rejoined mid-task or "aborted" if a stray window that spoils the task was
-    closed (see "abort_task" in STRAY_WINDOWS; never with `play_minigames`
-    False, i.e. in setup, which can't be abandoned halfway) - the callers
+    closed (see "abort_task" in STRAY_WINDOWS) or a paycheck popup was
+    dismissed - its clicks and the dismissal leave the backpack and the
+    character in an unknown state, so the task starts over (never with
+    `play_minigames` False, i.e. in setup, which can't be abandoned halfway) - the callers
     abandon the task - otherwise None."""
     if in_task:
         if rejoin_game(kinds=("disconnect",)):
@@ -2683,9 +2685,8 @@ def unscrew(in_task: bool = False, play_minigames: bool = True) -> Optional[str]
         if play_minigames:
             return "played"    # back in the world somewhere unknown: the task is abandoned like after a minigame
     played = minigame_popup(play=play_minigames) if cfg.HALLOWEEN else None
-    if not backpack_open:
-        detect_paycheck()
-    if in_task and play_minigames and played is None and closed and cfg.STRAY_WINDOWS[closed].get("abort_task"):
+    paycheck = detect_paycheck() if not backpack_open else False
+    if in_task and play_minigames and played is None and (paycheck or (closed and cfg.STRAY_WINDOWS[closed].get("abort_task"))):
         return "aborted"   # (not setup, which can't be abandoned halfway - that is `play_minigames` False)
     return played
 

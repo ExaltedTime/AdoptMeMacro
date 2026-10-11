@@ -415,7 +415,7 @@ REJOIN_LEAVE_KEYS = ("esc", "l", "enter")
 REJOIN_LEAVE_KEY_GAP = 0.25        # between those keys (Natro uses the same)
 REJOIN_MIN_LEAVE_HEIGHT = 500      # px; the L shortcut only works in a Roblox window at least this tall
 REJOIN_CLOSE_WAIT = 5.0            # after closing, before relaunching (relaunching too soon gives Roblox error 264)
-REJOIN_INTERVAL = 60 * 60          # while the loop runs, rejoin this often (seconds) even if nothing is wrong, to
+REJOIN_INTERVAL = 2 * 60 * 60      # while the loop runs, rejoin this often (seconds) even if nothing is wrong, to
                                    # refresh a client that has been up a long time; also gives stuck needs a fresh chance
 NO_PROGRESS_REJOIN_INTERVAL = 20 * 60  # while the loop runs, rejoin if no need has been resolved for this long (seconds)
 NO_DETECTION_RESPAWN_INTERVAL = 4 * 60  # while the loop runs, respawn if no need has been *detected* for this long (seconds); counts

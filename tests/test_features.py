@@ -1,6 +1,7 @@
 """The daily money reset, the Debug tab's run-every-need sequence, and judging an icon gone by how its place changes."""
 import datetime
 import os
+import time
 
 import cv2
 import numpy as np
@@ -386,3 +387,75 @@ def test_real_bright_bar_the_awaited_icon_is_followed_and_then_seen_to_go(macro,
         gone[y - 28:y + 29, x - 28:x + 29] = part[y - 28:y + 29, x - 28:x + 29]
     watch["screen"] = gone
     assert macro.icon_gone_by_frame_change("pizza") is True
+
+
+# --- the minigame win screen, closed whenever it is up ------------------------------------------------
+
+@pytest.fixture
+def winner(macro, monkeypatch):
+    """A screen showing the minigame win screen (banner and NICE! button), with the things unscrew() does around it stubbed."""
+    screen = bright_screen()
+    cfg = macro.cfg
+    for box, color in ((cfg.MINIGAME_VICTORY_BANNER_BOX, cfg.MINIGAME_VICTORY_BANNER_COLOR), (cfg.MINIGAME_VICTORY_BUTTON_BOX, cfg.GREEN_BUTTON_COLOR)):
+        left, top, right, bottom = box
+        screen[top:bottom, left:right] = color[::-1]
+    state = {"screen": screen}
+    respawns = []
+    monkeypatch.setattr(macro, "grab_screen", lambda: state["screen"])
+    monkeypatch.setattr(macro, "respawn_character", lambda: respawns.append(1))
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
+    monkeypatch.setattr(macro, "rejoin_game", lambda kinds=None: False)
+    monkeypatch.setattr(macro, "close_backpack_if_stuck", lambda in_task: False)
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: None)
+    monkeypatch.setattr(macro, "detect_paycheck", lambda: False)
+    monkeypatch.setattr(macro.cfg, "HALLOWEEN", True)
+    state["respawns"] = respawns
+    return state
+
+
+def test_a_win_screen_is_closed_and_the_character_respawned(macro, winner):
+    assert macro.close_minigame_win_screen() is True
+    assert macro.cfg.MINIGAME_VICTORY_BUTTON_POS in macro.clicks and winner["respawns"] == [1]
+    assert "minigame win screen closed" in open(macro.cfg.RUN_LOG_PATH).read()
+    assert macro.state.last_progress is not None
+
+
+def test_no_win_screen_means_nothing_happens(macro, winner):
+    winner["screen"] = bright_screen()
+    assert macro.close_minigame_win_screen() is False
+    assert not macro.clicks and winner["respawns"] == []
+
+
+def test_the_green_button_alone_is_not_a_win_screen(macro, winner):
+    screen = bright_screen()
+    left, top, right, bottom = macro.cfg.MINIGAME_VICTORY_BUTTON_BOX
+    screen[top:bottom, left:right] = macro.cfg.GREEN_BUTTON_COLOR[::-1]
+    winner["screen"] = screen                                    # a popup's Yes, an Okay: the banner rules them out
+    assert macro.close_minigame_win_screen() is False
+
+
+def test_every_cycle_checks_for_the_win_screen_and_abandons_the_task(macro, winner):
+    assert macro.unscrew() == "played"
+    assert macro.cfg.MINIGAME_VICTORY_BUTTON_POS in macro.clicks and winner["respawns"] == [1]
+
+
+def test_setup_only_clicks_nice_and_carries_on(macro, winner, monkeypatch):
+    monkeypatch.setattr(macro, "minigame_popup", lambda play=True: None)
+    assert macro.unscrew(in_task=True, play_minigames=False) is None
+    assert macro.cfg.MINIGAME_VICTORY_BUTTON_POS in macro.clicks and winner["respawns"] == []
+
+
+def test_the_win_screen_is_only_looked_for_while_halloween_is_on(macro, winner, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "HALLOWEEN", False)
+    assert macro.unscrew() is None and not macro.clicks
+
+
+def test_the_scheduled_rejoin_is_two_hours(macro, monkeypatch):
+    assert macro.cfg.REJOIN_INTERVAL == 2 * 60 * 60
+    macro.state.last_rejoin = time.time() - 119 * 60
+    macro.state.last_progress = time.time()
+    monkeypatch.setattr(macro.gw, "getAllWindows", lambda: [type("W", (), {"title": "Roblox"})()])
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((1080, 1920, 3), np.uint8))
+    assert macro.rejoin_reason() is None
+    macro.state.last_rejoin = time.time() - 121 * 60
+    assert macro.rejoin_reason()[0] == "scheduled"

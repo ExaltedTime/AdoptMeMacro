@@ -263,7 +263,7 @@ class State:
     # send_macro_window_to_back(). None when running without the GUI.
     macro_window: Any = None
     # When the game was last (re)joined: set when the loop starts and by every
-    # successful leave_and_rejoin(); rejoin_reason() schedules the next hourly
+    # successful leave_and_rejoin(); rejoin_reason() schedules the next
     # refresh REJOIN_INTERVAL after it. None until then.
     last_rejoin: Optional[float] = None
     # When a need was last resolved (or the loop started, or the game was last
@@ -2584,6 +2584,26 @@ def play_minigame(name: str) -> bool:
     respawn_character()
     return won
 
+def close_minigame_win_screen(abandon: bool = True) -> bool:
+    """If the minigame win screen (detect_minigame_victory()) is up - whether
+    the macro was playing that minigame or not: one that ended after the
+    macro had stopped watching it, say - click NICE! and wait
+    MINIGAME_FINISH_WAIT. With `abandon` (the default) it then counts as
+    progress and the character is respawned, as after a minigame it played
+    itself (the win screen has put it back in the world somewhere unknown);
+    without (setup, which can't be abandoned halfway) only the click is made.
+    Returns True if the screen was there."""
+    if not detect_minigame_victory(grab_screen()):
+        return False
+    print("[debug] minigame win screen is up, clicking NICE!...")
+    log_run_event("minigame win screen closed")
+    hover_click(*cfg.MINIGAME_VICTORY_BUTTON_POS)
+    wait_interruptible(cfg.MINIGAME_FINISH_WAIT)
+    if abandon:
+        state.last_progress = state.last_detection = time.time()
+        respawn_character()
+    return True
+
 def minigame_popup(play: bool = True) -> Optional[str]:
     """Halloween only (see HALLOWEEN): handles a minigame popup (see
     detect_minigame_popup()). Which minigame it is comes from
@@ -2621,7 +2641,8 @@ def unscrew(in_task: bool = False, play_minigames: bool = True) -> Optional[str]
         at the top of a cycle, mid-task once it's been seen open twice in a
         row);
       - close stray windows (dismiss_stray_windows());
-      - during Halloween, handle a minigame popup;
+      - during Halloween, close a minigame win screen if one is up
+        (close_minigame_win_screen()) and handle a minigame popup;
       - the paycheck popup (not while the backpack is still open - its green
         Select All button would be mistaken for CASH OUT).
     The stray windows and the minigame popup go before the paycheck check
@@ -2638,6 +2659,9 @@ def unscrew(in_task: bool = False, play_minigames: bool = True) -> Optional[str]
         rejoin_game()
     backpack_open = close_backpack_if_stuck(in_task)
     closed = dismiss_stray_windows()
+    if cfg.HALLOWEEN and close_minigame_win_screen(abandon=play_minigames):
+        if play_minigames:
+            return "played"    # back in the world somewhere unknown: the task is abandoned like after a minigame
     played = minigame_popup(play=play_minigames) if cfg.HALLOWEEN else None
     if not backpack_open:
         detect_paycheck()
@@ -2932,7 +2956,7 @@ def run_workflow_loop() -> None:
     state.run_number = next_run_number()
     reset_need_tracking()
     reset_run_stats()
-    state.last_rejoin = state.last_progress = state.last_detection = time.time()  # the hourly and no-progress rejoins count from here
+    state.last_rejoin = state.last_progress = state.last_detection = time.time()  # the scheduled and no-progress rejoins count from here
     log_run_event("LOOP started")
     recorder = start_recording_if_requested()
     print("\n" + "=" * 50)

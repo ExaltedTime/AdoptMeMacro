@@ -439,7 +439,11 @@ calls `minigame_popup()`, which plays or dismisses the minigame popups
 Every cycle, `unscrew()` runs `rejoin_game()` first (nothing else works
 while disconnected), then `close_backpack_if_stuck()` (the backpack, either
 form), then
-`dismiss_stray_windows()`, then `minigame_popup()` if `HALLOWEEN` is on, then
+`dismiss_stray_windows()`, then, if `HALLOWEEN` is on, `close_minigame_win_screen()`
+(whenever the minigame win screen is up - the red GAME OVER! banner and the green
+NICE! button, `detect_minigame_victory()` - NICE! is clicked, the character
+respawned and the task abandoned, even if the macro wasn't playing that minigame;
+in setup only the click is made) and `minigame_popup()`, then
 the paycheck check. The stray windows and the minigame popup go before the
 paycheck check because their green buttons (Okay, Yes) are the same green as
 the paycheck's CASH OUT button, so `detect_paycheck()` would mistake them for
@@ -653,7 +657,7 @@ asks `rejoin_reason()` whether the game needs rejoining. In order:
    (20 minutes; `state.last_progress`, set when the loop starts, whenever a need is
    resolved and by every successful `leave_and_rejoin()`): the game is up but
    nothing is working, whatever the cause.
-4. *Scheduled* - it has been `REJOIN_INTERVAL` (an hour) since the last
+4. *Scheduled* - it has been `REJOIN_INTERVAL` (two hours) since the last
    rejoin (`state.last_rejoin`, set when the loop starts and by every successful
    `leave_and_rejoin()`): a refresh of a client that has been up a long time.
 

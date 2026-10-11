@@ -606,9 +606,9 @@ losing it for `MINIGAME_OVERLAY_LOST_TIMEOUT` (10 s) means the minigame was left
 seeing it within `MINIGAME_OVERLAY_START_GRACE` (60 s) of the start wait means it
 never started. Either is a logged failure with that reason, instead of waiting
 out `MINIGAME_MAX_DURATION` (600 s).
-- `play_hauntlet_2()` waits `HAUNTLET_2_START_WAIT` (50 s), then holds
+- `play_hauntlet_2()` waits `MINIGAME_START_WAIT` (50 s), then holds
   `HAUNTLET_2_FORWARD_KEY` until victory or until the overlay says it's over.
-- `play_ghost_gallery()` waits `GHOST_GALLERY_START_WAIT`, then holds the mouse
+- `play_ghost_gallery()` waits `MINIGAME_START_WAIT`, then holds the mouse
   in `GHOST_GALLERY_HOLD`-second holds (`GHOST_GALLERY_HOLD_GAP` apart) while
   running in random `MOVE_KEYS` directions with a jump, each for a random time
   between `GHOST_GALLERY_STEP_MIN` and `_MAX`, until victory.

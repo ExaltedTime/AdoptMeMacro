@@ -2507,12 +2507,12 @@ def minigame_wait(duration: float, watch: MinigameWatch) -> None:
             return
 
 def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
-    """Hauntlet 2: wait HAUNTLET_2_START_WAIT for it to start (no needs can be
+    """Hauntlet 2: wait MINIGAME_START_WAIT for it to start (no needs can be
     seen while it runs, and the lobby counts down first), then hold forward
     until the victory screen shows - or the overlay says it's over. Returns
     True if it was won before `deadline`."""
-    print(f"[debug] hauntlet 2: waiting {cfg.HAUNTLET_2_START_WAIT:g}s for it to start...")
-    minigame_wait(cfg.HAUNTLET_2_START_WAIT, watch)
+    print(f"[debug] hauntlet 2: waiting {cfg.MINIGAME_START_WAIT:g}s for it to start...")
+    minigame_wait(cfg.MINIGAME_START_WAIT, watch)
     watch.start_wait_over()
     pydirectinput.keyDown(cfg.HAUNTLET_2_FORWARD_KEY)
     try:
@@ -2529,8 +2529,8 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     GHOST_GALLERY_HOLD-second holds (GHOST_GALLERY_HOLD_GAP apart), until the
     victory screen shows - or the overlay says it's over. Returns True if it
     was won before `deadline`."""
-    print(f"[debug] ghost gallery: waiting {cfg.GHOST_GALLERY_START_WAIT:g}s for it to start...")
-    minigame_wait(cfg.GHOST_GALLERY_START_WAIT, watch)
+    print(f"[debug] ghost gallery: waiting {cfg.MINIGAME_START_WAIT:g}s for it to start...")
+    minigame_wait(cfg.MINIGAME_START_WAIT, watch)
     watch.start_wait_over()
     while time.time() < deadline and not watch.problem:
         pydirectinput.mouseDown()

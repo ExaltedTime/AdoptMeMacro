@@ -1,10 +1,10 @@
 """Every tunable constant the macro uses: screen positions, timings,
-detection thresholds, and GUI layout. main.py does `from magic_numbers
-import *` and refers to these by bare name - this file holds no logic,
+detection thresholds, and GUI layout. main.py does `import magic_numbers as cfg` and refers to these as cfg.NAME - this file holds no logic,
 only values, so that's the one thing to edit when something needs
 retuning (a moved button, a slow computer, a different monitor)."""
 
 import os
+from typing import Any
 from pathlib import Path
 
 import numpy as np
@@ -43,11 +43,11 @@ MINIGAME_POPUP_YES_POS = (1049, 612)
 
 # Which minigame a popup is for: the first line of its title ("Ghost Gallery", "Hauntlet 2") is matched
 # against the crops in MINIGAME_TEMPLATE_DIR, searched for within MINIGAME_TITLE_BOX. A minigame is the
-# lower-cased file name (Ghost_gallery.png -> "ghost_gallery"); each one has an on/off switch in the game
+# lower-cased file name (ghost_gallery.png, hauntlet_2.png -> "ghost_gallery", "hauntlet_2"); each one has an on/off switch in the game
 # config ("<name>_enabled", off by default) - an off one is dismissed, an on one is played.
 MINIGAME_TITLE_BOX = (730, 410, 1200, 510)   # left, top, right, bottom
 MINIGAME_TITLE_MATCH_THRESHOLD = 0.85
-MINIGAME_LABELS = {"hauntlet": "Hauntlet 2", "ghost_gallery": "Ghost Gallery"}   # for the GUI and the logs
+MINIGAME_LABELS = {"hauntlet_2": "Hauntlet 2", "ghost_gallery": "Ghost Gallery"}   # for the GUI and the logs
 
 # Playing one. Both end on the victory screen (a red "GAME OVER!" banner over a green NICE! button), which
 # is looked for every MINIGAME_VICTORY_CHECK_INTERVAL seconds, then the button is clicked.
@@ -60,12 +60,21 @@ MINIGAME_VICTORY_BUTTON_TOLERANCE = 3
 MINIGAME_VICTORY_BUTTON_BOX = (860, 725, 1060, 800)
 MINIGAME_VICTORY_BUTTON_MIN_PIXELS = 2000
 MINIGAME_VICTORY_BUTTON_POS = (966, 762)
+# While one runs it has its own overlay along the top of the screen (Hauntlet 2: the ROOM counter beside the
+# timer and monitor; Ghost Gallery: the TIME LEFT / GHOST GALLERY / Score banner). Crops of each overlay (ref/overlays/<minigame>.png, found within its box here, at least
+# MINIGAME_OVERLAY_THRESHOLD) say whether the game is on: one that was seen and then isn't, for
+# MINIGAME_OVERLAY_LOST_TIMEOUT seconds, was left (game over, kicked out) - and one never seen within
+# MINIGAME_OVERLAY_START_GRACE seconds after its start wait never started.
+MINIGAME_OVERLAYS = {"hauntlet_2": (1040, 40, 1210, 135), "ghost_gallery": (840, 25, 1080, 120)}   # name: search box
+MINIGAME_OVERLAY_THRESHOLD = 0.7
+MINIGAME_OVERLAY_LOST_TIMEOUT = 10.0
+MINIGAME_OVERLAY_START_GRACE = 60.0
 MINIGAME_VICTORY_CHECK_INTERVAL = 1.0
 MINIGAME_POPUP_CHECK_INTERVAL = 4.0   # the popup checks (stray windows, paycheck) run this often while a minigame is played
 MINIGAME_MAX_DURATION = 600.0       # gives up (and logs a failure) if the victory screen hasn't shown by then
 MINIGAME_FINISH_WAIT = 5.0          # after clicking NICE!, before carrying on
-HAUNTLET_START_WAIT = 50.0          # waits this long after teleporting, then holds HAUNTLET_FORWARD_KEY
-HAUNTLET_FORWARD_KEY = "w"
+HAUNTLET_2_START_WAIT = 50.0          # waits this long after teleporting, then holds HAUNTLET_2_FORWARD_KEY
+HAUNTLET_2_FORWARD_KEY = "w"
 GHOST_GALLERY_START_WAIT = 50.0      # after teleporting, before it starts running about
 GHOST_GALLERY_HOLD = 5.0            # the mouse is held down in holds this long...
 GHOST_GALLERY_HOLD_GAP = 0.2        # ...with this short a pause between them
@@ -80,7 +89,7 @@ GHOST_GALLERY_STEP_MAX = 1.0        # for a random time between these
 # "box", and closed by clicking "close_pos" - see dismiss_stray_windows(). The Trading Hub also throws up a
 # "Go to the Trading Hub to edit listings!" popup, found by its green Okay button and clicked first.
 STRAY_WINDOW_MATCH_THRESHOLD = 0.8
-STRAY_WINDOWS = {
+STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     "trading_hub": {"box": (580, 290, 1020, 400), "close_pos": (1278, 339)},
     "star_rewards": {"box": (640, 385, 1060, 475), "close_pos": (1209, 441)},
     # "Are you sure you want to respawn your character?" - what respawn_character()'s esc, r, enter leaves
@@ -92,6 +101,10 @@ STRAY_WINDOWS = {
     # The camera-on-the-pet view with its BACK button. Only choose and pet want it ("only_when_unwanted"), so
     # it's backed out of unless one of those handlers is running - see wanting_pet_focus().
     "pet_focus": {"box": (400, 60, 700, 180), "close_pos": (545, 120), "only_when_unwanted": True},
+    # "You can't spawn a vehicle here." - turns up now and then when a need's vehicle gets equipped in a spot that
+    # doesn't allow it. "close_pos" is its Okay button; "abort_task" abandons the need that was running (it's
+    # tried again from scratch on the next check) - see unscrew().
+    "cant_spawn_vehicle": {"box": (760, 420, 1160, 630), "close_pos": (962, 657), "abort_task": True},
 }
 # The sick need's own "Ask Doctor Heart to heal your family?" Yes/No dialog (ref/popups/sick_dialog.png, found
 # within SICK_DIALOG_BOX) has the same Yes green + No red as a minigame popup; it is the sick handler's to
@@ -114,21 +127,27 @@ UNSCREW_TASK_INTERVAL = 4.0
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MINIGAME_TEMPLATE_DIR = os.path.join(SCRIPT_DIR, "ref", "halloween")
 STRAY_WINDOW_DIR = os.path.join(SCRIPT_DIR, "ref", "popups")
+MINIGAME_OVERLAY_DIR = os.path.join(SCRIPT_DIR, "ref", "overlays")
 NEEDS_DIR = os.path.join(SCRIPT_DIR, "needs")
 DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
-Path(NEEDS_DIR).mkdir(exist_ok=True)
-Path(DEBUG_DIR).mkdir(exist_ok=True)
+# debug/ holds two subfolders - images/ for every png (the debug_*.png views, failures/, reports/) and logs/ for
+# every text and json file - plus the game config, which stays in debug/ itself so "Refresh debug" (which
+# empties everything else) leaves it alone, and recordings/ for the run videos.
+IMAGES_DIR = os.path.join(DEBUG_DIR, "images")
+LOGS_DIR = os.path.join(DEBUG_DIR, "logs")
+for _directory in (NEEDS_DIR, DEBUG_DIR, IMAGES_DIR, LOGS_DIR):
+    Path(_directory).mkdir(exist_ok=True)
 
-RUN_LOG_PATH = os.path.join(DEBUG_DIR, "run_log.txt")      # appended to, never overwritten
-RUN_COUNTER_PATH = os.path.join(DEBUG_DIR, "run_counter.txt")  # holds the last-used run number
-GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")      # persisted game state - see load_game_config()
-OUTPUT_LOG_PATH = os.path.join(DEBUG_DIR, "output.log")    # everything the macro prints, timestamped - see log_output()
-FAILURE_DIR = os.path.join(DEBUG_DIR, "failures")          # a screenshot per failure - see log_failure()
+RUN_LOG_PATH = os.path.join(LOGS_DIR, "run_log.txt")        # appended to, never overwritten
+RUN_COUNTER_PATH = os.path.join(LOGS_DIR, "run_counter.txt")  # holds the last-used run number
+GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")       # persisted game state - see load_game_config()
+OUTPUT_LOG_PATH = os.path.join(LOGS_DIR, "output.log")      # everything the macro prints, timestamped - see log_output()
+STATUS_PATH = os.path.join(LOGS_DIR, "status.json")         # live "is it alive and what's it doing" summary - see write_status()
+FAILURE_DIR = os.path.join(IMAGES_DIR, "failures")          # a folder per failure (screenshot, need icons, info) - see log_failure()
+REPORTS_DIR = os.path.join(IMAGES_DIR, "reports")           # run<N>.png charts of a run - see the RUN REPORT section of main.py
 RECORDINGS_DIR = os.path.join(DEBUG_DIR, "recordings")      # run videos - see RunRecorder
-REPORTS_DIR = os.path.join(DEBUG_DIR, "reports")            # run<N>.png charts of a run - see helper.py
-STATUS_PATH = os.path.join(DEBUG_DIR, "status.json")       # live "is it alive and what's it doing" summary - see write_status()
 OUTPUT_LOG_MAX_BYTES = 5 * 1024 * 1024   # output.log moves to output.log.old (replacing the last one) past this size
-MAX_FAILURE_SCREENSHOTS = 40             # oldest are deleted beyond this many
+MAX_FAILURE_FOLDERS = 100                # oldest failure folders are deleted beyond this many
 
 # Recording a run ("Record the next run" on the Options tab): low quality on purpose, a video of a whole
 # unattended run is large. Every frame has the time on it, to line it up with the logs.
@@ -300,7 +319,7 @@ HELICOPTER_HOLD_DURATION = 4.0     # then hold KEY_HELICOPTER this long
 # wait for the need to clear. Each entry: where to teleport, the
 # (key, seconds) holds to perform in order, optionally a `final_click`
 # position to click after the last hold, and optionally `helicopter` (above).
-TELEPORT_WALK_NEEDS_NORMAL = {
+TELEPORT_WALK_NEEDS_NORMAL: dict[str, dict[str, Any]] = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),)),
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 1.2), ("a", 10.0))),
@@ -313,18 +332,18 @@ TELEPORT_WALK_NEEDS_NORMAL = {
 # Used instead of the entry of the same name above while HALLOWEEN is on (Halloween
 # moves the nursery) - and "sick" only exists here, so it isn't a need at all
 # outside Halloween.
-TELEPORT_WALK_NEEDS_HALLOWEEN = {
+TELEPORT_WALK_NEEDS_HALLOWEEN: dict[str, dict[str, Any]] = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 7.7),), helicopter=True),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 20.0),), helicopter=True),
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.8), ("a", 10))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("s", 20),), helicopter=True),
-    "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 5.0), ("w", 0.8)),
+    "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 3.0), ("w", 0.8)),
                     final_click=SICK_FINAL_CLICK_POS),
 }
 
 # The set actually used everywhere else (TeleportWalkNeedHandler and the
 # handler registry both read this).
-TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN \
+TELEPORT_WALK_NEEDS: dict[str, dict[str, Any]] = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN \
     else TELEPORT_WALK_NEEDS_NORMAL
 
 DISABLED_NEEDS_REJOIN_THRESHOLD = 4  # this many needs disabled for the run (see NEED_STUCK_CHECKS) means something is
@@ -400,6 +419,10 @@ REJOIN_CLOSE_WAIT = 5.0            # after closing, before relaunching (relaunch
 REJOIN_INTERVAL = 60 * 60          # while the loop runs, rejoin this often (seconds) even if nothing is wrong, to
                                    # refresh a client that has been up a long time; also gives stuck needs a fresh chance
 NO_PROGRESS_REJOIN_INTERVAL = 20 * 60  # while the loop runs, rejoin if no need has been resolved for this long (seconds)
+NO_DETECTION_RESPAWN_INTERVAL = 4 * 60  # while the loop runs, respawn if no need has been *detected* for this long (seconds); counts
+                                       # separately from the line above (a respawn doesn't delay that rejoin), and repeats every this often
+QUIET_LOG_INTERVAL = 5 * 60        # while no need is being resolved, log "quiet: no need resolved for N min" every this often (seconds)
+RESOURCE_LOG_INTERVAL = 60.0       # how often the macro logs its own CPU and memory use while the loop runs (seconds)
 REJOIN_MAX_ATTEMPTS = 3            # close -> launch -> wait cycles before giving up
 REJOIN_WINDOW_TIMEOUT = 240.0      # most it waits for the Roblox window to appear after launching (Natro: 4 minutes,
                                    # as Roblox may be installing an update first)
@@ -427,6 +450,7 @@ ROBLOX_CRASH_WINDOW_TITLE = "Roblox Crash"
 # Gives up after this many focus losses in a row without a need being resolved in between, so it can't
 # fight you for the window forever.
 FOCUS_RESUME_MAX_IN_A_ROW = 5
+STOP_CLICK_GRACE = 0.6    # after a focus loss, how long to wait for a [STOP] press that is still mid-click (pressing it takes the focus first)
 FOCUS_RESUME_DELAY = 3.0   # wait before taking the window back, so whatever took it is out of the way
 
 # Window focus click (near top edge, right of center)
@@ -442,6 +466,11 @@ NEED_ICON_WIDTH_PERCENT = 0.70      # fraction of screen width searched, from th
                                      # keeps the GUI panel (docked top-right) out of frame
 NEED_ICON_BLANK_HEIGHT = 0.15       # top-left UI cluster to ignore (height)
 NEED_ICON_BLANK_WIDTH = 0.20        # top-left UI cluster to ignore (width)
+# While the need strip is practically unchanged since the circle search last ran, that result is reused:
+NEED_STRIP_CHANGED_LEVEL = 25           # a pixel counts as changed if any channel moved by more than this...
+NEED_STRIP_MAX_CHANGED_FRACTION = 0.002 # ...and the strip as unchanged if fewer than this fraction of its pixels did
+NEED_STRIP_MAX_REUSES = 10              # most checks in a row that reuse a result before the search runs again anyway
+NEED_STRIP_MAX_EMPTY_REUSES = 2         # ...and when that result found no icon at all (a missed icon looks the same, so trust it less)
 NEED_ICON_MIN_RADIUS = 24           # px, icon ring radius range searched for (Hough circles)
 NEED_ICON_MAX_RADIUS = 34
 NEED_ICON_MIN_DISTANCE = 40         # px, minimum spacing between two icon centers
@@ -450,7 +479,7 @@ NEED_ICON_HOUGH_EDGE = 100          # Hough: Canny upper edge threshold
 NEED_ICON_HOUGH_VOTES = 25          # Hough: accumulator votes needed to accept a circle
 # The icons can't be recognised against a bright background (the Pizza Party's, say), so when
 # more than this fraction of the icon strip is brighter than this gray level it counts as unreadable
-# (need_bar_readable()) and "the icon is gone" can't be concluded from it.
+# (detect_need_bar_readable()) and "the icon is gone" can't be concluded from it.
 NEED_BAR_BRIGHT_LEVEL = 200
 NEED_BAR_MAX_BRIGHT_FRACTION = 0.5
 CIRCULARITY_EPSILON = 1e-6          # avoids dividing by zero when scoring circularity

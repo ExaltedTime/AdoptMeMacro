@@ -1,0 +1,14 @@
+name: check
+on: [push, pull_request]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install pyflakes mypy pytest numpy opencv-python-headless
+      - run: pyflakes main.py magic_numbers.py tools/check_constants.py tests
+      - run: python tools/check_constants.py
+      - run: mypy main.py
+      - run: python -m pytest -q

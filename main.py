@@ -393,7 +393,7 @@ def reset_need_tracking() -> None:
 
 def log_run_event(message: str) -> None:
     """Append one timestamped line to RUN_LOG_PATH, tagged with
-    CURRENT_RUN_NUMBER."""
+    state.run_number."""
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     with open(cfg.RUN_LOG_PATH, "a") as f:
         f.write(f"[{timestamp}] [RUN {state.run_number}] {message}\n")
@@ -424,7 +424,9 @@ class RunStats:
 
     def reset(self) -> None:
         """Start afresh (a workflow was just started)."""
-        self.__init__()   # type: ignore[misc]
+        fresh = RunStats()
+        for item in fields(self):
+            setattr(self, item.name, getattr(fresh, item.name))
         self.run, self.started = state.run_number, time.strftime("%Y-%m-%d %H:%M:%S")
 
 run_stats = RunStats()
@@ -1061,7 +1063,7 @@ def click_button(button_x: float, button_y: float, need_name: str) -> bool:
 
 def refresh_button_mapping() -> bool:
     """Detect the current action button positions and cache them in
-    BUTTON_POSITIONS. Assumes the character is already at the buttons.
+    state.button_positions. Assumes the character is already at the buttons.
     Always clears any previous mapping first, even on failure, so a failed
     detection can never leave a stale (possibly wrong) position behind for
     click_need_button() to use."""
@@ -2141,9 +2143,9 @@ def rejoin_reason() -> Optional[tuple[str, str]]:
       "stuck" - DISABLED_NEEDS_REJOIN_THRESHOLD needs have been disabled
           for this run;
       "stalled" - no need has been resolved for NO_PROGRESS_REJOIN_INTERVAL
-          (see LAST_PROGRESS): the game is up but nothing is working;
+          (see State.last_progress): the game is up but nothing is working;
       "scheduled" - it has been REJOIN_INTERVAL since the last rejoin (see
-          LAST_REJOIN)."""
+          State.last_rejoin)."""
     if any(w.title == cfg.ROBLOX_CRASH_WINDOW_TITLE for w in gw.getAllWindows()):
         return "disconnect", "Roblox crashed"
     if not roblox_windows():
@@ -2505,8 +2507,9 @@ def unscrew(in_task: bool = False, play_minigames: bool = True) -> Optional[str]
     because their green buttons would otherwise be mistaken for CASH OUT too.
     Returns "played" if a minigame was played, "rejoined" if the game was
     rejoined mid-task or "aborted" if a stray window that spoils the task was
-    closed (see "abort_task" in STRAY_WINDOWS) - the callers abandon the task -
-    otherwise None."""
+    closed (see "abort_task" in STRAY_WINDOWS; never with `play_minigames`
+    False, i.e. in setup, which can't be abandoned halfway) - the callers
+    abandon the task - otherwise None."""
     if in_task:
         if rejoin_game(kinds=("disconnect",)):
             return "rejoined"
@@ -2517,8 +2520,8 @@ def unscrew(in_task: bool = False, play_minigames: bool = True) -> Optional[str]
     played = minigame_popup(play=play_minigames) if cfg.HALLOWEEN else None
     if not backpack_open:
         detect_paycheck()
-    if in_task and played is None and closed and cfg.STRAY_WINDOWS[closed].get("abort_task"):
-        return "aborted"
+    if in_task and play_minigames and played is None and closed and cfg.STRAY_WINDOWS[closed].get("abort_task"):
+        return "aborted"   # (not setup, which can't be abandoned halfway - that is `play_minigames` False)
     return played
 
 def run_side_action(action: Callable[[], bool]) -> bool:

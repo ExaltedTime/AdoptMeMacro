@@ -192,6 +192,18 @@ def test_cant_spawn_vehicle_aborts_the_running_task(macro, monkeypatch):
     assert stopped.value.reason == "a popup"
 
 
+def test_setup_is_never_aborted_by_the_popup(macro, monkeypatch):
+    """Setup can't be abandoned halfway (its clicks toggle things), so it only closes the popup."""
+    screen = put(blank(), reference(macro, "cant_spawn_vehicle"), macro.cfg.STRAY_WINDOWS["cant_spawn_vehicle"]["box"])
+    monkeypatch.setattr(macro, "grab_screen", lambda: screen)
+    monkeypatch.setattr(macro.time, "sleep", lambda s: None)
+    monkeypatch.setattr(macro, "rejoin_game", lambda kinds=None: False)
+    monkeypatch.setattr(macro, "close_backpack_if_stuck", lambda in_task: False)
+    monkeypatch.setattr(macro, "detect_paycheck", lambda: False)
+    assert macro.unscrew(in_task=True, play_minigames=False) is None
+    assert macro.cfg.STRAY_WINDOWS["cant_spawn_vehicle"]["close_pos"] in macro.clicks
+
+
 def test_backpack_title_marks_the_normal_backpack(macro):
     title = reference(macro, "backpack_normal")
     screen = put(blank(), title, macro.cfg.BACKPACK_NORMAL_TITLE_BOX)

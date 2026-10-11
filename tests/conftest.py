@@ -58,9 +58,11 @@ def macro(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "run_stats", main.RunStats())
     main.STOP_EVENT.clear()
     main.close_output_log()
+    main._NEED_STRIP_CACHE.update(strip=None, found=[], reuses=0)
     clicks = []
     monkeypatch.setattr(main, "hover_click", lambda x, y, duration=0: clicks.append((x, y)))
-    main.clicks = clicks
+    monkeypatch.setattr(main, "clicks", clicks, raising=False)
     yield main
     main.STOP_EVENT.clear()
     main.close_output_log()
+    main._NEED_STRIP_CACHE.update(strip=None, found=[], reuses=0)

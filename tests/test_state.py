@@ -7,8 +7,8 @@ import time
 import pytest
 
 
-def test_record_detection_disables_a_need_attempted_and_still_there(macro):
-    macro.cfg.ENABLED_NEEDS.add("hungry")
+def test_record_detection_disables_a_need_attempted_and_still_there(macro, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "ENABLED_NEEDS", {"hungry"})
     for _ in range(macro.cfg.NEED_STUCK_CHECKS):
         macro.state.attempted_last = {"hungry"}
         macro.record_detection(["hungry"])

@@ -65,7 +65,7 @@ def test_parse_run_event_counts(macro, tmp_path):
                             "quiet periods logged": 1, "idle respawns": 1}
 
 
-def test_what_the_macro_logs_is_what_the_parser_reads(macro, tmp_path):
+def test_what_the_macro_logs_is_what_the_parser_reads(macro, tmp_path, monkeypatch):
     """Round trip through log_run_event(): a wording change there must change the regexes too."""
     macro.state.run_number = 5
     macro.log_run_event("detected: hungry, thirsty")
@@ -73,7 +73,7 @@ def test_what_the_macro_logs_is_what_the_parser_reads(macro, tmp_path):
     macro.log_run_event("resolved: hungry (28s)")
     macro.log_run_event("resources: cpu 2.5% mem 100MB")
     macro.state.last_detection = time.time() - macro.cfg.NO_DETECTION_RESPAWN_INTERVAL - 1
-    macro.respawn_character = lambda: None
+    monkeypatch.setattr(macro, "respawn_character", lambda: None)
     macro.respawn_if_no_detection()
     macro.state.last_progress = time.time() - 6 * 60
     macro.check_quiet()

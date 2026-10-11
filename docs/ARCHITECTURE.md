@@ -446,7 +446,7 @@ other case - including mid-task, e.g. a throw click that focused the pet.
 flagged `abort_task`: when it is closed while a need handler is running,
 `unscrew(in_task=True)` returns `"aborted"` and `task_unscrew_tick()` raises
 `TaskInterrupted("a popup")`, so the need is abandoned and run again from the
-start on the next check (logged as "<need> interrupted by a popup").
+start on the next check (logged as "<need> interrupted by a popup"). Setup never aborts this way (it can't be abandoned halfway), so the popup is just closed there.
 
 A third entry, `respawn_confirm`, is the "Are you sure you want to respawn your
 character?" dialog (`ref/popups/respawn_confirm.png`; its `close_pos` is the

@@ -1,5 +1,7 @@
 """Screen detection on synthetic and reference images (the crops in ref/ are real, lossless PNGs)."""
 
+import os
+
 import cv2
 import numpy as np
 import pytest
@@ -279,3 +281,10 @@ def test_sick_dialog_is_not_a_minigame_popup(macro):
     assert macro.detect_minigame_popup(screen)                          # without the dialog's title it is a popup...
     put(screen, reference(macro, "sick_dialog"), macro.cfg.SICK_DIALOG_BOX)
     assert not macro.detect_minigame_popup(screen)                      # ...with it, it is ignored
+
+
+def test_the_learned_need_icons_load_from_ref_needs(macro):
+    assert macro.cfg.NEEDS_DIR.endswith(os.path.join("ref", "needs"))
+    names = {name for name, _ in macro.need_signatures()}
+    assert {"hungry", "thirsty", "pizza"} <= names
+    assert {"diving", "puddle"} <= names                       # the subfolder (ref/needs/weather/) is searched too

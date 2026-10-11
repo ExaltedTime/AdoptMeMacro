@@ -128,7 +128,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MINIGAME_TEMPLATE_DIR = os.path.join(SCRIPT_DIR, "ref", "halloween")
 STRAY_WINDOW_DIR = os.path.join(SCRIPT_DIR, "ref", "popups")
 MINIGAME_OVERLAY_DIR = os.path.join(SCRIPT_DIR, "ref", "overlays")
-NEEDS_DIR = os.path.join(SCRIPT_DIR, "needs")
+NEEDS_DIR = os.path.join(SCRIPT_DIR, "ref", "needs")      # the learned need icons - the one folder in ref/ the macro also writes to (see prompt_rename_need())
 DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
 # debug/ holds two subfolders - images/ for every png (the debug_*.png views, failures/, reports/) and logs/ for
 # every text and json file - plus the game config, which stays in debug/ itself so "Refresh debug" (which

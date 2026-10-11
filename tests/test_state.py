@@ -195,3 +195,60 @@ def test_log_run_event_tags_the_run(macro):
     macro.log_run_event("resolved: hungry (28s)")
     line = open(macro.cfg.RUN_LOG_PATH).read()
     assert "[RUN 328] resolved: hungry (28s)" in line
+
+
+@pytest.fixture
+def one_need(macro, monkeypatch):
+    """process_needs() with a single 'hungry' icon on a dark screen and a handler that succeeds."""
+    import numpy as np
+    screen = np.zeros((1080, 1920, 3), np.uint8)
+    monkeypatch.setattr(macro, "focus_roblox_click", lambda: True)
+    monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([(100, 50, 30)], screen))
+    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(0, screen[:10, :10], "hungry", 0.9)]))
+    monkeypatch.setattr(macro, "respawn_character", lambda: None)
+    monkeypatch.setattr(macro, "check_focus", lambda: None)
+
+    class Handler:
+        def handle(self):
+            return True
+    monkeypatch.setattr(macro, "get_need_handler", lambda name: Handler())
+    return screen
+
+
+def test_process_needs_resolves_a_need_and_counts_it(macro, one_need):
+    macro.state.last_detection = time.time() - 100
+    macro.state.last_progress = time.time() - 100
+    assert macro.process_needs() is True
+    assert macro.run_stats.resolved == {"hungry": 1} and macro.run_stats.last_resolved["need"] == "hungry"
+    assert time.time() - macro.state.last_progress < 1 and time.time() - macro.state.last_detection < 1
+    assert "detected: hungry" in open(macro.cfg.RUN_LOG_PATH).read()
+    assert "resolved: hungry (" in open(macro.cfg.RUN_LOG_PATH).read()
+
+
+def test_a_detected_need_that_cannot_be_resolved_still_counts_as_detected(macro, one_need, monkeypatch):
+    class Failing:
+        def handle(self):
+            return False
+    monkeypatch.setattr(macro, "get_need_handler", lambda name: Failing())
+    macro.state.last_detection = time.time() - 100
+    stalled = macro.state.last_progress = time.time() - 100
+    assert macro.process_needs() is False
+    assert time.time() - macro.state.last_detection < 1                 # seen - so no idle respawn for it
+    assert macro.state.last_progress == stalled                          # but not progress
+    assert macro.run_stats.failed == {"hungry": 1}
+
+
+def test_an_unreadable_need_bar_is_not_a_reason_to_respawn(macro, one_need, monkeypatch):
+    import numpy as np
+    monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([], np.full((1080, 1920, 3), 255, np.uint8)))
+    macro.state.last_detection = time.time() - 1000
+    assert macro.process_needs() is False
+    assert time.time() - macro.state.last_detection < 1
+
+
+def test_no_icons_on_a_readable_bar_leaves_the_idle_clock_running(macro, one_need, monkeypatch):
+    import numpy as np
+    monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([], np.zeros((1080, 1920, 3), np.uint8)))
+    before = macro.state.last_detection = time.time() - 1000
+    assert macro.process_needs() is False
+    assert macro.state.last_detection == before

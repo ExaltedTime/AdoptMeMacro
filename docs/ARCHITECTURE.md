@@ -1072,11 +1072,12 @@ clicks instead of making them. They cover:
 
 - `test_pure.py` - the small pure functions (server link parsing, durations,
   colour masks, axis rounding, failure kinds);
-- `test_state.py` - stuck-need disabling, `RunStats`, `status.json`, the
+- `test_state.py` - stuck-need disabling, `process_needs()` (resolved, unresolvable and unreadable-bar cases), `RunStats`, `status.json`, the
   failure folders, the quiet and idle-respawn checks (including that a respawn
   leaves the 20-minute rejoin clock alone), stopping, and the open `output.log`;
 - `test_detection.py` - the need-strip capture and its cache, and the
   popups and stray windows against the real crops in `ref/`;
+- `test_loop.py` - the whole workflow loop run for a moment with the game stubbed out (idle respawns, the resource monitor starting and stopping, the report being written);
 - `test_report.py` - the run-report parser against the exact log wording the
   macro writes (a round trip through `log_run_event()`), the chart itself,
   and the constant check.

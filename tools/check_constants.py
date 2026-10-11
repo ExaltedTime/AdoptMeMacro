@@ -12,7 +12,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def defined_names(path):
     names = set()
     for node in ast.parse(open(path, encoding="utf-8").read()).body:
-        targets = node.targets if isinstance(node, ast.Assign) else []
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
         for target in targets:
             for part in ast.walk(target):
                 if isinstance(part, ast.Name):

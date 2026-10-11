@@ -1034,5 +1034,11 @@ Actions, a temporary Linux machine): `pyflakes` on `main.py`,
 `magic_numbers.py` and `tools/check_constants.py` (syntax errors, undefined
 names, unused imports, duplicate definitions), then
 `python tools/check_constants.py`, which fails on a `cfg.NAME` in `main.py`
-that `magic_numbers.py` doesn't define. It can't run the macro itself - that
+that `magic_numbers.py` doesn't define, then `mypy main.py` (configured in
+`mypy.ini`: it also checks the bodies of functions without type hints, and
+ignores the Windows-only libraries it has no stubs for). Every function in
+`main.py` has type hints, using the aliases `Image` (a BGR screenshot or crop),
+`Point`, `Box` and `Color` defined under the imports. A few lines carry
+`# type: ignore[...]` for what the stubs get wrong (Windows-only calls, tkinter,
+OpenCV). It can't run the macro itself - that
 needs Windows, a screen and Roblox.

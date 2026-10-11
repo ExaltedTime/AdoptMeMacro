@@ -1,10 +1,10 @@
 """Every tunable constant the macro uses: screen positions, timings,
-detection thresholds, and GUI layout. main.py does `from magic_numbers
-import *` and refers to these by bare name - this file holds no logic,
+detection thresholds, and GUI layout. main.py does `import magic_numbers as cfg` and refers to these as cfg.NAME - this file holds no logic,
 only values, so that's the one thing to edit when something needs
 retuning (a moved button, a slow computer, a different monitor)."""
 
 import os
+from typing import Any
 from pathlib import Path
 
 import numpy as np
@@ -89,7 +89,7 @@ GHOST_GALLERY_STEP_MAX = 1.0        # for a random time between these
 # "box", and closed by clicking "close_pos" - see dismiss_stray_windows(). The Trading Hub also throws up a
 # "Go to the Trading Hub to edit listings!" popup, found by its green Okay button and clicked first.
 STRAY_WINDOW_MATCH_THRESHOLD = 0.8
-STRAY_WINDOWS = {
+STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     "trading_hub": {"box": (580, 290, 1020, 400), "close_pos": (1278, 339)},
     "star_rewards": {"box": (640, 385, 1060, 475), "close_pos": (1209, 441)},
     # "Are you sure you want to respawn your character?" - what respawn_character()'s esc, r, enter leaves
@@ -319,7 +319,7 @@ HELICOPTER_HOLD_DURATION = 4.0     # then hold KEY_HELICOPTER this long
 # wait for the need to clear. Each entry: where to teleport, the
 # (key, seconds) holds to perform in order, optionally a `final_click`
 # position to click after the last hold, and optionally `helicopter` (above).
-TELEPORT_WALK_NEEDS_NORMAL = {
+TELEPORT_WALK_NEEDS_NORMAL: dict[str, dict[str, Any]] = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),)),
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 1.2), ("a", 10.0))),
@@ -332,7 +332,7 @@ TELEPORT_WALK_NEEDS_NORMAL = {
 # Used instead of the entry of the same name above while HALLOWEEN is on (Halloween
 # moves the nursery) - and "sick" only exists here, so it isn't a need at all
 # outside Halloween.
-TELEPORT_WALK_NEEDS_HALLOWEEN = {
+TELEPORT_WALK_NEEDS_HALLOWEEN: dict[str, dict[str, Any]] = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 7.7),), helicopter=True),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 20.0),), helicopter=True),
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.8), ("a", 10))),
@@ -343,7 +343,7 @@ TELEPORT_WALK_NEEDS_HALLOWEEN = {
 
 # The set actually used everywhere else (TeleportWalkNeedHandler and the
 # handler registry both read this).
-TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN \
+TELEPORT_WALK_NEEDS: dict[str, dict[str, Any]] = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN \
     else TELEPORT_WALK_NEEDS_NORMAL
 
 DISABLED_NEEDS_REJOIN_THRESHOLD = 4  # this many needs disabled for the run (see NEED_STUCK_CHECKS) means something is

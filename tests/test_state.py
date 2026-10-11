@@ -336,6 +336,12 @@ def test_teleport_needs_wait_for_the_need_to_clear_up_to_the_configured_time(mac
     assert waited == [expected] == [macro.cfg.NEED_GONE_MAX_WAIT]
 
 
+@pytest.mark.parametrize("need", ["sick", "cafe", "beach"])
+def test_the_slow_needs_wait_longer(macro, need):
+    entry = macro.cfg.TELEPORT_WALK_NEEDS_HALLOWEEN.get(need) or macro.cfg.TELEPORT_WALK_NEEDS_NORMAL[need]
+    assert entry["max_wait"] == macro.cfg.NEED_GONE_SLOW_MAX_WAIT > macro.cfg.NEED_GONE_MAX_WAIT
+
+
 def test_a_need_can_set_its_own_wait(macro, monkeypatch):
     waited = []
     monkeypatch.setitem(macro.cfg.TELEPORT_WALK_NEEDS, "camping", {**macro.cfg.TELEPORT_WALK_NEEDS["camping"], "max_wait": 150.0})
@@ -417,3 +423,15 @@ def test_an_unreadable_bar_is_not_a_failure(need_gone, macro, monkeypatch):
     need_gone["script"](*[([], False)] * 20)
     macro.wait_until_need_gone("hungry", max_wait=10)
     assert "failures" not in need_gone
+
+
+def test_teleport_presses_the_backpack_key_again_if_it_did_not_open(macro, monkeypatch):
+    presses = []
+    opened = iter([False, True, True])
+    monkeypatch.setattr(macro.pydirectinput, "press", lambda key: presses.append(key), raising=False)
+    monkeypatch.setattr(macro, "grab_screen", lambda: None)
+    monkeypatch.setattr(macro, "detect_backpack_open", lambda img: next(opened))
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
+    monkeypatch.setattr(macro, "hold_key", lambda key, duration: None)
+    macro.teleport_to((1, 2))
+    assert presses == [macro.cfg.KEY_BACKPACK] * 2 and (1, 2) in macro.clicks

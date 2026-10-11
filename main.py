@@ -1912,6 +1912,13 @@ def teleport_to(category_pos: Point) -> None:
     print("[debug] opening backpack...")
     pydirectinput.press(cfg.KEY_BACKPACK)
     wait_interruptible(cfg.UI_SETTLE)
+    if not detect_backpack_open(grab_screen()):
+        # The key press was lost: the clicks below would land in the world and the walk would start from where we stand.
+        print("[debug] backpack didn't open, pressing again...")
+        pydirectinput.press(cfg.KEY_BACKPACK)
+        wait_interruptible(cfg.UI_SETTLE)
+        if not detect_backpack_open(grab_screen()):
+            log_failure("backpack did not open for the teleport")
 
     print("[debug] selecting category...")
     hover_click(*category_pos)
@@ -1965,6 +1972,7 @@ class TeleportWalkNeedHandler(NeedHandler):
 
         final_click = self.config.get("final_click")
         if final_click:
+            wait_interruptible(cfg.SICK_PRE_E_WAIT)
             pydirectinput.press("e")
             wait_interruptible(cfg.SICK_CONFIRM_WAIT)
             print(f"[debug] clicking {final_click}...")
@@ -2779,8 +2787,9 @@ class RunRecorder:
 
     def _frame(self) -> Image:
         frame = cv2.resize(grab_screen(), (cfg.RECORD_WIDTH, cfg.RECORD_HEIGHT), interpolation=cv2.INTER_AREA)
-        cv2.putText(frame, time.strftime("%Y-%m-%d %H:%M:%S"), (6, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4)
-        cv2.putText(frame, time.strftime("%Y-%m-%d %H:%M:%S"), (6, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        cv2.putText(frame, stamp, (6, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4, cv2.LINE_AA)   # black outline
+        cv2.putText(frame, stamp, (6, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
         return frame
 
     def _record(self) -> None:
@@ -3107,7 +3116,7 @@ def parse_run(log_path: str, run: Union[int, str]) -> Optional[dict[str, Any]]:
             data["events"]["quiet periods logged"] += 1
         elif text.startswith("FAILURE: "):
             data["failures"].append((t, text[len("FAILURE: "):]))
-        elif text.startswith("scheduled rejoin") or text.startswith("recovery complete"):
+        elif text.startswith("recovery complete"):   # once per rejoin ("scheduled rejoin" is logged at its start too)
             data["rejoins"].append(t)
             data["events"]["rejoins"] += 1
         elif text.startswith("paycheck popup"):

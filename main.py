@@ -2789,8 +2789,11 @@ class RunRecorder:
     def _frame(self) -> Image:
         frame = cv2.resize(grab_screen(), (cfg.RECORD_WIDTH, cfg.RECORD_HEIGHT), interpolation=cv2.INTER_AREA)
         stamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        cv2.putText(frame, stamp, (6, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4, cv2.LINE_AA)   # black outline
-        cv2.putText(frame, stamp, (6, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+        (text_w, text_h), baseline = cv2.getTextSize(stamp, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
+        # White text on a solid black box: it stays readable over any scene (an outline smeared in the video
+        # compression) - the corner of the screen it covers is given up.
+        cv2.rectangle(frame, (0, 0), (text_w + 12, text_h + baseline + 12), (0, 0, 0), -1)
+        cv2.putText(frame, stamp, (6, text_h + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
         return frame
 
     def _record(self) -> None:

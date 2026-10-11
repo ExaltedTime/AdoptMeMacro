@@ -288,3 +288,29 @@ def test_the_learned_need_icons_load_from_ref_needs(macro):
     names = {name for name, _ in macro.need_signatures()}
     assert {"hungry", "thirsty", "pizza"} <= names
     assert {"diving", "puddle"} <= names                       # the subfolder (ref/needs/weather/) is searched too
+
+
+def test_templates_are_read_once_and_reread_when_a_file_changes(macro, tmp_path, monkeypatch):
+    folder = tmp_path / "crops"
+    folder.mkdir()
+    cv2.imwrite(str(folder / "A.png"), np.full((4, 4, 3), 10, np.uint8))
+    reads = []
+    real = macro.cv2.imread
+    monkeypatch.setattr(macro.cv2, "imread", lambda path, *a: reads.append(path) or real(path, *a))
+    first = macro.load_templates(str(folder))
+    assert list(first) == ["a"] and len(reads) == 1
+    macro.load_templates(str(folder))
+    macro.load_templates(str(folder))
+    assert len(reads) == 1                                       # not read again
+    first["junk"] = 1                                            # callers can't corrupt the cache through the dict
+    assert "junk" not in macro.load_templates(str(folder))
+    cv2.imwrite(str(folder / "b.png"), np.full((4, 4, 3), 20, np.uint8))     # a file is added...
+    assert sorted(macro.load_templates(str(folder))) == ["a", "b"] and len(reads) == 3
+    os.utime(folder / "A.png", ns=(1, 1))                                      # ...changed...
+    macro.load_templates(str(folder))
+    assert len(reads) == 5
+    (folder / "b.png").unlink()                                                # ...removed
+    assert list(macro.load_templates(str(folder))) == ["a"]
+    assert macro.load_templates(str(tmp_path / "missing")) == {}
+    (folder / "notes.txt").write_text("x")
+    assert list(macro.load_templates(str(folder))) == ["a"]                    # only .png files count

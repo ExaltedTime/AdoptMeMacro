@@ -431,6 +431,7 @@ the Trading Hub doesn't, but needs can't be resolved with it in the way. Run
 308's two 20-minute stalls (a `paycheck popup dismissed` line every cycle) were
 these windows - the macro's paycheck clicks don't close them, and their green
 buttons look like CASH OUT.
+(`load_templates()` reads each folder's crops once and re-reads them only when a file is added, changed or removed.)
 `dismiss_stray_windows()` recognises each by a crop of its title
 in `ref/popups/` (`trading_hub.png`, `star_rewards.png`; matched within the
 `box` in `STRAY_WINDOWS`, at least `STRAY_WINDOW_MATCH_THRESHOLD`) and clicks

@@ -2244,16 +2244,30 @@ def detect_minigame_popup(img: Image) -> bool:
                   max(0, yes_x - cfg.MINIGAME_POPUP_NO_MAX_DX):yes_x]
     return int(np.count_nonzero(exact_color_mask(near_no, cfg.MINIGAME_POPUP_NO_COLOR))) >= cfg.MINIGAME_POPUP_MIN_BUTTON_PIXELS
 
+# directory -> (the files' names and modification times, {name: image}) - see load_templates().
+_TEMPLATE_CACHE: dict[str, tuple[Any, dict[str, Image]]] = {}
+
 def load_templates(directory: str) -> dict[str, Image]:
     """{lower-cased file name without extension: image} for every .png in
-    `directory` (none if it doesn't exist)."""
-    templates = {}
-    if os.path.isdir(directory):
-        for f in sorted(os.listdir(directory)):
+    `directory` (none if it doesn't exist). The images are read once and kept:
+    a call only looks at the files' modification times (a few cheap stats,
+    against decoding every PNG on every check), and reads them again when one
+    is added, changed or removed - so a crop replaced while the macro runs is
+    picked up. The images are shared between calls, so they must not be
+    modified."""
+    if not os.path.isdir(directory):
+        return {}
+    files = sorted(f for f in os.listdir(directory) if f.lower().endswith(".png"))
+    key = tuple((f, os.stat(os.path.join(directory, f)).st_mtime_ns) for f in files)
+    cached = _TEMPLATE_CACHE.get(directory)
+    if cached is None or cached[0] != key:
+        templates = {}
+        for f in files:
             crop = cv2.imread(os.path.join(directory, f))
-            if f.lower().endswith(".png") and crop is not None:
+            if crop is not None:
                 templates[os.path.splitext(f)[0].lower()] = crop
-    return templates
+        cached = _TEMPLATE_CACHE[directory] = (key, templates)
+    return dict(cached[1])
 
 def template_score(img: Image, crop: Image, box: Box) -> float:
     """How well `crop` matches anywhere within `box` (left, top, right,

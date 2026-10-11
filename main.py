@@ -269,6 +269,12 @@ class State:
     # rejoined): rejoin_reason() rejoins after NO_PROGRESS_REJOIN_INTERVAL
     # without any. None until the loop starts.
     last_progress: Optional[float] = None
+    # When a need was last detected on screen (or the loop started, the game was
+    # rejoined or a minigame was played, or the need bar couldn't be read):
+    # respawn_if_no_detection() respawns after NO_DETECTION_RESPAWN_INTERVAL
+    # without any. Separate from last_progress, so a respawn never delays the
+    # NO_PROGRESS_REJOIN_INTERVAL rejoin. None until the loop starts.
+    last_detection: Optional[float] = None
     # Detected action-button screen positions, keyed by need name (e.g. "hungry").
     # Populated by refresh_button_mapping() each time the macro walks to the
     # buttons, so this is a same-run cache, not persisted state - there's
@@ -1415,7 +1421,7 @@ def leave_and_rejoin(clean_leave: bool = True) -> bool:
         print(f"[debug] waiting {cfg.REJOIN_AFTER_JOIN_WAIT}s, then respawning...")
         wait_stoppable(cfg.REJOIN_AFTER_JOIN_WAIT)
         respawn_character()
-        state.last_rejoin = state.last_progress = time.time()
+        state.last_rejoin = state.last_progress = state.last_detection = time.time()
         print("[!] Rejoin complete!")
         return True
 
@@ -1930,6 +1936,8 @@ def process_needs() -> bool:
         return False
 
     found_icons, full_img = detect_need_icons(save_debug=True)
+    if not detect_need_bar_readable(full_img):
+        state.last_detection = time.time()   # can't tell whether there are needs - not a reason to respawn
     if not found_icons:
         record_detection([])
         return False
@@ -1956,6 +1964,8 @@ def process_needs() -> bool:
         log_run_event(f"detected: none matched ({len(found_icons)} icon(s) on screen)")
         state.none_matched_logged = True
     run_stats.last_detected = names
+    if names:
+        state.last_detection = time.time()
     record_detection(names)
 
     attempted = set()
@@ -2447,7 +2457,7 @@ def play_minigame(name: str) -> bool:
     else:
         reason = watch.problem or f"did not reach the victory screen within {cfg.MINIGAME_MAX_DURATION:g}s"
         log_failure(f"{label} {reason}")
-    state.last_progress = time.time()
+    state.last_progress = state.last_detection = time.time()
     respawn_character()
     return won
 
@@ -2716,6 +2726,23 @@ def check_quiet() -> None:
         log_run_event(f"quiet: no need resolved for {reports * cfg.QUIET_LOG_INTERVAL / 60:g} min")
     state.quiet_reported = reports
 
+def respawn_if_no_detection() -> bool:
+    """Respawn the character if no need has been detected on screen for
+    NO_DETECTION_RESPAWN_INTERVAL - the character may be stuck somewhere the
+    need icons don't show up from. Counts from the last detection (see
+    State.last_detection) and again from the respawn, so it repeats at most
+    once per interval. It never touches state.last_progress, so the
+    NO_PROGRESS_REJOIN_INTERVAL rejoin (rejoin_reason()) still comes when it
+    would have. Returns True if it respawned."""
+    if state.last_detection is None or time.time() - state.last_detection < cfg.NO_DETECTION_RESPAWN_INTERVAL:
+        return False
+    minutes = (time.time() - state.last_detection) / 60
+    print(f"[!] no need detected for {minutes:.0f} min - respawning")
+    log_run_event(f"no need detected for {minutes:.0f} min - respawning")
+    respawn_character()
+    state.last_detection = time.time()
+    return True
+
 def run_full_cycle() -> None:
     """One cycle: keep checking for needs, waiting NEED_CHECK_RETRY_DELAY
     between checks whenever none are found (showing how long it has been
@@ -2736,6 +2763,7 @@ def run_full_cycle() -> None:
         side_quest()
         if process_needs():
             return
+        respawn_if_no_detection()
         waiting_since = waiting_since or time.time()
         deadline = time.time() + cfg.NEED_CHECK_RETRY_DELAY
         while time.time() < deadline:
@@ -2753,7 +2781,7 @@ def run_workflow_loop() -> None:
     state.run_number = next_run_number()
     reset_need_tracking()
     reset_run_stats()
-    state.last_rejoin = state.last_progress = time.time()  # the hourly and no-progress rejoins count from here
+    state.last_rejoin = state.last_progress = state.last_detection = time.time()  # the hourly and no-progress rejoins count from here
     log_run_event("LOOP started")
     recorder = start_recording_if_requested()
     monitor = ResourceMonitor()
@@ -2886,6 +2914,8 @@ def parse_run(log_path: str, run: Union[int, str]) -> Optional[dict[str, Any]]:
                 data["detected"].append((t, len(names), len(names)))
         elif m := RESOURCES_RE.match(text):
             data["resources"].append((t, float(m.group(1)), int(m.group(2))))
+        elif text.startswith("no need detected for "):
+            data["events"]["idle respawns"] += 1
         elif text.startswith("quiet: "):
             data["events"]["quiet periods logged"] += 1
         elif text.startswith("FAILURE: "):
@@ -2960,7 +2990,7 @@ def draw_text(img: Image, s: str, x: float, y: float, scale: float = 0.5, color:
     cv2.putText(img, s, (int(x), int(y)), FONT, scale, color, thick, cv2.LINE_AA)
 
 
-def nice_max(value: float) -> int:
+def nice_max(value: float) -> float:
     """Round `value` up to a tidy axis maximum (1, 2, 5 x 10^n)."""
     if value <= 0:
         return 1

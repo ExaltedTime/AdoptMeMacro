@@ -419,6 +419,8 @@ REJOIN_CLOSE_WAIT = 5.0            # after closing, before relaunching (relaunch
 REJOIN_INTERVAL = 60 * 60          # while the loop runs, rejoin this often (seconds) even if nothing is wrong, to
                                    # refresh a client that has been up a long time; also gives stuck needs a fresh chance
 NO_PROGRESS_REJOIN_INTERVAL = 20 * 60  # while the loop runs, rejoin if no need has been resolved for this long (seconds)
+NO_DETECTION_RESPAWN_INTERVAL = 4 * 60  # while the loop runs, respawn if no need has been *detected* for this long (seconds); counts
+                                       # separately from the line above (a respawn doesn't delay that rejoin), and repeats every this often
 QUIET_LOG_INTERVAL = 5 * 60        # while no need is being resolved, log "quiet: no need resolved for N min" every this often (seconds)
 RESOURCE_LOG_INTERVAL = 60.0       # how often the macro logs its own CPU and memory use while the loop runs (seconds)
 REJOIN_MAX_ATTEMPTS = 3            # close -> launch -> wait cycles before giving up

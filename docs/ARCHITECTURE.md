@@ -615,6 +615,18 @@ asks `rejoin_reason()` whether the game needs rejoining. In order:
    rejoin (`state.last_rejoin`, set when the loop starts and by every successful
    `leave_and_rejoin()`): a refresh of a client that has been up a long time.
 
+Separately from those, `respawn_if_no_detection()` (in `run_full_cycle()`, after
+`process_needs()` found nothing to resolve) respawns the character when no
+need has been *detected* for `NO_DETECTION_RESPAWN_INTERVAL` (4 minutes) - it
+may be stuck somewhere the icons don't show from. It counts from
+`state.last_detection` (set whenever a need is detected, when the need bar
+can't be read, and when the loop starts, the game is rejoined or a minigame is
+played), and again from each respawn, so it repeats at most once per interval.
+It never touches `state.last_progress`, so the 20-minute stalled rejoin above
+still comes exactly when it would have: in a long stretch with nothing
+detected the character is respawned every 4 minutes and the game rejoined at
+20. The log line is `no need detected for N min - respawning`.
+
 If so, it runs `leave_and_rejoin()` (see [Side actions](#side-actions)) -
 without the clean esc/l/enter leave for a disconnect, since there's no game
 to leave - then `setup_game()` (the rejoin resets the settings it sets), then
@@ -1042,3 +1054,27 @@ ignores the Windows-only libraries it has no stubs for). Every function in
 `# type: ignore[...]` for what the stubs get wrong (Windows-only calls, tkinter,
 OpenCV). It can't run the macro itself - that
 needs Windows, a screen and Roblox.
+
+### Tests
+
+`tests/` holds the pytest tests (`python -m pytest -q`, also run by the Action).
+`tests/conftest.py` stands in for the libraries that only work on Windows or
+with a screen (`pyautogui`, `pydirectinput`, `mss`, `pygetwindow`), so
+`main.py` imports anywhere, and its `macro` fixture gives each test a fresh
+`State` and `RunStats`, redirects every file the macro writes (run log, status,
+failure folders, output log, reports) into a temporary folder, and records
+clicks instead of making them. They cover:
+
+- `test_pure.py` - the small pure functions (server link parsing, durations,
+  colour masks, axis rounding, failure kinds);
+- `test_state.py` - stuck-need disabling, `RunStats`, `status.json`, the
+  failure folders, the quiet and idle-respawn checks (including that a respawn
+  leaves the 20-minute rejoin clock alone), stopping, and the open `output.log`;
+- `test_detection.py` - the need-strip capture and its cache, and the
+  popups and stray windows against the real crops in `ref/`;
+- `test_report.py` - the run-report parser against the exact log wording the
+  macro writes (a round trip through `log_run_event()`), the chart itself,
+  and the constant check.
+
+Fixtures are synthetic images or the lossless crops in `ref/`; compressed
+screenshots (`.webp`) don't match exact colours, so they aren't used.

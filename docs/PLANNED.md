@@ -17,10 +17,6 @@
 
 Suggestions from reading through the code, none of them started. Roughly in order of payoff within each group.
 
-## Organization
-
-- [ ] `tests/`: the pure parts are easy to test with the Windows-only imports stubbed - `need_bar_readable()`, `record_detection()`, `parse_server_link()`, `exact_color_mask()`, `DebugCapture`, `format_duration()`. Use lossless PNG fixtures (compressed `.webp` screenshots don't match exact colours)
-
 ## Code
 
 - [ ] The teleport and walk handlers are already table-driven; the button handlers, `catch` and `pet` could be too (a list of steps instead of code), which also makes the timing tuning item easier

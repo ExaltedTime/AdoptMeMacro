@@ -23,7 +23,6 @@ Suggestions from reading through the code, none of them started. Roughly in orde
 
 ## Code
 
-- [ ] `STOP_FLAG` as a `threading.Event`, rather than a bool read from other threads
 - [ ] The teleport and walk handlers are already table-driven; the button handlers, `catch` and `pet` could be too (a list of steps instead of code), which also makes the timing tuning item easier
 - [ ] Use the `logging` module instead of `print("[debug] ...")`, so levels and the console/file split come for free and the on-screen console can hide debug lines
 - [ ] `RUN_STATS` as a dataclass, written to `status.json` atomically (write to a temp file, then `os.replace`) so a reader never sees half a file
@@ -31,8 +30,6 @@ Suggestions from reading through the code, none of them started. Roughly in orde
 - [ ] Hard-coded click positions (backpack categories, settings, setup) break on a different layout or UI update; where something has a distinctive look, find it (colour or template match) instead, as the Play button and popups already do
 
 ## Optimization
-
-- [ ] `detect_need_icons()` grabs the whole screen and then crops the top strip; grab only that region (`mss` can capture a sub-rectangle), and share one grab between the readability check and the detection
 
 ## Reliability
 

@@ -92,7 +92,7 @@ an extra walk from wherever the previous need left the character standing.
   takes a screenshot via `mss`; `exact_color_mask()` / `find_exact_color()`
   find things by their exact pixel color rather than their shape (the
   choose need's button, the popups and the Play button all work this way).
-- **STATE** - this module's own mutable state: `STOP_FLAG`;
+- **STATE** - this module's own mutable state: `STOP_EVENT`;
   the `State` object, `state` (a dataclass holding all of this module's
   mutable state - the run number, `last_progress`, `last_rejoin`, the stuck-need
   tracking and the in-task check flags; `State.snapshot()` is saved with every
@@ -175,7 +175,7 @@ instead, to show what else was on it.
 
 ## Need-icon detection
 
-`detect_need_icons()` scans a region of the screen for the round need icons:
+`detect_need_icons()` scans a region of the screen for the round need icons. Only that region is captured (`grab_screen_region()`: the strip plus the margin the icon crops reach past it, about 13% of the screen), when the Roblox window is exactly the reference size - otherwise it falls back to cropping a full `grab_screen()`, which gives the same pixels:
 
 1. Crop to the top `NEED_ICON_TOP_PERCENT` (15%) of screen height and the
    left `NEED_ICON_WIDTH_PERCENT` (70%) of screen width. The width crop
@@ -739,7 +739,7 @@ alongside the movement safe.
 Two independent conditions can interrupt a running workflow, and both are
 checked the same way:
 
-- **`StopRequested`** - raised when `STOP_FLAG` is set (the user pressed
+- **`StopRequested`** - raised when `STOP_EVENT` is set (the user pressed
   **[STOP]**).
 - **`FocusLost`** - raised when Roblox is no longer the focused window.
   Without this, a long-running action (a 20s walk, a 10s pet-circle, a
@@ -791,7 +791,7 @@ daemon thread that polls the key every `STOP_HOTKEY_POLL_INTERVAL` through
 works while another window has the focus). Only the key going *down* counts, so
 holding it doesn't retrigger, and it does nothing while nothing is running. It
 hands the stop to Tk's thread, which does exactly what the [STOP] button does
-(sets `STOP_FLAG`, so the run unwinds at the next `check_running()`, within
+(sets `STOP_EVENT` (a `threading.Event`: the waits sleep on it, so a stop is noticed at once), so the run unwinds at the next `check_running()`, within
 `STOP_CHECK_INTERVAL`, releasing any held key on the way) and logs "stopped with
 the P key". It stops the run for good - **Resume after focus loss** only catches
 `FocusLost`, not a stop. Because it's global, typing a `p` anywhere (including in

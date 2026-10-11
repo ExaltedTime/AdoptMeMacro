@@ -51,7 +51,7 @@ class StopRequested(Exception):
     never get released and would stay stuck in the game.
 
     Instead, wait_interruptible() and check_running() raise this the moment
-    they notice STOP_FLAG, and ordinary Python exception propagation unwinds
+    they notice STOP_EVENT, and ordinary Python exception propagation unwinds
     the call stack from wherever we are all the way up to run_async()'s
     worker thread, which catches it. Any try/finally in between (used
     wherever a key or the mouse is held down) still runs on the way up, so
@@ -77,7 +77,7 @@ def check_stop():
     check_running() at checkpoints that should also require Roblox focus -
     this exists on its own for the one checkpoint that shouldn't (see
     run_full_cycle())."""
-    if STOP_FLAG:
+    if STOP_EVENT.is_set():
         raise StopRequested()
 
 def check_focus():
@@ -90,11 +90,8 @@ def check_focus():
 def stop_pressed_soon():
     """True if [STOP] is pressed within STOP_CLICK_GRACE. Clicking the button
     takes the focus from Roblox on mouse-down, a moment before the click sets
-    STOP_FLAG, so a FocusLost seen right then is really the user stopping."""
-    end = time.time() + cfg.STOP_CLICK_GRACE
-    while time.time() < end and not STOP_FLAG:
-        time.sleep(0.05)
-    return STOP_FLAG
+    STOP_EVENT, so a FocusLost seen right then is really the user stopping."""
+    return STOP_EVENT.wait(cfg.STOP_CLICK_GRACE)
 
 def check_running():
     """Raise StopRequested or FocusLost if the workflow should not continue
@@ -206,6 +203,22 @@ def grab_screen():
         img = cv2.resize(img, (cfg.REFERENCE_WIDTH, cfg.REFERENCE_HEIGHT), interpolation=cv2.INTER_AREA)
     return img
 
+def grab_screen_region(x, y, width, height):
+    """The same pixels as grab_screen()[y:y + height, x:x + width] (so `x`, `y`,
+    `width` and `height` are in the reference space), but when the Roblox
+    window is exactly the reference size, and the region is within it, only
+    that region is captured rather than the whole monitor and then cropped.
+    Otherwise it is exactly that crop of grab_screen()."""
+    left, top, window_w, window_h = roblox_rect()
+    if (window_w, window_h) == (cfg.REFERENCE_WIDTH, cfg.REFERENCE_HEIGHT) and x >= 0 and y >= 0:
+        with mss.MSS() as sct:
+            monitor = sct.monitors[1]
+            if left + x + width <= monitor["width"] and top + y + height <= monitor["height"]:
+                shot = np.array(sct.grab({"left": monitor["left"] + left + x, "top": monitor["top"] + top + y,
+                                          "width": width, "height": height}))
+                return cv2.cvtColor(shot, cv2.COLOR_BGRA2BGR)
+    return grab_screen()[y:y + height, x:x + width]
+
 def exact_color_mask(img, rgb, tolerance=0):
     """Mask of every pixel in `img` (BGR, as grab_screen() returns) that
     matches `rgb` (an (R, G, B) tuple) exactly - or, with `tolerance`, to
@@ -231,7 +244,9 @@ def find_exact_color(img, rgb):
 # all in one `State` object, `state`, so it can be saved with a failure
 # (State.snapshot()) and reset or replaced in one place.
 
-STOP_FLAG = False
+# Set when the user presses [STOP] (or the stop hotkey); cleared when a run starts and ends. An Event, not a bool, so
+# the waits can sleep on it and wake the moment it is set (see wait_interruptible()).
+STOP_EVENT = threading.Event()
 
 @dataclass
 class State:
@@ -578,9 +593,9 @@ def extract_icon(img, cx, cy, radius, padding=cfg.ICON_EXTRACT_PADDING):
     return img[y0:y1, x0:x1].copy()
 
 def need_icon_strip(img):
-    """The part of `img` (the Roblox window) the need icons are looked for in."""
-    h, w = img.shape[:2]
-    return img[0:int(h * cfg.NEED_ICON_TOP_PERCENT), 0:int(w * cfg.NEED_ICON_WIDTH_PERCENT)]
+    """The part of `img` (the top-left of the Roblox window, in the reference
+    space) the need icons are looked for in."""
+    return img[0:int(cfg.REFERENCE_HEIGHT * cfg.NEED_ICON_TOP_PERCENT), 0:int(cfg.REFERENCE_WIDTH * cfg.NEED_ICON_WIDTH_PERCENT)]
 
 # The strip the icons were last searched for in, and what was found: while the strip looks the same, the circle
 # search is skipped (see detect_need_icons()).
@@ -600,13 +615,18 @@ def detect_need_icons(save_debug=False):
     in is practically unchanged since it was last searched (at most
     NEED_STRIP_MAX_CHANGED_FRACTION of it changed, and no more than
     NEED_STRIP_MAX_REUSES times running); an icon appearing or going changes
-    far more than that. Returns ((cx, cy, radius) per icon, left to right) and
-    the full screenshot."""
-    img = grab_screen()
-    h, w = img.shape[:2]
+    far more than that. Only the strip, plus the margin the icon crops reach
+    past it, is captured (grab_screen_region()): returns ((cx, cy, radius) per
+    icon, left to right) and that image, whose pixels sit at the same
+    positions as in grab_screen() (it just ends sooner).
+    Everything that uses the image (identify_icons(), detect_need_bar_readable())
+    stays within it."""
+    margin = cfg.ICON_CROP_RADIUS + cfg.ICON_EXTRACT_PADDING + cfg.ICON_SHIFT_TOLERANCE + 2
+    strip_w, strip_h = int(cfg.REFERENCE_WIDTH * cfg.NEED_ICON_WIDTH_PERCENT), int(cfg.REFERENCE_HEIGHT * cfg.NEED_ICON_TOP_PERCENT)
+    img = grab_screen_region(0, 0, min(cfg.REFERENCE_WIDTH, strip_w + margin), min(cfg.REFERENCE_HEIGHT, strip_h + margin))
 
     top_strip = need_icon_strip(img).copy()
-    top_strip[0:int(h * cfg.NEED_ICON_BLANK_HEIGHT), 0:int(w * cfg.NEED_ICON_BLANK_WIDTH)] = 0
+    top_strip[0:int(cfg.REFERENCE_HEIGHT * cfg.NEED_ICON_BLANK_HEIGHT), 0:int(cfg.REFERENCE_WIDTH * cfg.NEED_ICON_BLANK_WIDTH)] = 0
 
     cache = _NEED_STRIP_CACHE
     if (not save_debug and cache["strip"] is not None and cache["strip"].shape == top_strip.shape
@@ -713,8 +733,8 @@ def detect_need_bar_readable(img):
     (NEED_BAR_BRIGHT_LEVEL / NEED_BAR_MAX_BRIGHT_FRACTION) - the Pizza Party's
     bright background, say. The icons can't be recognised against that, so
     a missing icon there says nothing about whether the need is gone."""
-    h, w = img.shape[:2]
-    strip = img[0:int(h * cfg.NEED_ICON_TOP_PERCENT), int(w * cfg.NEED_ICON_BLANK_WIDTH):int(w * cfg.NEED_ICON_WIDTH_PERCENT)]
+    strip = img[0:int(cfg.REFERENCE_HEIGHT * cfg.NEED_ICON_TOP_PERCENT),
+                int(cfg.REFERENCE_WIDTH * cfg.NEED_ICON_BLANK_WIDTH):int(cfg.REFERENCE_WIDTH * cfg.NEED_ICON_WIDTH_PERCENT)]
     bright = np.count_nonzero(cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY) > cfg.NEED_BAR_BRIGHT_LEVEL)
     return bright / (strip.shape[0] * strip.shape[1]) < cfg.NEED_BAR_MAX_BRIGHT_FRACTION
 
@@ -787,7 +807,7 @@ def _watch_need_gone(need_name, cleared_event, stop_event):
     just running alongside the movement instead of after it. Sets
     `cleared_event` the moment it's confirmed. Exits quietly - without
     raising - the instant `stop_event` is set (the walk ended on its own)
-    or STOP_FLAG/focus loss is noticed: only the main thread's
+    or STOP_EVENT/focus loss is noticed: only the main thread's
     check_running() calls are allowed to unwind the workflow, so this
     thread must never let StopRequested/FocusLost escape uncaught."""
     misses = 0
@@ -882,7 +902,7 @@ def wait_interruptible(duration):
         check_running()
         task_unscrew_tick()
         sleep_chunk = min(cfg.STOP_CHECK_INTERVAL, duration - elapsed)
-        time.sleep(sleep_chunk)
+        STOP_EVENT.wait(sleep_chunk)   # returns early if [STOP] is pressed; check_running() then raises
         elapsed += sleep_chunk
     check_running()
 
@@ -893,7 +913,7 @@ def wait_stoppable(duration):
     end = time.time() + duration
     while time.time() < end:
         check_stop()
-        time.sleep(min(cfg.STOP_CHECK_INTERVAL, max(0.0, end - time.time())))
+        STOP_EVENT.wait(min(cfg.STOP_CHECK_INTERVAL, max(0.0, end - time.time())))
     check_stop()
 
 def release_all_inputs():
@@ -2698,8 +2718,7 @@ def run_workflow_loop():
     propagate on up to run_async()'s worker (via the bare `finally`, not
     `except`) so the GUI still reports [STOPPED] correctly; the finally
     just prints locally first."""
-    global STOP_FLAG
-    STOP_FLAG = False
+    STOP_EVENT.clear()
     state.run_number = next_run_number()
     reset_need_tracking()
     reset_run_stats()
@@ -3408,25 +3427,23 @@ class AdoptMeGUI:
 
         Lifecycle: disable the action buttons -> run func() in the background
         -> ALWAYS re-enable the buttons when func() returns, whether it
-        finished normally, was interrupted via STOP_FLAG, lost Roblox's
+        finished normally, was interrupted via STOP_EVENT, lost Roblox's
         focus, or raised an exception. That "always" is done with
         try/except/finally so there is
         no code path that leaves the UI stuck in the disabled "Running..."
         state - the bug that made buttons stop responding once a workflow
         completed on its own.
         """
-        global STOP_FLAG
 
         if self.is_running:
             print("[!] Already running - press [STOP] first")
             return
 
         self.is_running = True
-        STOP_FLAG = False
+        STOP_EVENT.clear()
         self._set_running_ui(True)
 
         def worker():
-            global STOP_FLAG
             try:
                 func()
                 final_status = "[DONE]"
@@ -3452,7 +3469,7 @@ class AdoptMeGUI:
                 final_status = "[ERROR]"
             finally:
                 release_all_inputs()  # last line of defense against stuck keys/mouse
-                STOP_FLAG = False
+                STOP_EVENT.clear()
                 self.is_running = False
                 # Tkinter widgets may only be touched from the main thread;
                 # root.after() hands this callback to it instead of calling
@@ -3538,16 +3555,15 @@ class AdoptMeGUI:
         self.run_async(test)
 
     def stop(self):
-        """Signal a running workflow to stop. This only sets STOP_FLAG; the
+        """Signal a running workflow to stop. This only sets STOP_EVENT; the
         actual cleanup (re-enabling buttons, resetting is_running) happens
         automatically in run_async()'s worker thread once the running
         function notices the flag (via wait_interruptible) and returns -
         there's no separate watchdog thread needed for that anymore."""
-        global STOP_FLAG
         if not self.is_running:
             return
         print("\n[!] STOPPING...")
-        STOP_FLAG = True
+        STOP_EVENT.set()
         self.status.config(text="Stopping...")
 
 # ============================================================================

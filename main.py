@@ -312,6 +312,10 @@ class State:
     # Where each need's icon was last recognised in the need bar (reference
     # space, centre), by need name - see icon_gone_by_frame_change().
     need_icon_positions: dict[str, tuple[int, int]] = field(default_factory=dict)
+    # Each need's icon as it last looked when the bar could be read (identify_icons()): what
+    # icon_gone_by_frame_change() looks for when it can't read the bar - its stored position can be
+    # another need's icon by then, the others having shifted about.
+    need_icon_crops: dict[str, Image] = field(default_factory=dict)
     # How many in-task checks in a row have seen the backpack open (see
     # close_backpack_if_stuck()).
     backpack_strikes: int = 0
@@ -787,6 +791,10 @@ def identify_icons(found_icons: list[tuple[int, int, int]], full_img: Image) -> 
         need_name, score = find_matching_need(icon_variants(full_img, cx, cy))
         if need_name:
             state.need_icon_positions[need_name] = (cx, cy)
+            r = cfg.ICON_CROP_RADIUS
+            crop = full_img[cy - r:cy + r + 1, cx - r:cx + r + 1] if cx >= r and cy >= r else None
+            if crop is not None and crop.shape[:2] == (2 * r + 1, 2 * r + 1):
+                state.need_icon_crops[need_name] = crop.copy()
         yield idx, icon_img, need_name, score
 
 def detect_need_bar_readable(img: Image) -> bool:
@@ -870,8 +878,13 @@ def icon_gone_by_frame_change(need_name: str) -> Optional[bool]:
         return None
     watch = _ICON_WATCH
     if watch["need"] != need_name or watch["crop"] is None:
-        watch.update(need=need_name, pos=pos, crop=here)
-        return None
+        stored = state.need_icon_crops.get(need_name)
+        if stored is None:
+            watch.update(need=need_name, pos=pos, crop=here)
+            return None
+        # What is at the stored position now may be another need's icon (the others shift as they clear):
+        # search for the icon as it looked when it was last read instead, so a clear is noticed at the first look.
+        watch.update(need=need_name, pos=pos, crop=stored)
     found = locate_icon(watch["crop"], pos[1])
     if found is None:
         wait_interruptible(cfg.NEED_GONE_FLICKER_RECHECK_DELAY)

@@ -276,8 +276,12 @@ its full length - and ending it isn't logged as a failure.
 **Judging an icon by how it changes between looks.** A need's icon has a
 timer: a section of its circle that slowly grows and changes colour (it is
 the progress of serving the need). While the bar can't be read,
-`icon_gone_by_frame_change()` records the icon at its last recognised place
-(`State.need_icon_positions`, set by `identify_icons()`), and every later look
+`icon_gone_by_frame_change()` takes the icon as it looked when it was last
+read (`State.need_icon_crops`, with its place in `State.need_icon_positions`,
+both set by `identify_icons()` - the place alone can hold another need's icon by
+now, the others having shifted while the walk ran: run 3's sick, 17:09, was
+followed as its neighbour and never seen to clear), searches the whole bar for it
+at the first look, and then every later look
 searches the whole bar for the icon *as it looked at the previous look*
 (`locate_icon()`: normalised correlation of the white ring and glyph, which the
 timer's colour change leaves alone). Found at a match of at least

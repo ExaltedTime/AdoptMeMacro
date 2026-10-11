@@ -389,6 +389,39 @@ def test_real_bright_bar_the_awaited_icon_is_followed_and_then_seen_to_go(macro,
     assert macro.icon_gone_by_frame_change("pizza") is True
 
 
+def test_a_need_cleared_while_the_bar_was_unreadable_is_seen_even_when_a_neighbour_took_its_place(macro, watch):
+    """Run 3, 17:09: the sick icon cleared but its stored position held another icon by then (the others had shifted
+    left), so the icon at that position was followed instead and the wait ran out. The icon as last read is searched for."""
+    full = bar_screen(0, 1, 2, 3, 4)
+    x, y = ICONS[1]
+    macro.state.need_icon_positions["pizza"] = (x, y)                                  # where it was last read ...
+    macro.state.need_icon_crops["pizza"] = full[y - 28:y + 29, x - 28:x + 29].copy()   # ... and how it looked
+    after = bar_screen(0)                                                              # index 1 cleared; 2, 3, 4 slid left a slot
+    for i in (2, 3, 4):
+        part = bar_screen(i, shifted_left=1)
+        nx, ny = ICONS[i][0] - SLOT, ICONS[i][1]
+        after[ny - 28:ny + 29, nx - 28:nx + 29] = part[ny - 28:ny + 29, nx - 28:nx + 29]
+    watch["screen"] = after
+    assert macro.icon_gone_by_frame_change("pizza") is True                            # at the very first look
+
+
+def test_the_stored_icon_is_found_again_when_it_has_only_moved(macro, watch):
+    full = bar_screen(0, 1, 2, 3, 4)
+    x, y = ICONS[3]
+    macro.state.need_icon_positions["pizza"] = (x, y)
+    macro.state.need_icon_crops["pizza"] = full[y - 28:y + 29, x - 28:x + 29].copy()
+    watch["screen"] = bar_screen(0, 3)                                                # 3 is still there, and 1 and 2 are not
+    assert macro.icon_gone_by_frame_change("pizza") is False
+
+
+def test_identify_icons_keeps_each_icon_as_it_was_read(macro, monkeypatch):
+    img = np.full((120, 300, 3), 200, np.uint8)
+    monkeypatch.setattr(macro, "find_matching_need", lambda variants: ("hungry", 0.99))
+    monkeypatch.setattr(macro, "check_running", lambda: None)
+    list(macro.identify_icons([(100, 60, 27)], img))
+    assert macro.state.need_icon_crops["hungry"].shape == (57, 57, 3) and macro.state.need_icon_positions["hungry"] == (100, 60)
+
+
 # --- the minigame win screen, closed whenever it is up ------------------------------------------------
 
 @pytest.fixture

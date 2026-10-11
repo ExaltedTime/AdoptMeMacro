@@ -2202,7 +2202,12 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
     if not leave_and_rejoin(clean_leave=(kind != "disconnect")):
         log_failure("recovery: rejoin failed, will try again next cycle")
         return False
-    setup_game()
+    try:
+        setup_game()
+    except TaskInterrupted as interruption:
+        # The game was rejoined again while setup ran (its in-task checks do that on a disconnect), and that
+        # nested recovery already ran setup itself - so this one carries on instead of ending the run.
+        log_run_event(f"setup interrupted by {interruption.reason} - the nested recovery redid it")
     state.disabled_needs.clear()
     reset_need_tracking()
     log_run_event("recovery complete: rejoined, setup run, disabled needs cleared")

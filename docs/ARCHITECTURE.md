@@ -638,7 +638,10 @@ If so, it runs `leave_and_rejoin()` (see [Side actions](#side-actions)) -
 without the clean esc/l/enter leave for a disconnect, since there's no game
 to leave - then `setup_game()` (the rejoin resets the settings it sets), then
 clears `state.disabled_needs` and the streaks so every need gets a fresh
-chance, and the workflow carries on. A disconnect, stuck or stalled recovery counts as
+chance, and the workflow carries on. (If the game is rejoined *again* while
+setup runs - its in-task checks do that on a disconnect - the nested recovery has
+already run setup, so the `TaskInterrupted` it raises is caught here and logged
+as `setup interrupted by a rejoin`, rather than ending the run.) A disconnect, stuck or stalled recovery counts as
 a failure: `log_failure()` saves a screenshot first, which shows the dialog
 and its error code. A scheduled rejoin isn't one: it's a line in the run log,
 counted in `scheduled_rejoins`. If the rejoin fails the cause is still

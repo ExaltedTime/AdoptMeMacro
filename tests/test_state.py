@@ -278,3 +278,21 @@ def test_a_need_the_popup_keeps_spoiling_is_eventually_disabled(macro, one_need,
     for _ in range(macro.cfg.NEED_STUCK_CHECKS + 1):
         macro.process_needs()
     assert "hungry" in macro.state.disabled_needs
+
+
+def test_a_second_disconnect_during_setup_does_not_end_the_run(macro, monkeypatch):
+    """rejoin_game() -> setup_game() -> (disconnect) -> nested recovery -> TaskInterrupted must not escape."""
+    import numpy as np
+    monkeypatch.setattr(macro, "grab_full_screen", lambda: np.zeros((4, 4, 3), np.uint8))
+    monkeypatch.setattr(macro, "grab_screen", lambda: (_ for _ in ()).throw(RuntimeError("no window")))
+    monkeypatch.setattr(macro, "rejoin_reason", lambda: ("disconnect", "disconnected from the game"))
+    monkeypatch.setattr(macro, "leave_and_rejoin", lambda clean_leave=True: True)
+
+    def setup_that_is_interrupted():
+        raise macro.TaskInterrupted("a rejoin")
+    monkeypatch.setattr(macro, "setup_game", setup_that_is_interrupted)
+    macro.state.disabled_needs.add("pizza")
+    assert macro.rejoin_game() is True
+    assert not macro.state.disabled_needs
+    log = open(macro.cfg.RUN_LOG_PATH).read()
+    assert "setup interrupted by a rejoin" in log and "recovery complete" in log

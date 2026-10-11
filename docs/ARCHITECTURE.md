@@ -274,20 +274,30 @@ falls back to `icon_gone_by_frame_change()` (below); if that can't tell either i
 returns `None`, which counts as neither a miss nor a sighting, so the wait runs
 its full length - and ending it isn't logged as a failure.
 
-**Judging an icon by how its place changes.** A need's icon has a timer: a
-darker section of its circle that slowly grows. While the bar can't be read,
-`icon_gone_by_frame_change()` watches the circle where the need's icon was
-last recognised (`State.need_icon_positions`, set by `identify_icons()`): a
-circle that stays as it was, or changes only a little between looks (the timer
-creeping on), is still there; one with more than `ICON_GONE_CHANGE_FRACTION`
-(half) of it changed by more than `ICON_FRAME_CHANGE_LEVEL` - and still that
-different `NEED_GONE_FLICKER_RECHECK_DELAY` later - is gone, which ends the
-wait (logged as `<need> icon gone by frame change`). The first look only
-records the circle, so an icon that went before then isn't noticed (the wait
-runs out as before), and the comparison starts afresh whenever the bar is
-readable again. The timer is deliberately not visible to the black-and-white
-icon matching, which is why this is a separate check. The thresholds have not
-yet been tuned on real frames of an unreadable bar.
+**Judging an icon by how it changes between looks.** A need's icon has a
+timer: a section of its circle that slowly grows and changes colour (it is
+the progress of serving the need). While the bar can't be read,
+`icon_gone_by_frame_change()` records the icon at its last recognised place
+(`State.need_icon_positions`, set by `identify_icons()`), and every later look
+searches the whole bar for the icon *as it looked at the previous look*
+(`locate_icon()`: normalised correlation of the white ring and glyph, which the
+timer's colour change leaves alone). Found at a match of at least
+`ICON_LOCATE_THRESHOLD` (0.75) means it is still there - and wherever it now
+is: when a neighbour to its left clears, the icons slide left, and the icon is
+followed to its new place (the position is updated). Not found, and still not
+found `NEED_GONE_FLICKER_RECHECK_DELAY` later, means it is gone - cleared, or
+replaced by a neighbour that slid into its place, which matches poorly - and
+that ends the wait (logged as `<need> icon gone by frame change`). Measured on
+real frames of the salon icon, the same icon scores 0.90-1.0 whatever its
+timer shows or where it has shifted to (the timer alone changes 22-39% of the
+circle between two looks), a neighbouring icon or a bright background 0.3-0.56.
+The first look only records the icon, so one that went before then isn't
+noticed (the wait runs out as before), and the comparison starts afresh
+whenever the bar is readable again. The timer is deliberately not visible to
+the black-and-white icon matching, which is why this is a separate check. The
+threshold was set from three frames of a readable bar; it has not yet been
+tried on a bright one.
+
 Popups, stray windows and minigames that turn up during the wait are handled
 by the `unscrew()` checks that `wait_interruptible()` runs during a task - see
 [Per-cycle checks while a task runs](#per-cycle-checks-while-a-task-runs).
@@ -995,7 +1005,7 @@ exact values and rationale):
 | Window / coordinates | `REFERENCE_WIDTH`, `REFERENCE_HEIGHT`, `REFERENCE_CENTER_X/Y`, `ROBLOX_RECT_TTL` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `STOP_CLICK_GRACE`, `NEED_GONE_*`, `TELEPORT_NEED_GONE_MAX_WAIT` |
 | Stuck needs | `NEED_STUCK_CHECKS` |
-| Icon readability | `NEED_BAR_BRIGHT_LEVEL`, `NEED_BAR_MAX_BRIGHT_FRACTION`, `ICON_FRAME_CHANGE_LEVEL`, `ICON_GONE_CHANGE_FRACTION` |
+| Icon readability | `NEED_BAR_BRIGHT_LEVEL`, `NEED_BAR_MAX_BRIGHT_FRACTION`, `ICON_LOCATE_THRESHOLD`, `ICON_LOCATE_ROW_MARGIN`, `ICON_FRAME_CHANGE_LEVEL` (log only) |
 | Pet focusing | `FOCUS_PET_REGION_TOP_PERCENT`, `FOCUS_PET_FRAME_GAP`, `FOCUS_PET_DIFF_THRESHOLD`, `FOCUS_PET_MERGE_KERNEL`, `FOCUS_PET_MIN_AREA` |
 | Screen positions | `CATCH_*_POS`, `EMPTY_POS`, `RIDE_*_POS`, `LURE_NEW_POS_*`, `SETUP_*_POS` |
 | Side quest / setup | `TREE_HARVEST_YIELD`, `MONEY_COLLECTED_TARGET`, `TREE_CHECK_INTERVAL`, `MONEY_RESET_HOUR`, `LURE_RECOLLECT_INTERVAL`, `LURE_COLLECT_*`, `TREE_COLLECT_*` |
@@ -1125,7 +1135,7 @@ clicks instead of making them. They cover:
 - `test_detection.py` - the need-strip capture and its cache, and the
   popups and stray windows against the real crops in `ref/`;
 - `test_loop.py` - the whole workflow loop run for a moment with the game stubbed out (idle respawns, the resource monitor starting and stopping, the report being written);
-- `test_features.py` - the daily money reset, the run-every-need sequence and judging an icon gone by how its place changes;
+- `test_features.py` - the daily money reset, the run-every-need sequence and judging an icon gone by how it changes between looks (with real salon-icon frames in `tests/fixtures/`);
 - `test_report.py` - the run-report parser against the exact log wording the
   macro writes (a round trip through `log_run_event()`), the chart itself,
   and the constant check.

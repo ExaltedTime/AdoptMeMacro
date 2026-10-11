@@ -487,9 +487,11 @@ NEED_ICON_HOUGH_VOTES = 25          # Hough: accumulator votes needed to accept 
 NEED_BAR_BRIGHT_LEVEL = 200
 NEED_BAR_MAX_BRIGHT_FRACTION = 0.5
 # While the bar is unreadable the wait watches each icon's place for change instead (see icon_gone_by_frame_change()):
-ICON_FRAME_CHANGE_LEVEL = 40       # a pixel counts as changed if any channel moved by more than this between two looks
-ICON_GONE_CHANGE_FRACTION = 0.5    # an icon is gone when more than this fraction of its circle has changed (the timer's darker
-                                   # section creeping on changes far less between two looks)
+ICON_LOCATE_THRESHOLD = 0.75       # an icon is found again (cv2 normalised correlation of its white ring and glyph, 0-1) when it
+                                   # matches this well: measured on real frames, the same icon scores 0.90-1.0 whatever its timer
+                                   # shows or where it has shifted to, a neighbour or a bright background 0.3-0.56
+ICON_LOCATE_ROW_MARGIN = 10        # px above and below the icon's row that are searched along the bar
+ICON_FRAME_CHANGE_LEVEL = 40       # for the log only: a pixel counts as changed if any channel moved by more than this between two looks
 CIRCULARITY_EPSILON = 1e-6          # avoids dividing by zero when scoring circularity
 PIXEL_MAX = 255                     # max value of an 8-bit pixel channel
 

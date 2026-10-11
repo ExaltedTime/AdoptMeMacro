@@ -1,5 +1,6 @@
 """The daily money reset, the Debug tab's run-every-need sequence, and judging an icon gone by how its place changes."""
 import datetime
+import os
 
 import cv2
 import numpy as np
@@ -96,6 +97,19 @@ def handlers(macro, *results):
     return made, calls
 
 
+def test_minigame_popups_are_declined_not_played_while_testing_every_need(macro, monkeypatch):
+    seen = []
+    monkeypatch.setattr(macro, "respawn_character", lambda: None)
+    monkeypatch.setattr(macro, "check_focus", lambda: None)
+
+    class Handler:
+        def handle(self):
+            seen.append(macro.state.task_play_minigames)
+            return True
+    macro.run_all_need_handlers({"a": Handler})
+    assert seen == [False]                                   # the in-task checks only decline an offered minigame
+
+
 def test_every_handler_runs_once_in_order_with_a_respawn_after_each(macro, monkeypatch):
     respawns = []
     monkeypatch.setattr(macro, "respawn_character", lambda: respawns.append(len(respawns)))
@@ -131,69 +145,95 @@ def test_the_default_sequence_is_every_debug_handler(macro, monkeypatch):
     assert seen == list(fake) and len(seen) >= 10
 
 
-# --- an icon judged gone by how its place changes, while the need bar can't be read --------------
+# --- an icon judged gone by how it changes between looks, while the need bar can't be read --------
 
 POS = (400, 80)
+SLOT = 68                                  # how far apart need icons sit in the bar
 BRIGHT = (240, 250, 255)
-
-
-def draw_icon(screen, timer_degrees):
-    """A need icon on a bright background: a coloured disc, with the timer's darker section `timer_degrees` wide."""
-    cv2.circle(screen, POS, 28, (60, 140, 230), -1)
-    cv2.circle(screen, POS, 28, (255, 255, 255), 3)
-    if timer_degrees:
-        cv2.ellipse(screen, POS, (24, 24), -90, 0, timer_degrees, (20, 60, 110), -1)
-    return screen
 
 
 def bright_screen():
     return np.full((1080, 1920, 3), BRIGHT, np.uint8)
 
 
+def draw_icon(screen, timer_degrees=0, position=POS, disc=(60, 140, 230)):
+    """A need icon on a bright background: a coloured disc with a white glyph, and the timer's darker section."""
+    x, y = position
+    cv2.circle(screen, position, 28, disc, -1)
+    cv2.line(screen, (x - 12, y - 10), (x + 12, y + 10), (255, 255, 255), 5)
+    cv2.line(screen, (x + 12, y - 10), (x - 12, y + 10), (255, 255, 255), 5)
+    cv2.circle(screen, (x - 9, y + 12), 5, (255, 255, 255), -1)
+    cv2.circle(screen, position, 28, (255, 255, 255), 3)
+    if timer_degrees:
+        cv2.ellipse(screen, position, (24, 24), -90, 0, timer_degrees, (20, 60, 110), -1)
+    return screen
+
+
 @pytest.fixture
 def watch(macro, monkeypatch):
-    """icon_gone_by_frame_change() on a screen that shows whatever `looks` says, one entry per look at the icon's place."""
-    looks = []
-
-    def region(x, y, width, height):
-        screen = looks.pop(0) if looks else last[0]
-        last[0] = screen
-        return screen[y:y + height, x:x + width].copy()
-    last = [draw_icon(bright_screen(), 0)]
-    monkeypatch.setattr(macro, "grab_screen_region", region)
+    """icon_gone_by_frame_change() on a screen the test controls: set view["screen"] before each look."""
+    view = {"screen": draw_icon(bright_screen())}
+    monkeypatch.setattr(macro, "grab_screen_region", lambda x, y, w, h: view["screen"][y:y + h, x:x + w].copy())
     monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
     monkeypatch.setattr(macro, "check_focus", lambda: None)
     macro._ICON_WATCH.update(need=None, pos=None, crop=None)
     macro.state.need_icon_positions["pizza"] = POS
-    yield looks
+    yield view
     macro._ICON_WATCH.update(need=None, pos=None, crop=None)
 
 
-def test_the_first_look_only_records_the_circle(macro, watch):
+def test_the_first_look_only_records_the_icon(macro, watch):
     assert macro.icon_gone_by_frame_change("pizza") is None
 
 
-def test_an_icon_that_stays_or_whose_timer_creeps_on_is_still_there(macro, watch):
-    degrees = [30, 40, 52, 66]
-    watch.extend(draw_icon(bright_screen(), d) for d in degrees)
-    assert macro.icon_gone_by_frame_change("pizza") is None
-    assert [macro.icon_gone_by_frame_change("pizza") for _ in degrees[1:]] == [False, False, False]
+def test_an_icon_whose_timer_creeps_on_is_still_there(macro, watch):
+    answers = []
+    for degrees in (30, 40, 52, 66, 120):                   # the timer's section grows (and the disc changes) look by look
+        watch["screen"] = draw_icon(bright_screen(), degrees)
+        answers.append(macro.icon_gone_by_frame_change("pizza"))
+    assert answers == [None, False, False, False, False]
 
 
 def test_an_icon_that_vanishes_is_gone(macro, watch):
-    watch.extend([draw_icon(bright_screen(), 90), draw_icon(bright_screen(), 100), bright_screen(), bright_screen()])
-    assert macro.icon_gone_by_frame_change("pizza") is None
-    assert macro.icon_gone_by_frame_change("pizza") is False
+    macro.icon_gone_by_frame_change("pizza")
+    watch["screen"] = bright_screen()
     assert macro.icon_gone_by_frame_change("pizza") is True
     assert "pizza icon gone by frame change" in open(macro.cfg.RUN_LOG_PATH).read()
 
 
-def test_a_one_frame_change_is_not_taken_for_the_icon_going(macro, watch):
-    here = draw_icon(bright_screen(), 90)
-    watch.extend([here, bright_screen(), here, here])        # baseline, one blank frame, then back, back
-    assert macro.icon_gone_by_frame_change("pizza") is None
+def test_a_one_frame_glitch_is_not_taken_for_the_icon_going(macro, watch, monkeypatch):
+    macro.icon_gone_by_frame_change("pizza")
+    real = macro.locate_icon
+    calls = []
+
+    def glitchy(template, row):                              # the first search finds nothing; the second look finds the icon
+        calls.append(1)
+        return None if len(calls) == 1 else real(template, row)
+    monkeypatch.setattr(macro, "locate_icon", glitchy)
+    assert macro.icon_gone_by_frame_change("pizza") is False and len(calls) == 2
+
+
+def test_the_icon_is_followed_when_the_icons_shift_left_because_a_neighbour_cleared(macro, watch):
+    """The icons slide left by a slot when one to the left of this one clears: it must not be taken for gone."""
+    macro.icon_gone_by_frame_change("pizza")
+    watch["screen"] = draw_icon(bright_screen(), 20, position=(POS[0] - SLOT, POS[1]))
     assert macro.icon_gone_by_frame_change("pizza") is False
+    assert macro.state.need_icon_positions["pizza"] == (POS[0] - SLOT, POS[1])
+    watch["screen"] = draw_icon(bright_screen(), 30, position=(POS[0] - SLOT, POS[1]))   # and it keeps being followed from there
     assert macro.icon_gone_by_frame_change("pizza") is False
+    watch["screen"] = draw_icon(bright_screen(), 30, position=(POS[0] - 2 * SLOT, POS[1] + 2))   # shifting again, a pixel or two lower
+    assert macro.icon_gone_by_frame_change("pizza") is False
+
+
+def test_the_icon_is_gone_when_a_neighbour_slides_into_its_place(macro, watch):
+    """The need clears and the icon to its right slides into the gap: that is a different icon, so this one is gone."""
+    macro.icon_gone_by_frame_change("pizza")
+    neighbour = bright_screen()
+    cv2.circle(neighbour, POS, 28, (230, 160, 20), -1)                      # a different icon: a blue disc with a moon-like crescent
+    cv2.ellipse(neighbour, POS, (16, 16), 0, 40, 300, (255, 255, 255), 6)
+    cv2.circle(neighbour, POS, 28, (255, 255, 255), 3)
+    watch["screen"] = neighbour
+    assert macro.icon_gone_by_frame_change("pizza") is True
 
 
 def test_nothing_can_be_said_without_a_known_place(macro, watch):
@@ -205,14 +245,17 @@ def test_nothing_can_be_said_without_a_known_place(macro, watch):
 def test_the_wait_ends_when_an_unreadable_bar_shows_the_icon_gone(macro, watch, monkeypatch):
     """wait_until_need_gone() on a bright bar: it used to run its whole length; now the icon going ends it."""
     monkeypatch.setattr(macro, "scan_needs", lambda fresh=False: ([], False))      # the bar can't be read
-    waited = []
-    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: waited.append(duration))
-    watch.extend([draw_icon(bright_screen(), 50)] * 3 + [bright_screen()] * 3)
+    polls = []
     failures = []
     monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: failures.append(reason))
+
+    def wait(duration):
+        if duration == macro.cfg.NEED_GONE_POLL_INTERVAL:
+            polls.append(1)
+            watch["screen"] = draw_icon(bright_screen(), 30 * len(polls)) if len(polls) < 4 else bright_screen()
+    monkeypatch.setattr(macro, "wait_interruptible", wait)
     macro.wait_until_need_gone("pizza", max_wait=10_000)
-    assert not failures
-    assert len([w for w in waited if w == macro.cfg.NEED_GONE_POLL_INTERVAL]) == 4   # a baseline look, two more of the icon, then it is gone
+    assert not failures and len(polls) == 4                                 # three polls with the icon there, the fourth without
 
 
 def test_a_readable_bar_starts_the_next_unreadable_stretch_afresh(macro, watch, monkeypatch):
@@ -228,3 +271,56 @@ def test_icons_remember_where_they_were_recognised(macro, monkeypatch):
     monkeypatch.setattr(macro, "find_matching_need", lambda variants: ("pizza", 0.99))
     list(macro.identify_icons([(120, 60, 30)], img))
     assert macro.state.need_icon_positions == {"pizza": (120, 60)}
+
+
+# --- the same, on real frames: the salon icon three times while the salon need is served, and its neighbours (tests/fixtures) ---
+
+def fixture(name):
+    return cv2.imread(os.path.join(os.path.dirname(__file__), "fixtures", name))
+
+
+def paste(*placed):
+    """A bright screen with icon crops pasted at the given centres: paste((crop, (x, y)), ...)."""
+    screen = bright_screen()
+    for crop, (x, y) in placed:
+        screen[y - 28:y + 29, x - 28:x + 29] = crop
+    return screen
+
+
+def test_real_frames_the_timer_growing_changes_the_icon_a_lot_but_it_is_still_found(macro, watch):
+    one, two, three = (fixture(f"salon_icon_{k}.png") for k in (1, 2, 3))
+    assert macro.icon_region_change(one, two) == pytest.approx(0.22, abs=0.03)       # a lot of change per look...
+    assert macro.icon_region_change(two, three) == pytest.approx(0.39, abs=0.03)
+    answers = []
+    for frame in (one, two, three):
+        watch["screen"] = paste((frame, POS))
+        macro.icon_gone_by_frame_change("pizza")
+        answers.append(macro._ICON_WATCH["pos"])
+    assert answers == [POS, POS, POS]                                            # ...yet each look finds it where it was
+
+
+def test_real_frames_the_salon_icon_follows_the_shift_and_is_not_confused_with_its_neighbours(macro, watch):
+    one, two, three = (fixture(f"salon_icon_{k}.png") for k in (1, 2, 3))
+    sleepy, bath = fixture("sleepy_icon.png"), fixture("bath_icon.png")
+    watch["screen"] = paste((sleepy, (POS[0] - SLOT, POS[1])), (one, POS), (bath, (POS[0] + SLOT, POS[1])))
+    assert macro.icon_gone_by_frame_change("pizza") is None
+    # the sleepy icon clears: salon and bath slide left one slot each, and the salon's timer has moved on
+    watch["screen"] = paste((two, (POS[0] - SLOT, POS[1])), (bath, POS))
+    assert macro.icon_gone_by_frame_change("pizza") is False
+    assert macro.state.need_icon_positions["pizza"] == (POS[0] - SLOT, POS[1])
+    watch["screen"] = paste((three, (POS[0] - SLOT, POS[1])), (bath, POS))
+    assert macro.icon_gone_by_frame_change("pizza") is False
+    # the salon is served: its icon goes and the bath slides into its slot - gone, though something coloured is there
+    watch["screen"] = paste((bath, (POS[0] - SLOT, POS[1])))
+    assert macro.icon_gone_by_frame_change("pizza") is True
+
+
+def test_real_frames_how_well_an_icon_matches_itself_and_the_others(macro, watch):
+    one, two, three = (fixture(f"salon_icon_{k}.png") for k in (1, 2, 3))
+    sleepy, bath = fixture("sleepy_icon.png"), fixture("bath_icon.png")
+    watch["screen"] = paste((three, POS))
+    assert macro.locate_icon(one, POS[1]) == POS                                  # the earliest look still matches the latest
+    watch["screen"] = paste((sleepy, POS), (bath, (POS[0] + SLOT, POS[1])))
+    assert macro.locate_icon(one, POS[1]) is None                                 # the neighbours are not the salon
+    watch["screen"] = bright_screen()
+    assert macro.locate_icon(one, POS[1]) is None

@@ -830,41 +830,65 @@ def icon_region_change(before: Image, after: Image) -> float:
     changed = cv2.absdiff(before, after).max(axis=2) > cfg.ICON_FRAME_CHANGE_LEVEL
     return float(np.count_nonzero(changed & inside) / np.count_nonzero(inside))
 
+def locate_icon(template: Image, row: int) -> Optional[tuple[int, int]]:
+    """Where `template` (an icon-sized capture of a need icon) is in the need
+    bar now: the centre (x, y) of its best match along the bar at about `row`,
+    or None if nothing there matches well enough (ICON_LOCATE_THRESHOLD). The
+    match is on the whiteness of the pixels (the least of B, G, R), which is
+    the icon's white ring and glyph - they don't change as its timer
+    changes the colour of a section of the disc - and a bright background or
+    another icon matches poorly. The whole width of the bar is searched, so
+    the icon is found wherever the others shifting around it have put it."""
+    radius = cfg.ICON_CROP_RADIUS
+    y0 = max(0, row - radius - cfg.ICON_LOCATE_ROW_MARGIN)
+    band = grab_screen_region(0, y0, int(cfg.REFERENCE_WIDTH * cfg.NEED_ICON_WIDTH_PERCENT), 2 * radius + 2 * cfg.ICON_LOCATE_ROW_MARGIN + 1)
+    scores = cv2.matchTemplate(band.min(axis=2), template.min(axis=2), cv2.TM_CCOEFF_NORMED)
+    _, best, _, where = cv2.minMaxLoc(scores)
+    if best < cfg.ICON_LOCATE_THRESHOLD:
+        return None
+    return where[0] + radius, y0 + where[1] + radius
+
 def icon_gone_by_frame_change(need_name: str) -> Optional[bool]:
-    """Whether `need_name`'s icon is gone, judged from how its place in the
-    need bar changes between looks - for when the bar can't be read by
-    matching icons (a bright background, see detect_need_bar_readable()).
-    A need's icon fills its circle with a timer: a darker section that slowly
-    grows. So a circle that stays much as it was, or changes only a little,
-    is still there; one that has changed over more than ICON_GONE_CHANGE_FRACTION
-    of its area since the last look - and is still that different a moment
-    later (NEED_GONE_FLICKER_RECHECK_DELAY, so a one-frame change doesn't
-    count) - is gone. The icon's place is where it was last recognised
-    (State.need_icon_positions). The first look only records the circle (None:
-    nothing to compare yet), so an icon that went before that is not noticed,
-    and the wait runs out as it did before. None too if the place isn't known."""
+    """Whether `need_name`'s icon is gone, judged from how it changes between
+    looks - for when the bar can't be read by matching icons (a bright
+    background, see detect_need_bar_readable()). A need's icon fills its
+    circle with a timer: a section that slowly grows and changes colour. So
+    each look searches the bar for the icon *as it looked at the previous look*
+    (locate_icon()): the timer moves on a little between looks, and the
+    icon's white ring and glyph still match. Found - wherever the other icons
+    shifting about when one clears have put it, which is noted in
+    State.need_icon_positions - means it is still there. Not found, and still
+    not found NEED_GONE_FLICKER_RECHECK_DELAY later (so a one-frame glitch
+    doesn't count), means it is gone: cleared, or replaced by a neighbour that
+    has slid into its place. The icon's starting place is where it was last
+    recognised. The first look only records the icon (None: nothing to
+    compare with yet), so one that went before that is not noticed, and the
+    wait runs out as it did before. None too if the place isn't known."""
     pos = state.need_icon_positions.get(need_name)
     here = icon_region(pos) if pos is not None else None
     if pos is None or here is None:
         return None
     watch = _ICON_WATCH
-    if watch["need"] != need_name or watch["pos"] != pos or watch["crop"] is None:
+    if watch["need"] != need_name or watch["crop"] is None:
         watch.update(need=need_name, pos=pos, crop=here)
         return None
-    change = icon_region_change(watch["crop"], here)
-    print(f"[debug] {need_name}: need bar unreadable, its icon's place changed {change:.0%} since the last look")
-    if change < cfg.ICON_GONE_CHANGE_FRACTION:
-        watch["crop"] = here          # still there (or the timer creeping on): compare the next look with this one
-        return False
-    wait_interruptible(cfg.NEED_GONE_FLICKER_RECHECK_DELAY)
-    again = icon_region(pos)
-    if again is None:
+    found = locate_icon(watch["crop"], pos[1])
+    if found is None:
+        wait_interruptible(cfg.NEED_GONE_FLICKER_RECHECK_DELAY)
+        found = locate_icon(watch["crop"], pos[1])
+        if found is None:
+            print(f"[debug] {need_name}: need bar unreadable, and its icon is no longer in the bar")
+            log_run_event(f"{need_name} icon gone by frame change - the need bar is unreadable")
+            watch.update(need=None, pos=None, crop=None)
+            return True
+    now = icon_region(found)
+    if now is None:
         return None
-    if icon_region_change(watch["crop"], again) >= cfg.ICON_GONE_CHANGE_FRACTION:
-        log_run_event(f"{need_name} icon gone by frame change ({change:.0%}) - the need bar is unreadable")
-        watch.update(need=None, pos=None, crop=None)
-        return True
-    watch["crop"] = again             # it was a one-frame change
+    change = icon_region_change(watch["crop"], now) if found == pos else None
+    where = f"{pos} -> {found}" if found != pos else f"{pos}, {change:.0%} changed"
+    print(f"[debug] {need_name}: need bar unreadable, its icon is still there ({where})")
+    state.need_icon_positions[need_name] = found
+    watch.update(pos=found, crop=now)      # the next look searches for the icon as it is now
     return False
 
 def _need_cleared(need_name: str) -> Optional[bool]:
@@ -3316,7 +3340,8 @@ def run_all_need_handlers(handlers: Optional[dict[str, Callable[[], NeedHandler]
     ENABLED_NEEDS) once, one after another - the Debug tab's "test every
     need" button. Each runs with the in-task checks on, like a real need, and
     the character is respawned after it, since the handlers walk from the
-    spawn point. A stop ends the whole sequence (StopRequested propagates).
+    spawn point. Minigame popups are declined, not played (play_minigames=False),
+    so they can't cut a handler short. A stop ends the whole sequence (StopRequested propagates).
     Prints and returns how each went: "done", "failed" (the handler returned
     False) or "interrupted by ...", keyed by need."""
     handlers = DEBUG_HANDLERS if handlers is None else handlers
@@ -3326,7 +3351,7 @@ def run_all_need_handlers(handlers: Optional[dict[str, Callable[[], NeedHandler]
         check_stop()
         print(f"\n[TEST] ({i}/{len(handlers)}) {name}...")
         try:
-            with task_unscrew():
+            with task_unscrew(play_minigames=False):    # a minigame popup is declined, not played
                 results[name] = "done" if handler_cls().handle() else "failed"
         except TaskInterrupted as interruption:
             results[name] = f"interrupted by {interruption.reason}"

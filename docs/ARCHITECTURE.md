@@ -49,7 +49,7 @@ every second instead of a line per check.
 2. Detect every need icon currently on screen (`detect_need_icons()`).
    Nothing found → return `False` immediately (silently).
 3. For each detected icon, match it against the saved reference icons in
-   `needs/` (`find_matching_need()`). An icon that doesn't match anything
+   `ref/needs/` (`find_matching_need()`). An icon that doesn't match anything
    well enough triggers `prompt_rename_need()` (asks you, in a dialog, to
    name and save it - only when `SAVE_NEW_NEEDS` is on) and is otherwise skipped this pass - it isn't
    "resolved," it's just been taught for next time.
@@ -232,10 +232,10 @@ best-aligned variant.
 
 `find_matching_need()` compares the new icon against the signature of every
 saved `.png` in
-`needs/` (`need_signatures()` computes those once and recomputes them only
-when a file in `needs/` is added, changed or removed, so a check doesn't
+`ref/needs/` (`need_signatures()` computes those once and recomputes them only
+when a file in `ref/needs/` is added, changed or removed, so a check doesn't
 re-read the folder) - including subfolders, so related icons can be grouped (the
-seasonal `diving` and `puddle` icons live in `needs/weather/`); a need's
+seasonal `diving` and `puddle` icons live in `ref/needs/weather/`); a need's
 name is just its file name, wherever it sits - and keeps the best score. A best score below
 `ICON_MATCH_THRESHOLD` (0.93) means "not confident this is anything we've
 seen" and falls through to `prompt_rename_need()` instead.
@@ -835,7 +835,7 @@ is worse than the small delay this cooperative approach costs instead.
 
 `GAME_CONFIG_PATH` (`debug/.config`, a JSON file) is the macro's one piece
 of state that survives separate launches of the script - everything else
-either lives in `needs/` (the learned reference icons) or is cheap to
+either lives in `ref/needs/` (the learned reference icons) or is cheap to
 redetect fresh, like `state.button_positions`: detected every single time the
 character walks to the buttons, so there's nothing gained by saving it -
 it's never trusted across a run anyway, and a stale save would just be

@@ -711,7 +711,7 @@ def need_signatures() -> list[tuple[str, Image]]:
     icon on each check, so it's done once and redone only when the files
     change (checking their modification times is cheap), which also picks up
     an icon added while the macro runs. Recurses, so related icons can sit in
-    subfolders (e.g. needs/weather/) - a need's name is just its file name,
+    subfolders (e.g. ref/needs/weather/) - a need's name is just its file name,
     wherever it lives."""
     global _NEED_SIGNATURES
     files = sorted(os.path.join(root, f) for root, _, names in os.walk(cfg.NEEDS_DIR) for f in names if f.endswith('.png'))

@@ -7,8 +7,8 @@ modifying the code - if you just want to run the macro, see the main
 Almost everything lives in `main.py` (including the run-report chart - see [Debugging an unattended run](#debugging-an-unattended-run)), organized top to bottom as a sequence
 of `# === SECTION ===` blocks; this doc follows that same order. The one
 exception is `magic_numbers.py`, which holds every tunable constant (see
-[Configuration reference](#configuration-reference)) - `main.py` pulls
-does `import magic_numbers as cfg` and refers to them as `cfg.NAME`
+[Configuration reference](#configuration-reference)) - `main.py` does
+`import magic_numbers as cfg` and refers to them as `cfg.NAME`
 everywhere else (`tools/check_constants.py` fails on a `cfg.` name that
 `magic_numbers.py` doesn't define - a typo pyflakes can't see). The docs below
 still write constants by their bare name.
@@ -24,9 +24,10 @@ on-the-ground state), then repeats `run_full_cycle()` forever, pausing
 
 ```
 while True:
-    unscrew(); side_quest()
+    check_quiet(); unscrew(); side_quest()
     if process_needs():   # resolved ONE need
         return
+    respawn_if_no_detection()   # nothing detected for NO_DETECTION_RESPAWN_INTERVAL
     wait NEED_CHECK_RETRY_DELAY seconds, then check again
 ```
 
@@ -104,7 +105,7 @@ an extra walk from wherever the previous need left the character standing.
   config/tuning value lives in `magic_numbers.py` instead - see
   [Configuration reference](#configuration-reference).
 - **LOGGING** - `next_run_number()` / `log_run_event()`, plus the
-  unattended-run tools `log_output()`, `save_failure_screenshot()`,
+  unattended-run tools `log_output()`, `save_failure_report()`,
   `log_failure()` and `write_status()` - see
   [Debugging an unattended run](#debugging-an-unattended-run).
 - **GAME CONFIG** - `load_game_config()`/`save_game_config()`: the state
@@ -170,7 +171,7 @@ scales. Distances measured in pixels (icon radii, the `MINIGAME_POPUP_NO_MAX_*`
 offsets, ...) are reference pixels, so they scale too. Scaling assumes the same
 aspect ratio and a window that fills its area - a non-maximized window's title
 bar and borders are counted as part of it, so expect small errors there.
-`save_failure_screenshot()` is the one thing that captures the whole screen
+`save_failure_report()` is the one thing that captures the whole screen
 instead, to show what else was on it.
 
 ## Need-icon detection
@@ -196,11 +197,12 @@ instead, to show what else was on it.
    practically unchanged since it last ran: when fewer than
    `NEED_STRIP_MAX_CHANGED_FRACTION` of its pixels moved by more than
    `NEED_STRIP_CHANGED_LEVEL`, the last result is reused (at most
-   `NEED_STRIP_MAX_REUSES` times in a row, and never when saving the debug
-   image). An icon appearing or going changes far more than that. Only the
+   `NEED_STRIP_MAX_REUSES` times in a row, or `NEED_STRIP_MAX_EMPTY_REUSES` if
+   that result found no icon, since a missed icon looks the same; a call with
+   `fresh=True` always searches, and the debug image is still saved). An icon appearing or going changes far more than that. Only the
    strip is compared, never the whole screen.
 
-Each detected icon is cropped out of the full screenshot at a fixed
+Each detected icon is cropped out of the captured strip (plus margin) at a fixed
 radius (`ICON_CROP_RADIUS` + `ICON_EXTRACT_PADDING` px of margin) and handed
 to `find_matching_need()`.
 
@@ -243,7 +245,9 @@ seen" and falls through to `prompt_rename_need()` instead.
 `wait_until_need_gone()` - used after a button click (`click_need_button()`)
 and after `TeleportWalkNeedHandler`'s movement sequence (`choose` doesn't
 wait: it clears at once, and the next check sees that) - polls
-`scan_needs()` (one fresh detect-and-match pass) every
+`scan_needs()` (one detect-and-match pass; the circle search may be skipped
+while the strip is unchanged, except for the second look of each check, which is
+always a real search) every
 `NEED_GONE_POLL_INTERVAL` until the target need is missing
 `NEED_GONE_CONFIRMATIONS` times in a row (any sighting resets the count
 back to zero), up to `NEED_GONE_MAX_WAIT` total.
@@ -474,9 +478,12 @@ normal backpack for a few seconds on purpose, so one sighting could be a
 handler in the middle of its steps, but two `UNSCREW_TASK_INTERVAL` apart is a
 backpack open for longer than any handler needs. The paycheck check is skipped
 while the backpack is still open. If a minigame is played, or a disconnect made
-it rejoin, `TaskInterrupted` is raised: the handler is abandoned (both respawn
-the character), `process_needs()` logs `<need> interrupted by a minigame` /
-`a rejoin`, doesn't count it as resolved or as a failed attempt, and the next
+it rejoin, `TaskInterrupted` is raised: the handler is abandoned (a minigame and
+a rejoin both respawn the character; for the popup abort below,
+`task_unscrew_tick()` respawns it before raising), `process_needs()` logs `<need> interrupted by a minigame` /
+`a rejoin` / `a popup`, doesn't count it as resolved or as a failed attempt
+(except the popup: that does count as an attempt, so a need a popup keeps
+spoiling is disabled like any stuck need), and the next
 check decides from the screen what's still needed. During setup a minigame is
 only declined (No, without "do not show again"), since setup's clicks toggle
 things and can't be abandoned halfway.
@@ -726,9 +733,9 @@ shared `_need_cleared()` helper - see
 [Waiting for a need to clear](#waiting-for-a-need-to-clear)), just
 interleaved with the movement instead of run after it.
 
-This is the one place in the macro with real thread concurrency (every
-other background activity is the GUI's single `run_async()` worker
-thread). A second `threading.Event` tells the watcher to stop the instant
+This is the one place the macro scans the screen from two threads at once
+(the other background threads - the GUI's `run_async()` worker, the stop-hotkey
+poller, `ResourceMonitor` and `RunRecorder` - do their own, separate jobs). A second `threading.Event` tells the watcher to stop the instant
 the main loop exits for *any* reason - the duration elapsed, the need was
 confirmed cleared, or an exception (including `StopRequested`/
 `FocusLost`) is propagating out - via a `try`/`finally` around the
@@ -742,8 +749,9 @@ inside `hold_key()`) to notice a stop or focus loss first and signal the
 watcher to stop via the shared event. No input simulation
 (`pydirectinput`) ever happens on the watcher thread - it only takes
 screenshots and runs detection, each call independent and self-contained
-(a fresh `mss.MSS()` per screenshot, no shared mutable state with the
-main thread besides the two events), which is what makes running it
+(a fresh `mss.MSS()` per screenshot, and no shared mutable state with the
+main thread besides the two events and the need-strip cache, which
+`detect_need_icons()` guards with a lock), which is what makes running it
 alongside the movement safe.
 
 ## Stopping & focus safety

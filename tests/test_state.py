@@ -252,3 +252,29 @@ def test_no_icons_on_a_readable_bar_leaves_the_idle_clock_running(macro, one_nee
     before = macro.state.last_detection = time.time() - 1000
     assert macro.process_needs() is False
     assert macro.state.last_detection == before
+
+
+def test_a_popup_abort_counts_as_an_attempt_but_a_minigame_does_not(macro, one_need, monkeypatch):
+    def interrupted(reason):
+        class Handler:
+            def handle(self):
+                raise macro.TaskInterrupted(reason)
+        monkeypatch.setattr(macro, "get_need_handler", lambda name: Handler())
+        assert macro.process_needs() is True
+
+    interrupted("a popup")
+    assert macro.state.attempted_last == {"hungry"}         # so a need the popup keeps spoiling gets disabled
+    interrupted("a minigame")
+    assert macro.state.attempted_last == set()
+
+
+def test_a_need_the_popup_keeps_spoiling_is_eventually_disabled(macro, one_need, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "ENABLED_NEEDS", {"hungry"})
+
+    class Handler:
+        def handle(self):
+            raise macro.TaskInterrupted("a popup")
+    monkeypatch.setattr(macro, "get_need_handler", lambda name: Handler())
+    for _ in range(macro.cfg.NEED_STUCK_CHECKS + 1):
+        macro.process_needs()
+    assert "hungry" in macro.state.disabled_needs

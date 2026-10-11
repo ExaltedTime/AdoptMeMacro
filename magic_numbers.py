@@ -470,6 +470,7 @@ NEED_ICON_BLANK_WIDTH = 0.20        # top-left UI cluster to ignore (width)
 NEED_STRIP_CHANGED_LEVEL = 25           # a pixel counts as changed if any channel moved by more than this...
 NEED_STRIP_MAX_CHANGED_FRACTION = 0.002 # ...and the strip as unchanged if fewer than this fraction of its pixels did
 NEED_STRIP_MAX_REUSES = 10              # most checks in a row that reuse a result before the search runs again anyway
+NEED_STRIP_MAX_EMPTY_REUSES = 2         # ...and when that result found no icon at all (a missed icon looks the same, so trust it less)
 NEED_ICON_MIN_RADIUS = 24           # px, icon ring radius range searched for (Hough circles)
 NEED_ICON_MAX_RADIUS = 34
 NEED_ICON_MIN_DISTANCE = 40         # px, minimum spacing between two icon centers

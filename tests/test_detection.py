@@ -1,5 +1,4 @@
 """Screen detection on synthetic and reference images (the crops in ref/ are real, lossless PNGs)."""
-import os
 
 import cv2
 import numpy as np
@@ -81,9 +80,28 @@ def test_the_circle_search_is_skipped_while_the_strip_is_unchanged(macro, icon_s
 
 def test_the_search_runs_again_after_enough_reuses(macro, icon_screen):
     screen, searches = icon_screen
+    ring(screen["img"], (700, 80))
     for _ in range(macro.cfg.NEED_STRIP_MAX_REUSES + 2):
         macro.detect_need_icons()
     assert len(searches) == 2
+
+
+def test_an_empty_result_is_reused_less_than_one_with_icons(macro, icon_screen):
+    """A missed icon looks like an empty strip, so an empty result is trusted for fewer checks."""
+    screen, searches = icon_screen
+    for _ in range(macro.cfg.NEED_STRIP_MAX_EMPTY_REUSES + 2):
+        macro.detect_need_icons()
+    assert len(searches) == 2 and macro.cfg.NEED_STRIP_MAX_EMPTY_REUSES < macro.cfg.NEED_STRIP_MAX_REUSES
+
+
+def test_fresh_always_searches_and_refreshes_the_cache(macro, icon_screen):
+    screen, searches = icon_screen
+    ring(screen["img"], (700, 80))
+    macro.detect_need_icons()
+    macro.detect_need_icons(fresh=True)
+    assert len(searches) == 2 and macro._NEED_STRIP_CACHE["reuses"] == 0
+    macro.detect_need_icons()
+    assert len(searches) == 2                                  # reused the refreshed result
 
 
 def test_a_new_icon_forces_a_new_search(macro, icon_screen):
@@ -95,12 +113,41 @@ def test_a_new_icon_forces_a_new_search(macro, icon_screen):
     assert len(searches) == 2 and len(first) == 1 and len(second) == 2
 
 
-def test_saving_the_debug_image_never_uses_the_cache(macro, icon_screen, monkeypatch):
+def test_the_debug_image_is_still_saved_when_the_search_is_skipped(macro, icon_screen, monkeypatch, tmp_path):
     screen, searches = icon_screen
-    monkeypatch.setattr(macro.cfg, "IMAGES_DIR", os.path.dirname(macro.cfg.RUN_LOG_PATH))
-    macro.detect_need_icons()
+    monkeypatch.setattr(macro.cfg, "IMAGES_DIR", str(tmp_path))
+    ring(screen["img"], (700, 80))
     macro.detect_need_icons(save_debug=True)
-    assert len(searches) == 2
+    (tmp_path / "debug_needs.png").unlink()
+    macro.detect_need_icons(save_debug=True)
+    assert len(searches) == 1 and (tmp_path / "debug_needs.png").exists()
+
+
+def test_a_one_off_missed_icon_cannot_pass_the_flicker_recheck(macro, icon_screen, monkeypatch):
+    """_need_cleared() looks twice. If the first search misses an icon that is still there and the strip then looks
+    unchanged, the second look must still be a real search - not the same wrong answer from the cache."""
+    screen, searches = icon_screen
+    ring(screen["img"], (700, 80))
+    real = macro.cv2.HoughCircles
+    calls = []
+
+    def misses_once(*args, **kwargs):
+        calls.append(1)
+        return None if len(calls) == 1 else real(*args, **kwargs)
+
+    monkeypatch.setattr(macro.cv2, "HoughCircles", misses_once)
+    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(i, img[:5, :5], "hungry", 0.9) for i, _ in enumerate(found)]))
+    monkeypatch.setattr(macro, "check_focus", lambda: None)
+    monkeypatch.setattr(macro.cfg, "NEED_GONE_FLICKER_RECHECK_DELAY", 0)
+    assert macro._need_cleared("hungry") is False              # the second, fresh look saw it
+    assert len(calls) == 2
+
+
+def test_a_need_that_is_really_gone_is_cleared(macro, icon_screen, monkeypatch):
+    screen, searches = icon_screen
+    monkeypatch.setattr(macro, "check_focus", lambda: None)
+    monkeypatch.setattr(macro.cfg, "NEED_GONE_FLICKER_RECHECK_DELAY", 0)
+    assert macro._need_cleared("hungry") is True
 
 
 class FakeMonitor:
@@ -184,12 +231,15 @@ def test_cant_spawn_vehicle_aborts_the_running_task(macro, monkeypatch):
     monkeypatch.setattr(macro, "rejoin_game", lambda kinds=None: False)
     monkeypatch.setattr(macro, "close_backpack_if_stuck", lambda in_task: False)
     monkeypatch.setattr(macro, "detect_paycheck", lambda: False)
+    respawns = []
+    monkeypatch.setattr(macro, "respawn_character", lambda: respawns.append(1))
     assert macro.unscrew(in_task=True) == "aborted"
     macro.state.task_active, macro.state.task_thread = True, __import__("threading").get_ident()
     macro.state.last_task_unscrew = 0.0
     with pytest.raises(macro.TaskInterrupted) as stopped:
         macro.task_unscrew_tick()
     assert stopped.value.reason == "a popup"
+    assert respawns == [1]                                  # the retry starts from the spawn point
 
 
 def test_setup_is_never_aborted_by_the_popup(macro, monkeypatch):

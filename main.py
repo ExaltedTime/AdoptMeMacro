@@ -638,6 +638,7 @@ def need_icon_strip(img: Image) -> Image:
 
 # The strip the icons were last searched for in, and what was found: while the strip looks the same, the circle
 # search is skipped (see detect_need_icons()).
+_NEED_STRIP_LOCK = threading.Lock()
 _NEED_STRIP_CACHE: dict[str, Any] = {"strip": None, "found": [], "reuses": 0}
 
 def strip_changed_fraction(before: Image, after: Image) -> float:
@@ -645,7 +646,7 @@ def strip_changed_fraction(before: Image, after: Image) -> float:
     changed = cv2.absdiff(before, after).max(axis=2) > cfg.NEED_STRIP_CHANGED_LEVEL
     return np.count_nonzero(changed) / changed.size
 
-def detect_need_icons(save_debug: bool = False) -> tuple[list[tuple[int, int, int]], Image]:
+def detect_need_icons(save_debug: bool = False, fresh: bool = False) -> tuple[list[tuple[int, int, int]], Image]:
     """Detect the circular need icons at the top of the screen. Icons are
     found by their round outline (Hough circles, within a fixed radius
     range), not by color, so event badges overlapping an icon, differently
@@ -653,8 +654,11 @@ def detect_need_icons(save_debug: bool = False) -> tuple[list[tuple[int, int, in
     search is skipped, reusing the last result, while the strip the icons sit
     in is practically unchanged since it was last searched (at most
     NEED_STRIP_MAX_CHANGED_FRACTION of it changed, and no more than
-    NEED_STRIP_MAX_REUSES times running); an icon appearing or going changes
-    far more than that. Only the strip, plus the margin the icon crops reach
+    NEED_STRIP_MAX_REUSES times running - NEED_STRIP_MAX_EMPTY_REUSES if that
+    result found nothing, since a missed icon looks the same); an icon
+    appearing or going changes far more than that. `fresh` always searches
+    (and refreshes the cache): used for the second look of _need_cleared(),
+    which exists to survive one wrong result. Only the strip, plus the margin the icon crops reach
     past it, is captured (grab_screen_region()): returns ((cx, cy, radius) per
     icon, left to right) and that image, whose pixels sit at the same
     positions as in grab_screen() (it just ends sooner).
@@ -668,18 +672,20 @@ def detect_need_icons(save_debug: bool = False) -> tuple[list[tuple[int, int, in
     top_strip[0:int(cfg.REFERENCE_HEIGHT * cfg.NEED_ICON_BLANK_HEIGHT), 0:int(cfg.REFERENCE_WIDTH * cfg.NEED_ICON_BLANK_WIDTH)] = 0
 
     cache = _NEED_STRIP_CACHE
-    if (not save_debug and cache["strip"] is not None and cache["strip"].shape == top_strip.shape
-            and cache["reuses"] < cfg.NEED_STRIP_MAX_REUSES
-            and strip_changed_fraction(cache["strip"], top_strip) < cfg.NEED_STRIP_MAX_CHANGED_FRACTION):
-        cache["reuses"] += 1
-        found = list(cache["found"])
-    else:
-        gray = cv2.medianBlur(cv2.cvtColor(top_strip, cv2.COLOR_BGR2GRAY), cfg.NEED_ICON_BLUR_KERNEL)
-        circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, dp=1, minDist=cfg.NEED_ICON_MIN_DISTANCE,
-                                   param1=cfg.NEED_ICON_HOUGH_EDGE, param2=cfg.NEED_ICON_HOUGH_VOTES,
-                                   minRadius=cfg.NEED_ICON_MIN_RADIUS, maxRadius=cfg.NEED_ICON_MAX_RADIUS)
-        found = [] if circles is None else sorted((int(x), int(y), int(r)) for x, y, r in circles[0])
-        cache.update(strip=top_strip, found=found, reuses=0)
+    with _NEED_STRIP_LOCK:   # the need-gone watcher thread scans too
+        reusable = (not fresh and cache["strip"] is not None and cache["strip"].shape == top_strip.shape
+                    and cache["reuses"] < (cfg.NEED_STRIP_MAX_REUSES if cache["found"] else cfg.NEED_STRIP_MAX_EMPTY_REUSES)
+                    and strip_changed_fraction(cache["strip"], top_strip) < cfg.NEED_STRIP_MAX_CHANGED_FRACTION)
+        if reusable:
+            cache["reuses"] += 1
+            found = list(cache["found"])
+        else:
+            gray = cv2.medianBlur(cv2.cvtColor(top_strip, cv2.COLOR_BGR2GRAY), cfg.NEED_ICON_BLUR_KERNEL)
+            circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, dp=1, minDist=cfg.NEED_ICON_MIN_DISTANCE,
+                                       param1=cfg.NEED_ICON_HOUGH_EDGE, param2=cfg.NEED_ICON_HOUGH_VOTES,
+                                       minRadius=cfg.NEED_ICON_MIN_RADIUS, maxRadius=cfg.NEED_ICON_MAX_RADIUS)
+            found = [] if circles is None else sorted((int(x), int(y), int(r)) for x, y, r in circles[0])
+            cache.update(strip=top_strip, found=found, reuses=0)
 
     if save_debug:
         debug_img = top_strip.copy()
@@ -777,22 +783,25 @@ def detect_need_bar_readable(img: Image) -> bool:
     bright = np.count_nonzero(cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY) > cfg.NEED_BAR_BRIGHT_LEVEL)
     return bright / (strip.shape[0] * strip.shape[1]) < cfg.NEED_BAR_MAX_BRIGHT_FRACTION
 
-def scan_needs() -> tuple[list[Optional[str]], bool]:
+def scan_needs(fresh: bool = False) -> tuple[list[Optional[str]], bool]:
     """One-shot snapshot: (every need name currently detected on screen, whether
-    the icons could be read at all - see detect_need_bar_readable())."""
-    found_icons, full_img = detect_need_icons()
+    the icons could be read at all - see detect_need_bar_readable()). `fresh`
+    makes the circle search run even if the strip looks unchanged (see
+    detect_need_icons())."""
+    found_icons, full_img = detect_need_icons(fresh=fresh)
     if not detect_need_bar_readable(full_img):
         return [], False
     return [name for _, _, name, _ in identify_icons(found_icons, full_img)], True
 
 def _need_cleared(need_name: str) -> Optional[bool]:
     """True if `need_name`'s icon is missing on two quick checks in a row
-    (NEED_GONE_FLICKER_RECHECK_DELAY apart) - the single-frame-flicker
-    guard shared by wait_until_need_gone() and _watch_need_gone() below.
+    (NEED_GONE_FLICKER_RECHECK_DELAY apart, the second one a fresh circle
+    search) - the single-frame-flicker guard shared by wait_until_need_gone()
+    and _watch_need_gone() below.
     None if the icons couldn't be read (see detect_need_bar_readable()): that's
     neither cleared nor not cleared."""
     for attempt in range(2):
-        names, readable = scan_needs()
+        names, readable = scan_needs(fresh=attempt > 0)   # the second look must not just repeat the first
         if not readable:
             return None
         if need_name in names:
@@ -929,6 +938,7 @@ def task_unscrew_tick() -> None:
         raise TaskInterrupted("a rejoin")
     if played == "aborted":
         release_all_inputs()
+        respawn_character()   # unlike a minigame or a rejoin this doesn't respawn by itself: start the retry from a known spot
         raise TaskInterrupted("a popup")
 
 def wait_interruptible(duration: float) -> None:
@@ -1987,8 +1997,12 @@ def process_needs() -> bool:
             except TaskInterrupted as interruption:
                 # A minigame or a rejoin took over (both respawn): not
                 # resolved, and not a failed attempt either - the next check
-                # sees what's still on screen.
-                attempted.discard(need_name)
+                # sees what's still on screen. A popup that spoiled it (the
+                # character was respawned by task_unscrew_tick()) does count
+                # as an attempt, so a need it keeps spoiling is disabled like
+                # any other stuck need instead of being retried forever.
+                if interruption.reason != "a popup":
+                    attempted.discard(need_name)
                 print(f"[debug] {need_name} interrupted by {interruption.reason}")
                 log_run_event(f"{need_name} interrupted by {interruption.reason}")
                 return True

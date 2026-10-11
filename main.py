@@ -16,6 +16,7 @@ from __future__ import annotations
 # See README.md for an explanation of how the code is organized and how it behaves.
 
 import os, sys, re, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib, shutil
+import datetime
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, Union
@@ -308,6 +309,9 @@ class State:
     task_thread: Optional[int] = None
     last_task_unscrew: float = 0.0
     in_unscrew: bool = False
+    # Where each need's icon was last recognised in the need bar (reference
+    # space, centre), by need name - see icon_gone_by_frame_change().
+    need_icon_positions: dict[str, tuple[int, int]] = field(default_factory=dict)
     # How many in-task checks in a row have seen the backpack open (see
     # close_backpack_if_stuck()).
     backpack_strikes: int = 0
@@ -393,10 +397,19 @@ def reset_need_tracking() -> None:
 
 def log_run_event(message: str) -> None:
     """Append one timestamped line to RUN_LOG_PATH, tagged with
-    state.run_number."""
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    state.run_number - and, when a run number is set, to that run's own
+    file, RUN_LOGS_DIR/run<N>.txt (lines logged before any run has started
+    only go to RUN_LOG_PATH)."""
+    line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [RUN {state.run_number}] {message}\n"
     with open(cfg.RUN_LOG_PATH, "a") as f:
-        f.write(f"[{timestamp}] [RUN {state.run_number}] {message}\n")
+        f.write(line)
+    if state.run_number is not None:
+        try:
+            os.makedirs(cfg.RUN_LOGS_DIR, exist_ok=True)
+            with open(os.path.join(cfg.RUN_LOGS_DIR, f"run{state.run_number}.txt"), "a") as f:
+                f.write(line)
+        except OSError:
+            pass   # the combined log above has it
 
 # What the macro knows about how this run is going, written to STATUS_PATH by
 # write_status() so it can be checked without opening the GUI.
@@ -548,6 +561,7 @@ def load_game_config() -> dict[str, Any]:
         "money_collected": 0,
         "lure_timer": time.time(),  # due immediately on a fresh config
         "tree_timer": time.time(),  # likewise
+        "money_reset_boundary": None,   # the last daily MONEY_RESET_HOUR reset side_quest() has dealt with (None: not yet)
         "side_quest_enabled": True, # whether side_quest() is allowed to run at all
         "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
         "record_next_run": False,   # record the next run as a low quality video; cleared when that run starts
@@ -771,6 +785,8 @@ def identify_icons(found_icons: list[tuple[int, int, int]], full_img: Image) -> 
         check_running()
         icon_img = extract_icon(full_img, cx, cy, cfg.ICON_CROP_RADIUS)
         need_name, score = find_matching_need(icon_variants(full_img, cx, cy))
+        if need_name:
+            state.need_icon_positions[need_name] = (cx, cy)
         yield idx, icon_img, need_name, score
 
 def detect_need_bar_readable(img: Image) -> bool:
@@ -793,17 +809,101 @@ def scan_needs(fresh: bool = False) -> tuple[list[Optional[str]], bool]:
         return [], False
     return [name for _, _, name, _ in identify_icons(found_icons, full_img)], True
 
+# The icon region being watched while the need bar is unreadable: {"need", "pos", "crop"} - see icon_gone_by_frame_change().
+_ICON_WATCH: dict[str, Any] = {"need": None, "pos": None, "crop": None}
+
+def icon_region(pos: tuple[int, int]) -> Optional[Image]:
+    """The square around a need icon centred on `pos` (ICON_CROP_RADIUS each
+    way), captured now - or None if it would reach past the screen's edge."""
+    radius = cfg.ICON_CROP_RADIUS
+    x0, y0 = pos[0] - radius, pos[1] - radius
+    if x0 < 0 or y0 < 0:
+        return None
+    return grab_screen_region(x0, y0, 2 * radius + 1, 2 * radius + 1)
+
+def icon_region_change(before: Image, after: Image) -> float:
+    """The fraction of the circle of an icon-sized square that differs between
+    two captures by more than ICON_FRAME_CHANGE_LEVEL on any colour channel."""
+    size = before.shape[0]
+    yy, xx = np.ogrid[:size, :size]
+    inside = (yy - size // 2) ** 2 + (xx - size // 2) ** 2 <= (size // 2) ** 2
+    changed = cv2.absdiff(before, after).max(axis=2) > cfg.ICON_FRAME_CHANGE_LEVEL
+    return float(np.count_nonzero(changed & inside) / np.count_nonzero(inside))
+
+def locate_icon(template: Image, row: int) -> Optional[tuple[int, int]]:
+    """Where `template` (an icon-sized capture of a need icon) is in the need
+    bar now: the centre (x, y) of its best match along the bar at about `row`,
+    or None if nothing there matches well enough (ICON_LOCATE_THRESHOLD). The
+    match is on the whiteness of the pixels (the least of B, G, R), which is
+    the icon's white ring and glyph - they don't change as its timer
+    changes the colour of a section of the disc - and a bright background or
+    another icon matches poorly. The whole width of the bar is searched, so
+    the icon is found wherever the others shifting around it have put it."""
+    radius = cfg.ICON_CROP_RADIUS
+    y0 = max(0, row - radius - cfg.ICON_LOCATE_ROW_MARGIN)
+    band = grab_screen_region(0, y0, int(cfg.REFERENCE_WIDTH * cfg.NEED_ICON_WIDTH_PERCENT), 2 * radius + 2 * cfg.ICON_LOCATE_ROW_MARGIN + 1)
+    scores = cv2.matchTemplate(band.min(axis=2), template.min(axis=2), cv2.TM_CCOEFF_NORMED)
+    _, best, _, where = cv2.minMaxLoc(scores)
+    if best < cfg.ICON_LOCATE_THRESHOLD:
+        return None
+    return where[0] + radius, y0 + where[1] + radius
+
+def icon_gone_by_frame_change(need_name: str) -> Optional[bool]:
+    """Whether `need_name`'s icon is gone, judged from how it changes between
+    looks - for when the bar can't be read by matching icons (a bright
+    background, see detect_need_bar_readable()). A need's icon fills its
+    circle with a timer: a section that slowly grows and changes colour. So
+    each look searches the bar for the icon *as it looked at the previous look*
+    (locate_icon()): the timer moves on a little between looks, and the
+    icon's white ring and glyph still match. Found - wherever the other icons
+    shifting about when one clears have put it, which is noted in
+    State.need_icon_positions - means it is still there. Not found, and still
+    not found NEED_GONE_FLICKER_RECHECK_DELAY later (so a one-frame glitch
+    doesn't count), means it is gone: cleared, or replaced by a neighbour that
+    has slid into its place. The icon's starting place is where it was last
+    recognised. The first look only records the icon (None: nothing to
+    compare with yet), so one that went before that is not noticed, and the
+    wait runs out as it did before. None too if the place isn't known."""
+    pos = state.need_icon_positions.get(need_name)
+    here = icon_region(pos) if pos is not None else None
+    if pos is None or here is None:
+        return None
+    watch = _ICON_WATCH
+    if watch["need"] != need_name or watch["crop"] is None:
+        watch.update(need=need_name, pos=pos, crop=here)
+        return None
+    found = locate_icon(watch["crop"], pos[1])
+    if found is None:
+        wait_interruptible(cfg.NEED_GONE_FLICKER_RECHECK_DELAY)
+        found = locate_icon(watch["crop"], pos[1])
+        if found is None:
+            print(f"[debug] {need_name}: need bar unreadable, and its icon is no longer in the bar")
+            log_run_event(f"{need_name} icon gone by frame change - the need bar is unreadable")
+            watch.update(need=None, pos=None, crop=None)
+            return True
+    now = icon_region(found)
+    if now is None:
+        return None
+    change = icon_region_change(watch["crop"], now) if found == pos else None
+    where = f"{pos} -> {found}" if found != pos else f"{pos}, {change:.0%} changed"
+    print(f"[debug] {need_name}: need bar unreadable, its icon is still there ({where})")
+    state.need_icon_positions[need_name] = found
+    watch.update(pos=found, crop=now)      # the next look searches for the icon as it is now
+    return False
+
 def _need_cleared(need_name: str) -> Optional[bool]:
     """True if `need_name`'s icon is missing on two quick checks in a row
     (NEED_GONE_FLICKER_RECHECK_DELAY apart, the second one a fresh circle
     search) - the single-frame-flicker guard shared by wait_until_need_gone()
     and _watch_need_gone() below.
-    None if the icons couldn't be read (see detect_need_bar_readable()): that's
-    neither cleared nor not cleared."""
+    While the icons can't be read (see detect_need_bar_readable()) the answer
+    comes from icon_gone_by_frame_change() instead - None if that can't tell
+    either: neither cleared nor not cleared."""
     for attempt in range(2):
         names, readable = scan_needs(fresh=attempt > 0)   # the second look must not just repeat the first
         if not readable:
-            return None
+            return icon_gone_by_frame_change(need_name)
+        _ICON_WATCH.update(need=None, pos=None, crop=None)   # readable again: a later unreadable stretch starts afresh
         if need_name in names:
             return False
         if attempt == 0:
@@ -812,10 +912,10 @@ def _need_cleared(need_name: str) -> Optional[bool]:
 
 def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAIT, poll_interval: float = cfg.NEED_GONE_POLL_INTERVAL) -> None:
     """Wait for `need_name`'s icon to stop being detected, for at most
-    `max_wait` seconds - whichever happens first. The icon must be missing
-    NEED_GONE_CONFIRMATIONS checks in a row (any sighting resets the count),
-    so a single missed detection can't end the wait early - see
-    _need_cleared() for how each individual check is itself debounced.
+    `max_wait` seconds - whichever happens first. It is looked for every
+    `poll_interval` seconds, and one check that finds it gone ends the wait:
+    a single missed detection can't end it early because each check looks
+    twice, a moment apart (see _need_cleared()).
     While the icons can't be read (a bright background, see
     detect_need_bar_readable()) nothing counts as a miss, so that wait runs its
     full length - and ending it isn't logged as a failure. (Popups and
@@ -823,7 +923,6 @@ def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAI
     wait_interruptible() runs during a task.) Interruptible."""
     print(f"[debug] waiting up to {max_wait}s for {need_name} to clear...")
     deadline = time.time() + max_wait
-    misses = 0
     unreadable = False
     while True:
         remaining = deadline - time.time()
@@ -834,40 +933,28 @@ def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAI
                 print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
                 log_failure(f"{need_name} still showing after {max_wait}s")
             return
-        wait_interruptible(min(cfg.NEED_GONE_CONFIRM_INTERVAL if misses else poll_interval, remaining))
+        wait_interruptible(min(poll_interval, remaining))
         cleared = _need_cleared(need_name)
         unreadable = cleared is None
-        if not cleared:
-            misses = 0
-            continue
-
-        misses += 1
-        print(f"[debug] {need_name} not detected ({misses}/{cfg.NEED_GONE_CONFIRMATIONS})")
-        if misses >= cfg.NEED_GONE_CONFIRMATIONS:
+        if cleared:
             print(f"[debug] {need_name} cleared")
             return
 
 def _watch_need_gone(need_name: str, cleared_event: threading.Event, stop_event: threading.Event) -> None:
     """Background-thread body for walk_alternating()'s optional `need_name`:
-    polls whether the need has cleared *while* the character is still
-    moving, using the same miss-confirmation (NEED_GONE_CONFIRMATIONS,
-    debounced by _need_cleared()) wait_until_need_gone() uses standalone -
-    just running alongside the movement instead of after it. Sets
-    `cleared_event` the moment it's confirmed. Exits quietly - without
-    raising - the instant `stop_event` is set (the walk ended on its own)
-    or STOP_EVENT/focus loss is noticed: only the main thread's
-    check_running() calls are allowed to unwind the workflow, so this
-    thread must never let StopRequested/FocusLost escape uncaught."""
-    misses = 0
+    checks whether the need has cleared (_need_cleared()) every
+    NEED_GONE_POLL_INTERVAL *while* the character is still moving - the same
+    check wait_until_need_gone() makes standalone, just running alongside the
+    movement instead of after it. Sets `cleared_event` the moment it finds it
+    gone. Exits quietly - without raising - the instant `stop_event` is set
+    (the walk ended on its own) or STOP_EVENT/focus loss is noticed: only the
+    main thread's check_running() calls are allowed to unwind the workflow, so
+    this thread must never let StopRequested/FocusLost escape uncaught."""
     try:
         while not stop_event.is_set():
-            if stop_event.wait(cfg.NEED_GONE_CONFIRM_INTERVAL):
+            if stop_event.wait(cfg.NEED_GONE_POLL_INTERVAL):
                 return
-            if _need_cleared(need_name) is not True:
-                misses = 0
-                continue
-            misses += 1
-            if misses >= cfg.NEED_GONE_CONFIRMATIONS:
+            if _need_cleared(need_name) is True:
                 cleared_event.set()
                 return
     except (StopRequested, FocusLost):
@@ -1377,7 +1464,7 @@ def detect_play_button(img: Image) -> bool:
     x, y = cfg.REJOIN_JOIN_POS
     half_w, half_h = cfg.REJOIN_PLAY_BOX
     box = img[max(0, y - half_h):y + half_h, max(0, x - half_w):x + half_w]
-    mask = exact_color_mask(box, cfg.REJOIN_PLAY_COLOR, cfg.REJOIN_PLAY_COLOR_TOLERANCE)
+    mask = exact_color_mask(box, cfg.GREEN_BUTTON_COLOR, cfg.GREEN_BUTTON_TOLERANCE)
     return int(np.count_nonzero(mask)) >= cfg.REJOIN_PLAY_MIN_PIXELS
 
 def leave_and_rejoin(clean_leave: bool = True) -> bool:
@@ -1692,7 +1779,7 @@ class CatchNeedHandler(NeedHandler):
         hold_key(cfg.KEY_ZOOM_IN, cfg.CATCH_ZOOM_DURATION)
         
         # Click empty space to throw, every CATCH_THROW_INTERVAL, until the need clears
-        click_until_need_gone(cfg.EMPTY_POS, cfg.CATCH_THROW_INTERVAL, cfg.CATCH_MAX_WAIT, "catch")
+        click_until_need_gone(cfg.EMPTY_POS, cfg.CATCH_THROW_INTERVAL, cfg.NEED_GONE_MAX_WAIT, "catch")
 
         # Unequip the toy
         print("[debug] unequipping toy...")
@@ -1883,7 +1970,7 @@ class TeleportWalkNeedHandler(NeedHandler):
             print(f"[debug] clicking {final_click}...")
             hover_click(*final_click)
 
-        wait_until_need_gone(self.name)
+        wait_until_need_gone(self.name, max_wait=self.config.get("max_wait", cfg.NEED_GONE_MAX_WAIT))
 
         print(f"[!] {self.name.capitalize()} complete!")
         return True
@@ -2160,9 +2247,10 @@ def rejoin_reason() -> Optional[tuple[str, str]]:
           (see State.last_progress): the game is up but nothing is working;
       "scheduled" - it has been REJOIN_INTERVAL since the last rejoin (see
           State.last_rejoin)."""
-    if any(w.title == cfg.ROBLOX_CRASH_WINDOW_TITLE for w in gw.getAllWindows()):
+    windows = gw.getAllWindows()   # listed once (a Windows call that reads every window's title) for both questions
+    if any(w.title == cfg.ROBLOX_CRASH_WINDOW_TITLE for w in windows):
         return "disconnect", "Roblox crashed"
-    if not roblox_windows():
+    if not any("roblox" in w.title.lower() for w in windows):
         return "disconnect", "Roblox isn't running"
     if detect_disconnect(grab_screen()):
         return "disconnect", "disconnected from the game"
@@ -2227,7 +2315,7 @@ def detect_minigame_popup(img: Image) -> bool:
     sick = load_templates(cfg.STRAY_WINDOW_DIR).get("sick_dialog")
     if sick is not None and template_score(img, sick, cfg.SICK_DIALOG_BOX) >= cfg.SICK_DIALOG_MATCH_THRESHOLD:
         return False
-    ys, xs = np.where(exact_color_mask(img, cfg.MINIGAME_POPUP_YES_COLOR) > 0)
+    ys, xs = np.where(exact_color_mask(img, cfg.GREEN_BUTTON_COLOR) > 0)
     if len(xs) < cfg.MINIGAME_POPUP_MIN_BUTTON_PIXELS:
         return False
     yes_x, yes_y = int(xs.mean()), int(ys.mean())
@@ -2235,16 +2323,30 @@ def detect_minigame_popup(img: Image) -> bool:
                   max(0, yes_x - cfg.MINIGAME_POPUP_NO_MAX_DX):yes_x]
     return int(np.count_nonzero(exact_color_mask(near_no, cfg.MINIGAME_POPUP_NO_COLOR))) >= cfg.MINIGAME_POPUP_MIN_BUTTON_PIXELS
 
+# directory -> (the files' names and modification times, {name: image}) - see load_templates().
+_TEMPLATE_CACHE: dict[str, tuple[Any, dict[str, Image]]] = {}
+
 def load_templates(directory: str) -> dict[str, Image]:
     """{lower-cased file name without extension: image} for every .png in
-    `directory` (none if it doesn't exist)."""
-    templates = {}
-    if os.path.isdir(directory):
-        for f in sorted(os.listdir(directory)):
+    `directory` (none if it doesn't exist). The images are read once and kept:
+    a call only looks at the files' modification times (a few cheap stats,
+    against decoding every PNG on every check), and reads them again when one
+    is added, changed or removed - so a crop replaced while the macro runs is
+    picked up. The images are shared between calls, so they must not be
+    modified."""
+    if not os.path.isdir(directory):
+        return {}
+    files = sorted(f for f in os.listdir(directory) if f.lower().endswith(".png"))
+    key = tuple((f, os.stat(os.path.join(directory, f)).st_mtime_ns) for f in files)
+    cached = _TEMPLATE_CACHE.get(directory)
+    if cached is None or cached[0] != key:
+        templates = {}
+        for f in files:
             crop = cv2.imread(os.path.join(directory, f))
-            if f.lower().endswith(".png") and crop is not None:
+            if crop is not None:
                 templates[os.path.splitext(f)[0].lower()] = crop
-    return templates
+        cached = _TEMPLATE_CACHE[directory] = (key, templates)
+    return dict(cached[1])
 
 def template_score(img: Image, crop: Image, box: Box) -> float:
     """How well `crop` matches anywhere within `box` (left, top, right,
@@ -2310,7 +2412,7 @@ def dismiss_stray_windows() -> Optional[str]:
         log_run_event(f"stray window closed: {name}")
         if name == "trading_hub":
             left, top, right, bottom = cfg.STRAY_OKAY_BOX
-            okay = exact_color_mask(img[top:bottom, left:right], cfg.STRAY_OKAY_COLOR, cfg.STRAY_OKAY_TOLERANCE)
+            okay = exact_color_mask(img[top:bottom, left:right], cfg.GREEN_BUTTON_COLOR, cfg.GREEN_BUTTON_TOLERANCE)
             if np.count_nonzero(okay) >= cfg.STRAY_OKAY_MIN_PIXELS:
                 hover_click(*cfg.STRAY_OKAY_POS)
         hover_click(*config["close_pos"])
@@ -2325,7 +2427,7 @@ def detect_minigame_victory(img: Image) -> bool:
     for color, tolerance, box, minimum in (
             (cfg.MINIGAME_VICTORY_BANNER_COLOR, cfg.MINIGAME_VICTORY_BANNER_TOLERANCE,
              cfg.MINIGAME_VICTORY_BANNER_BOX, cfg.MINIGAME_VICTORY_BANNER_MIN_PIXELS),
-            (cfg.MINIGAME_VICTORY_BUTTON_COLOR, cfg.MINIGAME_VICTORY_BUTTON_TOLERANCE,
+            (cfg.GREEN_BUTTON_COLOR, cfg.GREEN_BUTTON_TOLERANCE,
              cfg.MINIGAME_VICTORY_BUTTON_BOX, cfg.MINIGAME_VICTORY_BUTTON_MIN_PIXELS)):
         left, top, right, bottom = box
         if np.count_nonzero(exact_color_mask(img[top:bottom, left:right], color, tolerance)) < minimum:
@@ -2405,12 +2507,12 @@ def minigame_wait(duration: float, watch: MinigameWatch) -> None:
             return
 
 def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
-    """Hauntlet 2: wait HAUNTLET_2_START_WAIT for it to start (no needs can be
+    """Hauntlet 2: wait MINIGAME_START_WAIT for it to start (no needs can be
     seen while it runs, and the lobby counts down first), then hold forward
     until the victory screen shows - or the overlay says it's over. Returns
     True if it was won before `deadline`."""
-    print(f"[debug] hauntlet 2: waiting {cfg.HAUNTLET_2_START_WAIT:g}s for it to start...")
-    minigame_wait(cfg.HAUNTLET_2_START_WAIT, watch)
+    print(f"[debug] hauntlet 2: waiting {cfg.MINIGAME_START_WAIT:g}s for it to start...")
+    minigame_wait(cfg.MINIGAME_START_WAIT, watch)
     watch.start_wait_over()
     pydirectinput.keyDown(cfg.HAUNTLET_2_FORWARD_KEY)
     try:
@@ -2427,8 +2529,8 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     GHOST_GALLERY_HOLD-second holds (GHOST_GALLERY_HOLD_GAP apart), until the
     victory screen shows - or the overlay says it's over. Returns True if it
     was won before `deadline`."""
-    print(f"[debug] ghost gallery: waiting {cfg.GHOST_GALLERY_START_WAIT:g}s for it to start...")
-    minigame_wait(cfg.GHOST_GALLERY_START_WAIT, watch)
+    print(f"[debug] ghost gallery: waiting {cfg.MINIGAME_START_WAIT:g}s for it to start...")
+    minigame_wait(cfg.MINIGAME_START_WAIT, watch)
     watch.start_wait_over()
     while time.time() < deadline and not watch.problem:
         pydirectinput.mouseDown()
@@ -2556,16 +2658,43 @@ def run_side_action(action: Callable[[], bool]) -> bool:
         log_run_event(f"{action.__name__} interrupted by {interruption.reason}")
         return False
 
+def last_money_reset_time(now: float) -> float:
+    """The most recent daily reset moment (MONEY_RESET_HOUR o'clock, local
+    time) at or before `now`, as a timestamp."""
+    moment = datetime.datetime.fromtimestamp(now)
+    boundary = moment.replace(hour=cfg.MONEY_RESET_HOUR, minute=0, second=0, microsecond=0)
+    if boundary > moment:
+        boundary -= datetime.timedelta(days=1)
+    return boundary.timestamp()
+
+def reset_money_if_due(config: dict[str, Any]) -> dict[str, Any]:
+    """The tree's money total starts again from 0 every day at
+    MONEY_RESET_HOUR. `config["money_reset_boundary"]` is the last such
+    moment already dealt with; when a later one has passed the total is reset
+    (and, like each harvest, saved at once). The first time it is seen (a
+    fresh or older config) it is only recorded, not acted on, so an update
+    doesn't wipe the day's total. Returns the config as it is now."""
+    boundary = last_money_reset_time(time.time())
+    recorded = config["money_reset_boundary"]
+    if recorded is not None and recorded >= boundary:
+        return config
+    if recorded is None:
+        return update_game_config(lambda c: c.update(money_reset_boundary=boundary))
+    print(f"[!] money total reset (daily at {cfg.MONEY_RESET_HOUR}:00): {config['money_collected']} -> 0")
+    log_run_event(f"money total reset: {config['money_collected']} -> 0")
+    return update_game_config(lambda c: c.update(money_collected=0, money_reset_boundary=boundary))
+
 def side_quest() -> None:
     """Runs once per cycle, right after unscrew(), unless side_quest_enabled
     is off in GAME_CONFIG_PATH: tends to the money tree and the lure using
     state persisted there. The tree is checked at most once per
     TREE_CHECK_INTERVAL, and money_collected only ever goes up (by
     TREE_HARVEST_YIELD per harvest, until it reaches MONEY_COLLECTED_TARGET)
-    - resetting it back down means resetting the config. Each piece of
+    until reset_money_if_due() starts it from 0 again at MONEY_RESET_HOUR
+    each day (or the config is reset). Each piece of
     progress is saved the moment its action succeeds, so a stop partway
     through doesn't lose it."""
-    config = load_game_config()
+    config = reset_money_if_due(load_game_config())
     if not config["side_quest_enabled"]:
         return
     now = time.time()
@@ -3206,6 +3335,31 @@ def write_run_report(run: Union[int, str]) -> Optional[str]:
         print(f"[debug] run report: {path}")
     return path
 
+def run_all_need_handlers(handlers: Optional[dict[str, Callable[[], NeedHandler]]] = None) -> dict[str, str]:
+    """Run every need handler (default: DEBUG_HANDLERS, whether or not it is in
+    ENABLED_NEEDS) once, one after another - the Debug tab's "test every
+    need" button. Each runs with the in-task checks on, like a real need, and
+    the character is respawned after it, since the handlers walk from the
+    spawn point. Minigame popups are declined, not played (play_minigames=False),
+    so they can't cut a handler short. A stop ends the whole sequence (StopRequested propagates).
+    Prints and returns how each went: "done", "failed" (the handler returned
+    False) or "interrupted by ...", keyed by need."""
+    handlers = DEBUG_HANDLERS if handlers is None else handlers
+    results: dict[str, str] = {}
+    print(f"\n[TEST] Running all {len(handlers)} need handlers, one after another...")
+    for i, (name, handler_cls) in enumerate(handlers.items(), 1):
+        check_stop()
+        print(f"\n[TEST] ({i}/{len(handlers)}) {name}...")
+        try:
+            with task_unscrew(play_minigames=False):    # a minigame popup is declined, not played
+                results[name] = "done" if handler_cls().handle() else "failed"
+        except TaskInterrupted as interruption:
+            results[name] = f"interrupted by {interruption.reason}"
+        print(f"[TEST] {name}: {results[name]}")
+        respawn_character()
+    print("\n[TEST] Summary: " + ", ".join(f"{name} {result}" for name, result in results.items()) + "\n")
+    return results
+
 class DebugCapture:
     """Replaces sys.stdout for the lifetime of the GUI: everything printed
     anywhere in the macro goes to the on-screen console - every line
@@ -3428,18 +3582,11 @@ class AdoptMeGUI:
         # action_buttons: they must stay usable while a workflow is running,
         # which is safe since update_game_config() is locked.
         config = load_game_config()
-        self.config_flag_vars = {}
+        self.config_flag_vars: dict[str, tk.BooleanVar] = {}
         for label, key in (("Run side quest", "side_quest_enabled"),
                            ("Resume after focus loss", "resume_on_focus_loss"),
-                           ("Record the next run (low quality video)", "record_next_run"),
                            *((f"Play {label}", f"{name}_enabled") for name, label in cfg.MINIGAME_LABELS.items())):
-            var = tk.BooleanVar(value=config[key])
-            self.config_flag_vars[key] = var
-            tk.Checkbutton(options_tab, text=label, variable=var,
-                           command=lambda k=key, v=var: self.set_config_flag(k, v.get()),  # type: ignore[misc]
-                           font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.bg, fg=self.fg,
-                           selectcolor=self.bg, activebackground=self.bg, activeforeground=self.fg,
-                           anchor=tk.W, cursor="hand2").pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
+            self.add_config_checkbox(options_tab, label, key, config)
 
         tk.Label(options_tab, text="Private server link", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
                  bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X)
@@ -3450,12 +3597,9 @@ class AdoptMeGUI:
         server_link_entry.bind("<FocusOut>", lambda e: self.save_server_link())
         server_link_entry.bind("<Return>", lambda e: self.save_server_link())
 
-        tk.Button(options_tab, text="Reset Config", command=self.reset_config,
-                  font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_STOP_COLOR, fg=self.fg,
-                  height=cfg.GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2").pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
-
-        # Debug tab: one button per need handler, regardless of whether it's in
-        # ENABLED_NEEDS, so any handler can be run on its own.
+        # Debug tab: two subtabs - the need handlers (one button each, regardless
+        # of whether it's in ENABLED_NEEDS, so any can be run on its own, plus
+        # one that runs them all in turn) and everything else.
         self.build_debug_tab(debug_tab)
 
         # Debug console
@@ -3573,6 +3717,19 @@ class AdoptMeGUI:
     def run_workflow_loop(self) -> None:
         self.run_async(run_workflow_loop)
 
+    def add_config_checkbox(self, parent: Any, label: str, key: str, config: dict[str, Any]) -> None:
+        """A checkbox for the persisted on/off switch `key` (see
+        load_game_config()). Deliberately not in action_buttons: they must stay
+        usable while a workflow is running, which is safe since
+        update_game_config() is locked."""
+        var = tk.BooleanVar(value=config[key])
+        self.config_flag_vars[key] = var
+        tk.Checkbutton(parent, text=label, variable=var,
+                       command=lambda k=key, v=var: self.set_config_flag(k, v.get()),  # type: ignore[misc]
+                       font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.bg, fg=self.fg,
+                       selectcolor=self.bg, activebackground=self.bg, activeforeground=self.fg,
+                       anchor=tk.W, cursor="hand2").pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
+
     def set_config_flag(self, key: str, value: Any) -> None:
         """Persist one of the config's on/off switches (a checkbox was clicked)."""
         update_game_config(lambda c: c.update({key: value}))
@@ -3596,23 +3753,48 @@ class AdoptMeGUI:
         print("[!] Config reset to defaults")
 
     def build_debug_tab(self, parent: Any) -> None:
-        """Fill the Debug tab with a two-column grid of [TEST] buttons, one
-        per entry in DEBUG_HANDLERS."""
-        tk.Label(parent, text="Run a need handler on its own", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"),
-                 bg=self.bg, fg=self.accent).grid(row=0, column=0, columnspan=2, sticky=tk.W,
-                                                   padx=cfg.GUI_ROW_SPACING, pady=(cfg.GUI_ROW_SPACING, cfg.GUI_WIDGET_SPACING))
+        """The Debug tab: a Needs subtab (build_needs_tab()) and an Other one
+        (build_other_tab())."""
+        subtabs = ttk.Notebook(parent)
+        subtabs.pack(fill=tk.BOTH, expand=True)
+        needs_tab = tk.Frame(subtabs, bg=self.bg)
+        other_tab = tk.Frame(subtabs, bg=self.bg)
+        subtabs.add(needs_tab, text="Needs")
+        subtabs.add(other_tab, text="Other")
+        self.build_needs_tab(needs_tab)
+        self.build_other_tab(other_tab)
+
+    def build_needs_tab(self, parent: Any) -> None:
+        """Fill the Needs subtab: a button that runs every need handler in turn,
+        then a two-column grid of [TEST] buttons, one per entry in
+        DEBUG_HANDLERS."""
         for col in range(2):
             parent.grid_columnconfigure(col, weight=1, uniform="debug")
+        btn_all = tk.Button(parent, text="Test every need, one after another", command=self.test_all_handlers,
+                            font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"), bg=cfg.GUI_LOOP_COLOR, fg=self.fg, cursor="hand2")
+        btn_all.grid(row=0, column=0, columnspan=2, sticky=tk.EW, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+        self.action_buttons.append(btn_all)
+        tk.Label(parent, text="Or run one need handler on its own", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"),
+                 bg=self.bg, fg=self.accent).grid(row=1, column=0, columnspan=2, sticky=tk.W,
+                                                   padx=cfg.GUI_ROW_SPACING, pady=(cfg.GUI_ROW_SPACING, cfg.GUI_WIDGET_SPACING))
         for i, (name, handler_cls) in enumerate(DEBUG_HANDLERS.items()):
             btn = tk.Button(parent, text=name.capitalize(),
                             command=lambda n=name, c=handler_cls: self.test_handler(n, c),  # type: ignore[misc]
                             font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
-            btn.grid(row=1 + i // 2, column=i % 2, sticky=tk.EW, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+            btn.grid(row=2 + i // 2, column=i % 2, sticky=tk.EW, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
             self.action_buttons.append(btn)
-        rows = 1 + (len(DEBUG_HANDLERS) + 1) // 2
+
+    def build_other_tab(self, parent: Any) -> None:
+        """Fill the Other subtab: record the next run, refresh the debug
+        folder, reset the config."""
+        self.add_config_checkbox(parent, "Record the next run (low quality video)", "record_next_run", load_game_config())
         tk.Button(parent, text="Refresh debug", command=self.refresh_debug_folder,
                   font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.accent, fg=self.fg, cursor="hand2"
-                  ).grid(row=rows, column=0, columnspan=2, sticky=tk.EW, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+                  ).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+        tk.Button(parent, text="Reset Config", command=self.reset_config,
+                  font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_STOP_COLOR, fg=self.fg,
+                  height=cfg.GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2"
+                  ).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
 
     def refresh_debug_folder(self) -> None:
         """Ask, then empty the debug folder (refresh_debug()). Not while a run
@@ -3623,6 +3805,11 @@ class AdoptMeGUI:
         if messagebox.askyesno("Refresh debug", "Delete everything in the debug folder (logs, images, recordings)?\n"
                                                 "The game config is kept."):
             print(f"[debug] debug folder refreshed ({refresh_debug()} entries removed)")
+
+    def test_all_handlers(self) -> None:
+        """Run every need handler in DEBUG_HANDLERS once, one after another
+        (run_all_need_handlers())."""
+        self.run_async(run_all_need_handlers)
 
     def test_handler(self, name: str, handler_cls: Callable[[], NeedHandler]) -> None:
         """Run one need handler on its own, outside the normal need-detection

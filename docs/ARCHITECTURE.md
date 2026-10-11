@@ -248,16 +248,18 @@ wait: it clears at once, and the next check sees that) - polls
 `scan_needs()` (one detect-and-match pass; the circle search may be skipped
 while the strip is unchanged, except for the second look of each check, which is
 always a real search) every
-`NEED_GONE_POLL_INTERVAL` until the target need is missing
-`NEED_GONE_CONFIRMATIONS` times in a row (any sighting resets the count
-back to zero), up to `NEED_GONE_MAX_WAIT` total.
+`NEED_GONE_POLL_INTERVAL` (3.5s) until a check finds the target need gone - one
+check is enough; each check looks twice, as described below - up to
+`NEED_GONE_MAX_WAIT` total, 75s - the one maximum for every need (the
+teleport-walk needs time out by themselves in the game, and camping was seen
+clearing ~66s after its walk) - or a teleport-walk entry's own `max_wait`.
 
 Each individual check goes through `_need_cleared()`, which re-samples
 once more, `NEED_GONE_FLICKER_RECHECK_DELAY` later, before a miss is
 allowed to count: the icon can drop out of a single detection pass for a
 frame (or against a momentarily busy background) without the need having
-actually cleared, and a bare miss-streak alone isn't enough to tell that
-apart from the real thing. This only guards against a one-frame flicker -
+actually cleared. (There used to be a further three-misses-in-a-row
+confirmation on top of this; it was removed to speed up resolving.) This only guards against a one-frame flicker -
 a detection failure caused by a *sustained* background change behind the
 icon isn't something this re-check can fix, since it'll fail again on the
 immediate retry too. The one such case that is handled: the Pizza Party's
@@ -267,8 +269,37 @@ the character respawned with the pizza still unserved, and it had to run
 twice. `detect_need_bar_readable()` spots it (more than
 `NEED_BAR_MAX_BRIGHT_FRACTION` of the icon strip brighter than
 `NEED_BAR_BRIGHT_LEVEL`); while the icons are unreadable `_need_cleared()`
-returns `None`, which counts as neither a miss nor a sighting, so the wait
-runs its full `NEED_GONE_MAX_WAIT` - and ending it isn't logged as a failure.
+falls back to `icon_gone_by_frame_change()` (below); if that can't tell either it
+returns `None`, which counts as neither a miss nor a sighting, so the wait runs
+its full length - and ending it isn't logged as a failure.
+
+**Judging an icon by how it changes between looks.** A need's icon has a
+timer: a section of its circle that slowly grows and changes colour (it is
+the progress of serving the need). While the bar can't be read,
+`icon_gone_by_frame_change()` records the icon at its last recognised place
+(`State.need_icon_positions`, set by `identify_icons()`), and every later look
+searches the whole bar for the icon *as it looked at the previous look*
+(`locate_icon()`: normalised correlation of the white ring and glyph, which the
+timer's colour change leaves alone). Found at a match of at least
+`ICON_LOCATE_THRESHOLD` (0.75) means it is still there - and wherever it now
+is: when a neighbour to its left clears, the icons slide left, and the icon is
+followed to its new place (the position is updated). Not found, and still not
+found `NEED_GONE_FLICKER_RECHECK_DELAY` later, means it is gone - cleared, or
+replaced by a neighbour that slid into its place, which matches poorly - and
+that ends the wait (logged as `<need> icon gone by frame change`). Measured on
+real frames of the salon icon, the same icon scores 0.90-1.0 whatever its
+timer shows or where it has shifted to (the timer alone changes 22-39% of the
+circle between two looks), a neighbouring icon or a bright background 0.3-0.56.
+The first look only records the icon, so one that went before then isn't
+noticed (the wait runs out as before), and the comparison starts afresh
+whenever the bar is readable again. The timer is deliberately not visible to
+the black-and-white icon matching, which is why this is a separate check. On a real
+Pizza Party frame (`tests/fixtures/pizza_party_bar.png`: the bar is 79% bright, so
+unreadable; the circles are still found, but the icons score only 0.84-0.89
+against the saved ones, under the 0.93 needed) each of the five icons finds
+itself at 1.0 and the best of the other four at 0.65. The icon is found again
+only if it was recognised before the bar went bright (its place is recorded then).
+
 Popups, stray windows and minigames that turn up during the wait are handled
 by the `unscrew()` checks that `wait_interruptible()` runs during a task - see
 [Per-cycle checks while a task runs](#per-cycle-checks-while-a-task-runs).
@@ -343,8 +374,11 @@ teleport-walk needs `cafe`, `salon`, `sick`, `pizza`, `school`, `beach`,
 `camping`, `bored` (called out with their own inline comment in the set
 literal, since they leave the map and run considerably longer than
 everything else).
-The GUI's **Debug** tab has a button per handler that runs it directly
-regardless of `ENABLED_NEEDS`.
+The GUI's **Debug** tab has a **Needs** subtab with a button per handler that
+runs it directly regardless of `ENABLED_NEEDS`, and a button that runs every
+handler once, one after another (`run_all_need_handlers()`: each with the
+in-task checks on, the character respawned after each, a stop ends the
+whole sequence, and a summary of how each went printed at the end).
 
 **Focusing the pet.** (Each click is followed by `FOCUS_PET_CLICK_SETTLE` and a `detect_pet_focus()` check; the clicks stop at the first one that focuses it, and `FOCUS_PET_MENU_WAIT` is only waited if none did.) `pet` and `choose` both start with `focus_pet()`, which first checks whether the pet is already focused (`detect_pet_focus()`: the BACK button's crop is on screen) and if so returns True with no clicks; otherwise it
 has no hardcoded position: it takes two screenshots of the bottom of the
@@ -373,12 +407,12 @@ rather than a flat sleep after the fact.
 | Need | How it's handled |
 |---|---|
 | `hungry` / `thirsty` / `dirty` / `potty` / `sleepy` | `ButtonNeedHandler`: walk to the action buttons (`walk_to_buttons()`), refresh the button mapping (`refresh_button_mapping()`), click the matching one (`click_need_button()`), which then calls `wait_until_need_gone()` for that need name. |
-| `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → hold zoom-in → click empty space every `CATCH_THROW_INTERVAL` (0.5s) until the "catch" icon is confirmed gone (`click_until_need_gone()`, the same watcher thread `walk_alternating()` uses; at most `CATCH_MAX_WAIT`) → unequip. |
+| `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → hold zoom-in → click empty space every `CATCH_THROW_INTERVAL` (0.5s) until the "catch" icon is confirmed gone (`click_until_need_gone()`, the same watcher thread `walk_alternating()` uses; at most `NEED_GONE_MAX_WAIT`) → unequip. |
 | `pet` | `PetNeedHandler`: `focus_pet()` (see below), then hold the mouse down and swipe once down from `PET_SWIPE_START_OFFSET` above screen center to `PET_SWIPE_END_OFFSET` below it over `PET_SWIPE_DURATION` (8s). Same as `catch` - always the full fixed duration. |
 | `choose` | `ChooseNeedHandler`: `focus_pet()` (see below), find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. It doesn't wait for the icon to clear (it's gone at once; the next check confirms). |
-| `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then `equip_favorite_vehicle()` (backpack → vehicles → first vehicle → equip → close backpack), hold `r` (`KEY_HELICOPTER`) for `RIDE_R_HOLD_DURATION` (1s), then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT` (60s), ending early the moment "ride" is confirmed cleared (see below). |
-| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`), and `helicopter` (see below). Which table is used depends on `HALLOWEEN` - see below. |
-| `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")` - up to `NEED_GONE_MAX_WAIT` (60s), same early-exit as `ride` above. |
+| `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then `equip_favorite_vehicle()` (backpack → vehicles → first vehicle → equip → close backpack), hold `r` (`KEY_HELICOPTER`) for `RIDE_R_HOLD_DURATION` (1s), then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT` (75s), ending early the moment "ride" is confirmed cleared (see below). |
+| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`), `helicopter` (see below) and `max_wait` (how long to wait for the need to clear afterwards; default `NEED_GONE_MAX_WAIT`, 75s). Which table is used depends on `HALLOWEEN` - see below. |
+| `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")` - up to `NEED_GONE_MAX_WAIT` (75s), same early-exit as `ride` above. |
 
 **Helicopter.** A teleport-walk entry can fly instead of walk. `HELICOPTER_REQUIRED`
 (`magic_numbers.py`, default `False`) is the default for entries that don't
@@ -428,6 +462,7 @@ the Trading Hub doesn't, but needs can't be resolved with it in the way. Run
 308's two 20-minute stalls (a `paycheck popup dismissed` line every cycle) were
 these windows - the macro's paycheck clicks don't close them, and their green
 buttons look like CASH OUT.
+(`load_templates()` reads each folder's crops once and re-reads them only when a file is added, changed or removed.)
 `dismiss_stray_windows()` recognises each by a crop of its title
 in `ref/popups/` (`trading_hub.png`, `star_rewards.png`; matched within the
 `box` in `STRAY_WINDOWS`, at least `STRAY_WINDOW_MATCH_THRESHOLD`) and clicks
@@ -524,8 +559,8 @@ sighting in a row (see above).
 "Ghost Gallery is starting soon! Teleport there now?" and "Hauntlet 2 is
 starting soon!..." - in the same popup layout.
 `detect_minigame_popup()` recognises that layout by its two buttons: neither
-color is unique alone (Yes green = `PAYCHECK_CASHOUT_COLOR`, No red = the
-Exit Home button), so it needs the Yes green (`MINIGAME_POPUP_YES_COLOR`, at
+color is unique alone (Yes green = `GREEN_BUTTON_COLOR`, No red = the
+Exit Home button), so it needs the Yes green (`GREEN_BUTTON_COLOR`, at
 least `MINIGAME_POPUP_MIN_BUTTON_PIXELS` px) with the No red
 (`MINIGAME_POPUP_NO_COLOR`) within `MINIGAME_POPUP_NO_MAX_DX` / `_DY` px to
 its left - except the sick need's own "Ask Doctor Heart to heal your family?" dialog, which has the same Yes/No look but is the sick handler's to answer (its Yes is `SICK_FINAL_CLICK_POS`): `ref/popups/sick_dialog.png`, within `SICK_DIALOG_BOX`, makes the detector ignore it. (Before that, the every-4s in-task check took it for a minigame popup and clicked its decline positions in the middle of the sick sequence - `unknown` popups clustered in the sick handler in the logs.) `identify_minigame()` then says which one it is: it matches the
@@ -571,9 +606,9 @@ losing it for `MINIGAME_OVERLAY_LOST_TIMEOUT` (10 s) means the minigame was left
 seeing it within `MINIGAME_OVERLAY_START_GRACE` (60 s) of the start wait means it
 never started. Either is a logged failure with that reason, instead of waiting
 out `MINIGAME_MAX_DURATION` (600 s).
-- `play_hauntlet_2()` waits `HAUNTLET_2_START_WAIT` (50 s), then holds
+- `play_hauntlet_2()` waits `MINIGAME_START_WAIT` (50 s), then holds
   `HAUNTLET_2_FORWARD_KEY` until victory or until the overlay says it's over.
-- `play_ghost_gallery()` waits `GHOST_GALLERY_START_WAIT`, then holds the mouse
+- `play_ghost_gallery()` waits `MINIGAME_START_WAIT`, then holds the mouse
   in `GHOST_GALLERY_HOLD`-second holds (`GHOST_GALLERY_HOLD_GAP` apart) while
   running in random `MOVE_KEYS` directions with a jump, each for a random time
   between `GHOST_GALLERY_STEP_MIN` and `_MAX`, until victory.
@@ -681,7 +716,7 @@ lure and tree actions are only reachable through `side_quest()`.
      joining a public server.
   3. Wait up to `REJOIN_WINDOW_TIMEOUT` for a Roblox window to exist, then up
      to `REJOIN_LOAD_TIMEOUT` for the game's green Play button
-     (`REJOIN_PLAY_COLOR`) to show up around `REJOIN_JOIN_POS`
+     (`GREEN_BUTTON_COLOR`) to show up around `REJOIN_JOIN_POS`
      (`detect_play_button()`).
   4. Wait `REJOIN_PLAY_SETTLE`, click it, wait `REJOIN_AFTER_JOIN_WAIT` (15s),
      respawn and return `True`. A stage that times out starts the next attempt;
@@ -725,14 +760,14 @@ windows](#per-cycle-checks)) and runs inside `task_unscrew()`.
 
 `walk_alternating()` (used by `ride` and `walk`) takes an optional
 `need_name`. When given, it starts a background thread
-(`_watch_need_gone()`) that polls whether that need has cleared *while*
+(`_watch_need_gone()`) that checks every `NEED_GONE_POLL_INTERVAL` whether that need has cleared *while*
 the character is still alternating back and forth, instead of only
 checking once the full duration has elapsed - the main loop breaks out
 early (via a shared `threading.Event`) the moment the background thread
-confirms it, rather than always running the full `total_duration`. The
-background thread uses the same miss-confirmation as
-`wait_until_need_gone()` (`NEED_GONE_CONFIRMATIONS`, debounced by the
-shared `_need_cleared()` helper - see
+finds it gone, rather than always running the full `total_duration`. The
+background thread makes the same check as
+`wait_until_need_gone()` (the shared `_need_cleared()` helper, which looks
+twice - see
 [Waiting for a need to clear](#waiting-for-a-need-to-clear)), just
 interleaved with the movement instead of run after it.
 
@@ -847,9 +882,15 @@ actually on disk (so an old config missing a newer key still works), and
 `save_game_config()` overwrites the whole file:
 
 - **`money_collected`** - how much `tree_collect()` has yielded so far,
-  in `TREE_HARVEST_YIELD` (16) increments. Only ever goes up - there's no
-  code path that lowers it, by design (see `side_quest()` below); the
-  GUI's **Reset Config** button puts it back to 0.
+  in `TREE_HARVEST_YIELD` (16) increments. It goes up with each harvest and
+  is put back to 0 every day at `MONEY_RESET_HOUR` (17:00, local time) by
+  `reset_money_if_due()` (see `side_quest()` below), or by the Debug tab's
+  **Reset Config** button.
+- **`money_reset_boundary`** - the last daily reset moment already dealt with
+  (a timestamp; `None` on a fresh or older config). `side_quest()` compares it
+  with the most recent 17:00 (`last_money_reset_time()`): a later one means the
+  total is reset and the new moment saved. The first time it is seen (`None`) it
+  is only recorded, so updating doesn't wipe the day's total.
 - **`tree_timer`** / **`lure_timer`** - the timestamps `tree_collect()` /
   `lure_collect()` are next due. Both default to "due immediately"
   (`time.time()`) when the config is fresh.
@@ -859,7 +900,7 @@ actually on disk (so an old config missing a newer key still works), and
 - **`resume_on_focus_loss`** - the **Resume after focus loss** checkbox (default
   off); see [Stopping & focus safety](#stopping--focus-safety).
 - **`record_next_run`** - the **Record the next run (low quality video)**
-  checkbox (default off); see [Recording a run](#recording-a-run). Cleared, and
+  checkbox on the Debug tab's Other subtab (default off); see [Recording a run](#recording-a-run). Cleared, and
   the checkbox unticked, when the run that it was for starts.
 - **`private_server_link`** - the private server link `leave_and_rejoin()`
   joins, typed into the GUI's entry box (saved when you press Enter or click
@@ -870,7 +911,8 @@ During a run, this file is read and updated by:
 
 - **`side_quest()`** - called right after `unscrew()`, every cycle of
   `run_full_cycle()`'s loop (so on the same cadence as the paycheck
-  check); does nothing if `side_quest_enabled` is off. While
+  check); first applies the daily money reset (`reset_money_if_due()`), then does
+  nothing if `side_quest_enabled` is off. While
   `money_collected` is below `MONEY_COLLECTED_TARGET` (200) *and*
   `tree_timer` has passed, it calls `tree_collect()`, adds
   `TREE_HARVEST_YIELD`, and pushes `tree_timer` `TREE_CHECK_INTERVAL`
@@ -918,8 +960,10 @@ knowing if you're modifying it:
   flatten Tk's default border/focus-ring rendering.
 - The **Main** tab has the loop/stop row and the Respawn, Setup and Leave &
   rejoin buttons; the **Options** tab holds the persisted switches (Run side
-  quest, Resume after focus loss), the private server link and Reset Config;
-  the **Debug** tab has a button per need handler.
+  quest, Resume after focus loss, Play <minigame>) and the private server link;
+  the **Debug** tab has two subtabs: **Needs** (a button that tests every need
+  in turn, and one per need handler) and **Other** (Record the next run,
+  Refresh debug, Reset Config).
 - **`DebugCapture`** redirects `sys.stdout` into the on-screen console
   (`self.debug_text`) for the lifetime of the GUI, so every `print()`
   anywhere in the macro shows up there automatically (`write()` only logs
@@ -932,7 +976,7 @@ knowing if you're modifying it:
 
 ### Recording a run
 
-Tick **Record the next run (low quality video)** on the Options tab (the
+Tick **Record the next run (low quality video)** on the Debug tab's Other subtab (the
 `record_next_run` config switch) and the next time the loop starts it records
 the Roblox window to `debug/recordings/run<N>_<time>.mp4` - then clears the
 switch, so it's one run only. `start_recording_if_requested()` starts a
@@ -963,14 +1007,14 @@ exact values and rationale):
 | Window / coordinates | `REFERENCE_WIDTH`, `REFERENCE_HEIGHT`, `REFERENCE_CENTER_X/Y`, `ROBLOX_RECT_TTL` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `STOP_CLICK_GRACE`, `NEED_GONE_*` |
 | Stuck needs | `NEED_STUCK_CHECKS` |
-| Icon readability | `NEED_BAR_BRIGHT_LEVEL`, `NEED_BAR_MAX_BRIGHT_FRACTION` |
+| Icon readability | `NEED_BAR_BRIGHT_LEVEL`, `NEED_BAR_MAX_BRIGHT_FRACTION`, `ICON_LOCATE_THRESHOLD`, `ICON_LOCATE_ROW_MARGIN`, `ICON_FRAME_CHANGE_LEVEL` (log only) |
 | Pet focusing | `FOCUS_PET_REGION_TOP_PERCENT`, `FOCUS_PET_FRAME_GAP`, `FOCUS_PET_DIFF_THRESHOLD`, `FOCUS_PET_MERGE_KERNEL`, `FOCUS_PET_MIN_AREA` |
 | Screen positions | `CATCH_*_POS`, `EMPTY_POS`, `RIDE_*_POS`, `LURE_NEW_POS_*`, `SETUP_*_POS` |
-| Side quest / setup | `TREE_HARVEST_YIELD`, `MONEY_COLLECTED_TARGET`, `TREE_CHECK_INTERVAL`, `LURE_RECOLLECT_INTERVAL`, `LURE_COLLECT_*`, `TREE_COLLECT_*` |
+| Side quest / setup | `TREE_HARVEST_YIELD`, `MONEY_COLLECTED_TARGET`, `TREE_CHECK_INTERVAL`, `MONEY_RESET_HOUR`, `LURE_RECOLLECT_INTERVAL`, `LURE_COLLECT_*`, `TREE_COLLECT_*` |
 | Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN/MAX_RADIUS`, `NEED_ICON_HOUGH_*`, `NEED_STRIP_*` (when the circle search is skipped) |
 | Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
-| Debug logging | `OUTPUT_LOG_PATH`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
+| Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_BOX`, `PAYCHECK_MATCH_THRESHOLD` |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
@@ -982,10 +1026,10 @@ Everything below is in `debug/` (git-ignored) so a run that broke while you
 were away can be read back afterwards. The folder has two subfolders -
 `images/` (`IMAGES_DIR`: every png - the `debug_*.png` views, `failures/`,
 `reports/`) and `logs/` (`LOGS_DIR`: every text and json file - `output.log`,
-`run_log.txt`, `run_counter.txt`, `status.json`) - plus `recordings/` for the
+`run_log.txt`, `run_counter.txt`, `status.json`, and `runs/`, one `run<N>.txt` per run) - plus `recordings/` for the
 videos, and the game config (`.config`) in `debug/` itself. An older layout is
 moved into place at startup (`migrate_debug_layout()`). The Debug tab's
-**Refresh debug** button (`refresh_debug()`, after a confirmation, not while a
+Other subtab's **Refresh debug** button (`refresh_debug()`, after a confirmation, not while a
 run is going) empties all of it except `.config`; run numbers start from 1
 again, since the counter goes with the logs.
 
@@ -997,6 +1041,10 @@ again, since the counter goes with the logs.
 - **`run_log.txt`** - the short version: one tagged line per notable event
   (needs detected, resolved with how long they took, popups dismissed,
   recoveries, stops, failures). Start here to see roughly what happened.
+  Every line is also written to its own run's file, `logs/runs/run<N>.txt`
+  (`RUN_LOGS_DIR`, by `log_run_event()`), so one run can be read or shared on
+  its own; lines logged before any run has started (`RUN None`) are only in
+  the combined file, and the run report still reads the combined one.
   Two kinds of line are written on a timer while the loop runs:
   `quiet: no need resolved for N min` (every `QUIET_LOG_INTERVAL`, by
   `check_quiet()` at the top of each cycle, while nothing is being resolved -
@@ -1089,6 +1137,7 @@ clicks instead of making them. They cover:
 - `test_detection.py` - the need-strip capture and its cache, and the
   popups and stray windows against the real crops in `ref/`;
 - `test_loop.py` - the whole workflow loop run for a moment with the game stubbed out (idle respawns, the resource monitor starting and stopping, the report being written);
+- `test_features.py` - the daily money reset, the run-every-need sequence and judging an icon gone by how it changes between looks (with real salon-icon frames in `tests/fixtures/`);
 - `test_report.py` - the run-report parser against the exact log wording the
   macro writes (a round trip through `log_run_event()`), the chart itself,
   and the constant check.

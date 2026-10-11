@@ -264,7 +264,7 @@ def test_backpack_title_marks_the_normal_backpack(macro):
 
 
 def test_minigame_popup_is_a_green_yes_with_a_red_no_beside_it(macro):
-    yes, no = macro.cfg.MINIGAME_POPUP_YES_COLOR, macro.cfg.MINIGAME_POPUP_NO_COLOR
+    yes, no = macro.cfg.GREEN_BUTTON_COLOR, macro.cfg.MINIGAME_POPUP_NO_COLOR
     img = blank()
     img[600:640, 1000:1140] = yes[::-1]          # the colours are RGB, the image BGR
     assert not macro.detect_minigame_popup(img)  # Yes alone (a paycheck's button, say) isn't one
@@ -274,7 +274,7 @@ def test_minigame_popup_is_a_green_yes_with_a_red_no_beside_it(macro):
 
 def test_sick_dialog_is_not_a_minigame_popup(macro):
     """The doctor's Yes/No dialog has the same two colours, but it is the sick handler's to answer."""
-    yes, no = macro.cfg.MINIGAME_POPUP_YES_COLOR, macro.cfg.MINIGAME_POPUP_NO_COLOR
+    yes, no = macro.cfg.GREEN_BUTTON_COLOR, macro.cfg.MINIGAME_POPUP_NO_COLOR
     screen = blank()
     screen[600:640, 1000:1140] = yes[::-1]
     screen[600:640, 800:940] = no[::-1]
@@ -288,3 +288,29 @@ def test_the_learned_need_icons_load_from_ref_needs(macro):
     names = {name for name, _ in macro.need_signatures()}
     assert {"hungry", "thirsty", "pizza"} <= names
     assert {"diving", "puddle"} <= names                       # the subfolder (ref/needs/weather/) is searched too
+
+
+def test_templates_are_read_once_and_reread_when_a_file_changes(macro, tmp_path, monkeypatch):
+    folder = tmp_path / "crops"
+    folder.mkdir()
+    cv2.imwrite(str(folder / "A.png"), np.full((4, 4, 3), 10, np.uint8))
+    reads = []
+    real = macro.cv2.imread
+    monkeypatch.setattr(macro.cv2, "imread", lambda path, *a: reads.append(path) or real(path, *a))
+    first = macro.load_templates(str(folder))
+    assert list(first) == ["a"] and len(reads) == 1
+    macro.load_templates(str(folder))
+    macro.load_templates(str(folder))
+    assert len(reads) == 1                                       # not read again
+    first["junk"] = 1                                            # callers can't corrupt the cache through the dict
+    assert "junk" not in macro.load_templates(str(folder))
+    cv2.imwrite(str(folder / "b.png"), np.full((4, 4, 3), 20, np.uint8))     # a file is added...
+    assert sorted(macro.load_templates(str(folder))) == ["a", "b"] and len(reads) == 3
+    os.utime(folder / "A.png", ns=(1, 1))                                      # ...changed...
+    macro.load_templates(str(folder))
+    assert len(reads) == 5
+    (folder / "b.png").unlink()                                                # ...removed
+    assert list(macro.load_templates(str(folder))) == ["a"]
+    assert macro.load_templates(str(tmp_path / "missing")) == {}
+    (folder / "notes.txt").write_text("x")
+    assert list(macro.load_templates(str(folder))) == ["a"]                    # only .png files count

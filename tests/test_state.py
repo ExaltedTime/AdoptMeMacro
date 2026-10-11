@@ -134,7 +134,8 @@ def test_respawns_after_the_interval_then_waits_a_full_interval_again(macro, res
 def test_the_idle_respawn_does_not_touch_the_progress_clock(macro, respawns, monkeypatch):
     """The 20 minute no-progress rejoin counts from last_progress, which a respawn must leave alone."""
     import numpy as np
-    monkeypatch.setattr(macro, "roblox_windows", lambda: [object()])          # Roblox is running...
+    window = type("Window", (), {"title": "Roblox"})()
+    monkeypatch.setattr(macro.gw, "getAllWindows", lambda: [window])           # Roblox is running...
     monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((1080, 1920, 3), np.uint8))   # ...and not disconnected
     stalled = time.time() - macro.cfg.NO_PROGRESS_REJOIN_INTERVAL - 5
     macro.state.last_progress = stalled
@@ -296,3 +297,123 @@ def test_a_second_disconnect_during_setup_does_not_end_the_run(macro, monkeypatc
     assert not macro.state.disabled_needs
     log = open(macro.cfg.RUN_LOG_PATH).read()
     assert "setup interrupted by a rejoin" in log and "recovery complete" in log
+
+
+def test_every_run_gets_its_own_log_file_and_the_combined_log_keeps_everything(macro):
+    macro.log_run_event("before any run")                     # no run number yet: only in the combined log
+    macro.state.run_number = 7
+    macro.log_run_event("resolved: hungry (28s)")
+    macro.state.run_number = 8
+    macro.log_run_event("detected: pizza")
+    macro.log_run_event("resolved: pizza (80s)")
+    own = os.path.join(macro.cfg.RUN_LOGS_DIR)
+    assert sorted(os.listdir(own)) == ["run7.txt", "run8.txt"]
+    assert open(os.path.join(own, "run7.txt")).read().count("\n") == 1
+    eight = open(os.path.join(own, "run8.txt")).read().splitlines()
+    assert len(eight) == 2 and all("[RUN 8]" in line for line in eight)
+    combined = open(macro.cfg.RUN_LOG_PATH).read().splitlines()
+    assert len(combined) == 4 and "[RUN None] before any run" in combined[0]
+    assert macro.parse_run(macro.cfg.RUN_LOG_PATH, 8)["resolved"][0][1:] == ("pizza", 80)    # the report still reads the combined log
+
+
+def test_a_run_log_that_cannot_be_written_does_not_lose_the_combined_line(macro, monkeypatch):
+    macro.state.run_number = 3
+    monkeypatch.setattr(macro.cfg, "RUN_LOGS_DIR", os.path.join(macro.cfg.RUN_LOG_PATH, "not-a-folder"))   # a path under a file
+    macro.log_run_event("resolved: hungry (28s)")
+    assert "resolved: hungry" in open(macro.cfg.RUN_LOG_PATH).read()
+
+
+@pytest.mark.parametrize("need, expected", [("camping", 75.0), ("pizza", 75.0)])
+def test_teleport_needs_wait_for_the_need_to_clear_up_to_the_configured_time(macro, monkeypatch, need, expected):
+    waited = []
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "teleport_to", lambda pos: None)
+    monkeypatch.setattr(macro, "equip_favorite_vehicle", lambda: None)       # camping flies while Halloween is on
+    monkeypatch.setattr(macro, "hold_key", lambda key, duration: None)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
+    monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=60.0, **kw: waited.append(max_wait))
+    assert macro.TeleportWalkNeedHandler(need).handle() is True
+    assert waited == [expected] == [macro.cfg.NEED_GONE_MAX_WAIT]
+
+
+def test_a_need_can_set_its_own_wait(macro, monkeypatch):
+    waited = []
+    monkeypatch.setitem(macro.cfg.TELEPORT_WALK_NEEDS, "camping", {**macro.cfg.TELEPORT_WALK_NEEDS["camping"], "max_wait": 150.0})
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "teleport_to", lambda pos: None)
+    monkeypatch.setattr(macro, "equip_favorite_vehicle", lambda: None)       # camping flies while Halloween is on
+    monkeypatch.setattr(macro, "hold_key", lambda key, duration: None)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
+    monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=60.0, **kw: waited.append(max_wait))
+    macro.TeleportWalkNeedHandler("camping").handle()
+    assert waited == [150.0]
+
+
+def test_rejoin_reason_lists_the_windows_once(macro, monkeypatch):
+    import numpy as np
+    calls = []
+    window = type("Window", (), {"title": "Roblox"})()
+    monkeypatch.setattr(macro.gw, "getAllWindows", lambda: calls.append(1) or [window])
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((1080, 1920, 3), np.uint8))
+    assert macro.rejoin_reason() is None
+    assert calls == [1]
+
+
+def test_rejoin_reason_knows_a_crashed_or_missing_roblox(macro, monkeypatch):
+    crash = type("Window", (), {"title": macro.cfg.ROBLOX_CRASH_WINDOW_TITLE})()
+    other = type("Window", (), {"title": "Notepad"})()
+    monkeypatch.setattr(macro.gw, "getAllWindows", lambda: [other, crash])
+    assert macro.rejoin_reason() == ("disconnect", "Roblox crashed")
+    monkeypatch.setattr(macro.gw, "getAllWindows", lambda: [other])
+    assert macro.rejoin_reason() == ("disconnect", "Roblox isn't running")
+
+
+@pytest.fixture
+def need_gone(macro, monkeypatch):
+    """wait_until_need_gone() with scripted scan results: scans[i] is what the i-th look at the screen sees."""
+    log = {"waits": [], "scans": []}
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: log["waits"].append(round(duration, 2)))
+    monkeypatch.setattr(macro, "check_focus", lambda: None)
+    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: log.setdefault("failures", []).append(reason))
+
+    def script(*results):
+        queue = list(results)
+
+        def scan_needs(fresh=False):
+            log["scans"].append(fresh)
+            return queue.pop(0) if queue else (["hungry"], True)
+        monkeypatch.setattr(macro, "scan_needs", scan_needs)
+    log["script"] = script
+    return log
+
+
+def test_the_wait_ends_at_the_first_check_that_finds_the_need_gone(need_gone, macro):
+    need_gone["script"]((["hungry"], True), ([], True), ([], True))      # check 1: still there; check 2: gone on both looks
+    macro.wait_until_need_gone("hungry", max_wait=60)
+    assert need_gone["scans"] == [False, False, True]                      # the second look of the last check was a fresh search
+    assert [w for w in need_gone["waits"] if w > 1] == [macro.cfg.NEED_GONE_POLL_INTERVAL] * 2   # polled every 3.5s, no extra confirmations
+    assert macro.cfg.NEED_GONE_POLL_INTERVAL == 3.5 and "failures" not in need_gone
+
+
+def test_a_flicker_on_the_first_look_does_not_end_the_wait(need_gone, macro):
+    need_gone["script"]((([]), True), (["hungry"], True), (["hungry"], True), ([], True), ([], True))
+    macro.wait_until_need_gone("hungry", max_wait=60)
+    assert len(need_gone["scans"]) == 5                                    # check 1 missed it once but saw it on the second look
+
+
+def test_a_need_that_never_clears_is_a_failure_after_the_wait(need_gone, macro, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(macro.time, "time", lambda: clock[0])
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: clock.__setitem__(0, clock[0] + duration))
+    need_gone["script"]()                                                  # always still there
+    macro.wait_until_need_gone("hungry", max_wait=10)
+    assert need_gone["failures"] == ["hungry still showing after 10s"]
+
+
+def test_an_unreadable_bar_is_not_a_failure(need_gone, macro, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(macro.time, "time", lambda: clock[0])
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: clock.__setitem__(0, clock[0] + duration))
+    need_gone["script"](*[([], False)] * 20)
+    macro.wait_until_need_gone("hungry", max_wait=10)
+    assert "failures" not in need_gone

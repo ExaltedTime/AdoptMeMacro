@@ -763,7 +763,7 @@ def task_unscrew(play_minigames=True):
 
 def task_unscrew_tick():
     """The hook in wait_interruptible(): run the in-task checks if one is due.
-    Raises TaskInterrupted if a minigame was played or the game was rejoined."""
+    Raises TaskInterrupted if a minigame was played, the game was rejoined or a popup spoiled the task."""
     global _IN_UNSCREW, _LAST_TASK_UNSCREW
     if (not TASK_ACTIVE or _IN_UNSCREW or threading.get_ident() != TASK_THREAD
             or time.time() - _LAST_TASK_UNSCREW < UNSCREW_TASK_INTERVAL):
@@ -780,6 +780,9 @@ def task_unscrew_tick():
     if played == "rejoined":
         release_all_inputs()
         raise TaskInterrupted("a rejoin")
+    if played == "aborted":
+        release_all_inputs()
+        raise TaskInterrupted("a popup")
 
 def wait_interruptible(duration):
     """Sleep for `duration`, in STOP_CHECK_INTERVAL chunks, checking
@@ -2356,17 +2359,21 @@ def unscrew(in_task=False, play_minigames=True):
     The stray windows and the minigame popup go before the paycheck check
     because their green buttons would otherwise be mistaken for CASH OUT too.
     Returns "played" if a minigame was played, "rejoined" if the game was
-    rejoined mid-task (the callers abandon the task), otherwise None."""
+    rejoined mid-task or "aborted" if a stray window that spoils the task was
+    closed (see "abort_task" in STRAY_WINDOWS) - the callers abandon the task -
+    otherwise None."""
     if in_task:
         if rejoin_game(kinds=("disconnect",)):
             return "rejoined"
     else:
         rejoin_game()
     backpack_open = close_backpack_if_stuck(in_task)
-    dismiss_stray_windows()
+    closed = dismiss_stray_windows()
     played = minigame_popup(play=play_minigames) if HALLOWEEN else None
     if not backpack_open:
         detect_paycheck()
+    if in_task and played is None and closed and STRAY_WINDOWS[closed].get("abort_task"):
+        return "aborted"
     return played
 
 def run_side_action(action):

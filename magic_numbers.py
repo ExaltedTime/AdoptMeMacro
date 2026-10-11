@@ -101,6 +101,10 @@ STRAY_WINDOWS = {
     # The camera-on-the-pet view with its BACK button. Only choose and pet want it ("only_when_unwanted"), so
     # it's backed out of unless one of those handlers is running - see wanting_pet_focus().
     "pet_focus": {"box": (400, 60, 700, 180), "close_pos": (545, 120), "only_when_unwanted": True},
+    # "You can't spawn a vehicle here." - turns up now and then when a need's vehicle gets equipped in a spot that
+    # doesn't allow it. "close_pos" is its Okay button; "abort_task" abandons the need that was running (it's
+    # tried again from scratch on the next check) - see unscrew().
+    "cant_spawn_vehicle": {"box": (760, 420, 1160, 630), "close_pos": (962, 657), "abort_task": True},
 }
 # The sick need's own "Ask Doctor Heart to heal your family?" Yes/No dialog (ref/popups/sick_dialog.png, found
 # within SICK_DIALOG_BOX) has the same Yes green + No red as a minigame popup; it is the sick handler's to

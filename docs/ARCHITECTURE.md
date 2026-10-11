@@ -429,6 +429,13 @@ the camera on the pet with a BACK button; `close_pos` is that button). Only
 `wanting_pet_focus()` is active (those two handlers), and clicks BACK in every
 other case - including mid-task, e.g. a throw click that focused the pet.
 
+`cant_spawn_vehicle` is the "You can't spawn a vehicle here." popup
+(`ref/popups/cant_spawn_vehicle.png`; `close_pos` is its Okay button). It is
+flagged `abort_task`: when it is closed while a need handler is running,
+`unscrew(in_task=True)` returns `"aborted"` and `task_unscrew_tick()` raises
+`TaskInterrupted("a popup")`, so the need is abandoned and run again from the
+start on the next check (logged as "<need> interrupted by a popup").
+
 A third entry, `respawn_confirm`, is the "Are you sure you want to respawn your
 character?" dialog (`ref/popups/respawn_confirm.png`; its `close_pos` is the
 Respawn button). `respawn_character()` presses esc, r and enter within a

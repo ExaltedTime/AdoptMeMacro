@@ -1,6 +1,7 @@
 """The daily money reset, the Debug tab's run-every-need sequence, and judging an icon gone by how its place changes."""
 import datetime
 import os
+import threading
 import time
 
 import cv2
@@ -403,6 +404,22 @@ def test_a_need_cleared_while_the_bar_was_unreadable_is_seen_even_when_a_neighbo
         after[ny - 28:ny + 29, nx - 28:nx + 29] = part[ny - 28:ny + 29, nx - 28:nx + 29]
     watch["screen"] = after
     assert macro.icon_gone_by_frame_change("pizza") is True                            # at the very first look
+
+
+def test_each_wait_starts_from_the_icon_as_last_read_not_from_an_earlier_wait(macro, monkeypatch):
+    """An earlier wait for the same need that ended on a timeout leaves its last picture in the watch; if that was
+    the wrong thing (a neighbour), the next wait must not carry on from it."""
+    macro._ICON_WATCH.update(need="pizza", pos=(1, 1), crop=np.zeros((57, 57, 3), np.uint8))
+    seen = []
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
+    monkeypatch.setattr(macro, "_need_cleared", lambda name: seen.append(dict(macro._ICON_WATCH)) or True)
+    macro.wait_until_need_gone("pizza", max_wait=10)
+    assert seen and seen[0] == {"need": None, "pos": None, "crop": None}
+    macro._ICON_WATCH.update(need="pizza", pos=(1, 1), crop=np.zeros((57, 57, 3), np.uint8))
+    stop = threading.Event()
+    stop.set()
+    macro._watch_need_gone("pizza", threading.Event(), stop)                    # the walking watcher thread's body
+    assert macro._ICON_WATCH["need"] is None
 
 
 def test_the_stored_icon_is_found_again_when_it_has_only_moved(macro, watch):

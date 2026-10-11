@@ -294,9 +294,12 @@ that ends the wait (logged as `<need> icon gone by frame change`). Measured on
 real frames of the salon icon, the same icon scores 0.90-1.0 whatever its
 timer shows or where it has shifted to (the timer alone changes 22-39% of the
 circle between two looks), a neighbouring icon or a bright background 0.3-0.56.
-The first look only records the icon, so one that went before then isn't
-noticed (the wait runs out as before), and the comparison starts afresh
-whenever the bar is readable again. The timer is deliberately not visible to
+Without a stored picture (the need was never read while the bar was readable)
+the first look only records what is at the stored place, so one that went before
+then isn't noticed (the wait runs out as before). Each wait starts afresh
+(`reset_icon_watch()`, at the start of `wait_until_need_gone()` and of the
+walking watcher thread, and whenever the bar is readable again), so a wait never
+carries on from where an earlier wait for the same need left off. The timer is deliberately not visible to
 the black-and-white icon matching, which is why this is a separate check. On a real
 Pizza Party frame (`tests/fixtures/pizza_party_bar.png`: the bar is 79% bright, so
 unreadable; the circles are still found, but the icons score only 0.84-0.89
@@ -415,7 +418,7 @@ rather than a flat sleep after the fact.
 | `pet` | `PetNeedHandler`: `focus_pet()` (see below), then hold the mouse down and swipe once down from `PET_SWIPE_START_OFFSET` above screen center to `PET_SWIPE_END_OFFSET` below it over `PET_SWIPE_DURATION` (8s). Same as `catch` - always the full fixed duration. |
 | `choose` | `ChooseNeedHandler`: `focus_pet()` (see below), find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. It doesn't wait for the icon to clear (it's gone at once; the next check confirms). |
 | `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then `equip_favorite_vehicle()` (backpack → vehicles → first vehicle → equip → close backpack), hold `r` (`KEY_HELICOPTER`) for `RIDE_R_HOLD_DURATION` (1s), then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT` (75s), ending early the moment "ride" is confirmed cleared (see below). |
-| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`), `helicopter` (see below) and `max_wait` (how long to wait for the need to clear afterwards; default `NEED_GONE_MAX_WAIT`, 75s; `cafe` and `beach` use `NEED_GONE_SLOW_MAX_WAIT`, 90s, as they were seen clearing about 80s after their walk). `sick` waits `SICK_PRE_E_WAIT` after its last hold before pressing `e`. `teleport_to()` checks the backpack really opened (pressing the key once more if not, a failure if still not) before clicking its tabs. Which table is used depends on `HALLOWEEN` - see below. |
+| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`), `helicopter` (see below) and `max_wait` (how long to wait for the need to clear afterwards; default `NEED_GONE_MAX_WAIT`, 75s; `cafe` and `beach` use `NEED_GONE_SLOW_MAX_WAIT`, 90s, as they were seen clearing about 80s after their walk). `sick` waits `SICK_PRE_E_WAIT` after its last hold before pressing `e`. Which table is used depends on `HALLOWEEN` - see below. |
 | `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")` - up to `NEED_GONE_MAX_WAIT` (75s), same early-exit as `ride` above. |
 
 **Helicopter.** A teleport-walk entry can fly instead of walk. `HELICOPTER_REQUIRED`
@@ -933,10 +936,15 @@ During a run, this file is read and updated by:
   doesn't lose progress already made.
 
 The GUI (Tk's main thread) and the workflow (`run_async`'s worker thread)
-both write this file, so every change goes through
-`update_game_config(mutate)` - a load-modify-save under a lock - or
+both read and write this file, so every access holds one lock
+(`GAME_CONFIG_LOCK`): a change goes through
+`update_game_config(mutate)` - a load-modify-save under it - or
 `reset_game_config()` (deletes the file, so the next load is all defaults;
-the GUI then refreshes its checkboxes to match). `side_quest()`
+the GUI then refreshes its checkboxes to match), and `load_game_config()`
+takes it too, so a reader can't see the file mid-write (which reads as "no
+config", the defaults: an empty private server link, the minigames off).
+`save_game_config()` writes a temporary file and moves it into place, so a
+crash partway can't leave a truncated config either. `side_quest()`
 deliberately doesn't hold a loaded config across a long
 action and save it afterwards - that could silently undo a checkbox
 clicked in the meantime.
@@ -951,7 +959,9 @@ knowing if you're modifying it:
   background daemon thread (so Tkinter's main loop never blocks), and
   *always* re-enables them in a `finally` block - normal finish, a
   `StopRequested`/`FocusLost`, or an unexpected exception all take the
-  same path back to a usable UI. `[STOP]` is deliberately excluded from
+  same path back to a usable UI. A `TaskInterrupted` (the Setup button's
+  `setup_game()` cut short by a disconnect, whose rejoin ran setup itself) is
+  logged and counts as done, not as a crash. `[STOP]` is deliberately excluded from
   `action_buttons`, since it must stay clickable while something is
   running.
 - **The main row** (loop/stop) gives both buttons their own
@@ -1079,7 +1089,7 @@ again, since the counter goes with the logs.
   misread icon can be seen at once; missing when Roblox couldn't be captured)
   and `info.txt` (the reason, the needs last detected, the disabled needs and
   how long ago a need was last resolved) and `state.json` (the whole `State`
-  object and `run_stats` (a `RunStats` dataclass) as they were, for working out what the macro believed
+  object - the stored need icon pictures as their sizes - and `run_stats` (a `RunStats` dataclass) as they were, for working out what the macro believed
   at that moment). It also prints the reason, writes it
   to `run_log.txt` and counts it in the status file. It's called when a handler
   can't resolve a need, a need is still showing after `NEED_GONE_MAX_WAIT`, a

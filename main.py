@@ -336,6 +336,8 @@ class State:
                 value = None if value is None else "set"
             elif isinstance(value, set):
                 value = sorted(value)
+            elif item.name == "need_icon_crops":
+                value = {name: f"image {crop.shape[1]}x{crop.shape[0]}" for name, crop in list(value.items())}   # pictures: not JSON
             out[item.name] = value
         return out
 
@@ -558,9 +560,15 @@ def reset_run_stats() -> None:
 # Game state that needs to persist across separate launches of the script
 # (unlike BUTTON_POSITIONS/CURRENT_RUN_NUMBER above) - see side_quest().
 
-def load_game_config() -> dict[str, Any]:
-    """Load GAME_CONFIG_PATH, or these defaults if it doesn't exist yet
-    (first run, or reset via reset_game_config())."""
+# The GUI (Tk main thread) and the workflow (run_async's worker thread) both
+# read and write this file, so every access goes through the functions below,
+# each holding this one lock - a reader can never see a half-written file (it
+# would read as "no config" and silently give the defaults: the private server
+# link gone, the minigames switched off).
+GAME_CONFIG_LOCK = threading.Lock()
+
+def _read_game_config() -> dict[str, Any]:
+    """load_game_config() without taking the lock (for callers that hold it)."""
     defaults = {
         "money_collected": 0,
         "lure_timer": time.time(),  # due immediately on a fresh config
@@ -581,23 +589,32 @@ def load_game_config() -> dict[str, Any]:
         config.setdefault("hauntlet_2_enabled", config.pop("hauntlet_enabled"))
     return {**defaults, **config}
 
-def save_game_config(config: dict[str, Any]) -> None:
-    """Persist `config` (as returned by load_game_config()) to GAME_CONFIG_PATH."""
-    with open(cfg.GAME_CONFIG_PATH, "w") as f:
-        json.dump(config, f)
+def load_game_config() -> dict[str, Any]:
+    """Load GAME_CONFIG_PATH, or these defaults if it doesn't exist yet
+    (first run, or reset via reset_game_config())."""
+    with GAME_CONFIG_LOCK:
+        return _read_game_config()
 
-# The GUI (Tk main thread) and the workflow (run_async's worker thread) both
-# write this file, so every change goes through update_game_config() /
-# reset_game_config() - a load-modify-save under one lock - rather than
-# holding a loaded dict across a long action and saving it afterwards,
-# which could silently undo a checkbox clicked in the meantime.
-GAME_CONFIG_LOCK = threading.Lock()
+def save_game_config(config: dict[str, Any]) -> None:
+    """Persist `config` (as returned by load_game_config()) to GAME_CONFIG_PATH.
+    Written to a temporary file and moved into place, so a crash partway
+    can't leave a truncated config behind (which would read as the defaults).
+    Callers outside this section hold GAME_CONFIG_LOCK - use
+    update_game_config()."""
+    tmp = cfg.GAME_CONFIG_PATH + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(config, f)
+        os.replace(tmp, cfg.GAME_CONFIG_PATH)
+    except OSError:
+        with open(cfg.GAME_CONFIG_PATH, "w") as f:   # the move wasn't allowed (the file is open elsewhere): write it in place
+            json.dump(config, f)
 
 def update_game_config(mutate: Callable[[dict[str, Any]], Any]) -> dict[str, Any]:
     """Load the config, call mutate(config) to change it in place, save it,
     and return it - all atomically with respect to other callers."""
     with GAME_CONFIG_LOCK:
-        config = load_game_config()
+        config = _read_game_config()
         mutate(config)
         save_game_config(config)
         return config
@@ -606,13 +623,13 @@ def reset_game_config() -> None:
     """Delete GAME_CONFIG_PATH so the next load starts from the defaults -
     except the private server link, which isn't progress and is kept."""
     with GAME_CONFIG_LOCK:
-        link = load_game_config()["private_server_link"]
+        link = _read_game_config()["private_server_link"]
         try:
             os.remove(cfg.GAME_CONFIG_PATH)
         except FileNotFoundError:
             pass
         if link:
-            save_game_config({**load_game_config(), "private_server_link": link})
+            save_game_config({**_read_game_config(), "private_server_link": link})
 
 # ============================================================================
 # ICON PROCESSING
@@ -820,6 +837,11 @@ def scan_needs(fresh: bool = False) -> tuple[list[Optional[str]], bool]:
 # The icon region being watched while the need bar is unreadable: {"need", "pos", "crop"} - see icon_gone_by_frame_change().
 _ICON_WATCH: dict[str, Any] = {"need": None, "pos": None, "crop": None}
 
+def reset_icon_watch() -> None:
+    """Forget the icon being watched: each wait for a need to clear starts from the picture of its icon taken
+    when it was last read, not from where an earlier wait for the same need happened to leave off."""
+    _ICON_WATCH.update(need=None, pos=None, crop=None)
+
 def icon_region(pos: tuple[int, int]) -> Optional[Image]:
     """The square around a need icon centred on `pos` (ICON_CROP_RADIUS each
     way), captured now - or None if it would reach past the screen's edge."""
@@ -892,7 +914,7 @@ def icon_gone_by_frame_change(need_name: str) -> Optional[bool]:
         if found is None:
             print(f"[debug] {need_name}: need bar unreadable, and its icon is no longer in the bar")
             log_run_event(f"{need_name} icon gone by frame change - the need bar is unreadable")
-            watch.update(need=None, pos=None, crop=None)
+            reset_icon_watch()
             return True
     now = icon_region(found)
     if now is None:
@@ -916,7 +938,7 @@ def _need_cleared(need_name: str) -> Optional[bool]:
         names, readable = scan_needs(fresh=attempt > 0)   # the second look must not just repeat the first
         if not readable:
             return icon_gone_by_frame_change(need_name)
-        _ICON_WATCH.update(need=None, pos=None, crop=None)   # readable again: a later unreadable stretch starts afresh
+        reset_icon_watch()   # readable again: a later unreadable stretch starts afresh
         if need_name in names:
             return False
         if attempt == 0:
@@ -935,6 +957,7 @@ def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAI
     minigames that turn up meanwhile are handled by the unscrew() checks
     wait_interruptible() runs during a task.) Interruptible."""
     print(f"[debug] waiting up to {max_wait}s for {need_name} to clear...")
+    reset_icon_watch()
     deadline = time.time() + max_wait
     unreadable = False
     while True:
@@ -964,6 +987,7 @@ def _watch_need_gone(need_name: str, cleared_event: threading.Event, stop_event:
     main thread's check_running() calls are allowed to unwind the workflow, so
     this thread must never let StopRequested/FocusLost escape uncaught."""
     try:
+        reset_icon_watch()
         while not stop_event.is_set():
             if stop_event.wait(cfg.NEED_GONE_POLL_INTERVAL):
                 return
@@ -1925,13 +1949,6 @@ def teleport_to(category_pos: Point) -> None:
     print("[debug] opening backpack...")
     pydirectinput.press(cfg.KEY_BACKPACK)
     wait_interruptible(cfg.UI_SETTLE)
-    if not detect_backpack_open(grab_screen()):
-        # The key press was lost: the clicks below would land in the world and the walk would start from where we stand.
-        print("[debug] backpack didn't open, pressing again...")
-        pydirectinput.press(cfg.KEY_BACKPACK)
-        wait_interruptible(cfg.UI_SETTLE)
-        if not detect_backpack_open(grab_screen()):
-            log_failure("backpack did not open for the teleport")
 
     print("[debug] selecting category...")
     hover_click(*category_pos)
@@ -3743,6 +3760,11 @@ class AdoptMeGUI:
                 # misreport a clean stop as "[ERROR]".
                 log_run_event("stopped by the user")
                 final_status = "[STOPPED]"
+            except TaskInterrupted as interruption:
+                # The GUI's Setup button ran setup_game() with the in-task checks on, and a disconnect made them
+                # rejoin the game - which ran setup itself. The action is done, not crashed.
+                log_run_event(f"interrupted by {interruption.reason}")
+                final_status = "[DONE]"
             except FocusLost:
                 # Same reasoning as StopRequested above - must come before
                 # the generic Exception handler.

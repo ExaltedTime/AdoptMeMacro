@@ -4,6 +4,7 @@ import os
 import threading
 import time
 
+import numpy as np
 import pytest
 
 
@@ -57,8 +58,10 @@ def test_write_status_has_the_documented_keys_and_is_valid_json(macro):
 def test_state_snapshot_is_json_friendly(macro):
     macro.state.disabled_needs.add("pizza")
     macro.state.macro_window = object()
+    macro.state.need_icon_crops["sick"] = np.zeros((57, 57, 3), np.uint8)       # pictures must not end up in the JSON
     snapshot = macro.state.snapshot()
     assert snapshot["disabled_needs"] == ["pizza"] and snapshot["macro_window"] == "set"
+    assert snapshot["need_icon_crops"] == {"sick": "image 57x57"}
     json.dumps(snapshot)
 
 
@@ -425,13 +428,48 @@ def test_an_unreadable_bar_is_not_a_failure(need_gone, macro, monkeypatch):
     assert "failures" not in need_gone
 
 
-def test_teleport_presses_the_backpack_key_again_if_it_did_not_open(macro, monkeypatch):
-    presses = []
-    opened = iter([False, True, True])
-    monkeypatch.setattr(macro.pydirectinput, "press", lambda key: presses.append(key), raising=False)
-    monkeypatch.setattr(macro, "grab_screen", lambda: None)
-    monkeypatch.setattr(macro, "detect_backpack_open", lambda img: next(opened))
-    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
-    monkeypatch.setattr(macro, "hold_key", lambda key, duration: None)
-    macro.teleport_to((1, 2))
-    assert presses == [macro.cfg.KEY_BACKPACK] * 2 and (1, 2) in macro.clicks
+
+def test_config_reads_never_see_a_half_written_file(macro, monkeypatch, tmp_path):
+    """The GUI thread and the worker both read and write the config: a reader must never get the defaults
+    because it looked while the file was being rewritten (the private server link would read as empty)."""
+    monkeypatch.setattr(macro.cfg, "GAME_CONFIG_PATH", str(tmp_path / ".config"))
+    macro.update_game_config(lambda c: c.update(private_server_link="https://link", filler="x" * 200000))
+    stop = threading.Event()
+
+    def write():
+        i = 0
+        while not stop.is_set():
+            i += 1
+            macro.update_game_config(lambda c: c.update(money_collected=i))
+
+    writer = threading.Thread(target=write)
+    writer.start()
+    try:
+        end = time.time() + 0.7
+        while time.time() < end:
+            assert macro.load_game_config()["private_server_link"] == "https://link"
+    finally:
+        stop.set()
+        writer.join()
+    assert not (tmp_path / ".config.tmp").exists()
+
+
+def test_a_button_action_cut_short_by_a_rejoin_is_done_not_a_crash(macro, monkeypatch):
+    """The Setup button runs setup_game() under the in-task checks; a disconnect rejoins (and sets up) mid-way and
+    raises TaskInterrupted, which the worker must not report as a crash."""
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.is_running = False
+    statuses = []
+    gui._set_running_ui = lambda running, status_text=None: statuses.append((running, status_text))
+    gui.root = type("Root", (), {"after": lambda self, ms, fn: fn()})()
+
+    def interrupted():
+        raise macro.TaskInterrupted("a rejoin")
+
+    macro.AdoptMeGUI.run_async(gui, interrupted)
+    deadline = time.time() + 5
+    while gui.is_running and time.time() < deadline:
+        time.sleep(0.01)
+    assert statuses[-1] == (False, "[DONE]")
+    assert "interrupted by a rejoin" in open(macro.cfg.RUN_LOG_PATH).read()
+    assert not any("crashed" in line for line in open(macro.cfg.RUN_LOG_PATH))

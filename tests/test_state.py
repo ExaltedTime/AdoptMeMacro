@@ -336,7 +336,7 @@ def test_teleport_needs_wait_for_the_need_to_clear_up_to_the_configured_time(mac
     assert waited == [expected] == [macro.cfg.NEED_GONE_MAX_WAIT]
 
 
-@pytest.mark.parametrize("need", ["sick", "cafe", "beach"])
+@pytest.mark.parametrize("need", ["cafe", "beach"])
 def test_the_slow_needs_wait_longer(macro, need):
     entry = macro.cfg.TELEPORT_WALK_NEEDS_HALLOWEEN.get(need) or macro.cfg.TELEPORT_WALK_NEEDS_NORMAL[need]
     assert entry["max_wait"] == macro.cfg.NEED_GONE_SLOW_MAX_WAIT > macro.cfg.NEED_GONE_MAX_WAIT

@@ -304,7 +304,7 @@ TELEPORT_WALK_STEP_GAP = 4.0      # pause between consecutive steps of a telepor
 SICK_PRE_E_WAIT = 2.0             # after the sick need's walk, before pressing 'e' (let the character come to rest)
 SICK_CONFIRM_WAIT = 7.0           # wait after pressing 'e' and before the sick need's final click
 
-NEED_GONE_SLOW_MAX_WAIT = 90.0   # the same for sick, cafe and beach, which were seen clearing ~80s after their walk
+NEED_GONE_SLOW_MAX_WAIT = 90.0   # the same for cafe and beach, which were seen clearing ~80s after their walk
 TELEPORT_PETS_TAB_POS = (817, 713)       # nursery: pets tab
 TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
 SICK_FINAL_CLICK_POS = (1045, 660)       # click after the sick need's walk
@@ -340,7 +340,7 @@ TELEPORT_WALK_NEEDS_HALLOWEEN: dict[str, dict[str, Any]] = {
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.8), ("a", 10))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("s", 20),), helicopter=True),
     "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 3.0), ("w", 0.8)),
-                    final_click=SICK_FINAL_CLICK_POS, max_wait=NEED_GONE_SLOW_MAX_WAIT),
+                    final_click=SICK_FINAL_CLICK_POS),
 }
 
 # The set actually used everywhere else (TeleportWalkNeedHandler and the

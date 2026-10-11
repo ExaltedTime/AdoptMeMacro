@@ -323,8 +323,8 @@ def test_a_run_log_that_cannot_be_written_does_not_lose_the_combined_line(macro,
     assert "resolved: hungry" in open(macro.cfg.RUN_LOG_PATH).read()
 
 
-@pytest.mark.parametrize("need, expected", [("camping", 90.0), ("pizza", 90.0)])
-def test_teleport_needs_wait_longer_for_the_need_to_clear(macro, monkeypatch, need, expected):
+@pytest.mark.parametrize("need, expected", [("camping", 75.0), ("pizza", 75.0)])
+def test_teleport_needs_wait_for_the_need_to_clear_up_to_the_configured_time(macro, monkeypatch, need, expected):
     waited = []
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
     monkeypatch.setattr(macro, "teleport_to", lambda pos: None)
@@ -333,7 +333,7 @@ def test_teleport_needs_wait_longer_for_the_need_to_clear(macro, monkeypatch, ne
     monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
     monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=60.0, **kw: waited.append(max_wait))
     assert macro.TeleportWalkNeedHandler(need).handle() is True
-    assert waited == [expected] and macro.cfg.TELEPORT_NEED_GONE_MAX_WAIT > macro.cfg.NEED_GONE_MAX_WAIT
+    assert waited == [expected] == [macro.cfg.TELEPORT_NEED_GONE_MAX_WAIT] == [macro.cfg.NEED_GONE_MAX_WAIT]
 
 
 def test_a_need_can_set_its_own_wait(macro, monkeypatch):

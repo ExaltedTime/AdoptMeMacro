@@ -352,11 +352,11 @@ DISABLED_NEEDS_REJOIN_THRESHOLD = 4  # this many needs disabled for the run (see
                                      # badly wrong: rejoin the game, run setup, and give every need a fresh chance
 NEED_STUCK_CHECKS = 5            # an enabled need still on screen after this many attempts in a row is
                                   # disabled for the rest of the run - see record_detection()
-NEED_GONE_MAX_WAIT = 60.0        # most wait_until_need_gone() ever waits for an icon to disappear -
+NEED_GONE_MAX_WAIT = 75.0        # most wait_until_need_gone() ever waits for an icon to disappear -
                                   # also reused as walk_alternating()'s total duration cap for walk/ride
-TELEPORT_NEED_GONE_MAX_WAIT = 90.0   # the same wait, for the teleport-walk needs after their walk: they time out by themselves in the game,
-                                  # and camping was seen clearing ~66s after it (a 60s wait logged a failure) - an entry of
-                                  # TELEPORT_WALK_NEEDS can override it with its own `max_wait`
+TELEPORT_NEED_GONE_MAX_WAIT = 75.0   # the same wait, for the teleport-walk needs after their walk (they time out by themselves in the game;
+                                  # camping was seen clearing ~66s after it) - an entry of TELEPORT_WALK_NEEDS can override it
+                                  # with its own `max_wait`
 NEED_GONE_POLL_INTERVAL = 3.5    # how often to check for the icon during that wait (and, while walking, from the watcher thread)
 NEED_GONE_FLICKER_RECHECK_DELAY = 0.3  # before counting any single miss, re-sample this soon after -
                                         # the icon can flash for a frame (or briefly drop out against a

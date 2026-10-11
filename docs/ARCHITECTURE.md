@@ -294,9 +294,12 @@ circle between two looks), a neighbouring icon or a bright background 0.3-0.56.
 The first look only records the icon, so one that went before then isn't
 noticed (the wait runs out as before), and the comparison starts afresh
 whenever the bar is readable again. The timer is deliberately not visible to
-the black-and-white icon matching, which is why this is a separate check. The
-threshold was set from three frames of a readable bar; it has not yet been
-tried on a bright one.
+the black-and-white icon matching, which is why this is a separate check. On a real
+Pizza Party frame (`tests/fixtures/pizza_party_bar.png`: the bar is 79% bright, so
+unreadable; the circles are still found, but the icons score only 0.84-0.89
+against the saved ones, under the 0.93 needed) each of the five icons finds
+itself at 1.0 and the best of the other four at 0.65. The icon is found again
+only if it was recognised before the bar went bright (its place is recorded then).
 
 Popups, stray windows and minigames that turn up during the wait are handled
 by the `unscrew()` checks that `wait_interruptible()` runs during a task - see

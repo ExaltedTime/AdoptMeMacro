@@ -324,3 +324,65 @@ def test_real_frames_how_well_an_icon_matches_itself_and_the_others(macro, watch
     assert macro.locate_icon(one, POS[1]) is None                                 # the neighbours are not the salon
     watch["screen"] = bright_screen()
     assert macro.locate_icon(one, POS[1]) is None
+
+
+# --- and on a real bright need bar: the Pizza Party, five icons (tests/fixtures/pizza_party_bar.png) ---------------
+
+BAR_ORIGIN = (780, 24)                      # where the fixture was cut from, in the 1920x1080 frame
+ICONS = [(823, 63), (891, 64), (959, 63), (1027, 63), (1095, 64)]    # the five icons' centres in that frame
+
+
+def bar_screen(*keep, shifted_left=0):
+    """The real bar with only the icons at indexes `keep` left in it (the rest painted over with the bar's background),
+    those icons moved `shifted_left` slots left."""
+    bar = fixture("pizza_party_bar.png")
+    screen = bright_screen()
+    background = bar[2, 2].copy()                                       # a bare patch of the cream background
+    screen[BAR_ORIGIN[1]:BAR_ORIGIN[1] + bar.shape[0], BAR_ORIGIN[0]:BAR_ORIGIN[0] + bar.shape[1]] = background
+    for i in keep:
+        x, y = ICONS[i]
+        crop = bar[y - 28 - BAR_ORIGIN[1]:y + 29 - BAR_ORIGIN[1], x - 28 - BAR_ORIGIN[0]:x + 29 - BAR_ORIGIN[0]]
+        nx = x - shifted_left * SLOT
+        screen[y - 28:y + 29, nx - 28:nx + 29] = crop
+    return screen
+
+
+def test_real_bright_bar_is_unreadable_to_the_matching_but_each_icon_is_found_again(macro, watch, monkeypatch):
+    screen = bar_screen(0, 1, 2, 3, 4)
+    watch["screen"] = screen
+    assert not macro.detect_need_bar_readable(screen)                       # the Pizza Party's background: the bar can't be read
+    for x, y in ICONS:
+        template = screen[y - 28:y + 29, x - 28:x + 29].copy()
+        assert macro.locate_icon(template, y) == (x, y)                      # each icon finds itself, and not one of the others
+    scores = []
+    for i, (x, y) in enumerate(ICONS):
+        template = screen[y - 28:y + 29, x - 28:x + 29].copy()
+        only_others = bar_screen(*[j for j in range(5) if j != i])
+        watch["screen"] = only_others
+        scores.append(macro.locate_icon(template, y))
+    assert scores == [None] * 5                                              # with its own icon removed it is not found
+
+
+def test_real_bright_bar_the_awaited_icon_is_followed_and_then_seen_to_go(macro, watch):
+    macro.state.need_icon_positions["pizza"] = ICONS[3]
+    watch["screen"] = bar_screen(0, 1, 2, 3, 4)
+    assert macro.icon_gone_by_frame_change("pizza") is None
+    watch["screen"] = bar_screen(0, 1, 2, 3, 4)
+    assert macro.icon_gone_by_frame_change("pizza") is False
+    # the icon at index 1 is served and goes: the ones to its right (2, 3, 4) slide left a slot
+    shifted = bar_screen(0)
+    for i in (2, 3, 4):
+        part = bar_screen(i, shifted_left=1)
+        x, y = ICONS[i][0] - SLOT, ICONS[i][1]
+        shifted[y - 28:y + 29, x - 28:x + 29] = part[y - 28:y + 29, x - 28:x + 29]
+    watch["screen"] = shifted
+    assert macro.icon_gone_by_frame_change("pizza") is False
+    assert macro.state.need_icon_positions["pizza"] == (ICONS[3][0] - SLOT, ICONS[3][1])
+    # now the awaited icon is served too: only 0, and 2 and 4 (slid left) remain
+    gone = bar_screen(0)
+    for i in (2, 4):
+        part = bar_screen(i, shifted_left=1)
+        x, y = ICONS[i][0] - SLOT, ICONS[i][1]
+        gone[y - 28:y + 29, x - 28:x + 29] = part[y - 28:y + 29, x - 28:x + 29]
+    watch["screen"] = gone
+    assert macro.icon_gone_by_frame_change("pizza") is True

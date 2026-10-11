@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os, sys, re, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib, shutil
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, Union
 from abc import ABC, abstractmethod
 from functools import partial
@@ -394,8 +394,34 @@ def log_run_event(message: str) -> None:
 
 # What the macro knows about how this run is going, written to STATUS_PATH by
 # write_status() so it can be checked without opening the GUI.
-RUN_STATS: dict[str, Any] = {"run": None, "started": None, "cycles": 0, "last_detected": [], "resolved": {}, "failed": {},
-             "failures": 0, "quiet_minutes": 0, "cpu_percent": None, "memory_mb": None, "recoveries": 0, "disconnects": 0, "scheduled_rejoins": 0, "focus_resumes": 0, "last_resolved": None, "last_failure": None}
+@dataclass
+class RunStats:
+    """What the macro knows about how this run is going, written to STATUS_PATH
+    by write_status() so it can be checked without opening the GUI. Field
+    names are the keys of status.json."""
+    run: Optional[int] = None
+    started: Optional[str] = None
+    cycles: int = 0
+    last_detected: list[str] = field(default_factory=list)
+    resolved: dict[str, int] = field(default_factory=dict)           # per need
+    failed: dict[str, int] = field(default_factory=dict)             # per need
+    failures: int = 0
+    quiet_minutes: int = 0                                           # whole minutes since a need was last resolved
+    cpu_percent: Optional[float] = None                              # the script's own, from ResourceMonitor
+    memory_mb: Optional[int] = None
+    recoveries: int = 0
+    disconnects: int = 0
+    scheduled_rejoins: int = 0
+    focus_resumes: int = 0
+    last_resolved: Optional[dict[str, str]] = None                   # {"need", "time"}
+    last_failure: Optional[dict[str, Optional[str]]] = None          # {"time", "reason", "screenshot"}
+
+    def reset(self) -> None:
+        """Start afresh (a workflow was just started)."""
+        self.__init__()   # type: ignore[misc]
+        self.run, self.started = state.run_number, time.strftime("%Y-%m-%d %H:%M:%S")
+
+run_stats = RunStats()
 
 OUTPUT_LOG_LOCK = threading.Lock()
 _output_at_line_start = True
@@ -441,7 +467,7 @@ def save_failure_report(reason: str) -> Optional[str]:
     FAILURE_DIR named with the time, run number and reason: screen.png (the
     whole screen, to see what has focus too), need_icons.png (the strip the
     need icons are read from, when Roblox could be captured), info.txt (a
-    short summary) and state.json (the whole State object and RUN_STATS, as
+    short summary) and state.json (the whole State object and run_stats, as
     they were). Deletes the oldest beyond MAX_FAILURE_FOLDERS. Returns
     "<folder>/screen.png", or None if it couldn't (never raises - it's called
     while something else is already going wrong)."""
@@ -458,11 +484,11 @@ def save_failure_report(reason: str) -> Optional[str]:
         since = f"{time.time() - state.last_progress:.0f}s ago" if state.last_progress else "never"
         with open(os.path.join(folder, "info.txt"), "w", encoding="utf-8") as f:
             f.write(f"reason: {reason}\ntime: {time.strftime('%Y-%m-%d %H:%M:%S')}\nrun: {state.run_number}\n"
-                    f"last detected: {', '.join(RUN_STATS['last_detected']) or 'nothing'}\n"
+                    f"last detected: {', '.join(run_stats.last_detected) or 'nothing'}\n"
                     f"disabled needs: {', '.join(sorted(state.disabled_needs)) or 'none'}\n"
                     f"last need resolved: {since}\n")
         with open(os.path.join(folder, "state.json"), "w", encoding="utf-8") as f:
-            json.dump({"state": state.snapshot(), "run_stats": RUN_STATS}, f, indent=2, default=str)
+            json.dump({"state": state.snapshot(), "run_stats": asdict(run_stats)}, f, indent=2, default=str)
         for old in sorted(os.listdir(cfg.FAILURE_DIR))[:-cfg.MAX_FAILURE_FOLDERS]:
             path = os.path.join(cfg.FAILURE_DIR, old)
             shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
@@ -472,10 +498,10 @@ def save_failure_report(reason: str) -> Optional[str]:
         return None
 
 def write_status() -> None:
-    """Write RUN_STATS, the currently disabled needs and the time to
+    """Write run_stats, the currently disabled needs and the time to
     STATUS_PATH (replacing it atomically). Never raises."""
     try:
-        status = {**RUN_STATS, "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
+        status = {**asdict(run_stats), "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
                   "disabled_needs": sorted(state.disabled_needs)}
         tmp = cfg.STATUS_PATH + ".tmp"
         with open(tmp, "w") as f:
@@ -492,15 +518,13 @@ def log_failure(reason: str, screenshot: bool = True) -> None:
     detail = f"{reason}" + (f" (screenshot: failures/{shot})" if shot else "")
     print(f"[!] FAILURE: {detail}")
     log_run_event(f"FAILURE: {detail}")
-    RUN_STATS["failures"] += 1
-    RUN_STATS["last_failure"] = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "reason": reason, "screenshot": shot}
+    run_stats.failures += 1
+    run_stats.last_failure = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "reason": reason, "screenshot": shot}
     write_status()
 
 def reset_run_stats() -> None:
     """Start the status counters afresh (a workflow was just started)."""
-    RUN_STATS.update(run=state.run_number, started=time.strftime("%Y-%m-%d %H:%M:%S"), cycles=0,
-                     last_detected=[], resolved={}, failed={}, failures=0, quiet_minutes=0, cpu_percent=None, memory_mb=None, recoveries=0, disconnects=0, scheduled_rejoins=0, focus_resumes=0,
-                     last_resolved=None, last_failure=None)
+    run_stats.reset()
     write_status()
 
 # ============================================================================
@@ -1931,7 +1955,7 @@ def process_needs() -> bool:
     elif not state.none_matched_logged:
         log_run_event(f"detected: none matched ({len(found_icons)} icon(s) on screen)")
         state.none_matched_logged = True
-    RUN_STATS["last_detected"] = names
+    run_stats.last_detected = names
     record_detection(names)
 
     attempted = set()
@@ -1958,14 +1982,14 @@ def process_needs() -> bool:
                 return True
             if not handled:
                 print(f"[debug] could not resolve '{need_name}' this pass, skipping")
-                RUN_STATS["failed"][need_name] = RUN_STATS["failed"].get(need_name, 0) + 1
+                run_stats.failed[need_name] = run_stats.failed.get(need_name, 0) + 1
                 log_failure(f"{need_name} handler could not resolve it")
                 continue
 
             respawn_character()
             seconds = time.time() - started
-            RUN_STATS["resolved"][need_name] = RUN_STATS["resolved"].get(need_name, 0) + 1
-            RUN_STATS["last_resolved"] = {"need": need_name, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+            run_stats.resolved[need_name] = run_stats.resolved.get(need_name, 0) + 1
+            run_stats.last_resolved = {"need": need_name, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
             state.last_progress = time.time()
             log_run_event(f"resolved: {need_name} ({seconds:.0f}s)")
             write_status()
@@ -2143,12 +2167,12 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
     if kind == "scheduled":
         print(f"[!] {reason} - rejoining")
         log_run_event(f"scheduled rejoin: {reason}")
-        RUN_STATS["scheduled_rejoins"] += 1
+        run_stats.scheduled_rejoins += 1
     else:
         log_failure(f"{reason} - rejoining")
-        RUN_STATS["recoveries"] += 1
+        run_stats.recoveries += 1
         if kind == "disconnect":
-            RUN_STATS["disconnects"] += 1
+            run_stats.disconnects += 1
     if not leave_and_rejoin(clean_leave=(kind != "disconnect")):
         log_failure("recovery: rejoin failed, will try again next cycle")
         return False
@@ -2656,7 +2680,7 @@ def process_memory_mb() -> Optional[float]:
 class ResourceMonitor(threading.Thread):
     """Every RESOURCE_LOG_INTERVAL while the loop runs, logs this script's CPU
     use (percent of the whole machine, over the interval just gone) and memory
-    - "resources: cpu 2.4% mem 215MB" - and keeps the latest in RUN_STATS. The
+    - "resources: cpu 2.4% mem 215MB" - and keeps the latest in run_stats. The
     run report charts them. Stopped by stop()."""
 
     def __init__(self) -> None:
@@ -2673,20 +2697,20 @@ class ResourceMonitor(threading.Thread):
             percent = 100 * (now_cpu - cpu) / max(1e-6, (now_wall - wall) * (os.cpu_count() or 1))
             wall, cpu = now_wall, now_cpu
             memory = process_memory_mb()
-            RUN_STATS["cpu_percent"] = round(percent, 1)
-            RUN_STATS["memory_mb"] = None if memory is None else round(memory)
+            run_stats.cpu_percent = round(percent, 1)
+            run_stats.memory_mb = None if memory is None else round(memory)
             if memory is not None:
                 log_run_event(f"resources: cpu {percent:.1f}% mem {memory:.0f}MB")
 
 
 def check_quiet() -> None:
-    """Every cycle: note in RUN_STATS how many whole minutes no need has been
+    """Every cycle: note in run_stats how many whole minutes no need has been
     resolved for, and log "quiet: no need resolved for N min" each
     QUIET_LOG_INTERVAL of it, so a stretch where nothing happens (the loop
     alive but stuck, or the need bar unreadable) shows in the log well before
     the NO_PROGRESS_REJOIN_INTERVAL rejoin."""
     quiet = time.time() - state.last_progress if state.last_progress else 0.0
-    RUN_STATS["quiet_minutes"] = int(quiet // 60)
+    run_stats.quiet_minutes = int(quiet // 60)
     reports = int(quiet // cfg.QUIET_LOG_INTERVAL)
     if reports > state.quiet_reported:
         log_run_event(f"quiet: no need resolved for {reports * cfg.QUIET_LOG_INTERVAL / 60:g} min")
@@ -2705,7 +2729,7 @@ def run_full_cycle() -> None:
         # process_needs() below is what brings Roblox to the front. Once
         # that succeeds, every wait from here on does check_running().
         check_stop()
-        RUN_STATS["cycles"] += 1
+        run_stats.cycles += 1
         check_quiet()
         write_status()
         unscrew()
@@ -2770,7 +2794,7 @@ def run_workflow_loop() -> None:
                 if focus_losses > cfg.FOCUS_RESUME_MAX_IN_A_ROW:
                     log_failure(f"Roblox lost focus {focus_losses} times in a row - giving up")
                     raise
-                RUN_STATS["focus_resumes"] += 1
+                run_stats.focus_resumes += 1
                 log_failure(f"Roblox lost focus - resuming ({focus_losses}/{cfg.FOCUS_RESUME_MAX_IN_A_ROW})")
                 release_all_inputs()
                 wait_stoppable(cfg.FOCUS_RESUME_DELAY)

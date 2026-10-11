@@ -993,7 +993,7 @@ again, since the counter goes with the logs.
   misread icon can be seen at once; missing when Roblox couldn't be captured)
   and `info.txt` (the reason, the needs last detected, the disabled needs and
   how long ago a need was last resolved) and `state.json` (the whole `State`
-  object and `RUN_STATS` as they were, for working out what the macro believed
+  object and `run_stats` (a `RunStats` dataclass) as they were, for working out what the macro believed
   at that moment). It also prints the reason, writes it
   to `run_log.txt` and counts it in the status file. It's called when a handler
   can't resolve a need, a need is still showing after `NEED_GONE_MAX_WAIT`, a
@@ -1009,7 +1009,7 @@ again, since the counter goes with the logs.
   currently disabled, the number of recoveries, disconnects, scheduled
   rejoins and focus resumes, how many whole minutes no need has been resolved
   for (`quiet_minutes`), the script's latest CPU and memory use, and the last
-  resolved need and last failure. `RUN_STATS` holds the counters in memory.
+  resolved need and last failure. `run_stats` (a `RunStats` dataclass) holds the counters in memory.
 - **`debug_needs.png`** / **`debug_buttons.png`** - see below.
 - **`recordings/`** - run videos, see [Recording a run](#recording-a-run).
 - **`debug_focus_pet.png`** / **`debug_focus_pet_after.png`** - what

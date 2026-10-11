@@ -399,8 +399,17 @@ def winner(macro, monkeypatch):
     for box, color in ((cfg.MINIGAME_VICTORY_BANNER_BOX, cfg.MINIGAME_VICTORY_BANNER_COLOR), (cfg.MINIGAME_VICTORY_BUTTON_BOX, cfg.GREEN_BUTTON_COLOR)):
         left, top, right, bottom = box
         screen[top:bottom, left:right] = color[::-1]
-    state = {"screen": screen}
+    state = {"screen": screen, "sticky": 0}      # "sticky": clicks the win screen survives
     respawns = []
+
+    def click(x, y, duration=0):
+        macro.clicks.append((x, y))
+        if state["sticky"] > 0:
+            state["sticky"] -= 1
+        else:
+            state["screen"] = bright_screen()
+
+    monkeypatch.setattr(macro, "hover_click", click)
     monkeypatch.setattr(macro, "grab_screen", lambda: state["screen"])
     monkeypatch.setattr(macro, "respawn_character", lambda: respawns.append(1))
     monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
@@ -418,6 +427,29 @@ def test_a_win_screen_is_closed_and_the_character_respawned(macro, winner):
     assert macro.cfg.MINIGAME_VICTORY_BUTTON_POS in macro.clicks and winner["respawns"] == [1]
     assert "minigame win screen closed" in open(macro.cfg.RUN_LOG_PATH).read()
     assert macro.state.last_progress is not None
+
+
+def test_a_click_that_missed_is_repeated(macro, winner):
+    winner["sticky"] = 1
+    assert macro.close_minigame_win_screen() is True
+    assert macro.clicks.count(macro.cfg.MINIGAME_VICTORY_BUTTON_POS) == 2 and winner["respawns"] == [1]
+
+
+def test_a_win_screen_that_will_not_close_is_retried_then_reported(macro, winner):
+    winner["sticky"] = 99
+    macro.close_minigame_win_screen()
+    assert macro.clicks.count(macro.cfg.MINIGAME_VICTORY_BUTTON_POS) == macro.cfg.MINIGAME_VICTORY_CLICK_TRIES
+    assert "would not close" in open(macro.cfg.RUN_LOG_PATH).read()
+
+
+def test_the_real_win_screen_is_recognised(macro):
+    import cv2
+    screen = bright_screen()
+    for box, name in ((macro.cfg.MINIGAME_VICTORY_BANNER_BOX, "win_banner.png"), (macro.cfg.MINIGAME_VICTORY_BUTTON_BOX, "win_button.png")):
+        crop = cv2.imread(f"tests/fixtures/{name}")
+        left, top, right, bottom = box
+        screen[top:top + crop.shape[0], left:left + crop.shape[1]] = crop
+    assert macro.detect_minigame_victory(screen) is True
 
 
 def test_no_win_screen_means_nothing_happens(macro, winner):

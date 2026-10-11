@@ -593,8 +593,10 @@ Options tab). `minigame_popup()`:
 victory screen instead - a red GAME OVER! banner over a green NICE! button,
 found by exact color (`detect_minigame_victory()`, checked every
 `MINIGAME_VICTORY_CHECK_INTERVAL`), which is the same for both. While it plays, `minigame_popup_checks()` runs `dismiss_stray_windows()` and `detect_paycheck()` every `MINIGAME_POPUP_CHECK_INTERVAL` (4s), including during the start waits (`minigame_wait()`) - the in-task `unscrew()` can't, since the minigame is played from it. Then NICE!
-(`MINIGAME_VICTORY_BUTTON_POS`) is clicked, `MINIGAME_FINISH_WAIT` is waited
-out, and the character respawns. If the victory screen hasn't shown after
+(`MINIGAME_VICTORY_BUTTON_POS`) is clicked and `MINIGAME_FINISH_WAIT` waited
+out (`click_nice_until_gone()`, which looks again and clicks up to
+`MINIGAME_VICTORY_CLICK_TRIES` times while the win screen is still up, logging a
+failure if it never closes), and the character respawns. If the victory screen hasn't shown after
 `MINIGAME_MAX_DURATION` it gives up with a logged failure (and releases every
 input). A minigame counts as progress for the no-progress rejoin.
 

@@ -74,6 +74,7 @@ MINIGAME_VICTORY_CHECK_INTERVAL = 1.0
 MINIGAME_POPUP_CHECK_INTERVAL = 4.0   # the popup checks (stray windows, paycheck) run this often while a minigame is played
 MINIGAME_MAX_DURATION = 600.0       # gives up (and logs a failure) if the victory screen hasn't shown by then
 MINIGAME_FINISH_WAIT = 5.0          # after clicking NICE!, before carrying on
+MINIGAME_VICTORY_CLICK_TRIES = 3      # NICE! clicks before giving up on the win screen closing
 MINIGAME_START_WAIT = 50.0          # both minigames wait this long after teleporting, before they act (Hauntlet 2 then holds
                                     # HAUNTLET_2_FORWARD_KEY, Ghost Gallery starts running about)
 HAUNTLET_2_FORWARD_KEY = "w"

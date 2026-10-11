@@ -2554,6 +2554,20 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
 
 MINIGAME_PLAYERS = {"hauntlet_2": play_hauntlet_2, "ghost_gallery": play_ghost_gallery}
 
+def click_nice_until_gone() -> bool:
+    """Click the win screen's NICE! button, wait MINIGAME_FINISH_WAIT, and
+    look again: while the win screen is still up (the click missed, or the
+    screen was still animating in) click once more, up to
+    MINIGAME_VICTORY_CLICK_TRIES times in all. Returns True if it's gone."""
+    for attempt in range(cfg.MINIGAME_VICTORY_CLICK_TRIES):
+        hover_click(*cfg.MINIGAME_VICTORY_BUTTON_POS)
+        wait_interruptible(cfg.MINIGAME_FINISH_WAIT)
+        if not detect_minigame_victory(grab_screen()):
+            return True
+        print(f"[debug] win screen still up after click {attempt + 1}")
+    log_failure("minigame win screen would not close")
+    return False
+
 def play_minigame(name: str) -> bool:
     """Take the popup's Yes, play minigame `name` until its victory screen
     shows, click NICE!, and respawn. Gives up (a logged failure) when the
@@ -2574,9 +2588,8 @@ def play_minigame(name: str) -> bool:
     finally:
         release_all_inputs()
     if won:
-        hover_click(*cfg.MINIGAME_VICTORY_BUTTON_POS)
         log_run_event(f"minigame finished: {label} ({time.time() - started:.0f}s)")
-        wait_interruptible(cfg.MINIGAME_FINISH_WAIT)
+        click_nice_until_gone()
     else:
         reason = watch.problem or f"did not reach the victory screen within {cfg.MINIGAME_MAX_DURATION:g}s"
         log_failure(f"{label} {reason}")
@@ -2597,8 +2610,7 @@ def close_minigame_win_screen(abandon: bool = True) -> bool:
         return False
     print("[debug] minigame win screen is up, clicking NICE!...")
     log_run_event("minigame win screen closed")
-    hover_click(*cfg.MINIGAME_VICTORY_BUTTON_POS)
-    wait_interruptible(cfg.MINIGAME_FINISH_WAIT)
+    click_nice_until_gone()
     if abandon:
         state.last_progress = state.last_detection = time.time()
         respawn_character()

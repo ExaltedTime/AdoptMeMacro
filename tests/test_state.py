@@ -473,3 +473,69 @@ def test_a_button_action_cut_short_by_a_rejoin_is_done_not_a_crash(macro, monkey
     assert statuses[-1] == (False, "[DONE]")
     assert "interrupted by a rejoin" in open(macro.cfg.RUN_LOG_PATH).read()
     assert not any("crashed" in line for line in open(macro.cfg.RUN_LOG_PATH))
+
+
+def test_a_failing_log_write_cannot_leave_the_ui_disabled(macro, monkeypatch):
+    """final_status must be bound before any except block can fail (the buttons stayed disabled otherwise)."""
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.is_running = False
+    statuses = []
+    gui._set_running_ui = lambda running, status_text=None: statuses.append((running, status_text))
+    gui.root = type("Root", (), {"after": lambda self, ms, fn: fn()})()
+
+    def broken_log(message):
+        raise PermissionError("run_log.txt is locked")
+
+    monkeypatch.setattr(macro, "log_run_event", broken_log)
+    monkeypatch.setattr(macro, "save_failure_report", lambda reason: None)
+
+    def stopped():
+        raise macro.StopRequested()
+
+    macro.AdoptMeGUI.run_async(gui, stopped)
+    deadline = time.time() + 5
+    while not (statuses and statuses[-1][0] is False) and time.time() < deadline:
+        time.sleep(0.01)
+    assert statuses[-1] == (False, "[ERROR]") and gui.is_running is False
+
+
+def test_refresh_debug_carries_on_past_a_locked_entry(macro, monkeypatch, tmp_path):
+    debug = tmp_path / "debug"
+    for folder in ("images", "logs", "recordings"):
+        (debug / folder).mkdir(parents=True)
+        (debug / folder / "x.txt").write_text("x")
+    (debug / ".config").write_text("{}")
+    for name, value in (("DEBUG_DIR", str(debug)), ("IMAGES_DIR", str(debug / "images")), ("LOGS_DIR", str(debug / "logs")),
+                        ("GAME_CONFIG_PATH", str(debug / ".config"))):
+        monkeypatch.setattr(macro.cfg, name, value)
+    real_rmtree = macro.shutil.rmtree
+
+    def rmtree(path, *args, **kwargs):
+        if path.endswith("recordings"):
+            raise PermissionError("a video is still open")
+        real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(macro.shutil, "rmtree", rmtree)
+    assert macro.refresh_debug() == 2                                  # images and logs went, recordings stayed
+    assert (debug / "images").is_dir() and (debug / "logs").is_dir() and (debug / ".config").exists()
+
+
+def test_the_stop_hotkey_stops_even_if_the_log_cannot_be_written(macro, monkeypatch):
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.is_running = True
+    gui.status = type("Label", (), {"config": lambda self, **kw: None})()
+    monkeypatch.setattr(macro, "log_run_event", lambda message: (_ for _ in ()).throw(PermissionError("locked")))
+    macro.STOP_EVENT.clear()
+    gui.stop_by_hotkey()
+    assert macro.STOP_EVENT.is_set()
+
+
+def test_a_run_whose_clock_stepped_back_still_gets_a_report(macro, tmp_path):
+    """Local-time stamps go backwards at the end of daylight saving: negative offsets must not index the bars from the end."""
+    log = tmp_path / "log.txt"
+    log.write_text("\n".join([
+        "[2026-10-25 02:30:00] [RUN 9] LOOP started",
+        "[2026-10-25 02:40:00] [RUN 9] resolved: hungry (20s)",
+        "[2026-10-25 02:10:00] [RUN 9] resolved: hungry (20s)",     # an hour back
+        "[2026-10-25 03:30:00] [RUN 9] LOOP stopped"]) + "\n")
+    assert macro.generate_run_report(str(log), 9, str(tmp_path)) is not None

@@ -375,8 +375,11 @@ def refresh_debug() -> int:
         path = os.path.join(cfg.DEBUG_DIR, name)
         if path == cfg.GAME_CONFIG_PATH:
             continue
-        shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
-        removed += 1
+        try:
+            shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
+            removed += 1
+        except OSError as error:   # a locked file (a video still open, say): leave it, carry on with the rest
+            print(f"[!] couldn't delete {name}: {error}")
     for directory in (cfg.IMAGES_DIR, cfg.LOGS_DIR):
         os.makedirs(directory, exist_ok=True)
     return removed
@@ -2940,7 +2943,10 @@ class ResourceMonitor(threading.Thread):
             run_stats.cpu_percent = round(percent, 1)
             run_stats.memory_mb = None if memory is None else round(memory)
             if memory is not None:
-                log_run_event(f"resources: cpu {percent:.1f}% mem {memory:.0f}MB")
+                try:
+                    log_run_event(f"resources: cpu {percent:.1f}% mem {memory:.0f}MB")
+                except OSError:
+                    pass   # a transient write failure: sample again next time
 
 
 def check_quiet() -> None:
@@ -3291,7 +3297,7 @@ def draw_report(data: dict[str, Any], run: Union[int, str], basic: set[str], tel
     n_buckets = max(1, int(np.ceil(duration / step)))
     stacks: list[defaultdict[str, int]] = [defaultdict(int) for _ in range(n_buckets)]
     for t, need, _ in data["resolved"]:
-        stacks[min(n_buckets - 1, int((t - start) // step))][need_group(need, basic, teleport)] += 1
+        stacks[max(0, min(n_buckets - 1, int((t - start) // step)))][need_group(need, basic, teleport)] += 1
     peak = max([sum(s.values()) for s in stacks] + [1])
     y_max = nice_max(peak)
     panel = Panel(img, (20, 50, width - 20, 560), f"Needs resolved per {unit_label(step)}",
@@ -3396,7 +3402,9 @@ def generate_run_report(log_path: str, run: Union[int, str], out_dir: str, basic
             return None
         os.makedirs(out_dir, exist_ok=True)
         path = os.path.join(out_dir, f"run{run}.png")
-        cv2.imwrite(path, draw_report(data, run, set(basic), set(teleport)))
+        if not cv2.imwrite(path, draw_report(data, run, set(basic), set(teleport))):
+            print(f"[!] couldn't write the run report to {path}")
+            return None
         return path
     except Exception as error:
         print(f"[!] couldn't write the run report: {error}")
@@ -3550,6 +3558,16 @@ class AdoptMeGUI:
 
         self.is_running = False
         self.watch_stop_hotkey()
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
+
+    def close(self) -> None:
+        """The window's X button: stop whatever is running and let go of every key and the mouse before the
+        process ends - the worker is a daemon thread, which dies with the process before its own cleanup can run
+        (a movement key or the mouse button would stay held down in the game)."""
+        STOP_EVENT.set()
+        time.sleep(cfg.STOP_CHECK_INTERVAL * 3)   # the worker notices the stop within a check or two and releases what it holds
+        release_all_inputs()
+        self.root.destroy()
 
     def watch_stop_hotkey(self) -> None:
         """Start a background thread that stops a running macro the moment
@@ -3574,8 +3592,11 @@ class AdoptMeGUI:
         """STOP_HOTKEY was pressed: stop, same as the [STOP] button, and say so."""
         if self.is_running:
             print(f"\n[!] '{cfg.STOP_HOTKEY.upper()}' pressed")
-            log_run_event(f"stopped with the {cfg.STOP_HOTKEY.upper()} key")
-            self.stop()
+            self.stop()   # first: a failing log write must not keep the macro running
+            try:
+                log_run_event(f"stopped with the {cfg.STOP_HOTKEY.upper()} key")
+            except OSError:
+                pass
 
     def create_ui(self) -> None:
         """Build every widget. Any button that kicks off a background action
@@ -3750,6 +3771,7 @@ class AdoptMeGUI:
         self._set_running_ui(True)
 
         def worker():
+            final_status = "[ERROR]"   # bound before anything can fail, so the finally below always re-enables the UI
             try:
                 func()
                 final_status = "[DONE]"

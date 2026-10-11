@@ -961,7 +961,7 @@ knowing if you're modifying it:
   `StopRequested`/`FocusLost`, or an unexpected exception all take the
   same path back to a usable UI. A `TaskInterrupted` (the Setup button's
   `setup_game()` cut short by a disconnect, whose rejoin ran setup itself) is
-  logged and counts as done, not as a crash. `[STOP]` is deliberately excluded from
+  logged and counts as done, not as a crash. `final_status` is bound before the `try`, so even a failing log write inside an `except` can't leave the buttons disabled. Closing the window (the X) stops the run and releases every key and the mouse first (`AdoptMeGUI.close()`), since the daemon worker would otherwise die with a key still held; the stop hotkey stops before it logs. "Refresh debug" skips an entry it can't delete (a video still open) instead of abandoning half the folder. `[STOP]` is deliberately excluded from
   `action_buttons`, since it must stay clickable while something is
   running.
 - **The main row** (loop/stop) gives both buttons their own

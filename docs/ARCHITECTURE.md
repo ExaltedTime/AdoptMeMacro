@@ -1092,7 +1092,8 @@ capture stops, `zip_capture()` (on a thread of its own) also splits it into zips
 `capture_<time>_part01.zip`, `_part02.zip`, ... The frames are in time order, none twice; part 1 also holds
 `events.jsonl` and `info.json`. They are stored, not compressed (PNGs don't shrink), so a 25 MB part is about
 14 frames. Attach them all (send them in order); a zip arrives byte for byte, unlike a pasted image, which
-is recompressed. The files themselves stay in the folder:
+is recompressed. For a zip that already exists (a capture zipped by hand, say) `python tools/split_zip.py big.zip` cuts it into
+`big_part01.zip`, ... of at most 25 MB (or the number of MB given as a second argument), every file kept whole. The files themselves stay in the folder:
 
 - `frame_<n>_<seconds>.png` - `grab_screen()` (the Roblox window at the reference size, the macro's own
   window included if it is on top), lossless. The screen is looked at every `CAPTURE_FRAME_INTERVAL`

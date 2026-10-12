@@ -270,3 +270,28 @@ def test_stopping_a_capture_with_the_hotkey_zips_it(macro, capture):
     wait_for(lambda: first.frames >= 1)
     macro.toggle_input_capture()
     assert wait_for(lambda: os.path.isdir(os.path.join(first.folder, "zips")) and os.listdir(os.path.join(first.folder, "zips")))
+
+
+def test_split_zip_cuts_an_existing_zip_into_parts_without_changing_a_file(tmp_path, monkeypatch):
+    import zipfile
+    monkeypatch.syspath_prepend(os.path.join(os.path.dirname(os.path.dirname(__file__)), "tools"))
+    import split_zip
+    source = str(tmp_path / "big.zip")
+    rng = np.random.RandomState(1)
+    originals = {f"capture_x/frame_{n:06d}.png": rng.bytes(3000) for n in range(1, 9)}
+    originals["capture_x/events.jsonl"] = b'{"t": 1}\n'
+    with zipfile.ZipFile(source, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, data in originals.items():
+            z.writestr(name, data)
+    paths = split_zip.split_zip(source, 0.007)                                       # ~7 KB: two frames to a part
+    assert len(paths) >= 4 and paths[0].endswith("big_part01.zip")
+    got = {}
+    for p in paths:
+        assert os.path.getsize(p) < 0.007 * 1024 * 1024 + 800
+        with zipfile.ZipFile(p) as z:
+            for name in z.namelist():
+                assert name not in got                                              # none twice
+                got[name] = z.read(name)
+    assert got == originals                                                         # none lost, none changed, paths kept
+    assert list(got) == list(originals)                                             # in the original order
+    assert len(split_zip.split_zip(source, 25)) == 1

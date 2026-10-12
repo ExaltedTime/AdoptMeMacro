@@ -172,6 +172,25 @@ RECORD_FPS = 4
 RECORD_MAX_MINUTES = 480                 # recording stops by itself after this long
 MAX_RECORDINGS = 5                       # oldest videos are deleted beyond this many
 
+# The input capture (press CAPTURE_HOTKEY in any window to start it and again to stop it): lossless screenshots plus
+# every key, mouse button and mouse movement, in a folder of its own, to work out how something is played by hand
+# (see InputCapture). Screenshots are large, so it stops by itself after a while or when the disk runs low, and a frame
+# that looks like the last one saved is skipped.
+CAPTURES_DIR = os.path.join(DEBUG_DIR, "captures")          # a folder per capture
+CAPTURE_HOTKEY = "m"                     # a letter or digit
+CAPTURE_FRAME_INTERVAL = 0.5             # a screenshot is looked at this often (seconds), and one more right after every mouse click
+# A frame is only saved if it differs from the last one saved: at least CAPTURE_CHANGE_FRACTION of the picture (shrunk to
+# 320x180 first) has moved by more than CAPTURE_CHANGE_LEVEL (0-255 grey) - a character walking does, a ticking timer or
+# a blinking light doesn't. A click always gets a frame, and so does CAPTURE_MAX_SKIP seconds without one.
+CAPTURE_CHANGE_LEVEL = 12
+CAPTURE_CHANGE_FRACTION = 0.002
+CAPTURE_MAX_SKIP = 3.0
+CAPTURE_POLL_INTERVAL = 0.01             # how often keys, mouse buttons and the mouse position are looked at
+CAPTURE_MOVE_INTERVAL = 0.03             # the mouse position is written at most this often
+CAPTURE_MAX_MINUTES = 15                 # a capture stops by itself after this long...
+CAPTURE_MIN_FREE_MB = 3000               # ...or when less than this much disk is free
+MAX_CAPTURES = 5                         # oldest captures are deleted beyond this many
+
 # ============================================================================
 # SCREEN / INPUT SETUP
 # ============================================================================

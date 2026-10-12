@@ -104,12 +104,14 @@ def test_failure_folders_keep_only_the_newest(macro, monkeypatch):
 
 
 def test_check_quiet_logs_once_per_interval_and_reports_minutes(macro):
-    macro.state.last_progress = time.time() - 11 * 60
+    interval = macro.cfg.QUIET_LOG_INTERVAL
+    quiet = 2 * interval + 60                          # two whole intervals and a bit
+    macro.state.last_progress = time.time() - quiet
     macro.check_quiet()
     macro.check_quiet()                                # the same stretch: not logged again
-    assert macro.run_stats.quiet_minutes == 11
+    assert macro.run_stats.quiet_minutes == int(quiet // 60)
     lines = [l for l in open(macro.cfg.RUN_LOG_PATH) if "quiet:" in l]
-    assert len(lines) == 1 and "no need resolved for 10 min" in lines[0]
+    assert len(lines) == 1 and f"no need resolved for {2 * interval / 60:g} min" in lines[0]
     macro.state.last_progress = time.time()           # progress made
     macro.check_quiet()
     assert macro.run_stats.quiet_minutes == 0
@@ -131,7 +133,8 @@ def test_respawns_after_the_interval_then_waits_a_full_interval_again(macro, res
     macro.state.last_detection = time.time() - macro.cfg.NO_DETECTION_RESPAWN_INTERVAL - 1
     assert macro.respawn_if_no_detection() is True and len(respawns) == 1
     assert macro.respawn_if_no_detection() is False and len(respawns) == 1
-    assert "no need detected for 4 min - respawning" in open(macro.cfg.RUN_LOG_PATH).read()
+    minutes = (macro.cfg.NO_DETECTION_RESPAWN_INTERVAL + 1) / 60
+    assert f"no need detected for {minutes:.0f} min - respawning" in open(macro.cfg.RUN_LOG_PATH).read()
 
 
 def test_the_idle_respawn_does_not_touch_the_progress_clock(macro, respawns, monkeypatch):
@@ -163,20 +166,37 @@ def test_stop_wakes_a_wait_at_once(macro, monkeypatch):
     threading.Timer(0.2, macro.STOP_EVENT.set).start()
     started = time.time()
     with pytest.raises(macro.StopRequested):
-        macro.wait_interruptible(10)
-    assert time.time() - started < 1.0
+        macro.wait_interruptible(60)
+    assert time.time() - started < 30                  # a wait that ignored the stop would run the whole 60s
 
 
-def test_a_wait_runs_its_full_length_when_not_stopped(macro, monkeypatch):
+@pytest.fixture
+def fake_clock(macro, monkeypatch):
+    """time.monotonic and STOP_EVENT.wait on a clock the test controls: waits take no real time, and what they add
+    up to can be asserted exactly (a real-time assertion fails on a slow machine)."""
+    clock = {"now": 1000.0, "slept": []}
+    monkeypatch.setattr(macro.time, "monotonic", lambda: clock["now"])
+
+    def wait(timeout=None):
+        clock["slept"].append(timeout)
+        clock["now"] += timeout
+        return False
+
+    monkeypatch.setattr(macro.STOP_EVENT, "wait", wait)
     monkeypatch.setattr(macro, "check_focus", lambda: None)
-    started = time.time()
+    return clock
+
+
+def test_a_wait_runs_its_full_length_when_not_stopped(macro, fake_clock):
     macro.wait_interruptible(0.3)
-    assert 0.25 < time.time() - started < 1.0
+    assert sum(fake_clock["slept"]) == pytest.approx(0.3)
+    assert max(fake_clock["slept"]) <= macro.cfg.STOP_CHECK_INTERVAL + 1e-9       # in chunks, so a stop is noticed within one
 
 
 def test_stop_pressed_soon(macro, monkeypatch):
-    monkeypatch.setattr(macro.cfg, "STOP_CLICK_GRACE", 0.3)
+    monkeypatch.setattr(macro.cfg, "STOP_CLICK_GRACE", 0.05)
     assert macro.stop_pressed_soon() is False
+    monkeypatch.setattr(macro.cfg, "STOP_CLICK_GRACE", 30)       # long: it returns the moment the stop is set
     threading.Timer(0.05, macro.STOP_EVENT.set).start()
     assert macro.stop_pressed_soon() is True
 
@@ -326,30 +346,37 @@ def test_a_run_log_that_cannot_be_written_does_not_lose_the_combined_line(macro,
     assert "resolved: hungry" in open(macro.cfg.RUN_LOG_PATH).read()
 
 
-@pytest.mark.parametrize("need, expected", [("camping", 75.0), ("pizza", 75.0)])
-def test_teleport_needs_wait_for_the_need_to_clear_up_to_the_configured_time(macro, monkeypatch, need, expected):
+@pytest.fixture
+def walker(macro, monkeypatch):
+    """A made-up teleport-walk need with an entry of its own, so these tests don't depend on how the real ones are
+    tuned (or on HALLOWEEN, which decides which of them exist). Returns make(**extra_keys) -> handler, and the
+    list of max_wait values wait_until_need_gone() was called with."""
     waited = []
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
     monkeypatch.setattr(macro, "teleport_to", lambda pos: None)
-    monkeypatch.setattr(macro, "equip_favorite_vehicle", lambda: None)       # camping flies while Halloween is on
     monkeypatch.setattr(macro, "hold_key", lambda key, duration: None)
     monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
     monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=60.0, **kw: waited.append(max_wait))
-    assert macro.TeleportWalkNeedHandler(need).handle() is True
-    assert waited == [expected] == [macro.cfg.NEED_GONE_MAX_WAIT]
+
+    def make(**extra):
+        entry = dict(teleport_pos=(1, 2), steps=(("w", 1.0), ("a", 2.0)), helicopter=False, **extra)
+        monkeypatch.setitem(macro.cfg.TELEPORT_WALK_NEEDS, "test_need", entry)
+        return macro.TeleportWalkNeedHandler("test_need")
+
+    make.waited = waited
+    return make
 
 
-def test_a_need_can_set_its_own_wait(macro, monkeypatch):
-    waited = []
-    monkeypatch.setitem(macro.cfg.TELEPORT_WALK_NEEDS, "camping", {**macro.cfg.TELEPORT_WALK_NEEDS["camping"], "max_wait": 150.0})
-    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
-    monkeypatch.setattr(macro, "teleport_to", lambda pos: None)
-    monkeypatch.setattr(macro, "equip_favorite_vehicle", lambda: None)       # camping flies while Halloween is on
-    monkeypatch.setattr(macro, "hold_key", lambda key, duration: None)
-    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
-    monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=60.0, **kw: waited.append(max_wait))
-    macro.TeleportWalkNeedHandler("camping").handle()
-    assert waited == [150.0]
+def test_a_teleport_need_waits_for_the_need_to_clear_up_to_the_default_time(macro, walker):
+    assert walker().handle() is True
+    assert walker.waited == [macro.cfg.NEED_GONE_MAX_WAIT]
+
+
+
+
+def test_a_need_can_set_its_own_wait(walker):
+    walker(max_wait=150.0).handle()
+    assert walker.waited == [150.0]
 
 
 def test_rejoin_reason_lists_the_windows_once(macro, monkeypatch):
@@ -394,8 +421,8 @@ def test_the_wait_ends_at_the_first_check_that_finds_the_need_gone(need_gone, ma
     need_gone["script"]((["hungry"], True), ([], True), ([], True))      # check 1: still there; check 2: gone on both looks
     macro.wait_until_need_gone("hungry", max_wait=60)
     assert need_gone["scans"] == [False, False, True]                      # the second look of the last check was a fresh search
-    assert [w for w in need_gone["waits"] if w > 1] == [macro.cfg.NEED_GONE_POLL_INTERVAL] * 2   # polled every 3.5s, no extra confirmations
-    assert macro.cfg.NEED_GONE_POLL_INTERVAL == 3.5 and "failures" not in need_gone
+    assert [w for w in need_gone["waits"] if w > 1] == [macro.cfg.NEED_GONE_POLL_INTERVAL] * 2   # polled every NEED_GONE_POLL_INTERVAL, no extra confirmations
+    assert "failures" not in need_gone
 
 
 def test_a_flicker_on_the_first_look_does_not_end_the_wait(need_gone, macro):
@@ -469,28 +496,35 @@ def test_a_button_action_cut_short_by_a_rejoin_is_done_not_a_crash(macro, monkey
     assert not any("crashed" in line for line in open(macro.cfg.RUN_LOG_PATH))
 
 
-def test_a_failing_log_write_cannot_leave_the_ui_disabled(macro, monkeypatch):
-    """final_status must be bound before any except block can fail (the buttons stayed disabled otherwise)."""
+@pytest.mark.parametrize("failure, status", [
+    (None, "[STOPPED]"),
+    (lambda: (_ for _ in ()).throw(RuntimeError("boom")), "[ERROR]"),
+])
+def test_a_log_that_cannot_be_written_cannot_leave_the_ui_disabled(macro, monkeypatch, failure, status):
+    """However the action ends, a locked log file must not stop the worker re-enabling the buttons (final_status bound
+    first, the logging guarded) - and must not leave an exception behind in the thread either."""
     gui = object.__new__(macro.AdoptMeGUI)
     gui.is_running = False
     statuses = []
     gui._set_running_ui = lambda running, status_text=None: statuses.append((running, status_text))
     gui.root = type("Root", (), {"after": lambda self, ms, fn: fn()})()
 
-    def broken_log(message):
+    def broken_log(message, *args, **kwargs):
         raise PermissionError("run_log.txt is locked")
 
     monkeypatch.setattr(macro, "log_run_event", broken_log)
-    monkeypatch.setattr(macro, "save_failure_report", lambda reason: None)
+    monkeypatch.setattr(macro, "log_failure", broken_log)
 
-    def stopped():
-        raise macro.StopRequested()
+    def action():
+        if status == "[STOPPED]":
+            raise macro.StopRequested()
+        failure()
 
-    macro.AdoptMeGUI.run_async(gui, stopped)
-    deadline = time.time() + 5
+    macro.AdoptMeGUI.run_async(gui, action)
+    deadline = time.time() + 30
     while not (statuses and statuses[-1][0] is False) and time.time() < deadline:
         time.sleep(0.01)
-    assert statuses[-1] == (False, "[ERROR]") and gui.is_running is False
+    assert statuses[-1] == (False, status) and gui.is_running is False
 
 
 def test_refresh_debug_carries_on_past_a_locked_entry(macro, monkeypatch, tmp_path):
@@ -688,24 +722,31 @@ def test_setup_keeps_its_backpack_open_without_the_in_task_check_closing_it(macr
 
 
 def test_the_recorder_does_not_spin_while_no_frame_can_be_grabbed(macro, monkeypatch):
-    attempts = []
     recorder = macro.RunRecorder("unused")
     recorder.writer = type("Writer", (), {"write": lambda self, frame: None})()
-    monkeypatch.setattr(recorder, "_frame", lambda: attempts.append(1) or (_ for _ in ()).throw(RuntimeError("no window")))
-    thread = threading.Thread(target=recorder._record)
-    thread.start()
-    time.sleep(0.45)
-    recorder.stop_event.set()
-    thread.join()
-    assert len(attempts) <= 4                                                      # about one try per frame time, not thousands
+    monkeypatch.setattr(recorder, "_frame", lambda: (_ for _ in ()).throw(RuntimeError("no window")))
+    waits = []
+    real_set = recorder.stop_event.set
+
+    def wait(timeout=None):
+        waits.append(timeout)
+        if len(waits) >= 3:
+            real_set()                                       # enough: let _record() return
+        return False
+
+    monkeypatch.setattr(recorder.stop_event, "wait", wait)
+    recorder._record()
+    assert len(waits) == 3 and all(w >= 1.0 / macro.cfg.RECORD_FPS for w in waits)    # each try a frame's time apart, never 0
 
 
-def test_time_spent_in_the_in_task_checks_counts_towards_a_wait(macro, monkeypatch):
-    monkeypatch.setattr(macro, "check_focus", lambda: None)
-    monkeypatch.setattr(macro, "task_unscrew_tick", lambda: time.sleep(0.1))       # a slow check on every pass
-    started = time.time()
+def test_time_spent_in_the_in_task_checks_counts_towards_a_wait(macro, fake_clock, monkeypatch):
+    def slow_check():
+        fake_clock["now"] += 0.1                                              # an in-task check that takes 0.1s every pass
+
+    monkeypatch.setattr(macro, "task_unscrew_tick", slow_check)
+    started = fake_clock["now"]
     macro.wait_interruptible(0.5)
-    assert 0.45 < time.time() - started < 0.75                                     # it used to add every check's time on top (~1s)
+    assert fake_clock["now"] - started == pytest.approx(0.5, abs=0.11)         # it used to add every check's time on top (1.0)
 
 
 def _window(title):
@@ -730,9 +771,16 @@ def test_without_a_window_titled_exactly_roblox_any_roblox_title_still_counts(ma
 
 @pytest.fixture
 def sick_run(macro, monkeypatch):
-    """The sick handler up to its press of 'e': run["dialog"] is what each look for the doctor's dialog sees, in order."""
+    """The sick handler up to its press of 'e': run["dialog"] is what each look for the doctor's dialog sees, in order.
+    The need has an entry of its own here (positions made up), so none of this depends on how the real one is tuned
+    or on HALLOWEEN, which decides whether the real one exists."""
     import numpy as np
-    run = {"dialog": [True], "waited": [], "respawns": 0, "events": [], "pet_focused": False}
+    from functools import partial
+    final, prompt = (610, 620), (630, 640)
+    monkeypatch.setitem(macro.cfg.TELEPORT_WALK_NEEDS, "sick", dict(teleport_pos=(1, 2), steps=(("w", 1.0),), helicopter=False,
+                                                                    final_click=final, prompt_pos=prompt))
+    monkeypatch.setitem(macro.NEED_HANDLER_CLASSES, "sick", partial(macro.TeleportWalkNeedHandler, "sick"))
+    run = {"dialog": [True], "waited": [], "respawns": 0, "events": [], "pet_focused": False, "final": final, "prompt": prompt}
 
     def dialog_up(img):
         run["events"].append("look")
@@ -755,7 +803,7 @@ def sick_run(macro, monkeypatch):
 
 def test_sick_clicks_yes_once_the_dialog_is_up(macro, sick_run):
     assert macro.TeleportWalkNeedHandler("sick").handle() is True
-    assert sick_run["events"] == ["look", ("click", macro.cfg.SICK_FINAL_CLICK_POS)]        # no prompt click needed
+    assert sick_run["events"] == ["look", ("click", sick_run["final"])]        # no prompt click needed
     assert sick_run["waited"] == ["sick"] and sick_run["respawns"] == 0
 
 
@@ -763,8 +811,8 @@ def test_sick_backs_out_of_the_pet_view_and_clicks_the_prompt_when_e_brings_up_n
     sick_run["dialog"] = [False, True]                                   # nothing after e, the dialog after the click
     sick_run["pet_focused"] = True
     assert macro.TeleportWalkNeedHandler("sick").handle() is True
-    assert sick_run["events"] == ["look", "back out", ("click", macro.cfg.SICK_PROMPT_POS), "look",
-                                  ("click", macro.cfg.SICK_FINAL_CLICK_POS)]
+    assert sick_run["events"] == ["look", "back out", ("click", sick_run["prompt"]), "look",
+                                  ("click", sick_run["final"])]
     assert sick_run["waited"] == ["sick"] and sick_run["respawns"] == 0
     log = open(macro.cfg.RUN_LOG_PATH).read()
     assert "sick: no dialog after e (pet focused: True) - clicking the prompt" in log and "FAILURE" not in log
@@ -773,7 +821,7 @@ def test_sick_backs_out_of_the_pet_view_and_clicks_the_prompt_when_e_brings_up_n
 def test_sick_fails_at_once_when_the_prompt_click_brings_up_no_dialog_either(macro, sick_run):
     sick_run["dialog"] = [False]
     assert macro.TeleportWalkNeedHandler("sick").handle() is False
-    assert sick_run["events"] == ["look", "back out", ("click", macro.cfg.SICK_PROMPT_POS), "look"]   # never the Yes click
+    assert sick_run["events"] == ["look", "back out", ("click", sick_run["prompt"]), "look"]   # never the Yes click
     assert sick_run["waited"] == [] and sick_run["respawns"] == 1                                    # no waiting for the icon
 
 

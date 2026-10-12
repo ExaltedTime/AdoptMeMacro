@@ -1180,3 +1180,17 @@ clicks instead of making them. They cover:
 
 Fixtures are synthetic images or the lossless crops in `ref/`; compressed
 screenshots (`.webp`) don't match exact colours, so they aren't used.
+
+**Tests don't pin tuned values.** `magic_numbers.py` is edited constantly (timings,
+routes, intervals, the `HALLOWEEN` flag), so a test must pass for any sensible
+tuning: it states what it is about itself (the daily-reset tests set
+`MONEY_RESET_HOUR` to 17; the teleport-walk and sick tests give a made-up need
+an entry of its own, so they don't depend on the real table or on `HALLOWEEN`,
+which decides whether `sick` exists) or reads the constant (`cfg.QUIET_LOG_INTERVAL`,
+not "5 minutes"). Waits are tested on a fake clock (`fake_clock`), not by timing
+them, and the loop test runs until it has seen what it checks instead of for a
+fixed time, so a slow machine only makes it slower.
+`python tools/retune_check.py` runs the suite against retuned copies of
+`magic_numbers.py` (every timing and step scaled up and down, other intervals
+and counts changed, the event flag off, every click position moved, optional
+need keys dropped) and names any test that breaks - run it after adding tests.

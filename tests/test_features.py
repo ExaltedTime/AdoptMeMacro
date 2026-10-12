@@ -568,3 +568,36 @@ def test_a_paycheck_at_the_top_of_a_cycle_does_not_abort(macro, quiet_screen, mo
 def test_setup_is_not_aborted_by_a_paycheck(macro, quiet_screen, monkeypatch):
     monkeypatch.setattr(macro, "detect_paycheck", lambda: True)
     assert macro.unscrew(in_task=True, play_minigames=False) is None
+
+
+def test_a_stored_icon_from_a_dark_scene_is_still_found_on_the_bright_bar(macro, watch):
+    """The picture stored while the bar was readable had the old (dark) scene in its corners; matched against the
+    bright bar that scored 0.60-0.73, under ICON_LOCATE_THRESHOLD, so the icon read as gone at the first look."""
+    bright = bar_screen(0, 1, 2, 3, 4)
+    r = macro.cfg.ICON_CROP_RADIUS
+    yy, xx = np.ogrid[:2 * r + 1, :2 * r + 1]
+    corners = (yy - r) ** 2 + (xx - r) ** 2 > r * r
+    for x, y in ICONS:
+        before = bright.copy()
+        before[y - r:y + r + 1, x - r:x + r + 1][corners] = 25                  # a dark world behind the icon, as when it was read
+        stored = macro.icon_crop_for_storage(before, x, y)
+        assert (stored[corners] == 255).all()                                    # corners made white
+        watch["screen"] = bright
+        assert macro.locate_icon(stored, y) == (x, y)
+        raw = before[y - r:y + r + 1, x - r:x + r + 1].copy()
+        assert macro.locate_icon(raw, y) is None                                 # what it would have been without the fix
+
+
+def test_the_stored_icon_picture_is_none_at_the_screen_edge(macro):
+    assert macro.icon_crop_for_storage(np.zeros((200, 200, 3), np.uint8), 10, 100) is None
+    assert macro.icon_crop_for_storage(np.zeros((100, 200, 3), np.uint8), 100, 90) is None
+
+
+def test_a_button_scan_that_misses_one_is_logged(macro, monkeypatch):
+    monkeypatch.setattr(macro, "detect_buttons", lambda save_debug=False: [(620, 600), (960, 600), (1130, 600), (1300, 600)])
+    assert macro.refresh_button_mapping() is True
+    assert "button scan found 4 of 5" in open(macro.cfg.RUN_LOG_PATH).read()
+    five = [(620 + 170 * i, 600) for i in range(5)]
+    monkeypatch.setattr(macro, "detect_buttons", lambda save_debug=False: five)
+    macro.refresh_button_mapping()
+    assert open(macro.cfg.RUN_LOG_PATH).read().count("button scan found") == 1       # all five: nothing to say

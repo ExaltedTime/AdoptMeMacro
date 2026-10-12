@@ -143,7 +143,15 @@ def is_roblox_focused() -> bool:
     """Return True if a window with 'roblox' in its title is currently the
     active (focused) window."""
     active = gw.getActiveWindow()
-    return active is not None and "roblox" in (active.title or "").lower()
+    title = (active.title or "") if active is not None else ""
+    if title == "Roblox":
+        return True
+    if "roblox" not in title.lower():
+        return False
+    # An ambiguous title (a browser tab, the crash window): the game only if no window is titled exactly "Roblox" -
+    # the same choice roblox_window() makes.
+    game = roblox_window()
+    return game is None or game.title != "Roblox"
 
 def focus_roblox_click() -> bool:
     """Focus Roblox and click near the top edge to make sure input registers."""
@@ -300,6 +308,9 @@ class State:
     # when the first one was.
     idle_checks: int = 0
     idle_since: float = 0.0
+    # True from the start of a run until rejoin_game() has looked once: the game not running then is just where the
+    # run begins (it is started), not a failure.
+    run_start_pending: bool = False
     # Needs switched off for the rest of this launch of the script because they
     # kept showing up without ever clearing. Deliberately not persisted (unlike
     # the game config): relaunching the script gives every enabled need a fresh
@@ -825,6 +836,22 @@ def prompt_rename_need(icon_img: Image, idx: int) -> str:
     print(f"[!] Saved: {need_name}")
     return need_name
 
+def icon_crop_for_storage(full_img: Image, cx: int, cy: int) -> Optional[Image]:
+    """The icon at (cx, cy) as icon_gone_by_frame_change() will look for it later - the picture it was last read
+    as - or None if it reaches past the image. The square's four corners, outside the icon's circle, are made white:
+    that is the scene behind the icon *now*, and the picture is only used when the bar has gone bright, where
+    corners from a dark scene would match nothing."""
+    r = cfg.ICON_CROP_RADIUS
+    if cx < r or cy < r:
+        return None
+    crop = full_img[cy - r:cy + r + 1, cx - r:cx + r + 1]
+    if crop.shape[:2] != (2 * r + 1, 2 * r + 1):
+        return None
+    crop = crop.copy()
+    yy, xx = np.ogrid[:2 * r + 1, :2 * r + 1]
+    crop[(yy - r) ** 2 + (xx - r) ** 2 > r * r] = cfg.PIXEL_MAX
+    return crop
+
 def identify_icons(found_icons: list[tuple[int, int, int]], full_img: Image) -> Iterator[tuple[int, Image, Optional[str], float]]:
     """Match each detected icon against the saved needs. Yields
     (index, icon_image, need_name_or_None, score) per icon, checking
@@ -835,10 +862,9 @@ def identify_icons(found_icons: list[tuple[int, int, int]], full_img: Image) -> 
         need_name, score = find_matching_need(icon_variants(full_img, cx, cy))
         if need_name:
             state.need_icon_positions[need_name] = (cx, cy)
-            r = cfg.ICON_CROP_RADIUS
-            crop = full_img[cy - r:cy + r + 1, cx - r:cx + r + 1] if cx >= r and cy >= r else None
-            if crop is not None and crop.shape[:2] == (2 * r + 1, 2 * r + 1):
-                state.need_icon_crops[need_name] = crop.copy()
+            crop = icon_crop_for_storage(full_img, cx, cy)
+            if crop is not None:
+                state.need_icon_crops[need_name] = crop
         yield idx, icon_img, need_name, score
 
 def detect_need_bar_readable(img: Image) -> bool:
@@ -1097,13 +1123,13 @@ def wait_interruptible(duration: float) -> None:
     check_running() between each chunk. Raises StopRequested or FocusLost
     the moment either condition is noticed, instead of returning a bool the
     caller has to check after every call."""
-    elapsed = 0.0
-    while elapsed < duration:
+    end = time.monotonic() + duration   # a deadline, so the time the in-task checks take counts too
+    while time.monotonic() < end:
         check_running()
         task_unscrew_tick()
-        sleep_chunk = min(cfg.STOP_CHECK_INTERVAL, duration - elapsed)
-        STOP_EVENT.wait(sleep_chunk)   # returns early if [STOP] is pressed; check_running() then raises
-        elapsed += sleep_chunk
+        remaining = end - time.monotonic()
+        if remaining > 0:
+            STOP_EVENT.wait(min(cfg.STOP_CHECK_INTERVAL, remaining))   # returns early if [STOP] is pressed; check_running() then raises
     check_running()
 
 def wait_stoppable(duration: float) -> None:
@@ -1123,7 +1149,7 @@ def release_all_inputs() -> None:
     more whenever a background task ends (run_async's worker finally block)
     as a last line of defense - a bug in a handler we haven't caught yet
     still shouldn't be able to leave an input stuck down in the game."""
-    for key in (*cfg.MOVE_KEYS, cfg.KEY_HELICOPTER):
+    for key in (*cfg.MOVE_KEYS, cfg.KEY_HELICOPTER, cfg.KEY_ZOOM_IN):
         try:
             pydirectinput.keyUp(key)
         except Exception:
@@ -1237,6 +1263,10 @@ def refresh_button_mapping() -> bool:
         return False
 
     print(f"\n[!] DETECTED {len(positions)} BUTTON(S)")
+    if len(positions) != len(cfg.BUTTON_NAMES):
+        # The buttons are named by their order left to right, so a missed one shifts every name after it.
+        log_run_event(f"button scan found {len(positions)} of {len(cfg.BUTTON_NAMES)}: "
+                      + ", ".join(f"({x}, {y})" for x, y in positions))
     for i, (cx, cy) in enumerate(positions):
         if i < len(cfg.BUTTON_NAMES):
             name = cfg.BUTTON_NAMES[i]
@@ -1583,8 +1613,8 @@ def leave_and_rejoin(clean_leave: bool = True) -> bool:
         hover_click(*cfg.REJOIN_JOIN_POS)
         print(f"[debug] waiting {cfg.REJOIN_AFTER_JOIN_WAIT}s, then respawning...")
         wait_stoppable(cfg.REJOIN_AFTER_JOIN_WAIT)
+        state.last_rejoin = state.last_progress = state.last_detection = time.time()   # first: the respawn can raise FocusLost
         respawn_character()
-        state.last_rejoin = state.last_progress = state.last_detection = time.time()
         print("[!] Rejoin complete!")
         return True
 
@@ -2306,6 +2336,8 @@ def detect_disconnect(img: Image) -> bool:
     mask = exact_color_mask(img[top:bottom, left:right], cfg.DISCONNECT_PANEL_COLOR, cfg.DISCONNECT_PANEL_TOLERANCE)
     return bool(np.count_nonzero(mask) / mask.size >= cfg.DISCONNECT_PANEL_MIN_FRACTION)
 
+ROBLOX_NOT_RUNNING = "Roblox isn't running"
+
 def rejoin_reason() -> Optional[tuple[str, str]]:
     """Why the game needs rejoining right now, as (kind, reason) - or None if
     it doesn't. In order of priority:
@@ -2321,7 +2353,7 @@ def rejoin_reason() -> Optional[tuple[str, str]]:
     if any(w.title == cfg.ROBLOX_CRASH_WINDOW_TITLE for w in windows):
         return "disconnect", "Roblox crashed"
     if not any("roblox" in w.title.lower() for w in windows):
-        return "disconnect", "Roblox isn't running"
+        return "disconnect", ROBLOX_NOT_RUNNING
     if detect_disconnect(grab_screen()):
         return "disconnect", "disconnected from the game"
     if len(state.disabled_needs) >= cfg.DISABLED_NEEDS_REJOIN_THRESHOLD:
@@ -2344,6 +2376,9 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
     rejoin is a failure: it's logged with a screenshot, which shows the
     Disconnected dialog and its error code if that's why. The clean esc/l/
     enter leave is skipped when the game is already gone."""
+    at_start = state.run_start_pending and kinds is None
+    if kinds is None:
+        state.run_start_pending = False   # (an in-task look is never the start of a run)
     found = rejoin_reason()
     if found is None or (kinds is not None and found[0] not in kinds):
         return False
@@ -2352,6 +2387,9 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
         print(f"[!] {reason} - rejoining")
         log_run_event(f"scheduled rejoin: {reason}")
         run_stats.scheduled_rejoins += 1
+    elif at_start and reason == ROBLOX_NOT_RUNNING:
+        print(f"[!] {reason} - starting it")
+        log_run_event(f"{reason} at the start - starting it")
     else:
         log_failure(f"{reason} - rejoining")
         run_stats.recoveries += 1
@@ -2741,14 +2779,16 @@ def unscrew(in_task: bool = False, play_minigames: bool = True) -> Optional[str]
             return "rejoined"
     else:
         rejoin_game()
-    backpack_open = close_backpack_if_stuck(in_task)
+    # Setup (play_minigames False) keeps the backpack open for ~8s on purpose - longer than the two checks that
+    # count as stuck - and closes it itself at the end, so the check leaves it alone there.
+    backpack_open = False if (in_task and not play_minigames) else close_backpack_if_stuck(in_task)
     closed = dismiss_stray_windows()
     if cfg.HALLOWEEN and close_minigame_win_screen(abandon=play_minigames):
         if play_minigames:
             return "played"    # back in the world somewhere unknown: the task is abandoned like after a minigame
     played = minigame_popup(play=play_minigames) if cfg.HALLOWEEN else None
     paycheck = detect_paycheck() if not backpack_open else False
-    if in_task and play_minigames and played is None and (paycheck or (closed and cfg.STRAY_WINDOWS[closed].get("abort_task"))):
+    if in_task and play_minigames and played != "played" and (paycheck or (closed and cfg.STRAY_WINDOWS[closed].get("abort_task"))):
         return "aborted"   # (not setup, which can't be abandoned halfway - that is `play_minigames` False)
     return played
 
@@ -2875,7 +2915,8 @@ class RunRecorder:
                 for _ in range(max(1, due - written)):
                     self.writer.write(frame)
                     written += 1
-            self.stop_event.wait(max(0.0, (written / cfg.RECORD_FPS) - (time.time() - started)))
+            self.stop_event.wait(max(0.0, (written / cfg.RECORD_FPS) - (time.time() - started)) if frame is not None
+                                 else 1.0 / cfg.RECORD_FPS)   # nothing to write yet: try again in a frame's time
 
     def stop(self) -> None:
         """Stop recording and close the file."""
@@ -3047,6 +3088,7 @@ def run_workflow_loop() -> None:
     state.run_number = next_run_number()
     reset_need_tracking()
     state.idle_checks = 0
+    state.run_start_pending = True
     reset_run_stats()
     state.last_rejoin = state.last_progress = state.last_detection = time.time()  # the scheduled and no-progress rejoins count from here
     log_run_event("LOOP started")

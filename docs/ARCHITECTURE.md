@@ -95,7 +95,8 @@ an extra walk from wherever the previous need left the character standing.
   `check_running()`** - see [Stopping & focus safety](#stopping--focus-safety).
 - **WINDOW FOCUS & SCREEN CAPTURE** - `focus_roblox()` / `focus_roblox_click()`
   bring Roblox to the front; `is_roblox_focused()` checks whether it still
-  is; `roblox_windows()` lists the open Roblox windows; `grab_screen()`
+  is (a window titled exactly "Roblox"; a title that only contains it, a browser tab or the crash window, counts only if no
+  window is titled exactly "Roblox" - the same choice `roblox_window()` makes, so keys never go to a browser tab); `roblox_windows()` lists the open Roblox windows; `grab_screen()`
   takes a screenshot via `mss`; `exact_color_mask()` / `find_exact_color()`
   find things by their exact pixel color rather than their shape (the
   choose need's button, the popups and the Play button all work this way).
@@ -287,7 +288,9 @@ read (`State.need_icon_crops`, with its place in `State.need_icon_positions`,
 both set by `identify_icons()` - the place alone can hold another need's icon by
 now, the others having shifted while the walk ran: run 3's sick, 17:09, was
 followed as its neighbour and never seen to clear), searches the whole bar for it
-at the first look, and then every later look
+at the first look (the picture is stored by `icon_crop_for_storage()` with the four corners outside the
+icon's circle made white: they held the scene behind the icon when it was read, and a dark one scored 0.60-0.73
+against the bright bar, under `ICON_LOCATE_THRESHOLD`, so the icon read as gone; whitened it scores 0.90-0.92), and then every later look
 searches the whole bar for the icon *as it looked at the previous look*
 (`locate_icon()`: normalised correlation of the white ring and glyph, which the
 timer's colour change leaves alone). Found at a match of at least
@@ -451,7 +454,7 @@ calls `minigame_popup()`, which plays or dismisses the minigame popups
 
 Every cycle, `unscrew()` runs `rejoin_game()` first (nothing else works
 while disconnected), then `close_backpack_if_stuck()` (the backpack, either
-form), then
+form; not during setup, which keeps it open for ~8s on purpose and closes it itself), then
 `dismiss_stray_windows()`, then, if `HALLOWEEN` is on, `close_minigame_win_screen()`
 (whenever the minigame win screen is up - the red GAME OVER! banner and the green
 NICE! button, `detect_minigame_victory()` - NICE! is clicked, the character
@@ -698,7 +701,10 @@ already run setup, so the `TaskInterrupted` it raises is caught here and logged
 as `setup interrupted by a rejoin`, rather than ending the run.) A disconnect, stuck or stalled recovery counts as
 a failure: `log_failure()` saves a screenshot first, which shows the dialog
 and its error code. A scheduled rejoin isn't one: it's a line in the run log,
-counted in `scheduled_rejoins`. If the rejoin fails the cause is still
+counted in `scheduled_rejoins`. Nor is Roblox not running when the run starts
+(`State.run_start_pending`, cleared by the first top-of-cycle `rejoin_game()`):
+that is where the run begins, logged as "Roblox isn't running at the start -
+starting it" and not counted as a recovery or a failure. If the rejoin fails the cause is still
 there, so the next cycle tries again. The check only runs once per cycle, so
 a disconnect in the middle of a long handler is noticed when that handler
 finishes.
@@ -827,6 +833,9 @@ checked the same way:
   raised right then waits up to `STOP_CLICK_GRACE` (`stop_pressed_soon()`) for
   the stop: if it comes, the run ends as an ordinary user stop rather than a
   "Roblox lost focus" failure.
+
+`wait_interruptible()` runs to a deadline, so the time the in-task checks take counts
+towards the wait (a key held for a timed step is held for that long, not longer).
 
 `check_running()` checks both (`check_stop()` then `check_focus()`) and is
 the single checkpoint used everywhere: inside `wait_interruptible()` (so

@@ -609,3 +609,120 @@ def test_idle_checks_are_flushed_after_a_quiet_interval(macro):
     macro.state.idle_since -= macro.cfg.QUIET_LOG_INTERVAL
     macro.flush_idle_checks_if_due()
     assert macro.state.idle_checks == 0 and "idle checks: 1 over" in open(macro.cfg.RUN_LOG_PATH).read()
+
+
+def test_roblox_not_running_at_the_start_is_not_a_failure(macro, monkeypatch):
+    monkeypatch.setattr(macro, "rejoin_reason", lambda: ("disconnect", macro.ROBLOX_NOT_RUNNING))
+    monkeypatch.setattr(macro, "leave_and_rejoin", lambda clean_leave=True: True)
+    monkeypatch.setattr(macro, "setup_game", lambda: True)
+    macro.state.run_start_pending = True
+    assert macro.rejoin_game() is True
+    log = open(macro.cfg.RUN_LOG_PATH).read()
+    assert "Roblox isn't running at the start - starting it" in log and "FAILURE" not in log
+    assert macro.run_stats.failures == 0 and macro.run_stats.recoveries == 0 and macro.state.run_start_pending is False
+    assert macro.rejoin_game() is True                                          # the same later on is a failure
+    assert "FAILURE: Roblox isn't running - rejoining" in open(macro.cfg.RUN_LOG_PATH).read()
+
+
+def test_only_the_first_look_of_a_run_counts_as_the_start(macro, monkeypatch):
+    monkeypatch.setattr(macro, "rejoin_reason", lambda: None)
+    macro.state.run_start_pending = True
+    macro.rejoin_game(kinds=("disconnect",))                                     # an in-task look is not the start of the run
+    assert macro.state.run_start_pending is True
+    macro.rejoin_game()
+    assert macro.state.run_start_pending is False
+
+
+def test_the_zoom_key_is_released_with_the_rest(macro, monkeypatch):
+    released = []
+    monkeypatch.setattr(macro.pydirectinput, "keyUp", lambda key: released.append(key), raising=False)
+    monkeypatch.setattr(macro.pydirectinput, "mouseUp", lambda: None, raising=False)
+    macro.release_all_inputs()
+    assert macro.cfg.KEY_ZOOM_IN in released and macro.cfg.KEY_HELICOPTER in released
+
+
+def test_the_rejoin_is_booked_before_the_respawn_that_can_lose_focus(macro, monkeypatch):
+    """A FocusLost out of the post-join respawn must not leave the old rejoin/progress times behind (the next cycle
+    would rejoin the fresh game again)."""
+    import numpy as np
+    monkeypatch.setattr(macro, "close_roblox", lambda clean_leave=True: None)
+    monkeypatch.setattr(macro, "run_deeplink", lambda server=None: None)
+    monkeypatch.setattr(macro, "roblox_windows", lambda: [object()])
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((1080, 1920, 3), np.uint8))
+    monkeypatch.setattr(macro, "detect_play_button", lambda img: True)
+    monkeypatch.setattr(macro, "wait_stoppable", lambda duration: None)
+
+    def lose_focus():
+        raise macro.FocusLost()
+
+    monkeypatch.setattr(macro, "respawn_character", lose_focus)
+    macro.state.last_rejoin = macro.state.last_progress = macro.state.last_detection = time.time() - 3600
+    with pytest.raises(macro.FocusLost):
+        macro.leave_and_rejoin()
+    assert time.time() - macro.state.last_rejoin < 5 and time.time() - macro.state.last_progress < 5
+
+
+def test_a_dismissed_minigame_popup_does_not_lose_the_abort(macro, monkeypatch):
+    monkeypatch.setattr(macro, "rejoin_game", lambda kinds=None: False)
+    monkeypatch.setattr(macro, "close_backpack_if_stuck", lambda in_task: False)
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: "cant_spawn_vehicle")     # flagged abort_task
+    monkeypatch.setattr(macro, "close_minigame_win_screen", lambda abandon=True: False)
+    monkeypatch.setattr(macro, "minigame_popup", lambda play=True: "dismissed")
+    monkeypatch.setattr(macro, "detect_paycheck", lambda: False)
+    monkeypatch.setattr(macro.cfg, "HALLOWEEN", True)
+    assert macro.unscrew(in_task=True) == "aborted"
+
+
+def test_setup_keeps_its_backpack_open_without_the_in_task_check_closing_it(macro, monkeypatch):
+    """Setup holds the backpack open ~8s on purpose; two sightings 4s apart count as stuck elsewhere."""
+    def stuck_check(in_task):
+        raise AssertionError("the in-task backpack check must not run during setup")
+
+    monkeypatch.setattr(macro, "rejoin_game", lambda kinds=None: False)
+    monkeypatch.setattr(macro, "close_backpack_if_stuck", stuck_check)
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: None)
+    monkeypatch.setattr(macro, "detect_paycheck", lambda: False)
+    monkeypatch.setattr(macro.cfg, "HALLOWEEN", False)
+    assert macro.unscrew(in_task=True, play_minigames=False) is None
+
+
+def test_the_recorder_does_not_spin_while_no_frame_can_be_grabbed(macro, monkeypatch):
+    attempts = []
+    recorder = macro.RunRecorder("unused")
+    recorder.writer = type("Writer", (), {"write": lambda self, frame: None})()
+    monkeypatch.setattr(recorder, "_frame", lambda: attempts.append(1) or (_ for _ in ()).throw(RuntimeError("no window")))
+    thread = threading.Thread(target=recorder._record)
+    thread.start()
+    time.sleep(0.45)
+    recorder.stop_event.set()
+    thread.join()
+    assert len(attempts) <= 4                                                      # about one try per frame time, not thousands
+
+
+def test_time_spent_in_the_in_task_checks_counts_towards_a_wait(macro, monkeypatch):
+    monkeypatch.setattr(macro, "check_focus", lambda: None)
+    monkeypatch.setattr(macro, "task_unscrew_tick", lambda: time.sleep(0.1))       # a slow check on every pass
+    started = time.time()
+    macro.wait_interruptible(0.5)
+    assert 0.45 < time.time() - started < 0.75                                     # it used to add every check's time on top (~1s)
+
+
+def _window(title):
+    return type("Window", (), {"title": title})()
+
+
+def test_a_browser_tab_about_roblox_is_not_the_roblox_window(macro, monkeypatch):
+    game = _window("Roblox")
+    monkeypatch.setattr(macro, "roblox_windows", lambda: [_window("Roblox - Google Chrome"), game])
+    for title, expected in (("Roblox", True), ("Roblox - Google Chrome", False), ("Notepad", False)):
+        monkeypatch.setattr(macro.gw, "getActiveWindow", lambda title=title: _window(title))
+        assert macro.is_roblox_focused() is expected, title
+    monkeypatch.setattr(macro.gw, "getActiveWindow", lambda: None)
+    assert macro.is_roblox_focused() is False
+
+
+def test_without_a_window_titled_exactly_roblox_any_roblox_title_still_counts(macro, monkeypatch):
+    monkeypatch.setattr(macro, "roblox_windows", lambda: [_window("Roblox Player")])
+    monkeypatch.setattr(macro.gw, "getActiveWindow", lambda: _window("Roblox Player"))
+    assert macro.is_roblox_focused() is True

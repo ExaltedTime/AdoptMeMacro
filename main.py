@@ -3232,7 +3232,7 @@ def draw_report(data: dict[str, Any], run: Union[int, str], basic: set[str], tel
             vals = [m for t, m, _ in checks if int((t - start) // step) == i]
             if vals:
                 cv2.line(img, (panel2.x(i * step), panel2.y(np.mean(vals))),
-                         (panel2.x((i + 1) * step), panel2.y(np.mean(vals))), COLOR_MEAN, 3)
+                         (panel2.x(min((i + 1) * step, duration)), panel2.y(np.mean(vals))), COLOR_MEAN, 3)   # (the last bucket ends with the run)
         none = sum(1 for c in checks if c[1] == 0)
         note = f"grey: each of {len(checks)} checks; red: mean per {unit_label(step)}; {none} matched nothing"
         draw_text(img, note, panel2.plot[0] + 190, panel2.plot[1] - 16, 0.4)

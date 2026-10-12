@@ -196,3 +196,19 @@ def test_the_report_shows_a_disabled_need_until_the_next_rejoin(macro, tmp_path)
     drawn = macro.draw_report(data, 7, set(), set())
     top = (0, 50, 1600, 560)
     assert pixels_of(drawn, macro.COLOR_DISABLED, top) > pixels_of(plain, macro.COLOR_DISABLED, top) + 100
+
+
+def test_the_per_check_means_stay_inside_the_plot(macro, tmp_path):
+    """The last bucket is usually only part of a bucket: its mean line must stop where the run does, not run on
+    past the right edge of the panel."""
+    path = tmp_path / "log.txt"
+    path.write_text("\n".join([
+        "[2026-10-10 22:00:00] [RUN 7] LOOP started",
+        "[2026-10-10 23:50:10] [RUN 7] detected: hungry, pet",
+        "[2026-10-10 23:50:50] [RUN 7] LOOP stopped"]) + "\n")        # 1h50m50s: the last 5-minute bucket is mostly empty
+    data = macro.parse_run(str(path), 7)
+    duration = data["end"] - data["start"]
+    img = macro.draw_report(data, 7, set(), set())
+    right = macro.Panel(img.copy(), (20, 570, 800, 1080), "", duration, 5).plot[2]
+    beyond = img[570:1080, right + 3:800]                                  # between the plot's frame and the panel's edge
+    assert not (beyond == macro.COLOR_MEAN).all(axis=2).any()

@@ -21,7 +21,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, Union
 from abc import ABC, abstractmethod
-from functools import partial
+from functools import lru_cache, partial
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, simpledialog, ttk
 
@@ -40,39 +40,24 @@ Color = tuple[int, int, int]        # (R, G, B)
 import magic_numbers as cfg
 
 class TaskInterrupted(Exception):
-    """Raised from inside a need handler's waits when something that can't
-    wait (a minigame, a rejoin) took over the character: whatever the handler
-    was doing is abandoned. process_needs() catches it; the next check
-    decides from the screen what's still needed. `reason` is for the log."""
+    """A minigame or a rejoin took over the character: the handler is abandoned and
+    process_needs() catches this. `reason` is for the log. See docs/ARCHITECTURE.md#stopping--focus-safety.
+    """
     def __init__(self, reason: str = "something") -> None:
         super().__init__(reason)
         self.reason = reason
 
 class StopRequested(Exception):
-    """Raised to unwind out of a running workflow when the user presses [STOP].
-
-    This is deliberately cooperative cancellation, not thread-killing. Python
-    has no safe way to force-terminate a running thread from the outside -
-    the closest trick (async-raising into another thread via ctypes) is
-    explicitly unsafe, and for a game macro that matters a lot: if the kill
-    landed while a movement key or the mouse button was held down, it would
-    never get released and would stay stuck in the game.
-
-    Instead, wait_interruptible() and check_running() raise this the moment
-    they notice STOP_EVENT, and ordinary Python exception propagation unwinds
-    the call stack from wherever we are all the way up to run_async()'s
-    worker thread, which catches it. Any try/finally in between (used
-    wherever a key or the mouse is held down) still runs on the way up, so
-    cleanup always happens no matter where the stop lands - without every
-    function needing to manually check a flag after every single action."""
+    """Raised to unwind a running workflow when [STOP] is pressed - cooperative
+    cancellation, so held keys are released by the finally blocks on the way up.
+    See docs/ARCHITECTURE.md#stopping--focus-safety for why it isn't thread-killing.
+    """
     pass
 
 class FocusLost(Exception):
-    """Raised when Roblox is no longer the focused window while a workflow
-    is running. Handled the same way as StopRequested - it unwinds via
-    ordinary exception propagation, releasing any held key/mouse button via
-    the same try/finally blocks along the way - so the macro never keeps
-    sending clicks or keypresses into whatever window the user switched to."""
+    """Raised when Roblox is no longer the focused window mid-workflow; unwinds like
+    StopRequested so no input goes to another window. See docs/ARCHITECTURE.md#stopping--focus-safety.
+    """
     pass
 
 def hotkey_down(key: str) -> bool:
@@ -81,10 +66,9 @@ def hotkey_down(key: str) -> bool:
     return bool(ctypes.windll.user32.GetAsyncKeyState(ord(key.upper())) & 0x8000)  # type: ignore[attr-defined]  # Windows only
 
 def check_stop() -> None:
-    """Raise StopRequested if the user has pressed [STOP]. Prefer
-    check_running() at checkpoints that should also require Roblox focus -
-    this exists on its own for the one checkpoint that shouldn't (see
-    run_full_cycle())."""
+    """Raise StopRequested if [STOP] was pressed - the one checkpoint that doesn't
+    require Roblox focus (see run_full_cycle()).
+    """
     if STOP_EVENT.is_set():
         raise StopRequested()
 
@@ -102,11 +86,9 @@ def stop_pressed_soon() -> bool:
     return STOP_EVENT.wait(cfg.STOP_CLICK_GRACE)
 
 def check_running() -> None:
-    """Raise StopRequested or FocusLost if the workflow should not continue
-    right now. This is the single checkpoint used everywhere - inside
-    wait_interruptible() and any manual loop that doesn't otherwise call it
-    - so both a [STOP] press and tabbing away from Roblox are noticed at
-    the same, frequent cadence."""
+    """Raise StopRequested or FocusLost if the workflow shouldn't continue - the single
+    checkpoint used everywhere (see wait_interruptible()).
+    """
     check_stop()
     check_focus()
 
@@ -168,12 +150,10 @@ def focus_roblox_click() -> bool:
 _ROBLOX_RECT = None
 
 def roblox_rect() -> Box:
-    """(left, top, width, height), in screen pixels, of the Roblox window
-    clipped to the primary monitor - a maximized window reports a few pixels
-    of invisible border past the screen edges, which this trims, so a
-    maximized window on a 1920x1080 screen is exactly (0, 0, 1920, 1080).
-    The whole monitor if there's no usable Roblox window (not running,
-    minimized). Remembered for ROBLOX_RECT_TTL seconds."""
+    """(left, top, width, height) in screen pixels of the Roblox window clipped to the
+    primary monitor, or the whole monitor if there is no usable window. Cached for
+    ROBLOX_RECT_TTL. See docs/ARCHITECTURE.md#window--coordinates.
+    """
     global _ROBLOX_RECT
     now = time.time()
     if _ROBLOX_RECT and now - _ROBLOX_RECT[0] < cfg.ROBLOX_RECT_TTL:
@@ -206,11 +186,10 @@ def grab_full_screen() -> Image:
     return cv2.cvtColor(shot, cv2.COLOR_BGRA2BGR)
 
 def grab_screen() -> Image:
-    """Screenshot of the Roblox window as a BGR numpy array, scaled to the
-    reference size (REFERENCE_WIDTH x REFERENCE_HEIGHT) so every detection
-    and position works on the same pixels whatever the window or monitor
-    size. Unchanged from a plain screenshot when Roblox is maximized on a
-    1920x1080 screen."""
+    """Screenshot of the Roblox window as a BGR array scaled to the reference size, so
+    every detection works on the same pixels whatever the window.
+    See docs/ARCHITECTURE.md#window--coordinates.
+    """
     img = grab_full_screen()
     left, top, width, height = roblox_rect()
     if (left, top, width, height) != (0, 0, img.shape[1], img.shape[0]):
@@ -220,11 +199,9 @@ def grab_screen() -> Image:
     return img
 
 def grab_screen_region(x: int, y: int, width: int, height: int) -> Image:
-    """The same pixels as grab_screen()[y:y + height, x:x + width] (so `x`, `y`,
-    `width` and `height` are in the reference space), but when the Roblox
-    window is exactly the reference size, and the region is within it, only
-    that region is captured rather than the whole monitor and then cropped.
-    Otherwise it is exactly that crop of grab_screen()."""
+    """The same pixels as grab_screen()[y:y + height, x:x + width] (reference space), captured
+    directly when the window is exactly the reference size. See docs/ARCHITECTURE.md#need-icon-detection.
+    """
     left, top, window_w, window_h = roblox_rect()
     if (window_w, window_h) == (cfg.REFERENCE_WIDTH, cfg.REFERENCE_HEIGHT) and x >= 0 and y >= 0:
         with mss.MSS() as sct:
@@ -308,6 +285,8 @@ class State:
     # when the first one was.
     idle_checks: int = 0
     idle_since: float = 0.0
+    # Since when the screen has been completely white, without a break (see detect_white_screen()); None when it isn't.
+    white_since: Optional[float] = None
     # The needs named by the last "detected:" line, and how many checks since then found exactly the same with no
     # handler run in between (not yet written to the run log - see note_repeat_check()).
     last_detected_body: Optional[str] = None
@@ -332,13 +311,6 @@ class State:
     task_thread: Optional[int] = None
     last_task_unscrew: float = 0.0
     in_unscrew: bool = False
-    # Where each need's icon was last recognised in the need bar (reference
-    # space, centre), by need name - see icon_gone_by_frame_change().
-    need_icon_positions: dict[str, tuple[int, int]] = field(default_factory=dict)
-    # Each need's icon as it last looked when the bar could be read (identify_icons()): what
-    # icon_gone_by_frame_change() looks for when it can't read the bar - its stored position can be
-    # another need's icon by then, the others having shifted about.
-    need_icon_crops: dict[str, Image] = field(default_factory=dict)
     # How many in-task checks in a row have seen the backpack open (see
     # close_backpack_if_stuck()).
     backpack_strikes: int = 0
@@ -359,8 +331,6 @@ class State:
                 value = None if value is None else "set"
             elif isinstance(value, set):
                 value = sorted(value)
-            elif item.name == "need_icon_crops":
-                value = {name: f"image {crop.shape[1]}x{crop.shape[0]}" for name, crop in list(value.items())}   # pictures: not JSON
             out[item.name] = value
         return out
 
@@ -388,10 +358,10 @@ def migrate_debug_layout() -> None:
 migrate_debug_layout()
 
 def refresh_debug() -> int:
-    """Empty the debug folder - the images, the logs, the recordings - except
-    the game config (GAME_CONFIG_PATH), then recreate the subfolders. The run
-    numbers start from 1 again, since the counter goes with the logs. Returns
-    the number of entries removed."""
+    """Empty the debug folder except the game config and recreate its subfolders (run
+    numbers start from 1 again). Returns the number of entries removed.
+    See docs/ARCHITECTURE.md#debugging-an-unattended-run.
+    """
     removed = 0
     close_output_log()
     for name in os.listdir(cfg.DEBUG_DIR):
@@ -463,10 +433,9 @@ def flush_idle_checks_if_due() -> None:
         flush_idle_checks()
 
 def log_run_event(message: str) -> None:
-    """Append one timestamped line to RUN_LOG_PATH, tagged with
-    state.run_number - and, when a run number is set, to that run's own
-    file, RUN_LOGS_DIR/run<N>.txt (lines logged before any run has started
-    only go to RUN_LOG_PATH)."""
+    """Append one timestamped, run-tagged line to RUN_LOG_PATH and to that run's own file.
+    See docs/ARCHITECTURE.md#debugging-an-unattended-run.
+    """
     line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [RUN {state.run_number}] {message}\n"
     with open(cfg.RUN_LOG_PATH, "a") as f:
         f.write(line)
@@ -526,12 +495,9 @@ def close_output_log() -> None:
             _output_log = None
 
 def log_output(text: str) -> None:
-    """Append `text` (whatever was just printed) to OUTPUT_LOG_PATH, with a
-    timestamp at the start of every line. Called by DebugCapture, so it's
-    everything the GUI console shows, kept on disk. The file stays open
-    between calls and is flushed after each one, so nothing is lost if the
-    macro dies. Never raises. Past OUTPUT_LOG_MAX_BYTES the file moves to
-    output.log.old and a new one starts."""
+    """Append printed `text` to OUTPUT_LOG_PATH with a timestamp per line (rotated past
+    OUTPUT_LOG_MAX_BYTES). Never raises. See docs/ARCHITECTURE.md#debugging-an-unattended-run.
+    """
     global _output_at_line_start, _output_log
     try:
         with OUTPUT_LOG_LOCK:
@@ -551,14 +517,10 @@ def log_output(text: str) -> None:
         pass
 
 def save_failure_report(reason: str) -> Optional[str]:
-    """Save what was going on when `reason` went wrong, as a folder in
-    FAILURE_DIR named with the time, run number and reason: screen.png (the
-    whole screen, to see what has focus too), need_icons.png (the strip the
-    need icons are read from, when Roblox could be captured), info.txt (a
-    short summary) and state.json (the whole State object and run_stats, as
-    they were). Deletes the oldest beyond MAX_FAILURE_FOLDERS. Returns
-    "<folder>/screen.png", or None if it couldn't (never raises - it's called
-    while something else is already going wrong)."""
+    """Save what was going on when `reason` went wrong as a folder in FAILURE_DIR
+    (screen.png, need_icons.png, info.txt, state.json). Returns the screen.png path or
+    None; never raises. See docs/ARCHITECTURE.md#debugging-an-unattended-run.
+    """
     try:
         slug = re.sub(r"[^a-z0-9]+", "_", reason.lower()).strip("_")[:40]
         name = f"{time.strftime('%Y%m%d_%H%M%S')}_run{state.run_number}_{slug}"
@@ -657,11 +619,9 @@ def load_game_config() -> dict[str, Any]:
         return _read_game_config()
 
 def save_game_config(config: dict[str, Any]) -> None:
-    """Persist `config` (as returned by load_game_config()) to GAME_CONFIG_PATH.
-    Written to a temporary file and moved into place, so a crash partway
-    can't leave a truncated config behind (which would read as the defaults).
-    Callers outside this section hold GAME_CONFIG_LOCK - use
-    update_game_config()."""
+    """Persist `config` to GAME_CONFIG_PATH atomically; callers hold GAME_CONFIG_LOCK
+    (use update_game_config()). See docs/ARCHITECTURE.md#persisted-game-config.
+    """
     tmp = cfg.GAME_CONFIG_PATH + ".tmp"
     try:
         with open(tmp, "w") as f:
@@ -704,18 +664,35 @@ def preprocess_icon(icon_img: Image) -> Image:
     _, binary = cv2.threshold(enhanced, cfg.ICON_BW_THRESHOLD, cfg.PIXEL_MAX, cv2.THRESH_BINARY)
     return binary
 
+def icon_disc_mask(width: int, height: int, radius_fraction: float) -> Image:
+    """Boolean mask, True inside the disc (centred, `radius_fraction` of half the width across) of a width x height image."""
+    yy, xx = np.mgrid[:height, :width]
+    cx, cy = (width - 1) / 2, (height - 1) / 2
+    return (xx - cx) ** 2 + (yy - cy) ** 2 <= (radius_fraction * width / 2) ** 2
+
+@lru_cache(maxsize=None)
+def icon_match_mask(size: tuple[int, int], radius_fraction: float, left_half: bool) -> Image:
+    """The part of a signature (see icon_signature()) that is compared: the disc inside the icon's ring, and only
+    its left half when `left_half`."""
+    mask = icon_disc_mask(size[0], size[1], radius_fraction)
+    return mask[:, :mask.shape[1] // 2] if left_half else mask
+
 def icon_signature(icon_img: Image) -> Image:
-    """Reduced, comparable form of an icon: preprocessed, resized to
-    ICON_COMPARE_SIZE, scaled to 0-1, and (if MATCH_ONLY_LEFT_HALF) cut down
-    to its left half so an overlapping event badge doesn't matter."""
+    """Comparable form of an icon: outside-the-ring pixels blacked out, preprocessed,
+    resized, left half only. See docs/ARCHITECTURE.md#need-icon-matching.
+    """
+    height, width = icon_img.shape[:2]
+    icon_img = np.where(icon_disc_mask(width, height, cfg.ICON_MATCH_RADIUS_FRACTION)[:, :, None], icon_img, 0).astype(icon_img.dtype)
     proc = cv2.resize(preprocess_icon(icon_img), cfg.ICON_COMPARE_SIZE).astype(np.float32) / cfg.PIXEL_MAX
     if cfg.MATCH_ONLY_LEFT_HALF:
         proc = proc[:, :proc.shape[1] // 2]
     return proc
 
 def compare_signatures(sig1: Image, sig2: Image) -> float:
-    """Return a 0-1 similarity score (1 = identical) between two signatures."""
-    return 1.0 - float(np.mean((sig1 - sig2) ** 2))
+    """Return a 0-1 similarity score (1 = identical) between two signatures: one minus the mean squared difference
+    over the part inside the icon's ring (icon_match_mask())."""
+    mask = icon_match_mask(cfg.ICON_COMPARE_SIZE, cfg.ICON_MATCH_RADIUS_FRACTION, cfg.MATCH_ONLY_LEFT_HALF)
+    return 1.0 - float(np.sum(((sig1 - sig2) ** 2) * mask) / np.count_nonzero(mask))
 
 # ============================================================================
 # NEED ICON DETECTION
@@ -743,23 +720,10 @@ def strip_changed_fraction(before: Image, after: Image) -> float:
     return np.count_nonzero(changed) / changed.size
 
 def detect_need_icons(save_debug: bool = False, fresh: bool = False) -> tuple[list[tuple[int, int, int]], Image]:
-    """Detect the circular need icons at the top of the screen. Icons are
-    found by their round outline (Hough circles, within a fixed radius
-    range), not by color, so event badges overlapping an icon, differently
-    colored icons and busy backgrounds don't affect detection. The circle
-    search is skipped, reusing the last result, while the strip the icons sit
-    in is practically unchanged since it was last searched (at most
-    NEED_STRIP_MAX_CHANGED_FRACTION of it changed, and no more than
-    NEED_STRIP_MAX_REUSES times running - NEED_STRIP_MAX_EMPTY_REUSES if that
-    result found nothing, since a missed icon looks the same); an icon
-    appearing or going changes far more than that. `fresh` always searches
-    (and refreshes the cache): used for the second look of _need_cleared(),
-    which exists to survive one wrong result. Only the strip, plus the margin the icon crops reach
-    past it, is captured (grab_screen_region()): returns ((cx, cy, radius) per
-    icon, left to right) and that image, whose pixels sit at the same
-    positions as in grab_screen() (it just ends sooner).
-    Everything that uses the image (identify_icons(), detect_need_bar_readable())
-    stays within it."""
+    """Find the round need icons in the top-left strip by Hough circles: ((cx, cy, radius)
+    left to right, the captured image). The search is skipped while the strip is
+    practically unchanged; `fresh` always searches. See docs/ARCHITECTURE.md#need-icon-detection.
+    """
     margin = cfg.ICON_CROP_RADIUS + cfg.ICON_EXTRACT_PADDING + cfg.ICON_SHIFT_TOLERANCE + 2
     strip_w, strip_h = int(cfg.REFERENCE_WIDTH * cfg.NEED_ICON_WIDTH_PERCENT), int(cfg.REFERENCE_HEIGHT * cfg.NEED_ICON_TOP_PERCENT)
     img = grab_screen_region(0, 0, min(cfg.REFERENCE_WIDTH, strip_w + margin), min(cfg.REFERENCE_HEIGHT, strip_h + margin))
@@ -802,13 +766,9 @@ def icon_variants(img: Image, cx: int, cy: int) -> list[Image]:
 _NEED_SIGNATURES: tuple[Any, list[tuple[str, Image]]] = (None, [])
 
 def need_signatures() -> list[tuple[str, Image]]:
-    """[(need name, signature)] for every saved need icon. Reading and
-    preprocessing every .png in NEEDS_DIR is far too slow to repeat for each
-    icon on each check, so it's done once and redone only when the files
-    change (checking their modification times is cheap), which also picks up
-    an icon added while the macro runs. Recurses, so related icons can sit in
-    subfolders (e.g. ref/needs/weather/) - a need's name is just its file name,
-    wherever it lives."""
+    """[(need name, signature)] for every saved icon under NEEDS_DIR, cached and reloaded when
+    a file changes. See docs/ARCHITECTURE.md#need-icon-matching.
+    """
     global _NEED_SIGNATURES
     files = sorted(os.path.join(root, f) for root, _, names in os.walk(cfg.NEEDS_DIR) for f in names if f.endswith('.png'))
     key = tuple((f, os.path.getmtime(f)) for f in files)
@@ -837,10 +797,9 @@ def find_matching_need(icon_variants: list[Image]) -> tuple[Optional[str], float
     return None, best_score
 
 def prompt_rename_need(icon_img: Image, idx: int) -> str:
-    """Save a new need icon (as high-contrast B/W) and ask the user to name
-    it - in a dialog when the GUI is up (the worker thread has no console to
-    read from), otherwise on the console. Cancelling or an empty name saves
-    it as unnamed_<idx>."""
+    """Save a new need icon and ask for its name (dialog or console); a cancelled dialog saves
+    it as unnamed_<idx>. See docs/ARCHITECTURE.md#process_needs-step-by-step.
+    """
     print("\n[!] NEW NEED DETECTED!")
     temp_path = os.path.join(cfg.NEEDS_DIR, f"temp_{idx}.png")
     cv2.imwrite(temp_path, preprocess_icon(icon_img))
@@ -859,15 +818,6 @@ def prompt_rename_need(icon_img: Image, idx: int) -> str:
     print(f"[!] Saved: {need_name}")
     return need_name
 
-def icon_crop_for_storage(full_img: Image, cx: int, cy: int) -> Optional[Image]:
-    """The icon at (cx, cy) as icon_gone_by_frame_change() will look for it later - the picture it was last read
-    as - or None if it reaches past the image."""
-    r = cfg.ICON_CROP_RADIUS
-    if cx < r or cy < r:
-        return None
-    crop = full_img[cy - r:cy + r + 1, cx - r:cx + r + 1]
-    return crop.copy() if crop.shape[:2] == (2 * r + 1, 2 * r + 1) else None
-
 def identify_icons(found_icons: list[tuple[int, int, int]], full_img: Image) -> Iterator[tuple[int, Image, Optional[str], float]]:
     """Match each detected icon against the saved needs. Yields
     (index, icon_image, need_name_or_None, score) per icon, checking
@@ -876,223 +826,60 @@ def identify_icons(found_icons: list[tuple[int, int, int]], full_img: Image) -> 
         check_running()
         icon_img = extract_icon(full_img, cx, cy, cfg.ICON_CROP_RADIUS)
         need_name, score = find_matching_need(icon_variants(full_img, cx, cy))
-        if need_name:
-            state.need_icon_positions[need_name] = (cx, cy)
-            crop = icon_crop_for_storage(full_img, cx, cy)
-            if crop is not None:
-                state.need_icon_crops[need_name] = crop
         yield idx, icon_img, need_name, score
 
-def detect_need_bar_readable(img: Image) -> bool:
-    """False if the strip the icons sit in is mostly near-white in `img`
-    (NEED_BAR_BRIGHT_LEVEL / NEED_BAR_MAX_BRIGHT_FRACTION) - the Pizza Party's
-    bright background, say. The icons can't be recognised against that, so
-    a missing icon there says nothing about whether the need is gone."""
-    strip = img[0:int(cfg.REFERENCE_HEIGHT * cfg.NEED_ICON_TOP_PERCENT),
-                int(cfg.REFERENCE_WIDTH * cfg.NEED_ICON_BLANK_WIDTH):int(cfg.REFERENCE_WIDTH * cfg.NEED_ICON_WIDTH_PERCENT)]
-    bright = np.count_nonzero(cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY) > cfg.NEED_BAR_BRIGHT_LEVEL)
-    return bright / (strip.shape[0] * strip.shape[1]) < cfg.NEED_BAR_MAX_BRIGHT_FRACTION
-
-def scan_needs(fresh: bool = False) -> tuple[list[Optional[str]], bool]:
-    """One-shot snapshot: (every need name currently detected on screen, whether
-    the icons could be read at all - see detect_need_bar_readable()). `fresh`
+def scan_needs(fresh: bool = False) -> list[Optional[str]]:
+    """One-shot snapshot: every need name currently detected on screen. `fresh`
     makes the circle search run even if the strip looks unchanged (see
     detect_need_icons())."""
     found_icons, full_img = detect_need_icons(fresh=fresh)
-    if not detect_need_bar_readable(full_img):
-        return [], False
-    return [name for _, _, name, _ in identify_icons(found_icons, full_img)], True
+    return [name for _, _, name, _ in identify_icons(found_icons, full_img)]
 
-# The icon region being watched while the need bar is unreadable: {"need", "pos", "crop"} - see icon_gone_by_frame_change().
-_ICON_WATCH: dict[str, Any] = {"need": None, "pos": None, "crop": None}
-
-def reset_icon_watch() -> None:
-    """Forget the icon being watched: each wait for a need to clear starts from the picture of its icon taken
-    when it was last read, not from where an earlier wait for the same need happened to leave off."""
-    _ICON_WATCH.update(need=None, pos=None, crop=None)
-
-def icon_region(pos: tuple[int, int]) -> Optional[Image]:
-    """The square around a need icon centred on `pos` (ICON_CROP_RADIUS each
-    way), captured now - or None if it would reach past the screen's edge."""
-    radius = cfg.ICON_CROP_RADIUS
-    x0, y0 = pos[0] - radius, pos[1] - radius
-    if x0 < 0 or y0 < 0:
-        return None
-    return grab_screen_region(x0, y0, 2 * radius + 1, 2 * radius + 1)
-
-def icon_region_change(before: Image, after: Image) -> float:
-    """The fraction of the circle of an icon-sized square that differs between
-    two captures by more than ICON_FRAME_CHANGE_LEVEL on any colour channel."""
-    size = before.shape[0]
-    yy, xx = np.ogrid[:size, :size]
-    inside = (yy - size // 2) ** 2 + (xx - size // 2) ** 2 <= (size // 2) ** 2
-    changed = cv2.absdiff(before, after).max(axis=2) > cfg.ICON_FRAME_CHANGE_LEVEL
-    return float(np.count_nonzero(changed & inside) / np.count_nonzero(inside))
-
-def icon_mask(size: int) -> Image:
-    """1 inside the icon's circle, 0 in the four corners of its square capture - the scene behind the icon."""
-    yy, xx = np.ogrid[:size, :size]
-    centre = size // 2
-    return ((yy - centre) ** 2 + (xx - centre) ** 2 <= (centre - 1) ** 2).astype(np.uint8)
-
-def masked_match_scores(image: Image, template: Image, mask: Image) -> Image:
-    """cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED) counting only the pixels where `mask` is 1 (all
-    single-channel 8-bit; the scores are 0-1 per position, as there). OpenCV can't mask that method, and the
-    others (CCORR) rate any bright patch as a match. Worked out by hand: with the template made zero-mean over
-    the mask, the numerator is one plain correlation, and the image's masked mean and spread come from two
-    correlations with the mask. Positions whose masked patch is flat score 0."""
-    pic = image.astype(np.float32)
-    pic -= pic.mean()                       # shifting changes no score, and keeps the sums small enough for float32
-    weight = mask.astype(np.float32)
-    count = float(weight.sum())
-    tmpl = template.astype(np.float32)
-    tmpl = (tmpl - float((tmpl * weight).sum()) / count) * weight
-    numerator = cv2.matchTemplate(pic, tmpl, cv2.TM_CCORR)
-    total = cv2.matchTemplate(pic, weight, cv2.TM_CCORR)
-    total_sq = cv2.matchTemplate(pic * pic, weight, cv2.TM_CCORR)
-    spread = np.sqrt(np.maximum(total_sq - total * total / count, 0))
-    denominator = float(np.sqrt((tmpl * tmpl).sum())) * spread
-    return np.where(denominator > 1e-3 * count, numerator / np.maximum(denominator, 1e-9), 0).astype(np.float32)
-
-def locate_icon(template: Image, row: int) -> Optional[tuple[int, int]]:
-    """Where `template` (an icon-sized capture of a need icon) is in the need
-    bar now: the centre (x, y) of its best match along the bar at about `row`,
-    or None if nothing there matches well enough (ICON_LOCATE_THRESHOLD). The
-    match is on the whiteness of the pixels (the least of B, G, R), which is
-    the icon's white ring and glyph - they don't change as its timer
-    changes the colour of a section of the disc - and a bright background or
-    another icon matches poorly. Only the icon's circle counts (icon_mask()):
-    the corners of the square hold the scene behind it, which is not the
-    scene it is looked for in. The whole width of the bar is searched, so
-    the icon is found wherever the others shifting around it have put it."""
-    radius = cfg.ICON_CROP_RADIUS
-    y0 = max(0, row - radius - cfg.ICON_LOCATE_ROW_MARGIN)
-    band = grab_screen_region(0, y0, int(cfg.REFERENCE_WIDTH * cfg.NEED_ICON_WIDTH_PERCENT), 2 * radius + 2 * cfg.ICON_LOCATE_ROW_MARGIN + 1)
-    scores = masked_match_scores(band.min(axis=2), template.min(axis=2), icon_mask(template.shape[0]))
-    _, best, _, where = cv2.minMaxLoc(scores)
-    if best < cfg.ICON_LOCATE_THRESHOLD:
-        return None
-    return where[0] + radius, y0 + where[1] + radius
-
-def icon_gone_by_frame_change(need_name: str) -> Optional[bool]:
-    """Whether `need_name`'s icon is gone, judged from how it changes between
-    looks - for when the bar can't be read by matching icons (a bright
-    background, see detect_need_bar_readable()). A need's icon fills its
-    circle with a timer: a section that slowly grows and changes colour. So
-    each look searches the bar for the icon *as it looked at the previous look*
-    (locate_icon()): the timer moves on a little between looks, and the
-    icon's white ring and glyph still match. Found - wherever the other icons
-    shifting about when one clears have put it, which is noted in
-    State.need_icon_positions - means it is still there. Not found, and still
-    not found NEED_GONE_FLICKER_RECHECK_DELAY later (so a one-frame glitch
-    doesn't count), means it is gone: cleared, or replaced by a neighbour that
-    has slid into its place. The icon's starting place is where it was last
-    recognised. The first look only records the icon (None: nothing to
-    compare with yet), so one that went before that is not noticed, and the
-    wait runs out as it did before. None too if the place isn't known."""
-    pos = state.need_icon_positions.get(need_name)
-    here = icon_region(pos) if pos is not None else None
-    if pos is None or here is None:
-        return None
-    watch = _ICON_WATCH
-    if watch["need"] != need_name or watch["crop"] is None:
-        stored = state.need_icon_crops.get(need_name)
-        if stored is None:
-            watch.update(need=need_name, pos=pos, crop=here)
-            return None
-        # What is at the stored position now may be another need's icon (the others shift as they clear):
-        # search for the icon as it looked when it was last read instead, so a clear is noticed at the first look.
-        watch.update(need=need_name, pos=pos, crop=stored)
-    found = locate_icon(watch["crop"], pos[1])
-    if found is None:
-        wait_interruptible(cfg.NEED_GONE_FLICKER_RECHECK_DELAY)
-        found = locate_icon(watch["crop"], pos[1])
-        if found is None:
-            print(f"[debug] {need_name}: need bar unreadable, and its icon is no longer in the bar")
-            log_run_event(f"{need_name} icon gone by frame change - the need bar is unreadable")
-            reset_icon_watch()
-            return True
-    now = icon_region(found)
-    if now is None:
-        return None
-    change = icon_region_change(watch["crop"], now) if found == pos else None
-    where = f"{pos} -> {found}" if found != pos else f"{pos}, {change:.0%} changed"
-    print(f"[debug] {need_name}: need bar unreadable, its icon is still there ({where})")
-    state.need_icon_positions[need_name] = found
-    watch.update(pos=found, crop=now)      # the next look searches for the icon as it is now
-    return False
-
-def _need_cleared(need_name: str) -> Optional[bool]:
-    """True if `need_name`'s icon is missing on two quick checks in a row
-    (NEED_GONE_FLICKER_RECHECK_DELAY apart, the second one a fresh circle
-    search) - the single-frame-flicker guard shared by wait_until_need_gone()
-    and _watch_need_gone() below.
-    While the icons can't be read (see detect_need_bar_readable()) the answer
-    comes from icon_gone_by_frame_change() instead - None if that can't tell
-    either: neither cleared nor not cleared."""
+def _need_cleared(need_name: str) -> bool:
+    """True if `need_name` is missing on two checks in a row (the second a fresh search) - the
+    flicker guard shared by wait_until_need_gone() and _watch_need_gone().
+    See docs/ARCHITECTURE.md#waiting-for-a-need-to-clear.
+    """
     for attempt in range(2):
-        names, readable = scan_needs(fresh=attempt > 0)   # the second look must not just repeat the first
-        if not readable:
-            return icon_gone_by_frame_change(need_name)
-        reset_icon_watch()   # readable again: a later unreadable stretch starts afresh
-        if need_name in names:
+        if need_name in scan_needs(fresh=attempt > 0):   # the second look must not just repeat the first
             return False
         if attempt == 0:
             wait_interruptible(cfg.NEED_GONE_FLICKER_RECHECK_DELAY)
     return True
 
 def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAIT, poll_interval: float = cfg.NEED_GONE_POLL_INTERVAL) -> None:
-    """Wait for `need_name`'s icon to stop being detected, for at most
-    `max_wait` seconds - whichever happens first. It is looked for every
-    `poll_interval` seconds, and one check that finds it gone ends the wait:
-    a single missed detection can't end it early because each check looks
-    twice, a moment apart (see _need_cleared()).
-    While the icons can't be read (a bright background, see
-    detect_need_bar_readable()) nothing counts as a miss, so that wait runs its
-    full length - and ending it isn't logged as a failure. (Popups and
-    minigames that turn up meanwhile are handled by the unscrew() checks
-    wait_interruptible() runs during a task.) Interruptible."""
+    """Wait up to `max_wait` for `need_name` to clear, polling every `poll_interval`. A
+    timeout is logged as a failure and sets state.need_cleared False.
+    See docs/ARCHITECTURE.md#waiting-for-a-need-to-clear.
+    """
     print(f"[debug] waiting up to {max_wait}s for {need_name} to clear...")
-    reset_icon_watch()
     state.need_cleared = True
     deadline = time.time() + max_wait
-    unreadable = False
     while True:
         remaining = deadline - time.time()
         if remaining <= 0:
-            if unreadable:
-                print(f"[debug] couldn't read the need icons (bright background) - waited {max_wait}s, moving on")
-            else:
-                print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
-                log_failure(f"{need_name} still showing after {max_wait}s")
-                state.need_cleared = False
+            print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
+            log_failure(f"{need_name} still showing after {max_wait}s")
+            state.need_cleared = False
             return
         wait_interruptible(min(poll_interval, remaining))
-        cleared = _need_cleared(need_name)
-        unreadable = cleared is None
-        if cleared:
+        if _need_cleared(need_name):
             print(f"[debug] {need_name} cleared")
             return
 
 def _watch_need_gone(need_name: str, cleared_event: threading.Event, stop_event: threading.Event, answers: Optional[list] = None) -> None:
-    """Background-thread body for walk_alternating()'s optional `need_name`:
-    checks whether the need has cleared (_need_cleared()) every
-    NEED_GONE_POLL_INTERVAL *while* the character is still moving - the same
-    check wait_until_need_gone() makes standalone, just running alongside the
-    movement instead of after it. Sets `cleared_event` the moment it finds it
-    gone. Exits quietly - without raising - the instant `stop_event` is set
-    (the walk ended on its own) or STOP_EVENT/focus loss is noticed: only the
-    main thread's check_running() calls are allowed to unwind the workflow, so
-    this thread must never let StopRequested/FocusLost escape uncaught."""
+    """Watcher-thread body for walk_alternating(): sets `cleared_event` when the need is
+    gone, exits quietly on stop and never lets StopRequested/FocusLost escape.
+    See docs/ARCHITECTURE.md#checking-a-need-in-parallel-with-movement.
+    """
     try:
-        reset_icon_watch()
         while not stop_event.is_set():
             if stop_event.wait(cfg.NEED_GONE_POLL_INTERVAL):
                 return
             cleared = _need_cleared(need_name)
             if answers is not None:
-                answers.append(cleared)       # the last answer tells walk_alternating() whether the icons were readable
-            if cleared is True:
+                answers.append(cleared)       # the last answer tells walk_alternating() whether the need was still showing
+            if cleared:
                 cleared_event.set()
                 return
     except (StopRequested, FocusLost):
@@ -1103,12 +890,9 @@ def _watch_need_gone(need_name: str, cleared_event: threading.Event, stop_event:
 # ============================================================================
 
 def hover_move(x: float, y: float, duration: float = cfg.CLICK_MOVE_DURATION) -> None:
-    """Move the mouse to (x, y) - a reference-space position, see to_screen() -
-    over `duration` seconds using SendInput
-    (pydirectinput), then nudge it a couple of pixels back onto the target.
-    Roblox ignores pyautogui's SetCursorPos warps as hover movement and only
-    reacts to real input events, so this is what makes a UI element register
-    as hovered before it's clicked."""
+    """Move the mouse to a reference-space position with SendInput, nudging so Roblox sees
+    hover. See docs/ARCHITECTURE.md#click--input-primitives.
+    """
     x, y = to_screen(x, y)
     pydirectinput.moveTo(x, y, duration=duration)
     time.sleep(cfg.CLICK_SETTLE_DELAY)
@@ -1132,9 +916,9 @@ def hover_click(x: float, y: float, duration: float = cfg.CLICK_MOVE_DURATION) -
 @contextlib.contextmanager
 def task_unscrew(play_minigames: bool = True) -> Iterator[None]:
     """Within this block wait_interruptible() runs unscrew(in_task=True) every
-    UNSCREW_TASK_INTERVAL seconds. With `play_minigames` False (setup) an
-    offered minigame is only declined, never played - setup can't be
-    abandoned halfway, since its clicks toggle things."""
+    UNSCREW_TASK_INTERVAL; `play_minigames` False (setup) only declines minigames.
+    See docs/ARCHITECTURE.md#need-handlers.
+    """
     previous = (state.task_active, state.task_play_minigames, state.task_thread)
     state.task_active, state.task_play_minigames, state.task_thread = True, play_minigames, threading.get_ident()
     state.last_task_unscrew = time.time()
@@ -1167,10 +951,9 @@ def task_unscrew_tick() -> None:
         raise TaskInterrupted("a popup")
 
 def wait_interruptible(duration: float) -> None:
-    """Sleep for `duration`, in STOP_CHECK_INTERVAL chunks, checking
-    check_running() between each chunk. Raises StopRequested or FocusLost
-    the moment either condition is noticed, instead of returning a bool the
-    caller has to check after every call."""
+    """Sleep `duration` in STOP_CHECK_INTERVAL chunks, raising StopRequested/FocusLost as
+    soon as either is noticed. See docs/ARCHITECTURE.md#stopping--focus-safety.
+    """
     end = time.monotonic() + duration   # a deadline, so the time the in-task checks take counts too
     while time.monotonic() < end:
         check_running()
@@ -1191,12 +974,9 @@ def wait_stoppable(duration: float) -> None:
     check_stop()
 
 def release_all_inputs() -> None:
-    """Best-effort safety net: release every key this macro ever holds down,
-    plus the mouse button. The try/finally blocks around each individual
-    held key/button should already guarantee this, but this is called once
-    more whenever a background task ends (run_async's worker finally block)
-    as a last line of defense - a bug in a handler we haven't caught yet
-    still shouldn't be able to leave an input stuck down in the game."""
+    """Best-effort safety net: release every key the macro holds and the mouse button,
+    called when a background task ends. See docs/ARCHITECTURE.md#stopping--focus-safety.
+    """
     for key in (*cfg.MOVE_KEYS, cfg.KEY_HELICOPTER, cfg.KEY_ZOOM_IN):
         try:
             pydirectinput.keyUp(key)
@@ -1297,11 +1077,10 @@ def click_button(button_x: float, button_y: float, need_name: str) -> bool:
     return True
 
 def refresh_button_mapping() -> bool:
-    """Detect the current action button positions and cache them in
-    state.button_positions. Assumes the character is already at the buttons.
-    Always clears any previous mapping first, even on failure, so a failed
-    detection can never leave a stale (possibly wrong) position behind for
-    click_need_button() to use."""
+    """Detect the action buttons and cache them in state.button_positions, clearing any
+    previous mapping first so a failed detection never leaves a stale one.
+    See docs/ARCHITECTURE.md#button-detection.
+    """
     state.button_positions.clear()
 
     positions = detect_buttons(save_debug=True)
@@ -1325,12 +1104,10 @@ def refresh_button_mapping() -> bool:
     return True
 
 def click_need_button(need_name: str) -> bool:
-    """Click the action button mapped to `need_name` (see ButtonNeedHandler),
-    then wait for its icon to actually clear (wait_until_need_gone()) rather
-    than guessing how long that takes. Assumes refresh_button_mapping() has
-    already been called this cycle. Returns True if a mapped button was
-    actually found and clicked, False otherwise - the caller must not treat
-    this need as resolved (or respawn) on a False return."""
+    """Click the button mapped to `need_name`, then wait for its icon to clear. Returns
+    False if no button was mapped or clicked (the need must not count as resolved).
+    See docs/ARCHITECTURE.md#need-handlers.
+    """
     if need_name not in state.button_positions:
         print(f"[!] WARNING: no button mapped for '{need_name}'")
         return False
@@ -1386,18 +1163,11 @@ def walk_to_buttons() -> None:
     print("[debug] arrived at buttons")
 
 def walk_alternating(direction_pair: tuple[str, str], total_duration: float, step_duration: float = cfg.WALK_ALTERNATING_STEP, need_name: Optional[str] = None) -> None:
-    """Alternate between the two given keys, holding each for `step_duration`,
-    for a total of `total_duration` - or less, if `need_name` is given and
-    confirmed gone first. Shared by the walk need (a/d, left-right) and the
-    ride need (w/s, forward-back) - same pattern, different keys.
-
-    When `need_name` is given, a background thread (_watch_need_gone())
-    polls for it clearing *while* the character is still moving, instead
-    of only checking once the movement finishes - the walk stops as soon
-    as that thread confirms it, rather than always running the full
-    total_duration. If the time runs out with the need still showing, that is
-    logged as a failure and state.need_cleared is set False (not when the
-    last check couldn't read the icons - then nothing is known)."""
+    """Alternate the two keys, each held `step_duration`, for `total_duration` - or until
+    `need_name` is confirmed gone by a watcher thread. A timeout with the need still
+    showing is logged and sets state.need_cleared False.
+    See docs/ARCHITECTURE.md#checking-a-need-in-parallel-with-movement.
+    """
     print(f"[debug] walking alternating {direction_pair} pattern for {total_duration}s...")
     if not focus_roblox():
         return
@@ -1431,7 +1201,7 @@ def walk_alternating(direction_pair: tuple[str, str], total_duration: float, ste
 
     if cleared_event.is_set():
         print(f"[debug] {need_name} cleared, stopping early")
-    elif need_name is not None and answers and answers[-1] is False:
+    elif need_name is not None and answers and not answers[-1]:
         print(f"[debug] {need_name} still showing after {total_duration}s")
         log_failure(f"{need_name} still showing after {total_duration}s")
         state.need_cleared = False
@@ -1463,10 +1233,9 @@ def lure_collect() -> bool:
     return True
 
 def set_new_lure() -> bool:
-    """Click the two backpack positions that place a fresh lure, once the
-    current one's rewards have been collected. Split out from
-    lure_collect() so the placement sequence alone can be tested/tuned
-    without walking to the old lure first."""
+    """Click the two backpack positions that place a fresh lure (split out of
+    lure_collect() so it can be tuned alone). See docs/ARCHITECTURE.md#side-actions.
+    """
     if not focus_roblox():
         return False
     hover_click(*cfg.LURE_NEW_POS_1)
@@ -1490,11 +1259,9 @@ def tree_collect() -> bool:
     return True
 
 def setup_game() -> bool:
-    """Setup: lock the house, set the backpack's item filter to favorites
-    only, then disable trades (disable_trades()). Not part of the cycle -
-    only run on demand (the GUI's Setup button), and after a rejoin. Stray
-    windows are closed first, since an open one would take its clicks, and
-    the in-task checks run throughout (minigames only declined)."""
+    """Lock the house, filter the backpack to favorites and disable trades. Run on demand
+    and after a rejoin, not in the cycle. See docs/ARCHITECTURE.md#side-actions.
+    """
     with task_unscrew(play_minigames=False):
         return _setup_steps()
 
@@ -1567,10 +1334,9 @@ def disable_trades() -> bool:
     return True
 
 def parse_server_link(link: str) -> Optional[tuple[str, str]]:
-    """Turn a private server link into (type, code) for run_deeplink(), or
-    None if it isn't one. Understands the share form
-    (https://www.roblox.com/share?code=...&type=Server) and the older
-    ...?privateServerLinkCode=... form."""
+    """Turn a private server link (share or older form) into (type, code), or None.
+    See docs/ARCHITECTURE.md#side-actions.
+    """
     match = re.search(r"privateServerLinkCode=(\w{32})", link, re.I)
     if match:
         return "LinkCode", match.group(1)
@@ -1591,12 +1357,9 @@ def run_deeplink(server: Optional[tuple[str, str]] = None) -> None:
     os.startfile(uri)  # type: ignore[attr-defined]  # Windows only
 
 def close_roblox(clean_leave: bool = True) -> None:
-    """Leave the game properly (esc, l, enter - only if `clean_leave`, and
-    only if the window is tall enough for L to work), then kill any Roblox
-    process still around and wait REJOIN_CLOSE_WAIT. Nothing here needs
-    Roblox to stay focused. `clean_leave` is off when the game is already
-    gone or showing the Disconnected dialog, where those keys do nothing
-    useful and Enter could press Reconnect."""
+    """Leave the game cleanly (only if `clean_leave`), kill any Roblox process left and
+    wait REJOIN_CLOSE_WAIT. See docs/ARCHITECTURE.md#side-actions.
+    """
     window = roblox_window()
     if clean_leave and window is not None and window.height >= cfg.REJOIN_MIN_LEAVE_HEIGHT and focus_roblox():
         print("[debug] leaving the game...")
@@ -1618,14 +1381,10 @@ def detect_play_button(img: Image) -> bool:
     return int(np.count_nonzero(mask)) >= cfg.REJOIN_PLAY_MIN_PIXELS
 
 def leave_and_rejoin(clean_leave: bool = True) -> bool:
-    """Close Roblox, relaunch the game through a deeplink (to the private
-    server saved in the GUI, or a public one if none is saved), wait for it
-    to load, click Play, wait REJOIN_AFTER_JOIN_WAIT and respawn - see the
-    REJOIN_* settings. Retries the whole thing up to REJOIN_MAX_ATTEMPTS
-    times. Run from the GUI's Leave & rejoin button and by rejoin_game().
-    Returns True once back in the game, False if every attempt failed (or
-    the saved link isn't a valid private server link). `clean_leave` is
-    passed on to close_roblox()."""
+    """Close Roblox, relaunch through a deeplink, wait for the game, click Play and respawn;
+    up to REJOIN_MAX_ATTEMPTS times. Returns True once back in the game.
+    See docs/ARCHITECTURE.md#side-actions.
+    """
     link = load_game_config()["private_server_link"].strip()
     server = None
     if link:
@@ -1670,6 +1429,7 @@ def leave_and_rejoin(clean_leave: bool = True) -> bool:
         print(f"[debug] waiting {cfg.REJOIN_AFTER_JOIN_WAIT}s, then respawning...")
         wait_stoppable(cfg.REJOIN_AFTER_JOIN_WAIT)
         state.last_rejoin = state.last_progress = state.last_detection = time.time()   # first: the respawn can raise FocusLost
+        state.white_since = None
         respawn_character()
         print("[!] Rejoin complete!")
         return True
@@ -1689,10 +1449,9 @@ def leave_and_rejoin(clean_leave: bool = True) -> bool:
 # behavior.
 
 def macro_window_reference_rect() -> Optional[Box]:
-    """The macro's own window as a (left, top, right, bottom) box in reference
-    space (plus FOCUS_PET_IGNORE_MARGIN), or None when there's no GUI or it
-    can't be measured. Its console scrolls and flickers, which looks like
-    movement to focus_pet()."""
+    """The macro's own window as a reference-space box (plus FOCUS_PET_IGNORE_MARGIN) or
+    None: its scrolling console looks like movement to focus_pet(). See docs/ARCHITECTURE.md#need-handlers.
+    """
     if state.macro_window is None:
         return None
     measure = lambda: (state.macro_window.root.winfo_x(), state.macro_window.root.winfo_y(),
@@ -1708,12 +1467,10 @@ def macro_window_reference_rect() -> Optional[Box]:
             int((box[2] - left) * scale_x) + m, int((box[3] - top) * scale_y) + m)
 
 def moving_blobs(img_a: Image, img_b: Image, top_percent: float = cfg.FOCUS_PET_REGION_TOP_PERCENT, ignore: Sequence[Box] = ()) -> tuple[list[tuple[int, int, int, int, int]], Image, int]:
-    """Compare two same-size BGR screenshots over the bottom (1 - top_percent)
-    of the screen - leaving out every (left, top, right, bottom) box in
-    `ignore`, e.g. the macro's own window - and return ([(x, y, w, h, area) per blob of pixels that
-    changed between them, largest first, in screen coordinates], the change
-    mask of the region, its top row). Pure image logic, no input or waiting,
-    so it can be tested on its own."""
+    """Diff two screenshots below the top FOCUS_PET_REGION_TOP_PERCENT, minus the `ignore`
+    boxes: ([(x, y, w, h, area)] largest first, the change mask, the region's top row).
+    Pure image logic. See docs/ARCHITECTURE.md#need-handlers.
+    """
     top = int(img_a.shape[0] * top_percent)
     diff = cv2.absdiff(cv2.cvtColor(img_a[top:], cv2.COLOR_BGR2GRAY),
                        cv2.cvtColor(img_b[top:], cv2.COLOR_BGR2GRAY))
@@ -1734,11 +1491,6 @@ def moving_blobs(img_a: Image, img_b: Image, top_percent: float = cfg.FOCUS_PET_
         blobs.append((x, top + y, w, h, int(area)))
     return blobs, mask, top
 
-def find_moving_blobs(img_a: Image, img_b: Image, top_percent: float = cfg.FOCUS_PET_REGION_TOP_PERCENT, ignore: Sequence[Box] = ()) -> list[Point]:
-    """The (x, y) center of every blob moving_blobs() finds, largest first."""
-    blobs, _, _ = moving_blobs(img_a, img_b, top_percent, ignore)
-    return [(x + w // 2, y + h // 2) for x, y, w, h, _ in blobs]
-
 def save_focus_pet_debug(img: Image, blobs: list[tuple[int, int, int, int, int]], mask: Image, top: int, name: str = "debug_focus_pet.png", ignore: Sequence[Box] = ()) -> None:
     """Write debug/<name>: `img` (the second frame) with the searched region
     marked, the changed pixels in red, and a numbered box around every blob -
@@ -1755,22 +1507,14 @@ def save_focus_pet_debug(img: Image, blobs: list[tuple[int, int, int, int, int]]
     cv2.imwrite(os.path.join(cfg.IMAGES_DIR, name), marked)
 
 def detect_pet_focus(img: Image) -> bool:
-    """True if the pet focus view is showing in `img` - the "pet_focus" crop
-    of STRAY_WINDOWS (its BACK button)."""
-    crop = load_templates(cfg.STRAY_WINDOW_DIR).get("pet_focus")
-    return crop is not None and template_score(img, crop, cfg.STRAY_WINDOWS["pet_focus"]["box"]) >= cfg.STRAY_WINDOW_MATCH_THRESHOLD
+    """True if the pet focus view (its BACK button) is showing in `img`."""
+    return popup_visible(img, "pet_focus")
 
 def focus_pet(click_duration: float = cfg.CLICK_MOVE_DURATION) -> bool:
-    """Click the pet to open its interaction menu. The pet is found by
-    movement: two screenshots of the bottom of the screen FOCUS_PET_FRAME_GAP
-    apart, then a click on the center of everything that moved (see
-    moving_blobs(), which leaves out the macro's own window). What it saw is printed and written to
-    debug/debug_focus_pet.png (the blobs, marked) - and what the screen looked
-    like after the clicks to debug/debug_focus_pet_after.png. Returns True if
-    anything was clicked, False if nothing moved. It looks at whether the pet
-    is focused after each click and stops clicking the moment it is. If the pet is already
-    focused (the pet focus view's BACK button is on screen) there's nothing
-    to click: it just returns True."""
+    """Click the pet to open its menu: found by movement between two frames, clicked at the
+    centre of each moving blob until detect_pet_focus() sees the focus view. Returns
+    True if anything was clicked (or the pet was already focused). See docs/ARCHITECTURE.md#need-handlers.
+    """
     if detect_pet_focus(grab_screen()):
         print("[debug] focus_pet: the pet is already focused")
         return True
@@ -1817,10 +1561,9 @@ def select_backpack_tab(pos: Point) -> None:
     hover_click(*pos)
 
 def equip_favorite_vehicle() -> None:
-    """Open the backpack, select the first vehicle (the favorite, once
-    setup_game() has filtered the backpack to favorites) and equip it, then
-    close the backpack. Shared by ride and the helicopter step of
-    teleport-walk needs."""
+    """Open the backpack, equip the first vehicle (the favorite) and close it. Shared by
+    ride and the helicopter needs. See docs/ARCHITECTURE.md#need-handlers.
+    """
     print("[debug] opening backpack...")
     pydirectinput.press(cfg.KEY_BACKPACK)
     wait_interruptible(cfg.UI_SETTLE)
@@ -1968,12 +1711,9 @@ class PetNeedHandler(NeedHandler):
         return True
 
 class ChooseNeedHandler(NeedHandler):
-    """The 'choose' need: focus_pet() to open the pet's interaction menu,
-    find the button with a distinctive exact color (it has no distinguishing
-    icon, so shape detection doesn't apply here), move to it slowly rather
-    than jumping straight there, click it, then click the middle of the
-    screen to dismiss the menu. It doesn't wait for the icon to clear - that
-    happens at once, and process_needs() checks again after every need."""
+    """The 'choose' need: focus the pet, move slowly to the button of one exact colour,
+    click it, then click mid-screen. Doesn't wait for the icon. See docs/ARCHITECTURE.md#need-handlers.
+    """
 
     def handle(self) -> bool:
         print("[!] CHOOSE NEED")
@@ -2040,10 +1780,9 @@ class RideNeedHandler(NeedHandler):
         return True
 
 def teleport_to(category_pos: Point) -> None:
-    """Open the backpack and teleport via the given category tab
-    (TELEPORT_PETS_TAB_POS for the nursery, TELEPORT_VEHICLES_TAB_POS for
-    the dealership), then walk backward briefly to clear the landing spot.
-    Shared by every need that teleports somewhere (TeleportWalkNeedHandler)."""
+    """Open the backpack, teleport via the category tab, walk back to clear the landing
+    spot. Shared by the teleport-walk needs. See docs/ARCHITECTURE.md#need-handlers.
+    """
     print("[debug] opening backpack...")
     pydirectinput.press(cfg.KEY_BACKPACK)
     wait_interruptible(cfg.UI_SETTLE)
@@ -2060,14 +1799,10 @@ def teleport_to(category_pos: Point) -> None:
     wait_interruptible(cfg.TELEPORT_SETTLE_WAIT)
 
 class TeleportWalkNeedHandler(NeedHandler):
-    """A need that teleports somewhere, holds a sequence of movement keys,
-    then waits for the need to clear (see wait_until_need_gone()).
-    process_needs() respawns afterwards, since these leave the character
-    somewhere else on the map. What each one does is configured in
-    TELEPORT_WALK_NEEDS. An entry with `helicopter` set (default
-    HELICOPTER_REQUIRED) flies instead of walking: after teleporting it
-    steps forward, equips the favorite vehicle and holds r, and once the
-    steps have brought it to the destination it presses space."""
+    """Teleport, hold a sequence of keys, then wait for the need to clear; configured per
+    need in TELEPORT_WALK_NEEDS (`helicopter` flies instead). process_needs() respawns
+    afterwards. See docs/ARCHITECTURE.md#need-handlers.
+    """
 
     def __init__(self, name: str) -> None:
         self.name = name
@@ -2114,10 +1849,10 @@ class TeleportWalkNeedHandler(NeedHandler):
         return True
 
     def _open_dialog(self) -> bool:
-        """Press the prompt's key ('e') and wait for the need's dialog (sick: the doctor's Yes/No). If it isn't
-        recognised and the pet view is open - the prompt is then a hand button 'e' doesn't press - back out of it
-        and click the prompt on screen (the entry's `prompt_pos`), and look once more. If the pet view is not open
-        the answer is to go on (the dialog was most likely just not recognised). Returns whether to click Yes."""
+        """Press 'e' and wait for the need's dialog (sick); if it isn't recognised and the pet
+        view is open, back out and click the prompt, then look again. Returns whether to click
+        Yes. See docs/ARCHITECTURE.md#need-handlers.
+        """
         wait_interruptible(cfg.SICK_PRE_E_WAIT)
         pydirectinput.press("e")
         wait_interruptible(cfg.SICK_CONFIRM_WAIT)
@@ -2165,13 +1900,10 @@ def get_need_handler(need_name: str) -> Optional[NeedHandler]:
     return handler_cls() if handler_cls else None
 
 def record_detection(detected: list[str]) -> None:
-    """Track stuck needs: one that was attempted on the last pass and is
-    still on screen now has failed to clear, and an enabled need that does
-    that NEED_STUCK_CHECKS times in a row is disabled for the rest of the
-    run - retrying it forever just wastes time. A check where it's gone,
-    even once, breaks the streak. (A need merely waiting its turn behind
-    others doesn't count - only attempts do.) Call this for every check,
-    including ones that detect nothing."""
+    """Track stuck needs: one attempted last pass and still on screen counts a strike, and
+    NEED_STUCK_CHECKS in a row disables it for the run. Call for every check.
+    See docs/ARCHITECTURE.md#stuck-needs.
+    """
     for need_name in state.attempted_last:
         if need_name in detected:
             state.attempt_streaks[need_name] = state.attempt_streaks.get(need_name, 0) + 1
@@ -2187,21 +1919,14 @@ def record_detection(detected: list[str]) -> None:
                     f"({len(state.disabled_needs)} disabled now: {', '.join(sorted(state.disabled_needs))})")
 
 def process_needs() -> bool:
-    """Detect needs on screen and resolve the first one that can be: its
-    handler runs via get_need_handler(), and if it *actually* resolved the
-    need the character respawns and this returns True - the caller then
-    starts a fresh check, so the next need is always picked from what's on
-    screen now, never from a list taken before the last one was handled. A
-    need that isn't resolved (disabled, unmapped, or its handler returned
-    False) is skipped for the next one, with no respawn. Returns False if
-    nothing was resolved - including when nothing was on screen, which
-    prints nothing (the caller shows a waiting line instead)."""
+    """Detect needs and resolve the first one that can be: respawn and return True on
+    success (so the next need is picked from a fresh look), skip failures without respawn,
+    False if nothing was resolved. See docs/ARCHITECTURE.md#process_needs-step-by-step.
+    """
     if not focus_roblox_click():
         return False
 
     found_icons, full_img = detect_need_icons(save_debug=True)
-    if not detect_need_bar_readable(full_img):
-        state.last_detection = time.time()   # can't tell whether there are needs - not a reason to respawn
     if not found_icons:
         record_detection([])
         note_idle_check()
@@ -2305,13 +2030,10 @@ def process_needs() -> bool:
 # dismiss, recovering the game when it's gone wrong, and the timed chores.
 
 def detect_paycheck() -> bool:
-    """Detect the paycheck popup by the crop of its bank-card header
-    (ref/popups/paycheck.png, matched within PAYCHECK_BOX) and, if present,
-    dismiss it. Returns True if the popup was detected and dismissed, False
-    otherwise. Not by the green of its CASH OUT button, which the backpack's
-    tiles share."""
-    crop = load_templates(cfg.STRAY_WINDOW_DIR).get("paycheck")
-    if crop is None or template_score(grab_screen(), crop, cfg.PAYCHECK_BOX) < cfg.PAYCHECK_MATCH_THRESHOLD:
+    """Detect the paycheck popup by the crop of its bank-card header and dismiss it. Returns
+    True if it was there. See docs/ARCHITECTURE.md#need-handlers.
+    """
+    if not popup_visible(grab_screen(), "paycheck"):
         return False
 
     print("[debug] paycheck popup detected, dismissing...")
@@ -2328,12 +2050,10 @@ def detect_backpack_expanded(img: Image) -> bool:
     return bool(np.count_nonzero(mask) / mask.size >= cfg.BACKPACK_HEADER_MIN_FRACTION)
 
 def detect_backpack_normal(img: Image) -> bool:
-    """True if the NORMAL backpack is open in `img`: its purple frame within
-    BACKPACK_NORMAL_PANEL_BOX and the white of its item grid
-    (BACKPACK_NORMAL_WHITE_BOX), both - the white alone would also be any
-    bright scenery. Or its "BACKPACK" title crop."""
-    title = load_templates(cfg.STRAY_WINDOW_DIR).get("backpack_normal")
-    if title is not None and template_score(img, title, cfg.BACKPACK_NORMAL_TITLE_BOX) >= cfg.BACKPACK_NORMAL_TITLE_THRESHOLD:
+    """True if the normal backpack is open: its purple frame plus the white item grid, or its
+    title crop. See docs/ARCHITECTURE.md#need-handlers.
+    """
+    if popup_visible(img, "backpack_normal"):
         return True
     left, top, right, bottom = cfg.BACKPACK_NORMAL_PANEL_BOX
     frame = exact_color_mask(img[top:bottom, left:right], cfg.BACKPACK_NORMAL_COLOR, cfg.BACKPACK_NORMAL_TOLERANCE)
@@ -2352,14 +2072,9 @@ def detect_backpack_open(img: Image) -> bool:
 # close_backpack_if_stuck()).
 
 def close_backpack_if_open(step: str = "") -> bool:
-    """Close the backpack if it's open, in either form: press KEY_BACKPACK,
-    look again, and press once more if it's still open (the expanded one takes
-    two presses - the first shrinks it to the normal one, the second closes
-    that). If it's still open after the second press the key isn't doing what's
-    expected, so that's logged as a failure and it stops instead of pressing
-    again (another press could just reopen it). Does nothing unless Roblox has
-    the focus, so the key can't go to another window. `step` names what just
-    ran (see close_backpack()), for the log. Returns True if it was open."""
+    """Close the backpack in either form (key, look, key once more); logs a failure and stops
+    if it is still open. Returns True if it was open. See docs/ARCHITECTURE.md#click--input-primitives.
+    """
     if not is_roblox_focused() or not detect_backpack_open(grab_screen()):
         return False
     img = grab_screen()
@@ -2368,10 +2083,9 @@ def close_backpack_if_open(step: str = "") -> bool:
     cv2.imwrite(os.path.join(cfg.IMAGES_DIR, "debug_backpack_open.png"), img)
     if detect_backpack_expanded(img):
         # Its BACK button closes it entirely; the key would only shrink it first.
-        crop = load_templates(cfg.STRAY_WINDOW_DIR).get("backpack_back")
-        score, center = find_template(img, crop, cfg.BACKPACK_BACK_BOX) if crop is not None else (0.0, None)
-        if center is not None and score >= cfg.BACKPACK_BACK_MATCH_THRESHOLD:
-            hover_click(*center)
+        back = popup_found(img, "backpack_back")
+        if back is not None:
+            hover_click(*back)
             wait_interruptible(cfg.UI_SETTLE)
             if not detect_backpack_open(grab_screen()):
                 log_run_event("backpack was left open - closed it (BACK)" + (f" after {step}" if step else ""))
@@ -2386,22 +2100,18 @@ def close_backpack_if_open(step: str = "") -> bool:
     return True
 
 def close_backpack(step: str) -> None:
-    """End of a click sequence (`step` names it, for the log): press the
-    backpack key, then check it really closed - a misplaced click earlier can
-    have expanded the backpack, when the key only shrinks it - and close it
-    properly if not (close_backpack_if_open())."""
+    """End of a click sequence: press the backpack key and check it really closed.
+    See docs/ARCHITECTURE.md#click--input-primitives.
+    """
     pydirectinput.press(cfg.KEY_BACKPACK)
     wait_interruptible(cfg.UI_SETTLE)
     close_backpack_if_open(step)
 
 def close_backpack_if_stuck(in_task: bool) -> bool:
-    """The backpack part of unscrew(). At the top of a cycle no handler has it
-    open, so it's closed at once (close_backpack_if_open()). During a task a
-    handler has the normal one open for a few seconds on purpose, so it's only
-    closed once it has been seen open on BACKPACK_CLOSE_CONFIRMATIONS checks
-    in a row - at UNSCREW_TASK_INTERVAL apart that's a backpack open for
-    longer than that, which a handler never needs. Returns True if it's still
-    open (a first sighting, mid-task)."""
+    """The backpack part of unscrew(): closed at once at the top of a cycle, mid-task only
+    after BACKPACK_CLOSE_CONFIRMATIONS sightings in a row. Returns True if still open.
+    See docs/ARCHITECTURE.md#need-handlers.
+    """
     if not in_task:
         close_backpack_if_open()
         return False
@@ -2423,26 +2133,31 @@ def detect_disconnect(img: Image) -> bool:
     mask = exact_color_mask(img[top:bottom, left:right], cfg.DISCONNECT_PANEL_COLOR, cfg.DISCONNECT_PANEL_TOLERANCE)
     return bool(np.count_nonzero(mask) / mask.size >= cfg.DISCONNECT_PANEL_MIN_FRACTION)
 
+def detect_white_screen(img: Image) -> bool:
+    """True if most of `img` is completely white - the transition shown on a respawn, teleport or change of
+    location (WHITE_SCREEN_LEVEL / WHITE_SCREEN_MIN_FRACTION). See docs/ARCHITECTURE.md#stuck-needs."""
+    return bool(np.count_nonzero(img.min(axis=2) >= cfg.WHITE_SCREEN_LEVEL) / (img.shape[0] * img.shape[1]) >= cfg.WHITE_SCREEN_MIN_FRACTION)
+
 ROBLOX_NOT_RUNNING = "Roblox isn't running"
 
 def rejoin_reason() -> Optional[tuple[str, str]]:
-    """Why the game needs rejoining right now, as (kind, reason) - or None if
-    it doesn't. In order of priority:
-      "disconnect" - Roblox crashed (its crash window is open), isn't
-          running, or is showing the Disconnected dialog;
-      "stuck" - DISABLED_NEEDS_REJOIN_THRESHOLD needs have been disabled
-          for this run;
-      "stalled" - no need has been resolved for NO_PROGRESS_REJOIN_INTERVAL
-          (see State.last_progress): the game is up but nothing is working;
-      "scheduled" - it has been REJOIN_INTERVAL since the last rejoin (see
-          State.last_rejoin)."""
+    """Why the game needs rejoining now, as (kind, reason), or None - in priority order
+    "disconnect", "white_screen", "stuck", "stalled", "scheduled". See docs/ARCHITECTURE.md#stuck-needs.
+    """
     windows = gw.getAllWindows()   # listed once (a Windows call that reads every window's title) for both questions
     if any(w.title == cfg.ROBLOX_CRASH_WINDOW_TITLE for w in windows):
         return "disconnect", "Roblox crashed"
     if not any("roblox" in w.title.lower() for w in windows):
         return "disconnect", ROBLOX_NOT_RUNNING
-    if detect_disconnect(grab_screen()):
+    screen = grab_screen()
+    if detect_disconnect(screen):
         return "disconnect", "disconnected from the game"
+    if not detect_white_screen(screen):
+        state.white_since = None
+    elif state.white_since is None:
+        state.white_since = time.time()
+    elif time.time() - state.white_since >= cfg.WHITE_SCREEN_REJOIN_AFTER:
+        return "white_screen", f"the screen has been white for {cfg.WHITE_SCREEN_REJOIN_AFTER:g}s"
     if len(state.disabled_needs) >= cfg.DISABLED_NEEDS_REJOIN_THRESHOLD:
         return "stuck", f"{len(state.disabled_needs)} needs disabled ({', '.join(sorted(state.disabled_needs))})"
     if state.last_progress is not None and time.time() - state.last_progress >= cfg.NO_PROGRESS_REJOIN_INTERVAL:
@@ -2452,17 +2167,10 @@ def rejoin_reason() -> Optional[tuple[str, str]]:
     return None
 
 def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
-    """Recover when the game needs it (see rejoin_reason()), or - with `kinds`
-    (e.g. ("disconnect",), for the mid-task check) - only when it needs it for
-    one of those reasons: rejoin it
-    (leave_and_rejoin()), run setup_game() - the rejoin resets the game
-    settings it sets - and clear the disabled needs and their detection
-    history so every need gets a fresh chance. Returns True if it recovered,
-    False if nothing needed doing or the rejoin failed (the cause is still
-    there, so the next cycle tries again). Everything but the scheduled
-    rejoin is a failure: it's logged with a screenshot, which shows the
-    Disconnected dialog and its error code if that's why. The clean esc/l/
-    enter leave is skipped when the game is already gone."""
+    """Recover when rejoin_reason() says so (or only for `kinds`): rejoin, run setup_game(),
+    clear disabled needs. Returns True if it recovered. All but the scheduled rejoin are
+    logged failures. See docs/ARCHITECTURE.md#stuck-needs.
+    """
     at_start = state.run_start_pending and kinds is None
     if kinds is None:
         state.run_start_pending = False   # (an in-task look is never the start of a run)
@@ -2499,20 +2207,13 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
     return True
 
 def detect_sick_dialog(img: Image) -> bool:
-    """True if the sick need's "Ask Doctor Heart to heal your family?" dialog is on screen in `img` (the
-    "sick_dialog" crop in STRAY_WINDOW_DIR, found within SICK_DIALOG_BOX)."""
-    crop = load_templates(cfg.STRAY_WINDOW_DIR).get("sick_dialog")
-    return crop is not None and template_score(img, crop, cfg.SICK_DIALOG_BOX) >= cfg.SICK_DIALOG_MATCH_THRESHOLD
+    """True if the sick need's "Ask Doctor Heart to heal your family?" dialog is on screen in `img`."""
+    return popup_visible(img, "sick_dialog")
 
 def detect_minigame_popup(img: Image) -> bool:
-    """True if one of the Halloween minigame popups ("Ghost Gallery is
-    starting soon! Teleport there now?", "Hauntlet 2 is starting soon!...")
-    is on screen in `img`. They share one layout and nothing here tells them
-    apart - only that a minigame is offering to teleport you. Neither button
-    color is unique on its own (the Yes green is also the paycheck's CASH OUT
-    green, the No red is also the Exit Home button), so it needs both: the
-    Yes green, with the No red close by to its left. Not the sick need's
-    doctor dialog, which looks the same but belongs to that handler."""
+    """True if a Halloween minigame popup is on screen: the Yes green with the No red close
+    to its left (neither colour is unique alone). See docs/ARCHITECTURE.md#need-handlers.
+    """
     if detect_sick_dialog(img):
         return False
     ys, xs = np.where(exact_color_mask(img, cfg.GREEN_BUTTON_COLOR) > 0)
@@ -2527,13 +2228,9 @@ def detect_minigame_popup(img: Image) -> bool:
 _TEMPLATE_CACHE: dict[str, tuple[Any, dict[str, Image]]] = {}
 
 def load_templates(directory: str) -> dict[str, Image]:
-    """{lower-cased file name without extension: image} for every .png in
-    `directory` (none if it doesn't exist). The images are read once and kept:
-    a call only looks at the files' modification times (a few cheap stats,
-    against decoding every PNG on every check), and reads them again when one
-    is added, changed or removed - so a crop replaced while the macro runs is
-    picked up. The images are shared between calls, so they must not be
-    modified."""
+    """{name: image} for every .png in `directory`, cached and re-read when a file changes.
+    The images are shared: don't modify them. See docs/ARCHITECTURE.md#need-handlers.
+    """
     if not os.path.isdir(directory):
         return {}
     files = sorted(f for f in os.listdir(directory) if f.lower().endswith(".png"))
@@ -2567,6 +2264,20 @@ def find_template(img: Image, crop: Image, box: Box) -> tuple[float, Optional[Po
     _, score, _, (x, y) = cv2.minMaxLoc(cv2.matchTemplate(band, crop, cv2.TM_CCOEFF_NORMED))
     return float(score), (left + x + crop.shape[1] // 2, top + y + crop.shape[0] // 2)
 
+def popup_found(img: Image, name: str) -> Optional[Point]:
+    """Where the STRAY_WINDOW_DIR crop `name` is in `img` - its centre - if it matches within its box well enough
+    (POPUP_TEMPLATES, or STRAY_WINDOWS for a stray window), else None. See docs/ARCHITECTURE.md#popup-templates."""
+    crop = load_templates(cfg.STRAY_WINDOW_DIR).get(name)
+    entry = cfg.POPUP_TEMPLATES.get(name) or cfg.STRAY_WINDOWS[name]
+    if crop is None:
+        return None
+    score, centre = find_template(img, crop, entry["box"])
+    return centre if score >= entry.get("threshold", cfg.STRAY_WINDOW_MATCH_THRESHOLD) else None
+
+def popup_visible(img: Image, name: str) -> bool:
+    """True if the crop `name` is on screen in `img` (see popup_found())."""
+    return popup_found(img, name) is not None
+
 def identify_minigame(img: Image) -> Optional[str]:
     """Which minigame the popup in `img` is for: the name whose title crop
     (MINIGAME_TEMPLATE_DIR) matches best within MINIGAME_TITLE_BOX, if that
@@ -2592,19 +2303,12 @@ def wanting_pet_focus() -> Iterator[None]:
         state.pet_focus_wanted = False
 
 def dismiss_stray_windows() -> Optional[str]:
-    """Close any window from STRAY_WINDOWS that's open (found by its title
-    crop in STRAY_WINDOW_DIR): the Trading Hub the macro can open by a
-    misclick - first its "Go to the Trading Hub to edit listings!" popup, by
-    the green Okay button - and the Star Rewards, which opens once a day.
-    They cover the screen and get in the way of everything the macro clicks
-    (the Star Rewards also hides the need icons; the Trading Hub doesn't, but
-    needs can't be resolved with it in the way), and the paycheck check
-    mistakes their green buttons for CASH OUT. Returns the name of the window
-    closed, or None."""
+    """Close any window from STRAY_WINDOWS that is open (found by its title crop); returns
+    its name or None. See docs/ARCHITECTURE.md#need-handlers.
+    """
     img = grab_screen()
-    for name, crop in load_templates(cfg.STRAY_WINDOW_DIR).items():
-        config = cfg.STRAY_WINDOWS.get(name)
-        if config is None or template_score(img, crop, config["box"]) < cfg.STRAY_WINDOW_MATCH_THRESHOLD:
+    for name, config in cfg.STRAY_WINDOWS.items():
+        if not popup_visible(img, name):
             continue
         if config.get("only_when_unwanted") and state.pet_focus_wanted:
             continue
@@ -2707,10 +2411,9 @@ def minigame_wait(duration: float, watch: MinigameWatch) -> None:
             return
 
 def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
-    """Hauntlet 2: wait MINIGAME_START_WAIT for it to start (no needs can be
-    seen while it runs, and the lobby counts down first), then hold forward
-    until the victory screen shows - or the overlay says it's over. Returns
-    True if it was won before `deadline`."""
+    """Hauntlet 2: wait for it to start, hold forward until the victory screen shows or
+    the overlay says it's over. True if won before `deadline`. See docs/ARCHITECTURE.md#need-handlers.
+    """
     print(f"[debug] hauntlet 2: waiting {cfg.MINIGAME_START_WAIT:g}s for it to start...")
     minigame_wait(cfg.MINIGAME_START_WAIT, watch)
     watch.start_wait_over()
@@ -2725,10 +2428,9 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
     return False
 
 def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
-    """Ghost Gallery: run about at random, jumping, with the mouse held in
-    GHOST_GALLERY_HOLD-second holds (GHOST_GALLERY_HOLD_GAP apart), until the
-    victory screen shows - or the overlay says it's over. Returns True if it
-    was won before `deadline`."""
+    """Ghost Gallery: run about at random with the mouse held in holds until victory or the
+    overlay says it's over. True if won before `deadline`. See docs/ARCHITECTURE.md#need-handlers.
+    """
     print(f"[debug] ghost gallery: waiting {cfg.MINIGAME_START_WAIT:g}s for it to start...")
     minigame_wait(cfg.MINIGAME_START_WAIT, watch)
     watch.start_wait_over()
@@ -2755,10 +2457,9 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
 MINIGAME_PLAYERS = {"hauntlet_2": play_hauntlet_2, "ghost_gallery": play_ghost_gallery}
 
 def click_nice_until_gone() -> bool:
-    """Click the win screen's NICE! button, wait MINIGAME_FINISH_WAIT, and
-    look again: while the win screen is still up (the click missed, or the
-    screen was still animating in) click once more, up to
-    MINIGAME_VICTORY_CLICK_TRIES times in all. Returns True if it's gone."""
+    """Click the win screen's NICE! until it is gone (up to MINIGAME_VICTORY_CLICK_TRIES).
+    Returns True if it is. See docs/ARCHITECTURE.md#need-handlers.
+    """
     for attempt in range(cfg.MINIGAME_VICTORY_CLICK_TRIES):
         hover_click(*cfg.MINIGAME_VICTORY_BUTTON_POS)
         wait_interruptible(cfg.MINIGAME_FINISH_WAIT)
@@ -2769,11 +2470,10 @@ def click_nice_until_gone() -> bool:
     return False
 
 def play_minigame(name: str) -> bool:
-    """Take the popup's Yes, play minigame `name` until its victory screen
-    shows, click NICE!, and respawn. Gives up (a logged failure) when the
-    overlay shows it's over or never started (MinigameWatch), or after
-    MINIGAME_MAX_DURATION.
-    Counts as progress for the no-progress rejoin. Returns True if it was won."""
+    """Take the popup's Yes, play `name` until its victory screen, click NICE!, respawn. Gives
+    up (a logged failure) if the overlay shows it over or never started, or after
+    MINIGAME_MAX_DURATION. Counts as progress only if won. See docs/ARCHITECTURE.md#need-handlers.
+    """
     label = cfg.MINIGAME_LABELS.get(name, name)
     print(f"[!] playing {label}")
     log_run_event(f"minigame started: {label}")
@@ -2793,19 +2493,16 @@ def play_minigame(name: str) -> bool:
     else:
         reason = watch.problem or f"did not reach the victory screen within {cfg.MINIGAME_MAX_DURATION:g}s"
         log_failure(f"{label} {reason}")
-    state.last_progress = state.last_detection = time.time()
+    state.last_detection = time.time()      # no needs could be seen while it ran
+    if won:
+        state.last_progress = time.time()   # a failed one (never started, left early) must not reset the no-progress rejoin
     respawn_character()
     return won
 
 def close_minigame_win_screen(abandon: bool = True) -> bool:
-    """If the minigame win screen (detect_minigame_victory()) is up - whether
-    the macro was playing that minigame or not: one that ended after the
-    macro had stopped watching it, say - click NICE! and wait
-    MINIGAME_FINISH_WAIT. With `abandon` (the default) it then counts as
-    progress and the character is respawned, as after a minigame it played
-    itself (the win screen has put it back in the world somewhere unknown);
-    without (setup, which can't be abandoned halfway) only the click is made.
-    Returns True if the screen was there."""
+    """If the win screen is up, click NICE!; with `abandon` also count it as progress and
+    respawn. Returns True if it was there. See docs/ARCHITECTURE.md#need-handlers.
+    """
     if not detect_minigame_victory(grab_screen()):
         return False
     print("[debug] minigame win screen is up, clicking NICE!...")
@@ -2817,13 +2514,9 @@ def close_minigame_win_screen(abandon: bool = True) -> bool:
     return True
 
 def minigame_popup(play: bool = True) -> Optional[str]:
-    """Halloween only (see HALLOWEEN): handles a minigame popup (see
-    detect_minigame_popup()). Which minigame it is comes from
-    identify_minigame(). One that is switched on ("<name>_enabled" in the game
-    config) is played (play_minigame()) - unless `play` is False, when it's
-    only closed with No so it can offer itself again; any other (switched off,
-    or not recognised) is dismissed for the session with "do not show again"
-    ticked. Returns "played" or "dismissed" if a popup was there, None if not."""
+    """Halloween only: play a popup's minigame if it is switched on, else dismiss it.
+    Returns "played", "dismissed" or None. See docs/ARCHITECTURE.md#need-handlers.
+    """
     img = grab_screen()
     if not detect_minigame_popup(img):
         return None
@@ -2843,31 +2536,13 @@ def minigame_popup(play: bool = True) -> Optional[str]:
     return "dismissed"
 
 def unscrew(in_task: bool = False, play_minigames: bool = True) -> Optional[str]:
-    """The per-cycle checks - run right after check_stop() at the top of every
-    cycle, and, with `in_task`, every UNSCREW_TASK_INTERVAL seconds while a
-    need handler or setup is running (see task_unscrew()). In order:
-      - rejoin if we've been disconnected (first, since nothing else works
-        while disconnected; mid-task only that, not the scheduled or stalled
-        rejoins, which wait for the top of a cycle);
-      - close the backpack, in either form (close_backpack_if_stuck(): at once
-        at the top of a cycle, mid-task once it's been seen open twice in a
-        row);
-      - close stray windows (dismiss_stray_windows());
-      - during Halloween, close a minigame win screen if one is up
-        (close_minigame_win_screen()) and handle a minigame popup;
-      - the paycheck popup (not while the backpack is still open - its green
-        Select All button would be mistaken for CASH OUT).
-    The stray windows and the minigame popup go before the paycheck check
-    because their green buttons would otherwise be mistaken for CASH OUT too.
-    Returns "played" if a minigame was played, "rejoined" if the game was
-    rejoined mid-task or "aborted" if a stray window that spoils the task was
-    closed (see "abort_task" in STRAY_WINDOWS) or a paycheck popup was
-    dismissed - its clicks and the dismissal leave the backpack and the
-    character in an unknown state, so the task starts over (never with
-    `play_minigames` False, i.e. in setup, which can't be abandoned halfway) - the callers
-    abandon the task - otherwise None."""
+    """The per-cycle checks (at the top of every cycle; with `in_task` also during a task):
+    rejoin, backpack, stray windows, Halloween minigames, then the paycheck popup - in
+    that order, since the green buttons of the earlier ones look like CASH OUT. Returns
+    "played", "rejoined" or "aborted" (the callers abandon the task) or None. See docs/ARCHITECTURE.md#need-handlers.
+    """
     if in_task:
-        if rejoin_game(kinds=("disconnect",)):
+        if rejoin_game(kinds=("disconnect", "white_screen")):
             return "rejoined"
     else:
         rejoin_game()
@@ -2885,10 +2560,9 @@ def unscrew(in_task: bool = False, play_minigames: bool = True) -> Optional[str]
     return played
 
 def run_side_action(action: Callable[[], bool]) -> bool:
-    """Run lure_collect() / tree_collect() with the in-task checks on (popups,
-    stray windows, a minigame can turn up while they walk about), like a need
-    handler. Returns the action's result - False if a minigame or a rejoin
-    took over (TaskInterrupted), so it's tried again next cycle."""
+    """Run lure_collect() / tree_collect() with the in-task checks on. False if a minigame
+    or rejoin took over. See docs/ARCHITECTURE.md#side-actions.
+    """
     try:
         with task_unscrew():
             return action()
@@ -2907,12 +2581,9 @@ def last_money_reset_time(now: float) -> float:
     return boundary.timestamp()
 
 def reset_money_if_due(config: dict[str, Any]) -> dict[str, Any]:
-    """The tree's money total starts again from 0 every day at
-    MONEY_RESET_HOUR. `config["money_reset_boundary"]` is the last such
-    moment already dealt with; when a later one has passed the total is reset
-    (and, like each harvest, saved at once). The first time it is seen (a
-    fresh or older config) it is only recorded, not acted on, so an update
-    doesn't wipe the day's total. Returns the config as it is now."""
+    """Reset the tree's money total at each MONEY_RESET_HOUR (first sighting only recorded).
+    Returns the config. See docs/ARCHITECTURE.md#persisted-game-config.
+    """
     boundary = last_money_reset_time(time.time())
     recorded = config["money_reset_boundary"]
     if recorded is not None and recorded >= boundary:
@@ -2924,15 +2595,10 @@ def reset_money_if_due(config: dict[str, Any]) -> dict[str, Any]:
     return update_game_config(lambda c: c.update(money_collected=0, money_reset_boundary=boundary))
 
 def side_quest() -> None:
-    """Runs once per cycle, right after unscrew(), unless side_quest_enabled
-    is off in GAME_CONFIG_PATH: tends to the money tree and the lure using
-    state persisted there. The tree is checked at most once per
-    TREE_CHECK_INTERVAL, and money_collected only ever goes up (by
-    TREE_HARVEST_YIELD per harvest, until it reaches MONEY_COLLECTED_TARGET)
-    until reset_money_if_due() starts it from 0 again at MONEY_RESET_HOUR
-    each day (or the config is reset). Each piece of
-    progress is saved the moment its action succeeds, so a stop partway
-    through doesn't lose it."""
+    """Once per cycle after unscrew(), unless side_quest_enabled is off: tend the money tree and
+    the lure from the persisted state, saving each success at once.
+    See docs/ARCHITECTURE.md#side-actions.
+    """
     config = reset_money_if_due(load_game_config())
     if not config["side_quest_enabled"]:
         return
@@ -2954,11 +2620,9 @@ def side_quest() -> None:
 # ============================================================================
 
 class RunRecorder:
-    """Records the Roblox window to a low quality video (RECORD_WIDTH x
-    RECORD_HEIGHT at RECORD_FPS) from a background thread, each frame stamped
-    with the time so it lines up with output.log and run_log.txt. Stops by
-    itself after RECORD_MAX_MINUTES. MP4 where OpenCV can write it, otherwise
-    MJPG in an .avi."""
+    """Records the Roblox window to a low-quality, time-stamped video from a background thread
+    (stops after RECORD_MAX_MINUTES). See docs/ARCHITECTURE.md#recording-a-run.
+    """
 
     def __init__(self, path: str) -> None:
         self.path = path
@@ -3022,12 +2686,9 @@ class RunRecorder:
         print(f"[!] Recording saved: {self.path} ({size_mb:.0f} MB)")
 
 def start_recording_if_requested() -> Optional[RunRecorder]:
-    """If "Record the next run" is ticked (the record_next_run config switch):
-    clear it - it's for one run only, and the Options checkbox is unticked to
-    match - start a RunRecorder in RECORDINGS_DIR, named after the run number
-    and time, delete the oldest videos beyond MAX_RECORDINGS, and return the
-    recorder. Returns None if it isn't ticked or no video file could be opened
-    (which is logged)."""
+    """If "Record the next run" is ticked, clear it, start a RunRecorder and return it
+    (None if not ticked or no file could be opened). See docs/ARCHITECTURE.md#recording-a-run.
+    """
     if not load_game_config()["record_next_run"]:
         return None
     update_game_config(lambda c: c.update(record_next_run=False))
@@ -3125,11 +2786,9 @@ def system_memory_percent() -> Optional[float]:
         return None
 
 class ResourceMonitor(threading.Thread):
-    """Every RESOURCE_LOG_INTERVAL while the loop runs, logs this script's CPU
-    use (percent of the whole machine, over the interval just gone) and memory
-    - plus, when they can be read, the whole machine's CPU use and memory in
-    use: "resources: cpu 2.4% mem 215MB pc 38.5% pcmem 71%" - and keeps the
-    latest in run_stats. The run report charts them. Stopped by stop()."""
+    """Every RESOURCE_LOG_INTERVAL logs this script's CPU and memory and the whole PC's:
+    "resources: cpu 2.4% mem 215MB pc 38.5% pcmem 71%". See docs/ARCHITECTURE.md#debugging-an-unattended-run.
+    """
 
     def __init__(self) -> None:
         super().__init__(daemon=True)
@@ -3165,11 +2824,9 @@ class ResourceMonitor(threading.Thread):
 
 
 def check_quiet() -> None:
-    """Every cycle: note in run_stats how many whole minutes no need has been
-    resolved for, and log "quiet: no need resolved for N min" each
-    QUIET_LOG_INTERVAL of it, so a stretch where nothing happens (the loop
-    alive but stuck, or the need bar unreadable) shows in the log well before
-    the NO_PROGRESS_REJOIN_INTERVAL rejoin."""
+    """Every cycle: note the minutes since a need was resolved and log "quiet: ..." each
+    QUIET_LOG_INTERVAL. See docs/ARCHITECTURE.md#debugging-an-unattended-run.
+    """
     quiet = time.time() - state.last_progress if state.last_progress else 0.0
     run_stats.quiet_minutes = int(quiet // 60)
     reports = int(quiet // cfg.QUIET_LOG_INTERVAL)
@@ -3178,13 +2835,9 @@ def check_quiet() -> None:
     state.quiet_reported = reports
 
 def respawn_if_no_detection() -> bool:
-    """Respawn the character if no need has been detected on screen for
-    NO_DETECTION_RESPAWN_INTERVAL - the character may be stuck somewhere the
-    need icons don't show up from. Counts from the last detection (see
-    State.last_detection) and again from the respawn, so it repeats at most
-    once per interval. It never touches state.last_progress, so the
-    NO_PROGRESS_REJOIN_INTERVAL rejoin (rejoin_reason()) still comes when it
-    would have. Returns True if it respawned."""
+    """Respawn if no need was detected for NO_DETECTION_RESPAWN_INTERVAL; never touches
+    state.last_progress. Returns True if it respawned. See docs/ARCHITECTURE.md#stuck-needs.
+    """
     if state.last_detection is None or time.time() - state.last_detection < cfg.NO_DETECTION_RESPAWN_INTERVAL:
         return False
     minutes = (time.time() - state.last_detection) / 60
@@ -3195,11 +2848,9 @@ def respawn_if_no_detection() -> bool:
     return True
 
 def run_full_cycle() -> None:
-    """One cycle: keep checking for needs, waiting NEED_CHECK_RETRY_DELAY
-    between checks whenever none are found (showing how long it has been
-    waiting on one overwritten line), until one is resolved. Returning after
-    a single need means the next cycle - popups, side quest and all - starts
-    from a fresh look at the screen."""
+    """One cycle: check for needs, waiting between checks, until one is resolved.
+    See docs/ARCHITECTURE.md#the-workflow-lifecycle.
+    """
     waiting_since = None
     while True:
         # check_stop() only, not check_running() - clicking [LOOP]
@@ -3223,12 +2874,9 @@ def run_full_cycle() -> None:
             wait_interruptible(min(1.0, deadline - time.time()))
 
 def run_workflow_loop() -> None:
-    """Respawn once, then repeat the workflow continuously. The only way this
-    loop ever ends is via a stop request - there's no other exit condition,
-    so StopRequested is expected here, not an error. It's allowed to
-    propagate on up to run_async()'s worker (via the bare `finally`, not
-    `except`) so the GUI still reports [STOPPED] correctly; the finally
-    just prints locally first."""
+    """Respawn once, then repeat the workflow until a stop request, which propagates (bare
+    finally, not except) so the GUI reports [STOPPED]. See docs/ARCHITECTURE.md#the-workflow-lifecycle.
+    """
     STOP_EVENT.clear()
     state.run_number = next_run_number()
     reset_need_tracking()
@@ -3236,6 +2884,7 @@ def run_workflow_loop() -> None:
     state.run_start_pending = True
     reset_run_stats()
     state.last_rejoin = state.last_progress = state.last_detection = time.time()  # the scheduled and no-progress rejoins count from here
+    state.white_since = None
     log_run_event("LOOP started")
     recorder = start_recording_if_requested()
     print("\n" + "=" * 50)
@@ -3300,13 +2949,15 @@ def run_workflow_loop() -> None:
 # drawn with OpenCV by draw_report(), so there's no dependency beyond what the
 # macro already has. generate_run_report() does both and writes the file.
 #
-# The report has four panels:
+# The report has five panels:
 #   1. needs resolved per unit of time - the unit is picked so the run fills
 #      about TARGET_BUCKETS bars - stacked by basic / teleport / other need,
-#      with failures (red) and rejoins (blue) marked along the bottom;
+#      with failures (red) and rejoins (blue) marked along the bottom and each
+#      need disabled as stuck drawn as a grey bar until the next rejoin;
 #   2. needs detected per check, over time;
 #   3. average seconds per resolved need, with how many there were;
-#   4. counts of failures by kind, popups, minigames and the like.
+#   4. counts of failures by kind, popups, minigames and the like;
+#   5. CPU and memory use: the script's, and the whole PC's as a second line.
 
 LINE_RE = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] \[RUN ([^\]]+)\] (.*)$")
 RESOLVED_RE = re.compile(r"^resolved: (\S+) \((\d+)s\)$")
@@ -3343,14 +2994,11 @@ def parse_ts(text: str) -> float:
 
 
 def parse_run(log_path: str, run: Union[int, str]) -> Optional[dict[str, Any]]:
-    """Everything the report needs from run `run` (a number or its text) of
-    the log at `log_path`, as a dict, or None if the run isn't in it:
-      start, end - epoch seconds of the first and last line;
-      resolved - [(t, need, seconds)]; detected - [(t, matched, icons)] per check;
-      failures - [(t, text)]; rejoins - [t]; disabled - [(t, need)];
-      resources - [(t, cpu %, memory MB, whole-PC cpu %, whole-PC memory %)] (the last two None in older logs);
-      events - Counter of everything else.
-    A "same checks: N over Ss" line stands for N more checks that found what the "detected:" line before it did."""
+    """Everything the report needs from run `run` of the log, as a dict, or None if the run
+    isn't in it (keys: start, end, resolved, detected, failures, rejoins, disabled,
+    resources, events). "same checks: N" lines stand for N more of the detection above.
+    See docs/ARCHITECTURE.md#debugging-an-unattended-run.
+    """
     run = str(run)
     lines = []
     if not os.path.exists(log_path):
@@ -3700,14 +3348,10 @@ def write_run_report(run: Union[int, str]) -> Optional[str]:
     return path
 
 def run_all_need_handlers(handlers: Optional[dict[str, Callable[[], NeedHandler]]] = None) -> dict[str, str]:
-    """Run every need handler (default: DEBUG_HANDLERS, whether or not it is in
-    ENABLED_NEEDS) once, one after another - the Debug tab's "test every
-    need" button. Each runs with the in-task checks on, like a real need, and
-    the character is respawned after it, since the handlers walk from the
-    spawn point. Minigame popups are declined, not played (play_minigames=False),
-    so they can't cut a handler short. A stop ends the whole sequence (StopRequested propagates).
-    Prints and returns how each went: "done", "failed" (the handler returned
-    False) or "interrupted by ...", keyed by need."""
+    """Run every need handler once (the Debug tab's "test every need"), respawning after
+    each, minigame popups declined. Returns {need: "done" | "failed" | "interrupted by ..."}.
+    See docs/ARCHITECTURE.md#gui-internals.
+    """
     handlers = DEBUG_HANDLERS if handlers is None else handlers
     results: dict[str, str] = {}
     print(f"\n[TEST] Running all {len(handlers)} need handlers, one after another...")
@@ -3725,18 +3369,10 @@ def run_all_need_handlers(handlers: Optional[dict[str, Callable[[], NeedHandler]
     return results
 
 class DebugCapture:
-    """Replaces sys.stdout for the lifetime of the GUI: everything printed
-    anywhere in the macro goes to the on-screen console - every line
-    starting with the time - and, via log_output(), to OUTPUT_LOG_PATH.
-    A message starting with a carriage return is a status line instead: it
-    replaces the previous status line rather than adding one (and is logged
-    to the file only when it first appears), until something else is
-    printed.
-
-    write() can be called from any thread, but Tk widgets may only be
-    touched from Tk's own, so it only logs the message and queues it; the
-    queue is drained onto the widget every CONSOLE_DRAIN_INTERVAL_MS by
-    root.after() on the Tk thread."""
+    """Replaces sys.stdout while the GUI is up: every print goes to the console widget (queued,
+    drained on Tk's thread) and to output.log; a "\r" message is an overwritable status
+    line. See docs/ARCHITECTURE.md#gui-internals.
+    """
 
     def __init__(self, root: tk.Tk, text_widget: tk.Text) -> None:
         self.root = root
@@ -3855,11 +3491,9 @@ class AdoptMeGUI:
         self.root.destroy()
 
     def watch_stop_hotkey(self) -> None:
-        """Start a background thread that stops a running macro the moment
-        STOP_HOTKEY is pressed, in any window - so you can take over the
-        computer without reaching for the GUI. Only the key *going down*
-        counts (holding it doesn't retrigger), and it does nothing while
-        nothing is running. The stop itself is handed to Tk's thread."""
+        """Start a thread that stops the macro when STOP_HOTKEY goes down in any window.
+        See docs/ARCHITECTURE.md#gui-internals.
+        """
         def watch():
             was_down = False
             while True:
@@ -3884,11 +3518,9 @@ class AdoptMeGUI:
                 pass
 
     def create_ui(self) -> None:
-        """Build every widget. Any button that kicks off a background action
-        (via run_async) is appended to self.action_buttons so run_async can
-        disable/re-enable all of them together as a group. The [STOP] button
-        is deliberately excluded - it must stay clickable while something
-        is running, since that's the whole point of it."""
+        """Build every widget; buttons that start a background action are added to
+        self.action_buttons ([STOP] deliberately isn't). See docs/ARCHITECTURE.md#gui-internals.
+        """
         # Main buttons
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill=tk.X, padx=cfg.GUI_OUTER_PADDING, pady=(cfg.GUI_OUTER_PADDING, 0))
@@ -3901,16 +3533,8 @@ class AdoptMeGUI:
 
         self.action_buttons = []  # every button that starts a background task
 
-        # One row: [LOOP] (the continuous workflow) expanding to fill the left,
-        # [STOP] (square) on the right. Both sit in their own fixed-HEIGHT
-        # container (pack_propagate(False)) so they're always the same height
-        # regardless of font metrics - a
-        # Button's own width/height (character units) don't scale consistently
-        # across font sizes, and an unconstrained button's natural height grows
-        # with its font size, which is what broke this row last time the icon
-        # font got bigger. The stop container also fixes its WIDTH (making it a
-        # square); the loop container only fixes height and otherwise expands
-        # to fill the remaining width.
+        # One row: [LOOP] expanding to fill the left, [STOP] (square) on the right, each in a fixed-HEIGHT container
+        # so the row stays aligned whatever the font (see docs/ARCHITECTURE.md#gui-internals).
         NO_BORDER: dict[str, Any] = dict(bd=0, highlightthickness=0)  # flat edges, no default Tk bevel/focus ring
 
         main_row = tk.Frame(btn_frame, bg=self.bg)
@@ -3930,7 +3554,7 @@ class AdoptMeGUI:
         loop_container.pack(side=tk.LEFT, fill=tk.X, expand=True)
         loop_container.pack_propagate(False)
 
-        btn_loop = tk.Button(loop_container, text="\U0001F504", command=self.run_workflow_loop,
+        btn_loop = tk.Button(loop_container, text="\U0001F504", command=lambda: self.run_async(run_workflow_loop),
                               font=(cfg.GUI_FONT, cfg.GUI_LOOP_ICON_FONT_SIZE, "bold"), bg=cfg.GUI_LOOP_COLOR, fg=self.fg,
                               cursor="hand2", **NO_BORDER)
         btn_loop.pack(fill=tk.BOTH, expand=True)
@@ -3944,23 +3568,12 @@ class AdoptMeGUI:
         tk.Label(btn_frame, text="Functions", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"),
                  bg=self.bg, fg=self.accent).pack(anchor=tk.W)
 
-        btn_respawn = tk.Button(btn_frame, text="Respawn", command=lambda: self.run_async(respawn_character),
-                                 font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_RESPAWN_COLOR, fg=self.fg,
-                                 height=cfg.GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
-        btn_respawn.pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
-        self.action_buttons.append(btn_respawn)
-
-        btn_setup = tk.Button(btn_frame, text="Setup", command=lambda: self.run_async(setup_game),
-                               font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_RESPAWN_COLOR, fg=self.fg,
-                               height=cfg.GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
-        btn_setup.pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
-        self.action_buttons.append(btn_setup)
-
-        btn_rejoin = tk.Button(btn_frame, text="Leave & rejoin", command=lambda: self.run_async(leave_and_rejoin),
-                                font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_RESPAWN_COLOR, fg=self.fg,
-                                height=cfg.GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
-        btn_rejoin.pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
-        self.action_buttons.append(btn_rejoin)
+        for label, action in (("Respawn", respawn_character), ("Setup", setup_game), ("Leave & rejoin", leave_and_rejoin)):
+            btn = tk.Button(btn_frame, text=label, command=lambda a=action: self.run_async(a),  # type: ignore[misc]
+                            font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_RESPAWN_COLOR, fg=self.fg,
+                            height=cfg.GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
+            btn.pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
+            self.action_buttons.append(btn)
 
         # Options tab
         # Persisted switches (see load_game_config()). Deliberately not in
@@ -4017,10 +3630,9 @@ class AdoptMeGUI:
         self.root.lift()
 
     def run_on_ui_thread(self, func: Callable[[], Any], timeout: Optional[float] = 5.0) -> Any:
-        """Run `func` on Tk's own thread (Tk isn't safe to touch from the
-        worker thread) and wait until it has run, or `timeout` seconds (None
-        = as long as it takes, for a dialog). Returns what `func` returned
-        (None if it was still running when the wait ended)."""
+        """Run `func` on Tk's thread and wait up to `timeout` (None = as long as it takes);
+        returns its result. See docs/ARCHITECTURE.md#gui-internals.
+        """
         done = threading.Event()
         result = []
         def call():
@@ -4033,18 +3645,8 @@ class AdoptMeGUI:
         return result[0] if result else None
 
     def run_async(self, func: Callable[[], Any]) -> None:
-        """Run `func` on a background daemon thread so the GUI never freezes
-        while a workflow is executing (Tkinter blocks the whole window if you
-        run slow code directly on the main thread).
-
-        Lifecycle: disable the action buttons -> run func() in the background
-        -> ALWAYS re-enable the buttons when func() returns, whether it
-        finished normally, was interrupted via STOP_EVENT, lost Roblox's
-        focus, or raised an exception. That "always" is done with
-        try/except/finally so there is
-        no code path that leaves the UI stuck in the disabled "Running..."
-        state - the bug that made buttons stop responding once a workflow
-        completed on its own.
+        """Run `func` on a daemon thread so the GUI doesn't freeze; the buttons are always
+        re-enabled in a finally, however it ends. See docs/ARCHITECTURE.md#gui-internals.
         """
 
         if self.is_running:
@@ -4114,14 +3716,10 @@ class AdoptMeGUI:
             btn.config(state=button_state)  # type: ignore[call-overload]
         self.status.config(text="Running..." if running else (status_text or "Ready"))
 
-    def run_workflow_loop(self) -> None:
-        self.run_async(run_workflow_loop)
-
     def add_config_checkbox(self, parent: Any, label: str, key: str, config: dict[str, Any]) -> None:
-        """A checkbox for the persisted on/off switch `key` (see
-        load_game_config()). Deliberately not in action_buttons: they must stay
-        usable while a workflow is running, which is safe since
-        update_game_config() is locked."""
+        """A checkbox for the persisted switch `key`; not in action_buttons (usable while a
+        workflow runs). See docs/ARCHITECTURE.md#gui-internals.
+        """
         var = tk.BooleanVar(value=config[key])
         self.config_flag_vars[key] = var
         tk.Checkbutton(parent, text=label, variable=var,
@@ -4170,7 +3768,7 @@ class AdoptMeGUI:
         DEBUG_HANDLERS."""
         for col in range(2):
             parent.grid_columnconfigure(col, weight=1, uniform="debug")
-        btn_all = tk.Button(parent, text="Test every need, one after another", command=self.test_all_handlers,
+        btn_all = tk.Button(parent, text="Test every need, one after another", command=lambda: self.run_async(run_all_need_handlers),
                             font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"), bg=cfg.GUI_LOOP_COLOR, fg=self.fg, cursor="hand2")
         btn_all.grid(row=0, column=0, columnspan=2, sticky=tk.EW, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
         self.action_buttons.append(btn_all)
@@ -4206,11 +3804,6 @@ class AdoptMeGUI:
                                                 "The game config is kept."):
             print(f"[debug] debug folder refreshed ({refresh_debug()} entries removed)")
 
-    def test_all_handlers(self) -> None:
-        """Run every need handler in DEBUG_HANDLERS once, one after another
-        (run_all_need_handlers())."""
-        self.run_async(run_all_need_handlers)
-
     def test_handler(self, name: str, handler_cls: Callable[[], NeedHandler]) -> None:
         """Run one need handler on its own, outside the normal need-detection
         flow, so it can be tried even when it isn't in ENABLED_NEEDS."""
@@ -4225,11 +3818,9 @@ class AdoptMeGUI:
         self.run_async(test)
 
     def stop(self) -> None:
-        """Signal a running workflow to stop. This only sets STOP_EVENT; the
-        actual cleanup (re-enabling buttons, resetting is_running) happens
-        automatically in run_async()'s worker thread once the running
-        function notices the flag (via wait_interruptible) and returns -
-        there's no separate watchdog thread needed for that anymore."""
+        """Set STOP_EVENT; the cleanup happens in run_async()'s worker once the running function
+        notices. See docs/ARCHITECTURE.md#stopping--focus-safety.
+        """
         if not self.is_running:
             return
         print("\n[!] STOPPING...")

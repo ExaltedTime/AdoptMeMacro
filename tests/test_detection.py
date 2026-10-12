@@ -20,12 +20,6 @@ def put(img, crop, box):
     return img
 
 
-def test_need_bar_is_readable_on_a_dark_background_and_not_on_a_white_one(macro):
-    assert macro.detect_need_bar_readable(blank())
-    white = np.full(BLACK, 255, np.uint8)
-    assert not macro.detect_need_bar_readable(white)
-
-
 def test_need_icon_strip_is_the_configured_top_left_part(macro):
     strip = macro.need_icon_strip(blank())
     assert strip.shape[0] == int(1080 * macro.cfg.NEED_ICON_TOP_PERCENT)
@@ -258,7 +252,7 @@ def test_setup_is_never_aborted_by_the_popup(macro, monkeypatch):
 
 def test_backpack_title_marks_the_normal_backpack(macro):
     title = reference(macro, "backpack_normal")
-    screen = put(blank(), title, macro.cfg.BACKPACK_NORMAL_TITLE_BOX)
+    screen = put(blank(), title, macro.cfg.POPUP_TEMPLATES["backpack_normal"]["box"])
     assert macro.detect_backpack_normal(screen) and macro.detect_backpack_open(screen)
     assert not macro.detect_backpack_open(blank())
 
@@ -279,7 +273,7 @@ def test_sick_dialog_is_not_a_minigame_popup(macro):
     screen[600:640, 1000:1140] = yes[::-1]
     screen[600:640, 800:940] = no[::-1]
     assert macro.detect_minigame_popup(screen)                          # without the dialog's title it is a popup...
-    put(screen, reference(macro, "sick_dialog"), macro.cfg.SICK_DIALOG_BOX)
+    put(screen, reference(macro, "sick_dialog"), macro.cfg.POPUP_TEMPLATES["sick_dialog"]["box"])
     assert not macro.detect_minigame_popup(screen)                      # ...with it, it is ignored
 
 
@@ -319,5 +313,49 @@ def test_templates_are_read_once_and_reread_when_a_file_changes(macro, tmp_path,
 def test_the_sick_dialog_is_found_by_its_crop(macro):
     screen = blank()
     assert not macro.detect_sick_dialog(screen)
-    put(screen, reference(macro, "sick_dialog"), macro.cfg.SICK_DIALOG_BOX)
+    put(screen, reference(macro, "sick_dialog"), macro.cfg.POPUP_TEMPLATES["sick_dialog"]["box"])
     assert macro.detect_sick_dialog(screen)
+
+
+# --- popup_found() / popup_visible(): one lookup for every crop in ref/popups --------------------------------
+
+@pytest.mark.parametrize("name", ["paycheck", "sick_dialog", "backpack_normal", "backpack_back"])
+def test_every_popup_template_has_a_crop_a_box_and_a_threshold(macro, name):
+    entry = macro.cfg.POPUP_TEMPLATES[name]
+    crop = reference(macro, name)
+    left, top, right, bottom = entry["box"]
+    assert 0 <= left < right <= 1920 and 0 <= top < bottom <= 1080
+    assert crop.shape[0] <= bottom - top and crop.shape[1] <= right - left     # it fits in its own box
+    assert 0 < entry["threshold"] <= 1
+
+
+@pytest.mark.parametrize("name", ["paycheck", "sick_dialog", "backpack_normal", "backpack_back", "pet_focus", "trading_hub"])
+def test_a_crop_is_found_at_its_boxs_corner_and_not_on_an_empty_screen(macro, name):
+    box = (macro.cfg.POPUP_TEMPLATES.get(name) or macro.cfg.STRAY_WINDOWS[name])["box"]
+    crop = reference(macro, name)
+    screen = put(blank(), crop, box)
+    found = macro.popup_found(screen, name)
+    assert found == (box[0] + crop.shape[1] // 2, box[1] + crop.shape[0] // 2)       # its centre, in screen coordinates
+    assert macro.popup_visible(screen, name)
+    assert macro.popup_found(blank(), name) is None and not macro.popup_visible(blank(), name)
+
+
+def test_the_threshold_decides_and_a_stray_window_uses_the_shared_one(macro, monkeypatch):
+    crop = reference(macro, "paycheck")
+    box = macro.cfg.POPUP_TEMPLATES["paycheck"]["box"]
+    noisy = put(blank(), (crop.astype(int) + np.random.RandomState(1).randint(-40, 40, crop.shape)).clip(0, 255).astype(np.uint8), box)
+    score = macro.find_template(noisy, crop, box)[0]
+    assert 0 < score < 1
+    monkeypatch.setitem(macro.cfg.POPUP_TEMPLATES["paycheck"], "threshold", score - 0.01)
+    assert macro.popup_visible(noisy, "paycheck")
+    monkeypatch.setitem(macro.cfg.POPUP_TEMPLATES["paycheck"], "threshold", score + 0.01)
+    assert not macro.popup_visible(noisy, "paycheck")
+    # a stray window has no threshold of its own: STRAY_WINDOW_MATCH_THRESHOLD applies
+    hub = put(blank(), reference(macro, "trading_hub"), macro.cfg.STRAY_WINDOWS["trading_hub"]["box"])
+    monkeypatch.setattr(macro.cfg, "STRAY_WINDOW_MATCH_THRESHOLD", 1.01)
+    assert not macro.popup_visible(hub, "trading_hub")
+
+
+def test_a_name_with_no_crop_file_is_never_found(macro, monkeypatch):
+    monkeypatch.setitem(macro.cfg.POPUP_TEMPLATES, "no_such_crop", {"box": (0, 0, 100, 100), "threshold": 0.5})
+    assert macro.popup_found(blank(), "no_such_crop") is None

@@ -24,16 +24,19 @@ on-the-ground state), then repeats `run_full_cycle()` forever, pausing
 
 ```
 while True:
-    check_quiet(); unscrew(); side_quest()
-    if process_needs():   # resolved ONE need
+    check_stop(); count the cycle
+    check_quiet(); flush_idle_checks_if_due(); write_status()
+    unscrew(); side_quest()
+    if process_needs():   # resolved (or at least handled) ONE need
         return
     respawn_if_no_detection()   # nothing detected for NO_DETECTION_RESPAWN_INTERVAL
     wait NEED_CHECK_RETRY_DELAY seconds, then check again
 ```
 
 The key word is *resolved*. `process_needs()` returns `True` only if it
-actually did something - clicking a button or running a special handler -
-and it resolves **one** need per call. The loop then starts a new cycle, so
+actually did something - clicking a button or running a handler (or a handler
+was cut short by a minigame, a rejoin or a popup, which respawn the character
+too) - and it handles **one** need per call. The loop then starts a new cycle, so
 the popup checks, the side quest and a fresh detection all run again before
 the next need: what to do next is always decided from what's on screen
 *now*, not from a list taken before the previous need (which can take a
@@ -52,11 +55,15 @@ every second instead of a line per check.
    `ref/needs/` (`find_matching_need()`). An icon that doesn't match anything
    well enough triggers `prompt_rename_need()` (asks you, in a dialog, to
    name and save it - only when `SAVE_NEW_NEEDS` is on) and is otherwise skipped this pass - it isn't
-   "resolved," it's just been taught for next time.
+   "resolved," it's just been taught for next time. The saved icon is the
+   high-contrast black-and-white form (`preprocess_icon()`); cancelling the
+   dialog or an empty name saves it as `unnamed_<idx>`. The dialog runs on the
+   GUI's thread (`run_on_ui_thread()`, no timeout) since the worker has no
+   console to read from; without a GUI it asks on the console.
 4. Every icon that *did* match is collected into an ordered list of need
-   names, in the order they were detected, and printed and logged
-   (`detected: ...`; icons on screen but none recognised are logged once,
-   not on every check). A check that finds no need isn't logged line by line
+   names, in the order they were detected, and logged (`detected: ...`, and
+   printed with each icon's score; icons on screen but none recognised are
+   logged once, not on every check). A check that finds no need isn't logged line by line
    either: `note_idle_check()` counts them (including the not-recognised ones
    after the first) and `flush_idle_checks()` writes one `idle checks: N over
    Ss` line before the next detection, every `QUIET_LOG_INTERVAL`, and when the
@@ -74,8 +81,9 @@ every second instead of a line per check.
 5. The list is then worked through in order until one need is resolved. For
    each `need_name`, `get_need_handler(need_name)` looks it up in
    `NEED_HANDLER_CLASSES` and returns an instance, or `None` if that need
-   isn't in `ENABLED_NEEDS` - a `None` result is logged and skipped without
-   doing anything. Every need is handled the same way from here: calling
+   isn't in `ENABLED_NEEDS` or was disabled as stuck (see
+   [Stuck needs](#stuck-needs)) - a `None` result is printed and skipped
+   without doing anything. Every need is handled the same way from here: calling
    `.handle()` on whatever handler came back (see
    [Need handlers](#need-handlers)).
    - If `handle()` returns `True`, the character respawns (always done by
@@ -84,12 +92,12 @@ every second instead of a line per check.
      will be detected again, along with anything new, by the next check.
    - If it returns `False` (the need wasn't actually resolved this pass -
      e.g. no buttons detected, or a UI element `ChooseNeedHandler` needed
-     wasn't found), the need is logged and skipped with no respawn, and the
-     next one in the list is tried.
+     wasn't found), it is counted in `run_stats.failed`, logged as a failure
+     (`<need> handler could not resolve it`) and skipped with no respawn, and
+     the next one in the list is tried.
    - If it returns `True` but one of its waits ran out with the need still
      showing (`wait_until_need_gone()` and `walk_alternating()` set
-     `state.need_cleared` to `False` and log the failure; not when the bar
-     was unreadable, where nothing is known), the character is respawned
+     `state.need_cleared` to `False` and log the failure), the character is respawned
      (it was moved) but the need counts as *failed*, not resolved:
      `not cleared: <need> (Ns)` is logged, `last_progress` is left alone, and
      it is still an attempt, so a need that never clears is disabled by
@@ -153,15 +161,25 @@ an extra walk from wherever the previous need left the character standing.
 - **NEED HANDLERS** - `NeedHandler` and one subclass per need (or per group
   of needs, via `partial()`). See [Need handlers](#need-handlers).
 - **PER-CYCLE CHECKS** - `unscrew()` and what it runs: `rejoin_game()`
-  (with `rejoin_reason()` / `detect_disconnect()`), The click sequences that open the backpack (setup, equipping a vehicle or toy) end with `close_backpack(step)`: the key press, then `close_backpack_if_open(step)`, so a backpack a misplaced click expanded is closed on the spot and the log line says after which step ("... closed it after equipping the toy"). `close_backpack_if_stuck()`
+  (with `rejoin_reason()` / `detect_disconnect()`), `close_backpack_if_stuck()`
   / `close_backpack_if_open()` (with `detect_backpack_expanded()` /
-  `detect_backpack_normal()`),
+  `detect_backpack_normal()`; the click sequences that open the backpack end
+  with `close_backpack(step)`, which calls the latter - see
+  [Click & input primitives](#click--input-primitives)),
   `dismiss_stray_windows()`, `minigame_popup()`,
   `detect_paycheck()`; the `task_unscrew()` / `task_unscrew_tick()` hook that
   runs them during a task; and `side_quest()`.
-- **WORKFLOWS** - `run_full_cycle()` and `run_workflow_loop()`. See
-  [The workflow lifecycle](#the-workflow-lifecycle) above.
+- **RUN RECORDING** - `RunRecorder` and `start_recording_if_requested()`. See
+  [Recording a run](#recording-a-run).
+- **WORKFLOWS** - `run_full_cycle()` and `run_workflow_loop()` (plus
+  `ResourceMonitor`, `check_quiet()` and `respawn_if_no_detection()`, which run
+  inside the loop). See [The workflow lifecycle](#the-workflow-lifecycle) above.
+- **RUN REPORT** - `parse_run()` / `draw_report()` / `generate_run_report()`,
+  which chart a run from the log. See
+  [Debugging an unattended run](#debugging-an-unattended-run).
 - **GUI** - the `tkinter` control panel. See [GUI internals](#gui-internals).
+- **MAIN** - starts the GUI. The top of the file, **EXTERNAL DEPENDENCIES**,
+  holds the imports and the `Image` / `Point` / `Box` / `Color` aliases.
 
 ## Window & coordinates
 
@@ -177,7 +195,7 @@ know the real window size:
   the Play button, the pet - and every position they return is therefore in
   reference space.
 - **`to_screen(x, y)`** maps a reference-space position onto the real window.
-  `hover_move()` (so every click), the pet's mouse circle and the focus click
+  `hover_move()` (so every click), the pet swipe and the focus click
   all go through it.
 
 `roblox_rect()` reads the Roblox window's position and size (`roblox_window()`
@@ -240,11 +258,15 @@ crop to a high-contrast black & white image:
 3. Hard threshold (`ICON_BW_THRESHOLD`) - only near-white pixels survive,
    collapsing the icon to a black-and-white silhouette.
 
-`icon_signature()` then resizes the result to `ICON_COMPARE_SIZE`, scales it
+`icon_signature()` first blacks out everything outside the disc inside the
+icon's ring (`ICON_MATCH_RADIUS_FRACTION`) - the square crop's corners show
+whatever is behind the icon, and on a bright scene they used to wreck the
+CLAHE and the threshold - then resizes the result to `ICON_COMPARE_SIZE`, scales it
 to 0-1, and keeps only the **left half** (`MATCH_ONLY_LEFT_HALF`) so an
 event badge overlapping an icon's top right doesn't affect the match.
 `compare_signatures()` scores two signatures as `1 - mean squared
-difference`.
+difference`, over that disc only (`icon_match_mask()`). The saved icons are
+run through the same function when loaded, so none needed re-saving.
 
 A detected center can be a pixel or two off, which matters at this
 resolution, so `icon_variants()` cuts the live icon out at every offset
@@ -259,13 +281,16 @@ re-read the folder) - including subfolders, so related icons can be grouped (the
 seasonal `diving` and `puddle` icons live in `ref/needs/weather/`); a need's
 name is just its file name, wherever it sits - and keeps the best score. A best score below
 `ICON_MATCH_THRESHOLD` (0.93) means "not confident this is anything we've
-seen" and falls through to `prompt_rename_need()` instead.
+seen" - the icon is then unknown and, when `SAVE_NEW_NEEDS` is on, goes to
+`prompt_rename_need()`; otherwise it is just skipped.
 
 ## Waiting for a need to clear
 
 `wait_until_need_gone()` - used after a button click (`click_need_button()`)
 and after `TeleportWalkNeedHandler`'s movement sequence (`choose` doesn't
-wait: it clears at once, and the next check sees that) - polls
+wait: it clears at once, and the next check sees that; `walk` and `ride` do
+the same check in parallel with their movement, see
+[below](#checking-a-need-in-parallel-with-movement)) - polls
 `scan_needs()` (one detect-and-match pass; the circle search may be skipped
 while the strip is unchanged, except for the second look of each check, which is
 always a real search) every
@@ -282,58 +307,18 @@ frame (or against a momentarily busy background) without the need having
 actually cleared. (There used to be a further three-misses-in-a-row
 confirmation on top of this; it was removed to speed up resolving.) This only guards against a one-frame flicker -
 a detection failure caused by a *sustained* background change behind the
-icon isn't something this re-check can fix, since it'll fail again on the
-immediate retry too. The one such case that is handled: the Pizza Party's
-background is near-white, which the icons can't be recognised against, so
-the pizza need looked "gone" a few seconds in - the handler returned early,
-the character respawned with the pizza still unserved, and it had to run
-twice. `detect_need_bar_readable()` spots it (more than
-`NEED_BAR_MAX_BRIGHT_FRACTION` of the icon strip brighter than
-`NEED_BAR_BRIGHT_LEVEL`); while the icons are unreadable `_need_cleared()`
-falls back to `icon_gone_by_frame_change()` (below); if that can't tell either it
-returns `None`, which counts as neither a miss nor a sighting, so the wait runs
-its full length - and ending it isn't logged as a failure.
-
-**Judging an icon by how it changes between looks.** A need's icon has a
-timer: a section of its circle that slowly grows and changes colour (it is
-the progress of serving the need). While the bar can't be read,
-`icon_gone_by_frame_change()` takes the icon as it looked when it was last
-read (`State.need_icon_crops`, with its place in `State.need_icon_positions`,
-both set by `identify_icons()` - the place alone can hold another need's icon by
-now, the others having shifted while the walk ran: run 3's sick, 17:09, was
-followed as its neighbour and never seen to clear), searches the whole bar for it
-at the first look (the picture is stored by `icon_crop_for_storage()`; the match counts only the icon's circle - `icon_mask()`, through
-`masked_match_scores()`, a hand-written masked `TM_CCOEFF_NORMED` since OpenCV can't mask that method - because the square's
-four corners hold the scene behind the icon when it was read, and a dark one scored 0.60-0.73 unmasked against the
-bright bar, under `ICON_LOCATE_THRESHOLD`, so the icon read as gone; masked, the same icon scores 1.00 whatever was behind it), and then every later look
-searches the whole bar for the icon *as it looked at the previous look*
-(`locate_icon()`: normalised correlation of the white ring and glyph, which the
-timer's colour change leaves alone). Found at a match of at least
-`ICON_LOCATE_THRESHOLD` (0.75) means it is still there - and wherever it now
-is: when a neighbour to its left clears, the icons slide left, and the icon is
-followed to its new place (the position is updated). Not found, and still not
-found `NEED_GONE_FLICKER_RECHECK_DELAY` later, means it is gone - cleared, or
-replaced by a neighbour that slid into its place, which matches poorly - and
-that ends the wait (logged as `<need> icon gone by frame change`). Measured on
-real frames of the salon icon, the same icon scores 0.90-1.0 whatever its
-timer shows or where it has shifted to (the timer alone changes 22-39% of the
-circle between two looks), a neighbouring icon or a bright background 0.3-0.56.
-Without a stored picture (the need was never read while the bar was readable)
-the first look only records what is at the stored place, so one that went before
-then isn't noticed (the wait runs out as before). Each wait starts afresh
-(`reset_icon_watch()`, at the start of `wait_until_need_gone()` and of the
-walking watcher thread, and whenever the bar is readable again), so a wait never
-carries on from where an earlier wait for the same need left off. The timer is deliberately not visible to
-the black-and-white icon matching, which is why this is a separate check. On a real
-Pizza Party frame (`tests/fixtures/pizza_party_bar.png`: the bar is 79% bright, so
-unreadable; the circles are still found, but the icons score only 0.84-0.89
-against the saved ones, under the 0.93 needed) each of the five icons finds
-itself at 1.0 and the best of the other four at 0.65. The icon is found again
-only if it was recognised before the bar went bright (its place is recorded then).
+icon isn't something this re-check could fix, since it would fail again on the
+immediate retry too - which is why the matching itself has to work on any
+background (see [Need-icon matching](#need-icon-matching): only the disc inside the
+icon's ring is compared, checked against the real screenshots in
+`tests/icon_detection/`, bright ones included). There used to be a fallback for
+a near-white bar (the Pizza Party's) that judged an icon gone by how it changed
+between looks; with the matching reliable on those backgrounds it was removed,
+and so was the "bar unreadable" state: a wait that runs out is always a failure.
 
 Popups, stray windows and minigames that turn up during the wait are handled
 by the `unscrew()` checks that `wait_interruptible()` runs during a task - see
-[Per-cycle checks while a task runs](#per-cycle-checks-while-a-task-runs).
+[Per-cycle checks while a task runs](#need-handlers).
 
 `_need_cleared()` is also what `_watch_need_gone()` uses - see
 [Checking a need in parallel with movement](#checking-a-need-in-parallel-with-movement)
@@ -355,7 +340,8 @@ the buttons:
    version of itself (`BUTTON_PURPLE_ERODE_ITERATIONS`) - this isolates a
    thin ring just outside each purple blob, which is where a real button's
    white outline should be. Intersecting that ring with the white mask
-   gives a "has a white outline" score per candidate.
+   gives a "has a white outline" score per candidate (the count of those
+   pixels within the contour's bounding box, grown by `BUTTON_OUTLINE_PADDING`).
 4. Find purple contours, filtering out ones that are too small
    (`BUTTON_MIN_AREA * BUTTON_LOOSE_AREA_FACTOR`), too large
    (`BUTTON_MAX_AREA_FRACTION` of the band - a blob covering most of the
@@ -370,7 +356,9 @@ the buttons:
    stores the result in `state.button_positions`. This assumes the five buttons
    are always laid out in that fixed order on screen - if Roblox ever
    changes that order, this mapping (and only this mapping) would need
-   updating.
+   updating. It clears the previous mapping first, even when detection fails,
+   so a failed scan never leaves a stale position for `click_need_button()`;
+   when fewer than five buttons are found it logs `button scan found N of 5`.
 
 ## Click & input primitives
 
@@ -382,6 +370,17 @@ movement, so this is what makes a click register reliably whether it's on
 a UI button or into empty game-world space (there used to be a separate
 `simple_click()` with no hover wiggle for the latter case, but it wasn't
 actually needed - `hover_click()` works fine there too, so it was dropped).
+
+(`hover_move()` uses SendInput rather than `pyautogui.moveTo()` because
+`SetCursorPos`-style warps don't count as hover to Roblox, only real input
+events do.)
+
+`close_backpack(step)` ends a click sequence: it presses the backpack key and
+checks the backpack really closed - a misplaced click earlier can have expanded
+it, when the key only shrinks it - and closes it properly if not
+(`close_backpack_if_open()`, which gives up and logs a failure after a second
+press rather than risk reopening it, and does nothing unless Roblox has the
+focus).
 
 `wait_interruptible(duration)` is the delay primitive nearly everything
 else is built on - see [Stopping & focus safety](#stopping--focus-safety).
@@ -439,7 +438,7 @@ rather than a flat sleep after the fact.
 |---|---|
 | `hungry` / `thirsty` / `dirty` / `potty` / `sleepy` | `ButtonNeedHandler`: walk to the action buttons (`walk_to_buttons()`), refresh the button mapping (`refresh_button_mapping()`), click the matching one (`click_need_button()`), which then calls `wait_until_need_gone()` for that need name. |
 | `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → hold zoom-in → throw the toy by clicking empty space `CATCH_THROW_COUNT` (3) times, `CATCH_EMOTE_DELAY` (5s) after each → unequip. A fixed sequence: it doesn't wait for the icon (the next check sees whether it cleared). |
-| `pet` | `PetNeedHandler`: `focus_pet()` (see below), then hold the mouse down and swipe once down from `PET_SWIPE_START_OFFSET` above screen center to `PET_SWIPE_END_OFFSET` below it over `PET_SWIPE_DURATION` (8s). Same as `catch` - always the full fixed duration. |
+| `pet` | `PetNeedHandler`: `focus_pet()` (see below, with `PET_FOCUS_CLICK_DURATION`), click the screen centre, move to `PET_SWIPE_START_OFFSET` above it, then hold the mouse down and swipe once down to `PET_SWIPE_END_OFFSET` below it over `PET_SWIPE_DURATION` (8s), releasing the button in a `finally`. Same as `catch` - always the full fixed duration. |
 | `choose` | `ChooseNeedHandler`: `focus_pet()` (see below), find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. It doesn't wait for the icon to clear (it's gone at once; the next check confirms). |
 | `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then `equip_favorite_vehicle()` (backpack → vehicles → first vehicle → equip → close backpack), hold `r` (`KEY_HELICOPTER`) for `RIDE_R_HOLD_DURATION` (1.5s), then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT` (75s), ending early the moment "ride" is confirmed cleared (see below). |
 | `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`: after pressing `e` and waiting `SICK_CONFIRM_WAIT` the handler looks for the doctor's dialog, `detect_sick_dialog()`. Recognised: it clicks Yes. Not recognised and the pet view is not open: it logs `sick: dialog not recognised after e (pet focused: False) - clicking Yes anyway` and clicks Yes all the same, and the wait for the icon says whether it worked (in run 2 the recognition failed on 27 of 27 real attempts while the plain click had worked in run 1, so it is not trusted to fail the need). Not recognised and the pet view *is* open - the prompt is then a hand button `e` doesn't press: it logs `sick: no dialog after e (pet focused: True) - clicking the prompt`, backs out of the pet view (`dismiss_stray_windows()`), clicks the prompt on screen (`prompt_pos`, `SICK_PROMPT_POS`) and looks once more. Only if the dialog still isn't up has the need failed: the character respawns and the handler returns False at once, with no wait for the icon to clear, and `process_needs()` logs the failure), `helicopter` (see below) and `max_wait` (how long to wait for the need to clear afterwards; default `NEED_GONE_MAX_WAIT`, 75s). `sick` waits `SICK_PRE_E_WAIT` after its last hold before pressing `e`. Which table is used depends on `HALLOWEEN` - see below. |
@@ -480,7 +479,7 @@ paycheck check because their green buttons (Okay, Yes) are the same green as
 the paycheck's CASH OUT button, so `detect_paycheck()` would mistake them for
 one. For the same reason
 `detect_paycheck()` matches the crop of the popup's bank-card header
-(`ref/popups/paycheck.png`, within `PAYCHECK_BOX`) instead of counting green:
+(`ref/popups/paycheck.png`, within its `POPUP_TEMPLATES` box) instead of counting green:
 it used to count green pixels, and the green tiles of an open backpack passed
 that, so it "dismissed" a paycheck every cycle - and its second dismiss click,
 `PAYCHECK_DISMISS_POS_2` (948, 627), lands on the little orange box next to the
@@ -540,8 +539,8 @@ whole of a handler (a minute or two), and minigames are time-sensitive. So
 `task_unscrew()`, and during it every `wait_interruptible()` also runs
 `unscrew(in_task=True)` every `UNSCREW_TASK_INTERVAL` (only on the thread that
 started the task, and never from inside `unscrew()` itself). It's the same
-`unscrew()`, with two differences: the rejoin check only acts on a disconnect
-(`rejoin_game(kinds=("disconnect",))`; the scheduled and stalled rejoins wait
+`unscrew()`, with two differences: the rejoin check only acts on a disconnect or a
+white screen (`rejoin_game(kinds=("disconnect", "white_screen"))`; the stuck, scheduled and stalled rejoins wait
 for the top of a cycle), and the backpack is only closed once it has been seen
 open on `BACKPACK_CLOSE_CONFIRMATIONS` (2) checks in a row - a handler opens the
 normal backpack for a few seconds on purpose, so one sighting could be a
@@ -558,10 +557,23 @@ check decides from the screen what's still needed. During setup a minigame is
 only declined (No, without "do not show again"), since setup's clicks toggle
 things and can't be abandoned halfway.
 
+**Popup templates.** Everything recognised by a crop in `ref/popups/` is looked up the same
+way, by `popup_found(img, name)` / `popup_visible(img, name)`: the crop is matched
+(`cv2.matchTemplate`, `TM_CCOEFF_NORMED`) within a box and counts as found when the score reaches
+a threshold - the crop's centre is returned too, for the BACK button's click. Each name's box and
+threshold are in `POPUP_TEMPLATES` (`paycheck`, `sick_dialog`, `backpack_normal`, `backpack_back`) or, for
+a stray window (and `pet_focus`), in `STRAY_WINDOWS` with `STRAY_WINDOW_MATCH_THRESHOLD`. The
+detectors (`detect_paycheck()`, `detect_sick_dialog()`, `detect_pet_focus()`, the title check in
+`detect_backpack_normal()`, the BACK button in `close_backpack_if_open()`) are that lookup plus
+whatever they do with the answer, and `dismiss_stray_windows()` walks `STRAY_WINDOWS` through it. A
+new crop is a file in `ref/popups/` plus an entry in one of the two tables. A name with no crop file is
+never found. The minigame title (`identify_minigame()`) and overlay (`detect_minigame_overlay()`) crops
+live in their own folders and pick the best of several, so they keep their own constants.
+
 **Backpack tabs.** The backpack remembers its last category tab, and clicking a tab that is already selected (orange background) expands the backpack. `select_backpack_tab()` therefore only clicks the vehicles / toys tab when `is_backpack_tab_selected()` doesn't see the orange tile.
 
 **The BACK button.** The expanded backpack has a BACK button at the top
-(`ref/popups/backpack_back.png`, found within `BACKPACK_BACK_BOX`) that closes
+(`ref/popups/backpack_back.png`, found within its `POPUP_TEMPLATES["backpack_back"]` box) that closes
 it entirely, where the backpack key only shrinks it to the normal form first.
 `close_backpack_if_open()` clicks it when it sees the expanded form, and
 falls back to the key presses if it isn't found. The pet focus view has a BACK
@@ -579,7 +591,7 @@ is recognised by its purple frame (`BACKPACK_NORMAL_COLOR`, at least
 the white of its item grid (`BACKPACK_NORMAL_WHITE_*`); the frame alone or the
 white alone isn't enough, since the white is also any bright scenery. It is also
 recognised by a crop of its "BACKPACK" title (`ref/popups/backpack_normal.png`,
-`BACKPACK_NORMAL_TITLE_*`), because the color check, tuned on one screenshot,
+`POPUP_TEMPLATES["backpack_normal"]`), because the color check, tuned on one screenshot,
 missed another (`ref/test` is for more). `detect_backpack_open()` is either. `close_backpack_if_open()` presses
 `KEY_BACKPACK` - but only while Roblox has the focus, so the key can't go to
 another window - looks again, and presses once more if it's still open (the
@@ -598,7 +610,7 @@ color is unique alone (Yes green = `GREEN_BUTTON_COLOR`, No red = the
 Exit Home button), so it needs the Yes green (`GREEN_BUTTON_COLOR`, at
 least `MINIGAME_POPUP_MIN_BUTTON_PIXELS` px) with the No red
 (`MINIGAME_POPUP_NO_COLOR`) within `MINIGAME_POPUP_NO_MAX_DX` / `_DY` px to
-its left - except the sick need's own "Ask Doctor Heart to heal your family?" dialog, which has the same Yes/No look but is the sick handler's to answer (its Yes is `SICK_FINAL_CLICK_POS`): `ref/popups/sick_dialog.png`, within `SICK_DIALOG_BOX`, makes the detector ignore it. (Before that, the every-4s in-task check took it for a minigame popup and clicked its decline positions in the middle of the sick sequence - `unknown` popups clustered in the sick handler in the logs.) `identify_minigame()` then says which one it is: it matches the
+its left - except the sick need's own "Ask Doctor Heart to heal your family?" dialog, which has the same Yes/No look but is the sick handler's to answer (its Yes is `SICK_FINAL_CLICK_POS`): `ref/popups/sick_dialog.png`, within its `POPUP_TEMPLATES` box, makes the detector ignore it. (Before that, the every-4s in-task check took it for a minigame popup and clicked its decline positions in the middle of the sick sequence - `unknown` popups clustered in the sick handler in the logs.) `identify_minigame()` then says which one it is: it matches the
 first line of the title (`MINIGAME_TITLE_BOX`) against the crops in
 `ref/halloween/` (`cv2.matchTemplate`, best score at least
 `MINIGAME_TITLE_MATCH_THRESHOLD`); a minigame's name is its file name,
@@ -615,7 +627,7 @@ Options tab). `minigame_popup()`:
   and plays it, as below. Minigames are time-sensitive, so this also happens
   when the popup turns up while a handler is waiting in
   a handler's waits (see [Per-cycle checks while a task
-  runs](#per-cycle-checks-while-a-task-runs)): the minigame is played right
+  runs](#need-handlers)): the minigame is played right
   then and the handler abandoned (`TaskInterrupted`). Every held key and the mouse button are released first - at the start of `play_minigame()`, since the handler may have been holding one (a walk, the pet swipe) when it was interrupted, and again as the interruption is raised. Where it left the
   character is unknown afterwards, and the next check sees what is still
   needed.
@@ -623,13 +635,13 @@ Options tab). `minigame_popup()`:
 *Playing.* No needs can be seen while a minigame runs, so both end on the
 victory screen instead - a red GAME OVER! banner over a green NICE! button,
 found by exact color (`detect_minigame_victory()`, checked every
-`MINIGAME_VICTORY_CHECK_INTERVAL`), which is the same for both. While it plays, `minigame_popup_checks()` runs `dismiss_stray_windows()` and `detect_paycheck()` every `MINIGAME_POPUP_CHECK_INTERVAL` (4s), including during the start waits (`minigame_wait()`) - the in-task `unscrew()` can't, since the minigame is played from it. Then NICE!
+`MINIGAME_VICTORY_CHECK_INTERVAL`), which is the same for both. While it plays, `minigame_popup_checks()` runs `dismiss_stray_windows()` (and `detect_paycheck()` if it closed nothing) at most every `MINIGAME_POPUP_CHECK_INTERVAL` (4s), including during the start waits (`minigame_wait()`) - the in-task `unscrew()` can't, since the minigame is played from it. Then NICE!
 (`MINIGAME_VICTORY_BUTTON_POS`) is clicked and `MINIGAME_FINISH_WAIT` waited
 out (`click_nice_until_gone()`, which looks again and clicks up to
 `MINIGAME_VICTORY_CLICK_TRIES` times while the win screen is still up, logging a
 failure if it never closes), and the character respawns. If the victory screen hasn't shown after
 `MINIGAME_MAX_DURATION` it gives up with a logged failure (and releases every
-input). A minigame counts as progress for the no-progress rejoin.
+input). A minigame that was won counts as progress for the no-progress rejoin (`state.last_progress`); one that failed - never started, left early, timed out - does not, or a popup every few minutes would keep the 20-minute rejoin clock from ever running out. Either way it counts as a detection (no needs can be seen while it runs).
 
 *Telling whether it is on.* Each minigame has an overlay along the top of the
 screen while it runs (Hauntlet 2: the ROOM counter; Ghost Gallery: the TIME
@@ -684,45 +696,55 @@ asks `rejoin_reason()` whether the game needs rejoining. In order:
    (`detect_disconnect()`: at least `DISCONNECT_PANEL_MIN_FRACTION` of
    `DISCONNECT_PANEL_BOX` is the dialog's grey, `DISCONNECT_PANEL_COLOR` - the
    game behind it is blurred, so nothing else fills a box like that).
-2. *Stuck* - `DISABLED_NEEDS_REJOIN_THRESHOLD` (4) needs have been disabled as
+2. *White screen* - at least `WHITE_SCREEN_MIN_FRACTION` of the screen has been
+   completely white (every channel at or above `WHITE_SCREEN_LEVEL`,
+   `detect_white_screen()`) for `WHITE_SCREEN_REJOIN_AFTER` (30s) in a row. The
+   game shows a white screen for a moment on a respawn, teleport or change of
+   location, so only a long one counts; a bright scene is nowhere near it (the
+   real white transition in `tests/icon_detection/` is 93% white, every other
+   screenshot under 10%). It is looked for wherever `rejoin_reason()` is
+   asked, which is every cycle and every `UNSCREW_TASK_INTERVAL` mid-task, and
+   the clock (`state.white_since`) restarts whenever the screen isn't white.
+   (Needs stay visible on the white screen, so nothing else notices it.)
+3. *Stuck* - `DISABLED_NEEDS_REJOIN_THRESHOLD` (4) needs have been disabled as
    stuck.
-3. *Stalled* - no need has been resolved for `NO_PROGRESS_REJOIN_INTERVAL`
+4. *Stalled* - no need has been resolved for `NO_PROGRESS_REJOIN_INTERVAL`
    (20 minutes; `state.last_progress`, set when the loop starts, whenever a need is
    resolved and by every successful `leave_and_rejoin()`): the game is up but
    nothing is working, whatever the cause.
-4. *Scheduled* - it has been `REJOIN_INTERVAL` (two hours) since the last
+5. *Scheduled* - it has been `REJOIN_INTERVAL` (two hours) since the last
    rejoin (`state.last_rejoin`, set when the loop starts and by every successful
    `leave_and_rejoin()`): a refresh of a client that has been up a long time.
 
-Separately from those, `respawn_if_no_detection()` (in `run_full_cycle()`, after
-`process_needs()` found nothing to resolve) respawns the character when no
-need has been *detected* for `NO_DETECTION_RESPAWN_INTERVAL` (4 minutes) - it
-may be stuck somewhere the icons don't show from. It counts from
-`state.last_detection` (set whenever a need is detected, when the need bar
-can't be read, and when the loop starts, the game is rejoined or a minigame is
-played), and again from each respawn, so it repeats at most once per interval.
-It never touches `state.last_progress`, so the 20-minute stalled rejoin above
-still comes exactly when it would have: in a long stretch with nothing
-detected the character is respawned every 4 minutes and the game rejoined at
-20. The log line is `no need detected for N min - respawning`.
-
-If so, it runs `leave_and_rejoin()` (see [Side actions](#side-actions)) -
+If one applies, `rejoin_game()` runs `leave_and_rejoin()` (see [Side actions](#side-actions)) -
 without the clean esc/l/enter leave for a disconnect, since there's no game
 to leave - then `setup_game()` (the rejoin resets the settings it sets), then
 clears `state.disabled_needs` and the streaks so every need gets a fresh
 chance, and the workflow carries on. (If the game is rejoined *again* while
 setup runs - its in-task checks do that on a disconnect - the nested recovery has
 already run setup, so the `TaskInterrupted` it raises is caught here and logged
-as `setup interrupted by a rejoin`, rather than ending the run.) A disconnect, stuck or stalled recovery counts as
+as `setup interrupted by a rejoin`, rather than ending the run.) A disconnect, white-screen, stuck or stalled recovery counts as
 a failure: `log_failure()` saves a screenshot first, which shows the dialog
 and its error code. A scheduled rejoin isn't one: it's a line in the run log,
 counted in `scheduled_rejoins`. Nor is Roblox not running when the run starts
 (`State.run_start_pending`, cleared by the first top-of-cycle `rejoin_game()`):
 that is where the run begins, logged as "Roblox isn't running at the start -
-starting it" and not counted as a recovery or a failure. If the rejoin fails the cause is still
-there, so the next cycle tries again. The check only runs once per cycle, so
-a disconnect in the middle of a long handler is noticed when that handler
-finishes.
+starting it" and not counted as a recovery or a failure. If the rejoin fails (`recovery: rejoin failed, will try again next cycle`, a logged failure) the cause is still
+there, so the next cycle tries again. The top-of-cycle check looks for all
+five reasons; during a handler only a disconnect or a white screen is acted on (see *Per-cycle
+checks while a task runs* above), and the stuck, stalled and scheduled rejoins
+wait for the next top of a cycle.
+
+Separately from those, `respawn_if_no_detection()` (in `run_full_cycle()`, after
+`process_needs()` found nothing to resolve) respawns the character when no
+need has been *detected* for `NO_DETECTION_RESPAWN_INTERVAL` (4 minutes) - it
+may be stuck somewhere the icons don't show from. It counts from
+`state.last_detection` (set whenever a need is detected, and when the loop starts, the game is rejoined or a minigame is
+played), and again from each respawn, so it repeats at most once per interval.
+It never touches `state.last_progress`, so the 20-minute stalled rejoin above
+still comes exactly when it would have: in a long stretch with nothing
+detected the character is respawned every 4 minutes and the game rejoined at
+20. The log line is `no need detected for N min - respawning`.
 
 ### Side actions
 
@@ -780,14 +802,14 @@ lure and tree actions are only reachable through `side_quest()`.
   tuned on its own, without walking to the old lure first each time.
 - **`tree_collect()`** - holds `d` for `TREE_COLLECT_WALK_DURATION` (2s),
   then `s` for `TREE_COLLECT_BACKWARD_DURATION` (1s) to line up with the
-  tree, then presses `KEY_INTERACT`.
+  tree, then presses `KEY_INTERACT` and respawns (like `lure_collect()`).
 - **`setup_game()`** - respawns, clicks `SETUP_LOCK_HOUSE_POS` to lock the
   house, then opens the backpack and clicks through
   `SETUP_BACKPACK_SETTINGS_POS` → `SETUP_SORT_MENU_POS` →
   `SETUP_FAVORITES_POS` → `SETUP_CONFIRM_POS` to set its item filter to
   favorites only, then closes the backpack and calls `disable_trades()`. It
 first closes any stray window (up to `SETUP_STRAY_TRIES`; see [Stray
-windows](#per-cycle-checks)) and runs inside `task_unscrew()`.
+windows](#need-handlers)) and runs inside `task_unscrew()`.
 - **`disable_trades()`** - sends the macro window to the back
   (`send_macro_window_to_back()`; the always-on-top panel covers the settings
   gear), clicks the six `SETUP_TRADES_*` positions (settings → settings menu →
@@ -840,7 +862,7 @@ checked the same way:
 - **`StopRequested`** - raised when `STOP_EVENT` is set (the user pressed
   **[STOP]**).
 - **`FocusLost`** - raised when Roblox is no longer the focused window.
-  Without this, a long-running action (a 20s walk, a 10s pet-circle, a
+  Without this, a long-running action (a 75s walk, an 8s pet swipe, a
   wait between catch throws) would keep sending keypresses/clicks into
   whatever window the user actually switched to.
   Pressing the GUI's [STOP] button takes the focus from Roblox on
@@ -849,13 +871,29 @@ checked the same way:
   the stop: if it comes, the run ends as an ordinary user stop rather than a
   "Roblox lost focus" failure.
 
+**Why an exception and not killing the thread.** The stop is cooperative on
+purpose. Python has no safe way to terminate a running thread from outside
+(the closest trick, async-raising into it through `ctypes`, is explicitly
+unsafe), and for a game macro that matters: a kill that landed while a
+movement key or the mouse button was held would never release it, and it
+would stay stuck down in the game. Instead `wait_interruptible()` and
+`check_running()` raise `StopRequested` / `FocusLost` the moment they notice,
+and ordinary exception propagation unwinds the stack up to `run_async()`'s
+worker thread, which catches it. Every `try`/`finally` on the way (used
+wherever a key or the mouse is held) still runs, so cleanup happens wherever
+the stop lands, without each function checking a flag after every action.
+`TaskInterrupted` is the same mechanism for a different cause: a minigame or a
+rejoin took over the character, so the handler's waits raise it, the handler
+is abandoned, and `process_needs()` catches it - the next check decides from
+the screen what is still needed.
+
 `wait_interruptible()` runs to a deadline, so the time the in-task checks take counts
 towards the wait (a key held for a timed step is held for that long, not longer).
 
 `check_running()` checks both (`check_stop()` then `check_focus()`) and is
 the single checkpoint used everywhere: inside `wait_interruptible()` (so
 essentially every delay in the macro is a checkpoint), and in any manual
-loop that doesn't otherwise call it (e.g. `PetNeedHandler`'s mouse-circle
+loop that doesn't otherwise call it (e.g. `PetNeedHandler`'s swipe
 loop).
 
 One exception: the very first check at the top of `run_full_cycle()`'s
@@ -1014,6 +1052,17 @@ knowing if you're modifying it:
   the **Debug** tab has two subtabs: **Needs** (a button that tests every need
   in turn, and one per need handler) and **Other** (Record the next run,
   Refresh debug, Reset Config).
+- **`run_on_ui_thread(func, timeout)`** is how the worker thread touches Tk
+  (which is only safe from its own thread): it queues `func`, waits until it
+  has run or `timeout` seconds pass (`None` = as long as it takes, for a
+  dialog such as the new-need name prompt) and returns what it returned.
+- **`watch_stop_hotkey()`** starts a thread that stops a running macro when
+  `STOP_HOTKEY` goes down in any window (holding it doesn't retrigger; it does
+  nothing while nothing runs), so you can take over the computer without
+  reaching for the GUI. The stop itself is handed to Tk's thread.
+- **`add_config_checkbox(key)`** makes a checkbox for a persisted switch. It is
+  deliberately not in `action_buttons`: the switches stay usable while a
+  workflow runs, which is safe because `update_game_config()` is locked.
 - **`DebugCapture`** redirects `sys.stdout` into the on-screen console
   (`self.debug_text`) for the lifetime of the GUI, so every `print()`
   anywhere in the macro shows up there automatically (`write()` only logs
@@ -1031,7 +1080,8 @@ Tick **Record the next run (low quality video)** on the Debug tab's Other subtab
 the Roblox window to `debug/recordings/run<N>_<time>.mp4` - then clears the
 switch, so it's one run only. `start_recording_if_requested()` starts a
 `RunRecorder`, which writes `RECORD_WIDTH` x `RECORD_HEIGHT` (640x360) frames at
-`RECORD_FPS` (4) from a background thread, each stamped with the time so the
+`RECORD_FPS` (4) from a background thread, each stamped with the time (white text on a solid black box in the top-left
+corner, which stays readable over any scene at the cost of that corner) so the
 video lines up with `output.log` and `run_log.txt`; a slow grab is covered by
 repeating the last frame, so playback is real time. It stops when the loop
 ends or after `RECORD_MAX_MINUTES` (480, 8 hours), and only the newest `MAX_RECORDINGS` videos
@@ -1057,15 +1107,15 @@ exact values and rationale):
 | Window / coordinates | `REFERENCE_WIDTH`, `REFERENCE_HEIGHT`, `REFERENCE_CENTER_X/Y`, `ROBLOX_RECT_TTL` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `STOP_CLICK_GRACE`, `NEED_GONE_*` |
 | Stuck needs | `NEED_STUCK_CHECKS` |
-| Icon readability | `NEED_BAR_BRIGHT_LEVEL`, `NEED_BAR_MAX_BRIGHT_FRACTION`, `ICON_LOCATE_THRESHOLD`, `ICON_LOCATE_ROW_MARGIN`, `ICON_FRAME_CHANGE_LEVEL` (log only) |
 | Pet focusing | `FOCUS_PET_REGION_TOP_PERCENT`, `FOCUS_PET_FRAME_GAP`, `FOCUS_PET_DIFF_THRESHOLD`, `FOCUS_PET_MERGE_KERNEL`, `FOCUS_PET_MIN_AREA` |
 | Screen positions | `CATCH_*_POS`, `EMPTY_POS`, `RIDE_*_POS`, `LURE_NEW_POS_*`, `SETUP_*_POS` |
 | Side quest / setup | `TREE_HARVEST_YIELD`, `MONEY_COLLECTED_TARGET`, `TREE_CHECK_INTERVAL`, `MONEY_RESET_HOUR`, `LURE_RECOLLECT_INTERVAL`, `LURE_COLLECT_*`, `TREE_COLLECT_*` |
 | Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN/MAX_RADIUS`, `NEED_ICON_HOUGH_*`, `NEED_STRIP_*` (when the circle search is skipped) |
-| Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
+| Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_MATCH_RADIUS_FRACTION`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
 | Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
-| Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_BOX`, `PAYCHECK_MATCH_THRESHOLD` |
+| Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
+| Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
 | GUI | colors/fonts (`GUI_BG`, `GUI_FONT`, ...) and layout spacing (`GUI_OUTER_PADDING`, `GUI_ROW_SPACING`, ...) for the `tkinter` panel |
@@ -1123,7 +1173,7 @@ again, since the counter goes with the logs.
   misread icon can be seen at once; missing when Roblox couldn't be captured)
   and `info.txt` (the reason, the needs last detected, the disabled needs and
   how long ago a need was last resolved) and `state.json` (the whole `State`
-  object - the stored need icon pictures as their sizes - and `run_stats` (a `RunStats` dataclass) as they were, for working out what the macro believed
+  object and `run_stats` (a `RunStats` dataclass) as they were, for working out what the macro believed
   at that moment). It also prints the reason, writes it
   to `run_log.txt` and counts it in the status file. It's called when a handler
   can't resolve a need, a need is still showing after `NEED_GONE_MAX_WAIT`, a
@@ -1161,13 +1211,14 @@ these.
 
 `.github/workflows/check.yml` runs on every push and pull request (GitHub
 Actions, a temporary Linux machine): `pyflakes` on `main.py`,
-`magic_numbers.py` and `tools/check_constants.py` (syntax errors, undefined
-names, unused imports, duplicate definitions), then
+`magic_numbers.py`, `tools/check_constants.py` and `tests` (syntax errors,
+undefined names, unused imports, duplicate definitions), then
 `python tools/check_constants.py`, which fails on a `cfg.NAME` in `main.py`
 that `magic_numbers.py` doesn't define, then `mypy main.py` (configured in
 `mypy.ini`: it also checks the bodies of functions without type hints, and
-ignores the Windows-only libraries it has no stubs for). Every function in
-`main.py` has type hints, using the aliases `Image` (a BGR screenshot or crop),
+ignores the Windows-only libraries it has no stubs for), then
+`python -m pytest -q`. Every top-level function and method in
+`main.py` has type hints (a few small nested helpers don't), using the aliases `Image` (a BGR screenshot or crop),
 `Point`, `Box` and `Color` defined under the imports. A few lines carry
 `# type: ignore[...]` for what the stubs get wrong (Windows-only calls, tkinter,
 OpenCV). It can't run the macro itself - that
@@ -1185,13 +1236,14 @@ clicks instead of making them. They cover:
 
 - `test_pure.py` - the small pure functions (server link parsing, durations,
   colour masks, axis rounding, failure kinds);
-- `test_state.py` - stuck-need disabling, `process_needs()` (resolved, unresolvable and unreadable-bar cases), `RunStats`, `status.json`, the
+- `test_state.py` - stuck-need disabling, `process_needs()` (resolved, unresolvable and not-cleared cases), `RunStats`, `status.json`, the
   failure folders, the quiet and idle-respawn checks (including that a respawn
   leaves the 20-minute rejoin clock alone), stopping, and the open `output.log`;
 - `test_detection.py` - the need-strip capture and its cache, and the
-  popups and stray windows against the real crops in `ref/`;
+  popups and stray windows against the real crops in `ref/` (including that every `POPUP_TEMPLATES` entry has a crop that fits its box);
+- `test_icon_screenshots.py` - every real screenshot in `tests/icon_detection/<folder>/` (the need bar over dark, bright, busy and white scenes) run through the circle search and the matching; each must be listed in `EXPECTED` with the needs on its bar, so a screenshot added without a label fails;
 - `test_loop.py` - the whole workflow loop run for a moment with the game stubbed out (idle respawns, the resource monitor starting and stopping, the report being written);
-- `test_features.py` - the daily money reset, the run-every-need sequence and judging an icon gone by how it changes between looks (with real salon-icon frames in `tests/fixtures/`);
+- `test_features.py` - the daily money reset, the run-every-need sequence, the win screen and the like;
 - `test_config.py` - the real need tables in `magic_numbers.py`, without pinning any value: every entry is well formed (known keys, on-screen positions, movement keys, a `final_click` has its `prompt_pos`), has a handler, and the handler carries out exactly what the entry says (run over whichever needs exist, so `HALLOWEEN` off just drops `sick`). The handler tests elsewhere use made-up entries; this is what keeps the real ones honest;
 - `test_report.py` - the run-report parser against the exact log wording the
   macro writes (a round trip through `log_run_event()`), the chart itself,
@@ -1210,8 +1262,8 @@ not "5 minutes"). Waits are tested on a fake clock (`fake_clock`), not by timing
 them, and the loop test runs until it has seen what it checks instead of for a
 fixed time, so a slow machine only makes it slower.
 `python tools/retune_check.py` runs the suite against changed copies of the repo
-and names any test that breaks - run it after adding tests (about 28 runs, a few
-minutes; `python tools/retune_check.py halloween_off timings_x20` runs just those).
+and names any test that breaks - run it when a change could depend on tuned
+values, not on every commit (about 30 runs, a few minutes; `python tools/retune_check.py halloween_off timings_x20` runs just those).
 The variants: every timing and walk step scaled by 0.05, 0.5, 1.7 and 20; other
 intervals, hours and counts changed; counts at their lowest and highest; the
 event flag off; needs removed from or added to the table; button names reordered;
@@ -1220,4 +1272,7 @@ widened, search boxes and click positions moved; other key bindings; behaviour
 flags flipped (`SAVE_NEW_NEEDS`, `MATCH_ONLY_LEFT_HALF`); two other time zones; a
 different hash seed; run from another working directory; a `debug/` folder with a
 real config and logs in it; extra files in `ref/`; the tests in reverse and in
-shuffled order; and each test file run on its own.
+shuffled order; and each test file run on its own. The one test file that is *meant* to depend
+on recognition settings, `test_icon_screenshots.py`, is skipped by the two
+variants that change those settings on purpose (`ICON_SHIFT_TOLERANCE` to 0,
+`MATCH_ONLY_LEFT_HALF` off).

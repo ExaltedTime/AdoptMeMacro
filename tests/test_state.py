@@ -4,7 +4,6 @@ import os
 import threading
 import time
 
-import numpy as np
 import pytest
 
 
@@ -59,10 +58,10 @@ def test_write_status_has_the_documented_keys_and_is_valid_json(macro):
 def test_state_snapshot_is_json_friendly(macro):
     macro.state.disabled_needs.add("pizza")
     macro.state.macro_window = object()
-    macro.state.need_icon_crops["sick"] = np.zeros((57, 57, 3), np.uint8)       # pictures must not end up in the JSON
+    macro.state.attempted_last = {"sick"}                                          # sets must not end up in the JSON
     snapshot = macro.state.snapshot()
     assert snapshot["disabled_needs"] == ["pizza"] and snapshot["macro_window"] == "set"
-    assert snapshot["need_icon_crops"] == {"sick": "image 57x57"}
+    assert snapshot["attempted_last"] == ["sick"]
     json.dumps(snapshot)
 
 
@@ -264,15 +263,7 @@ def test_a_detected_need_that_cannot_be_resolved_still_counts_as_detected(macro,
     assert macro.run_stats.failed == {"hungry": 1}
 
 
-def test_an_unreadable_need_bar_is_not_a_reason_to_respawn(macro, one_need, monkeypatch):
-    import numpy as np
-    monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([], np.full((1080, 1920, 3), 255, np.uint8)))
-    macro.state.last_detection = time.time() - 1000
-    assert macro.process_needs() is False
-    assert time.time() - macro.state.last_detection < 1
-
-
-def test_no_icons_on_a_readable_bar_leaves_the_idle_clock_running(macro, one_need, monkeypatch):
+def test_no_icons_leaves_the_idle_clock_running(macro, one_need, monkeypatch):
     import numpy as np
     monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([], np.zeros((1080, 1920, 3), np.uint8)))
     before = macro.state.last_detection = time.time() - 1000
@@ -374,8 +365,6 @@ def test_a_teleport_need_waits_for_the_need_to_clear_up_to_the_default_time(macr
     assert walker.waited == [macro.cfg.NEED_GONE_MAX_WAIT]
 
 
-
-
 def test_a_need_can_set_its_own_wait(walker):
     walker(max_wait=150.0).handle()
     assert walker.waited == [150.0]
@@ -417,14 +406,14 @@ def need_gone(macro, monkeypatch):
 
         def scan_needs(fresh=False):
             log["scans"].append(fresh)
-            return queue.pop(0) if queue else (["hungry"], True)
+            return queue.pop(0) if queue else ["hungry"]
         monkeypatch.setattr(macro, "scan_needs", scan_needs)
     log["script"] = script
     return log
 
 
 def test_the_wait_ends_at_the_first_check_that_finds_the_need_gone(need_gone, macro):
-    need_gone["script"]((["hungry"], True), ([], True), ([], True))      # check 1: still there; check 2: gone on both looks
+    need_gone["script"](["hungry"], [], [])      # check 1: still there; check 2: gone on both looks
     macro.wait_until_need_gone("hungry", max_wait=60, poll_interval=POLL)
     assert need_gone["scans"] == [False, False, True]                      # the second look of the last check was a fresh search
     assert [w for w in need_gone["waits"] if w > 1] == [POLL] * 2   # polled every poll_interval, no extra confirmations
@@ -432,7 +421,7 @@ def test_the_wait_ends_at_the_first_check_that_finds_the_need_gone(need_gone, ma
 
 
 def test_a_flicker_on_the_first_look_does_not_end_the_wait(need_gone, macro):
-    need_gone["script"]((([]), True), (["hungry"], True), (["hungry"], True), ([], True), ([], True))
+    need_gone["script"]((([]), True), ["hungry"], ["hungry"], [], [])
     macro.wait_until_need_gone("hungry", max_wait=60)
     assert len(need_gone["scans"]) == 5                                    # check 1 missed it once but saw it on the second look
 
@@ -444,16 +433,6 @@ def test_a_need_that_never_clears_is_a_failure_after_the_wait(need_gone, macro, 
     need_gone["script"]()                                                  # always still there
     macro.wait_until_need_gone("hungry", max_wait=10)
     assert need_gone["failures"] == ["hungry still showing after 10s"]
-
-
-def test_an_unreadable_bar_is_not_a_failure(need_gone, macro, monkeypatch):
-    clock = [1000.0]
-    monkeypatch.setattr(macro.time, "time", lambda: clock[0])
-    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: clock.__setitem__(0, clock[0] + duration))
-    need_gone["script"](*[([], False)] * 20)
-    macro.wait_until_need_gone("hungry", max_wait=10, poll_interval=POLL)
-    assert "failures" not in need_gone
-
 
 
 def test_config_reads_never_see_a_half_written_file(macro, monkeypatch, tmp_path):
@@ -873,18 +852,9 @@ def test_a_wait_that_runs_out_marks_the_need_as_not_cleared(need_gone, macro, mo
     need_gone["script"]()
     macro.wait_until_need_gone("hungry", max_wait=10, poll_interval=POLL)
     assert macro.state.need_cleared is False
-    need_gone["script"](([], True), ([], True))
+    need_gone["script"]([], [])
     macro.wait_until_need_gone("hungry", max_wait=10, poll_interval=POLL)
     assert macro.state.need_cleared is True                                  # every wait starts afresh
-
-
-def test_an_unreadable_bar_does_not_mark_the_need_as_not_cleared(need_gone, macro, monkeypatch):
-    clock = [1000.0]
-    monkeypatch.setattr(macro.time, "time", lambda: clock[0])
-    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: clock.__setitem__(0, clock[0] + duration))
-    need_gone["script"](*[([], False)] * 20)
-    macro.wait_until_need_gone("hungry", max_wait=10, poll_interval=POLL)
-    assert macro.state.need_cleared is True
 
 
 def walk_with_watcher_answers(macro, monkeypatch, answers, cleared=False):
@@ -909,11 +879,6 @@ def walk_with_watcher_answers(macro, monkeypatch, answers, cleared=False):
 def test_a_walk_that_ends_with_the_need_still_showing_is_not_cleared(macro, monkeypatch):
     failures = walk_with_watcher_answers(macro, monkeypatch, [False, False])
     assert macro.state.need_cleared is False and failures == ["hungry still showing after 10s"]
-
-
-def test_a_walk_that_ends_with_the_icons_unreadable_proves_nothing(macro, monkeypatch):
-    failures = walk_with_watcher_answers(macro, monkeypatch, [False, None])
-    assert macro.state.need_cleared is True and failures == []
 
 
 def test_a_walk_that_clears_the_need_is_cleared(macro, monkeypatch):
@@ -1009,3 +974,87 @@ def test_a_need_disabled_for_being_stuck_is_logged_by_name(macro, monkeypatch):
         macro.record_detection(["hungry"])
     assert "hungry" in macro.state.disabled_needs
     assert "[RUN 4] disabled: hungry\n" in open(macro.cfg.RUN_LOG_PATH).read()
+
+
+# --- the white screen ---
+
+def white_screen_run(macro, monkeypatch, frames):
+    """rejoin_reason() with the game running and `frames` (a list, popped one per call) as what the screen shows."""
+    import numpy as np
+    clock = [1000.0]
+    window = type("Window", (), {"title": "Roblox"})()
+    monkeypatch.setattr(macro.time, "time", lambda: clock[0])
+    monkeypatch.setattr(macro.gw, "getAllWindows", lambda: [window])
+    white = np.full((1080, 1920, 3), 255, np.uint8)
+    dark = np.zeros((1080, 1920, 3), np.uint8)
+    monkeypatch.setattr(macro, "grab_screen", lambda: white if frames.pop(0) else dark)
+    return clock
+
+
+def test_a_screen_that_stays_white_is_rejoined_after_the_wait(macro, monkeypatch):
+    frames = [True] * 5
+    clock = white_screen_run(macro, monkeypatch, frames)
+    limit = macro.cfg.WHITE_SCREEN_REJOIN_AFTER
+    assert macro.rejoin_reason() is None                      # first white look: the clock starts
+    clock[0] += limit - 1
+    assert macro.rejoin_reason() is None                      # not long enough
+    clock[0] += 2
+    kind, reason = macro.rejoin_reason()
+    assert kind == "white_screen" and f"{limit:g}s" in reason
+
+
+def test_a_white_screen_that_clears_starts_the_wait_afresh(macro, monkeypatch):
+    frames = [True, False, True, True]
+    clock = white_screen_run(macro, monkeypatch, frames)
+    limit = macro.cfg.WHITE_SCREEN_REJOIN_AFTER
+    macro.rejoin_reason()
+    clock[0] += limit - 1
+    assert macro.rejoin_reason() is None and macro.state.white_since is None     # it cleared a moment before the limit
+    macro.rejoin_reason()
+    clock[0] += limit - 1
+    assert macro.rejoin_reason() is None                                          # the second white spell is a new one
+
+
+def test_a_white_screen_is_acted_on_mid_task_too(macro, monkeypatch):
+    seen = []
+    monkeypatch.setattr(macro, "rejoin_reason", lambda: ("white_screen", "white"))
+    monkeypatch.setattr(macro, "leave_and_rejoin", lambda clean_leave=True: seen.append(clean_leave) or True)
+    monkeypatch.setattr(macro, "setup_game", lambda: True)
+    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: None)
+    assert macro.unscrew(in_task=True) == "rejoined"
+    assert seen == [True]
+
+
+def test_detect_white_screen_wants_most_of_the_screen_completely_white(macro):
+    import numpy as np
+    screen = np.zeros((1080, 1920, 3), np.uint8)
+    assert not macro.detect_white_screen(screen)
+    screen[:, :int(1920 * (macro.cfg.WHITE_SCREEN_MIN_FRACTION + 0.05))] = 255
+    assert macro.detect_white_screen(screen)
+    bright = np.full((1080, 1920, 3), macro.cfg.WHITE_SCREEN_LEVEL - 20, np.uint8)       # bright is not white
+    assert not macro.detect_white_screen(bright)
+
+
+def test_the_real_white_transition_is_white_and_no_other_real_screenshot_is(macro):
+    import glob
+    import os
+    import cv2
+    folder = os.path.join(os.path.dirname(__file__), "icon_detection", "halloween1")
+    white = [os.path.basename(f) for f in sorted(glob.glob(os.path.join(folder, "*.png")))
+             if macro.detect_white_screen(cv2.imread(f))]
+    assert white == ["Screenshot (303).png"]
+
+
+def test_a_failed_minigame_does_not_count_as_progress_but_a_won_one_does(macro, monkeypatch):
+    stalled = time.time() - 100
+    monkeypatch.setattr(macro, "release_all_inputs", lambda: None)
+    monkeypatch.setattr(macro, "hover_click", lambda *a, **k: None)
+    monkeypatch.setattr(macro, "respawn_character", lambda: None)
+    monkeypatch.setattr(macro, "click_nice_until_gone", lambda: True)
+    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: None)
+    for won in (False, True):
+        macro.state.last_progress = stalled
+        monkeypatch.setitem(macro.MINIGAME_PLAYERS, "ghost_gallery", lambda deadline, watch, won=won: won)
+        assert macro.play_minigame("ghost_gallery") is won
+        assert (macro.state.last_progress == stalled) is (not won)
+        assert time.time() - macro.state.last_detection < 5                            # needs couldn't be seen meanwhile either way

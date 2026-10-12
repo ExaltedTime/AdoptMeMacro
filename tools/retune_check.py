@@ -11,6 +11,8 @@ magic_numbers.py, the environment, the files around it, or the order the tests r
 
 Each variant should pass exactly as the unchanged repo does. A failure names a test that depends on a tuned value:
 give it a made-up entry or read the constant (see the `walker` fixture in tests/test_state.py) instead of pinning it.
+(The exception is tests/test_icon_screenshots.py, which checks that the icon-recognition settings work on real screenshots:
+the variants that change those settings on purpose skip it.)
 """
 import glob
 import os
@@ -21,6 +23,10 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# The one test file that is *meant* to depend on the recognition settings: it checks that they recognise real screenshots.
+# A variant that changes those settings on purpose ("deselect") leaves it out.
+SCREENSHOT_TEST = "tests/test_icon_screenshots.py"
 
 SCALE = '''
 import re as _re
@@ -87,20 +93,20 @@ VARIANTS.update({
     "button_names_reordered": 'BUTTON_NAMES[:] = ["sleepy", "potty", "dirty", "thirsty", "hungry"]\n',
     "helicopter_everywhere": "HELICOPTER_REQUIRED = True\n",
     # thresholds and tolerances nudged either way (detection tuning)
-    "thresholds_up": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_THRESHOLD") and isinstance(_v, float):\n        globals()[_n] = min(0.99, _v * 1.03)\n',
-    "thresholds_down": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_THRESHOLD") and isinstance(_v, float):\n        globals()[_n] = _v * 0.94\n',
+    "thresholds_up": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_THRESHOLD") and isinstance(_v, float):\n        globals()[_n] = min(0.99, _v * 1.03)\nfor _e in POPUP_TEMPLATES.values():\n    _e["threshold"] = min(0.99, _e["threshold"] * 1.03)\n',
+    "thresholds_down": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_THRESHOLD") and isinstance(_v, float):\n        globals()[_n] = _v * 0.94\nfor _e in POPUP_TEMPLATES.values():\n    _e["threshold"] = _e["threshold"] * 0.94\n',
     "tolerances_wider": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_TOLERANCE") and isinstance(_v, int):\n        globals()[_n] = _v * 2 + 1\n',
     # every search box moved a few pixels
-    "boxes_shifted": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_BOX") and isinstance(_v, tuple) and len(_v) == 4:\n        globals()[_n] = (_v[0] + 4, _v[1] + 3, _v[2] + 4, _v[3] + 3)\n',
+    "boxes_shifted": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_BOX") and isinstance(_v, tuple) and len(_v) == 4:\n        globals()[_n] = (_v[0] + 4, _v[1] + 3, _v[2] + 4, _v[3] + 3)\nfor _e in POPUP_TEMPLATES.values():\n    _v = _e["box"]\n    _e["box"] = (_v[0] + 4, _v[1] + 3, _v[2] + 4, _v[3] + 3)\n',
     "timings_x0.05": SCALE % "0.05",
     "timings_x20": SCALE % "20",
     # counts and limits at both ends
-    "counts_low": "NEED_STUCK_CHECKS = 1\nBACKPACK_CLOSE_CONFIRMATIONS = 1\nREJOIN_MAX_ATTEMPTS = 1\nFOCUS_RESUME_MAX_IN_A_ROW = 1\nMINIGAME_VICTORY_CLICK_TRIES = 1\nMAX_FAILURE_FOLDERS = 1\nMAX_REPORTS = 1\nMAX_RECORDINGS = 1\nCONSOLE_MAX_LINES = 10\nICON_SHIFT_TOLERANCE = 0\nDISABLED_NEEDS_REJOIN_THRESHOLD = 1\n",
+    "counts_low": {"patch": "NEED_STUCK_CHECKS = 1\nBACKPACK_CLOSE_CONFIRMATIONS = 1\nREJOIN_MAX_ATTEMPTS = 1\nFOCUS_RESUME_MAX_IN_A_ROW = 1\nMINIGAME_VICTORY_CLICK_TRIES = 1\nMAX_FAILURE_FOLDERS = 1\nMAX_REPORTS = 1\nMAX_RECORDINGS = 1\nCONSOLE_MAX_LINES = 10\nICON_SHIFT_TOLERANCE = 0\nDISABLED_NEEDS_REJOIN_THRESHOLD = 1\n", "deselect": [SCREENSHOT_TEST]},
     "counts_high": "NEED_STUCK_CHECKS = 10\nBACKPACK_CLOSE_CONFIRMATIONS = 4\nREJOIN_MAX_ATTEMPTS = 8\nFOCUS_RESUME_MAX_IN_A_ROW = 20\nMINIGAME_VICTORY_CLICK_TRIES = 6\nMAX_FAILURE_FOLDERS = 1000\nMAX_REPORTS = 1000\nMAX_RECORDINGS = 50\nCONSOLE_MAX_LINES = 100000\nICON_SHIFT_TOLERANCE = 4\nDISABLED_NEEDS_REJOIN_THRESHOLD = 9\n",
     # other key bindings in the game
     "keys_remapped": 'KEY_BACKPACK = "v"\nKEY_MOUNT = "f"\nKEY_INTERACT = "f"\nKEY_ZOOM_IN = "o"\nKEY_HELICOPTER = "t"\nKEY_JUMP = "x"\nSTOP_HOTKEY = "q"\n',
     # behaviour flags flipped
-    "flags_flipped": "MATCH_ONLY_LEFT_HALF = False\nFOCUS_WINDOW_ON_ACTION = False\nSAVE_NEW_NEEDS = True\n",
+    "flags_flipped": {"patch": "MATCH_ONLY_LEFT_HALF = False\nFOCUS_WINDOW_ON_ACTION = False\nSAVE_NEW_NEEDS = True\n", "deselect": [SCREENSHOT_TEST]},
     # the machine and the folders around the code
     "tz_new_york": {"env": {"TZ": "America/New_York"}},
     "tz_kolkata": {"env": {"TZ": "Asia/Kolkata"}},
@@ -139,15 +145,17 @@ def prepare(copy: str, setup: str) -> None:
         import cv2
         import numpy as np
         noise = np.random.RandomState(0).randint(0, 255, (60, 60, 3), np.uint8)
-        for folder, name in (("needs", "zz_new_need"), ("popups", "zz_unknown_popup"), ("halloween", "zz_new_minigame"), ("overlays", "zz_overlay")):
-            cv2.imwrite(os.path.join(copy, "ref", folder, name + ".png"), noise)
+        icon = np.full((66, 66, 3), 255, np.uint8)      # a white disc with a dark bar: the learned need (noise is mostly black once binarised, like a dark patch of scenery)
+        cv2.line(icon, (10, 56), (56, 10), (0, 0, 0), 8)
+        for folder, name, image in (("needs", "zz_new_need", icon), ("popups", "zz_unknown_popup", noise), ("halloween", "zz_new_minigame", noise), ("overlays", "zz_overlay", noise)):
+            cv2.imwrite(os.path.join(copy, "ref", folder, name + ".png"), image)
 
 
 def run_variant(name: str) -> bool:
     """One variant: a string (appended to magic_numbers.py) or a dict of what to change: env, cwd, setup, alone."""
     spec = VARIANTS[name]
     options = spec if isinstance(spec, dict) else {}
-    patch = spec if isinstance(spec, str) else ""
+    patch = spec if isinstance(spec, str) else spec.get("patch", "")
     folder = tempfile.mkdtemp()
     try:
         copy = os.path.join(folder, "repo")
@@ -164,10 +172,11 @@ def run_variant(name: str) -> bool:
             cwd = os.path.join(folder, "elsewhere")
             os.makedirs(cwd)
             target = [os.path.join(copy, "tests")]
+        deselect = [arg for test in options.get("deselect", []) for arg in ("--deselect", test)]
         runs = [[t] for t in sorted(glob.glob(os.path.join(copy, "tests", "test_*.py")))] if options.get("alone") else [target]
         ok, summaries, failed = True, [], set()
         for paths in runs:
-            result = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "retune_plugin", *paths],
+            result = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "retune_plugin", *deselect, *paths],
                                     cwd=cwd, env=env, capture_output=True, text=True)
             ok = ok and result.returncode == 0
             failed |= set(re.findall(r"^(?:FAILED|ERROR) (\S+)", result.stdout, re.M))

@@ -124,18 +124,80 @@ def test_a_nearly_full_disk_stops_the_capture(macro, capture, monkeypatch):
     assert recorder.stopped_because == "the disk is nearly full" and recorder.frames == 0
 
 
-def test_the_hotkey_starts_then_stops_and_nothing_already_there_is_deleted(macro, capture):
-    older = os.path.join(macro.cfg.CAPTURES_DIR, "an_earlier_capture")
-    os.makedirs(older)
+def test_the_hotkey_starts_then_stops_and_the_oldest_captures_are_deleted(macro, capture, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "MAX_CAPTURES", 2)
+    os.makedirs(macro.cfg.CAPTURES_DIR)
+    for i in range(3):
+        old = os.path.join(macro.cfg.CAPTURES_DIR, f"old{i}")
+        os.makedirs(old)
+        os.utime(old, (1000 + i, 1000 + i))
     first = macro.toggle_input_capture()
     assert first is not None and macro.state.capture is first and first.running
-    assert os.path.isdir(older) and os.path.dirname(first.folder) == macro.cfg.CAPTURES_DIR
+    kept = os.listdir(macro.cfg.CAPTURES_DIR)
+    assert len(kept) == 2 and "old2" in kept and os.path.basename(first.folder) in kept          # room made for the new one
     assert macro.toggle_input_capture() is None and macro.state.capture is None and not first.running
 
 
-def test_the_default_capture_folder_is_in_the_repo_not_in_debug(macro):
-    import conftest
-    assert os.path.realpath(macro.cfg.CAPTURES_DIR) == os.path.realpath(os.path.join(conftest.ROOT, "temp", "captures"))
+def test_the_default_capture_folder_is_in_debug(macro):
+    assert os.path.realpath(macro.cfg.CAPTURES_DIR) == os.path.realpath(os.path.join(macro.cfg.DEBUG_DIR, "captures"))
+
+
+# --- unchanged frames are skipped ---
+
+@pytest.fixture
+def screen(macro, capture, monkeypatch):
+    """The screen the capture sees, as a mutable array; looked at every 20 ms; a long wait before a frame is forced."""
+    picture = {"img": np.full((1080, 1920, 3), 90, np.uint8)}
+    monkeypatch.setattr(macro, "grab_screen", lambda: picture["img"].copy())
+    monkeypatch.setattr(macro.cfg, "CAPTURE_FRAME_INTERVAL", 0.02)
+    monkeypatch.setattr(macro.cfg, "CAPTURE_MAX_SKIP", 3600.0)
+    return picture
+
+
+def run_capture(macro, capture, until):
+    recorder = macro.InputCapture(capture["folder"])
+    recorder.start()
+    assert wait_for(lambda: until(recorder))
+    recorder.stop()
+    return recorder
+
+
+def test_a_screen_that_does_not_change_is_saved_once(macro, capture, screen):
+    recorder = run_capture(macro, capture, lambda r: r.skipped >= 5)
+    assert recorder.frames == 1 and len([f for f in os.listdir(capture["folder"]) if f.endswith(".png")]) == 1
+
+
+def test_a_small_change_like_a_ticking_timer_is_skipped_but_something_moving_is_saved(macro, capture, screen):
+    recorder = macro.InputCapture(capture["folder"])
+    recorder.start()
+    assert wait_for(lambda: recorder.frames == 1)
+    screen["img"][40:70, 780:860] = 255                               # a timer's digits: about 0.1% of the picture
+    skipped = recorder.skipped
+    assert wait_for(lambda: recorder.skipped >= skipped + 4) and recorder.frames == 1
+    screen["img"][300:500, 700:900] = 20                              # a character: about 2%
+    assert wait_for(lambda: recorder.frames == 2)
+    recorder.stop()
+
+
+def test_a_click_always_gets_a_frame_even_when_nothing_changed(macro, capture, screen):
+    recorder = macro.InputCapture(capture["folder"])
+    recorder.start()
+    assert wait_for(lambda: recorder.frames == 1 and recorder.skipped >= 2)
+    capture["held"] = {"mouse_left"}
+    assert wait_for(lambda: recorder.frames == 2)
+    recorder.stop()
+
+
+def test_a_long_stretch_without_a_frame_forces_one(macro, capture, screen, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "CAPTURE_MAX_SKIP", 0.15)
+    recorder = run_capture(macro, capture, lambda r: r.frames >= 3)
+    assert recorder.skipped >= 1                                       # some looks were skipped in between
+
+
+def test_the_summary_counts_the_skipped_frames(macro, capture, screen):
+    recorder = run_capture(macro, capture, lambda r: r.skipped >= 3)
+    info = json.load(open(os.path.join(capture["folder"], "info.json")))
+    assert info["frames_skipped"] == recorder.skipped and info["frames"] == 1
 
 
 def test_a_capture_that_stopped_by_itself_is_tidied_up_and_the_next_press_starts_a_new_one(macro, capture, monkeypatch):

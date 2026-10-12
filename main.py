@@ -2757,8 +2757,8 @@ def to_reference(x: float, y: float) -> Point:
     return int((x - left) * cfg.REFERENCE_WIDTH / width), int((y - top) * cfg.REFERENCE_HEIGHT / height)
 
 class InputCapture:
-    """Records into `folder`: frame_<n>_<seconds>.png (grab_screen(), lossless) every CAPTURE_FRAME_INTERVAL and
-    right after every mouse click, and events.jsonl, one JSON object per line on the same clock ("t", seconds since
+    """Records into `folder`: frame_<n>_<seconds>.png (grab_screen(), lossless) when the screen has changed, looked at
+    every CAPTURE_FRAME_INTERVAL and right after every mouse click, and events.jsonl, one JSON object per line on the same clock ("t", seconds since
     the start): key_down / key_up with the key, mouse_down / mouse_up with the button, move (rate limited), and a
     frame line for each screenshot. Mouse events carry the screen position (x, y) and the reference-space one
     (rx, ry). The capture hotkey itself is left out. It stops by itself after CAPTURE_MAX_MINUTES or when the disk
@@ -2770,6 +2770,7 @@ class InputCapture:
         self.shot_now = threading.Event()
         self.stopped_because: Optional[str] = None
         self.frames = 0
+        self.skipped = 0
         self.events = 0
         self.started = 0.0
         self._lock = threading.Lock()
@@ -2804,11 +2805,11 @@ class InputCapture:
                 self._file = None
         seconds = time.time() - self.started
         size_mb = sum(os.path.getsize(os.path.join(self.folder, f)) for f in os.listdir(self.folder)) / (1024 * 1024)
-        summary = f"{self.frames} frames, {self.events} events, {seconds:.0f}s, {size_mb:.0f} MB in {self.folder}"
+        summary = f"{self.frames} frames ({self.skipped} unchanged ones skipped), {self.events} events, {seconds:.0f}s, {size_mb:.0f} MB in {self.folder}"
         try:
             with open(os.path.join(self.folder, "info.json")) as f:
                 info = json.load(f)
-            info.update(stopped=time.strftime("%Y-%m-%d %H:%M:%S"), seconds=round(seconds, 1), frames=self.frames,
+            info.update(stopped=time.strftime("%Y-%m-%d %H:%M:%S"), seconds=round(seconds, 1), frames=self.frames, frames_skipped=self.skipped,
                         events=self.events, stopped_because=self.stopped_because or "hotkey")
             with open(os.path.join(self.folder, "info.json"), "w") as f:
                 json.dump(info, f, indent=1)
@@ -2857,9 +2858,13 @@ class InputCapture:
                 print(f"[!] input capture: {error}")
 
     def _shots(self) -> None:
-        """Thread body: a screenshot every CAPTURE_FRAME_INTERVAL and right after each click; stops the capture when
-        it has run CAPTURE_MAX_MINUTES or the disk is nearly full."""
+        """Thread body: look at the screen every CAPTURE_FRAME_INTERVAL and right after each click, saving a frame when
+        it differs from the last one saved (see CAPTURE_CHANGE_FRACTION), after a click, or after CAPTURE_MAX_SKIP
+        seconds without one; stops the capture when it has run CAPTURE_MAX_MINUTES or the disk is nearly full."""
+        last_small: Optional[Image] = None
+        last_saved = 0.0
         while not self.stop_event.is_set():
+            clicked = self.shot_now.is_set()
             self.shot_now.clear()
             try:
                 if time.time() - self.started >= cfg.CAPTURE_MAX_MINUTES * 60:
@@ -2869,10 +2874,17 @@ class InputCapture:
                     self._give_up("the disk is nearly full")
                     return
                 seconds = time.time() - self.started
-                name = f"frame_{self.frames + 1:06d}_{seconds:.3f}.png"
-                if cv2.imwrite(os.path.join(self.folder, name), grab_screen(), [cv2.IMWRITE_PNG_COMPRESSION, 1]):
-                    self.frames += 1
-                    self._emit("frame", file=name)
+                screen = grab_screen()
+                small = cv2.resize(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY), (320, 180), interpolation=cv2.INTER_AREA)
+                if (clicked or last_small is None or seconds - last_saved >= cfg.CAPTURE_MAX_SKIP
+                        or np.count_nonzero(cv2.absdiff(small, last_small) > cfg.CAPTURE_CHANGE_LEVEL) / small.size >= cfg.CAPTURE_CHANGE_FRACTION):
+                    name = f"frame_{self.frames + 1:06d}_{seconds:.3f}.png"
+                    if cv2.imwrite(os.path.join(self.folder, name), screen, [cv2.IMWRITE_PNG_COMPRESSION, 1]):
+                        self.frames += 1
+                        self._emit("frame", file=name)
+                        last_small, last_saved = small, seconds
+                else:
+                    self.skipped += 1
             except Exception as error:
                 print(f"[!] input capture: couldn't save a frame: {error}")
             self.shot_now.wait(cfg.CAPTURE_FRAME_INTERVAL)
@@ -2885,7 +2897,7 @@ class InputCapture:
         print(f"[!] Input capture stopped by itself: {reason}")
 
 def toggle_input_capture() -> Optional[InputCapture]:
-    """Start a capture (a fresh folder in CAPTURES_DIR) or, if one is
+    """Start a capture (a fresh folder in CAPTURES_DIR, the oldest beyond MAX_CAPTURES deleted) or, if one is
     running, stop it - what the capture hotkey does. Returns the capture that is running now, or None."""
     current = state.capture
     if current is not None:
@@ -2895,6 +2907,9 @@ def toggle_input_capture() -> Optional[InputCapture]:
         if was_running:
             return None            # (one that had stopped by itself is only tidied up here: this press starts a new one)
     os.makedirs(cfg.CAPTURES_DIR, exist_ok=True)
+    folders = sorted((os.path.join(cfg.CAPTURES_DIR, f) for f in os.listdir(cfg.CAPTURES_DIR)), key=os.path.getmtime)
+    for old in folders[:max(0, len(folders) - (cfg.MAX_CAPTURES - 1))]:
+        shutil.rmtree(old, ignore_errors=True)
     capture = InputCapture(os.path.join(cfg.CAPTURES_DIR, "capture_" + time.strftime("%Y%m%d_%H%M%S")))
     capture.start()
     state.capture = capture

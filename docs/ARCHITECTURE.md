@@ -1085,11 +1085,13 @@ frames and the inputs that went with them. It is separate from **Record the next
 video of a macro run): it works whether or not the macro is running, and the macro's own key presses
 and clicks are recorded too, since `GetAsyncKeyState` sees them like any others.
 
-Each capture is a folder in `debug/captures/` (`CAPTURES_DIR`, git-ignored, emptied by **Refresh debug**;
-the newest `MAX_CAPTURES` are kept) named `capture_<date>_<time>`:
+Each capture is a folder in `temp/captures/` (`CAPTURES_DIR`) named `capture_<date>_<time>`. That is in
+the repo, not in `debug/`, on purpose: the folder isn't git-ignored, so a capture can be committed and read
+by whoever is working on the code, and **Refresh debug** leaves it alone. The macro never deletes a
+capture - clear the folder yourself (and mind the repo's size before committing one):
 
 - `frame_<n>_<seconds>.png` - `grab_screen()` (the Roblox window at the reference size, the macro's own
-  window included if it is on top), lossless, every `CAPTURE_FRAME_INTERVAL` (1 s) and once more
+  window included if it is on top), lossless, every `CAPTURE_FRAME_INTERVAL` (0.5 s) and once more
   right after every mouse click, so a click's frame shows what it landed on. `<seconds>` is on the same clock
   as the events.
 - `events.jsonl` - one JSON object per line, in time order, `t` being seconds since the start:
@@ -1105,7 +1107,7 @@ Keys and mouse buttons are read by polling `GetAsyncKeyState` every `CAPTURE_POL
 the same call as the stop hotkey, so no extra package is needed - and the position with `GetCursorPos`.
 The cost of polling is that **the mouse wheel isn't seen** (no async state to read) and a key pressed
 and released between two polls is missed. A capture stops by itself after `CAPTURE_MAX_MINUTES` (15) or
-when less than `CAPTURE_MIN_FREE_MB` of disk is free - a frame is roughly 1-3 MB, so a minute is 60-180 MB and a full 15 minutes up to a few GB - and the next
+when less than `CAPTURE_MIN_FREE_MB` of disk is free - a frame is roughly 1-3 MB, so a minute is 120-360 MB and a full 15 minutes up to 5 GB - and the next
 press of the hotkey then tidies it up and starts a new one. Screenshots and input are written from two
 threads of the capture's own; the hotkey is watched by the GUI's hotkey thread (with the stop hotkey) and
 acted on in Tk's thread, so typing an `m` into the private server link box starts a capture too.
@@ -1152,7 +1154,7 @@ exact values and rationale):
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
 | Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
-| Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES` |
+| Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |

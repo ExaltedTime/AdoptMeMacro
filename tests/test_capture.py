@@ -124,18 +124,18 @@ def test_a_nearly_full_disk_stops_the_capture(macro, capture, monkeypatch):
     assert recorder.stopped_because == "the disk is nearly full" and recorder.frames == 0
 
 
-def test_the_hotkey_starts_then_stops_and_the_oldest_captures_are_deleted(macro, capture, monkeypatch):
-    monkeypatch.setattr(macro.cfg, "MAX_CAPTURES", 2)
-    os.makedirs(macro.cfg.CAPTURES_DIR)
-    for i in range(3):
-        old = os.path.join(macro.cfg.CAPTURES_DIR, f"old{i}")
-        os.makedirs(old)
-        os.utime(old, (1000 + i, 1000 + i))
+def test_the_hotkey_starts_then_stops_and_nothing_already_there_is_deleted(macro, capture):
+    older = os.path.join(macro.cfg.CAPTURES_DIR, "an_earlier_capture")
+    os.makedirs(older)
     first = macro.toggle_input_capture()
     assert first is not None and macro.state.capture is first and first.running
-    kept = os.listdir(macro.cfg.CAPTURES_DIR)
-    assert len(kept) == 2 and "old0" not in kept and "old1" not in kept             # room made for the new one
+    assert os.path.isdir(older) and os.path.dirname(first.folder) == macro.cfg.CAPTURES_DIR
     assert macro.toggle_input_capture() is None and macro.state.capture is None and not first.running
+
+
+def test_the_default_capture_folder_is_in_the_repo_not_in_debug(macro):
+    import conftest
+    assert os.path.realpath(macro.cfg.CAPTURES_DIR) == os.path.realpath(os.path.join(conftest.ROOT, "temp", "captures"))
 
 
 def test_a_capture_that_stopped_by_itself_is_tidied_up_and_the_next_press_starts_a_new_one(macro, capture, monkeypatch):

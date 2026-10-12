@@ -2885,7 +2885,7 @@ class InputCapture:
         print(f"[!] Input capture stopped by itself: {reason}")
 
 def toggle_input_capture() -> Optional[InputCapture]:
-    """Start a capture (a fresh folder in CAPTURES_DIR, the oldest beyond MAX_CAPTURES deleted) or, if one is
+    """Start a capture (a fresh folder in CAPTURES_DIR) or, if one is
     running, stop it - what the capture hotkey does. Returns the capture that is running now, or None."""
     current = state.capture
     if current is not None:
@@ -2895,9 +2895,6 @@ def toggle_input_capture() -> Optional[InputCapture]:
         if was_running:
             return None            # (one that had stopped by itself is only tidied up here: this press starts a new one)
     os.makedirs(cfg.CAPTURES_DIR, exist_ok=True)
-    folders = sorted((os.path.join(cfg.CAPTURES_DIR, f) for f in os.listdir(cfg.CAPTURES_DIR)), key=os.path.getmtime)
-    for old in folders[:max(0, len(folders) - (cfg.MAX_CAPTURES - 1))]:
-        shutil.rmtree(old, ignore_errors=True)
     capture = InputCapture(os.path.join(cfg.CAPTURES_DIR, "capture_" + time.strftime("%Y%m%d_%H%M%S")))
     capture.start()
     state.capture = capture

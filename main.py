@@ -308,6 +308,14 @@ class State:
     # when the first one was.
     idle_checks: int = 0
     idle_since: float = 0.0
+    # The needs named by the last "detected:" line, and how many checks since then found exactly the same with no
+    # handler run in between (not yet written to the run log - see note_repeat_check()).
+    last_detected_body: Optional[str] = None
+    repeat_checks: int = 0
+    repeat_since: float = 0.0
+    # False when the last wait for a need to clear (wait_until_need_gone(), walk_alternating()) ran out with the
+    # need still showing - process_needs() then doesn't count the need as resolved.
+    need_cleared: bool = True
     # True from the start of a run until rejoin_game() has looked once: the game not running then is just where the
     # run begins (it is started), not a failure.
     run_start_pending: bool = False
@@ -418,25 +426,40 @@ def reset_need_tracking() -> None:
     state.attempt_streaks.clear()
     state.attempted_last = set()
     state.none_matched_logged = False
+    state.last_detected_body = None
 
 def note_idle_check() -> None:
     """Count one check that found no need. They are logged together, as one "idle checks: N over Ss" line
     (flush_idle_checks()), so a long wait doesn't write a line every few seconds - and the run report can still
     count every check, not just the ones that found something."""
+    state.last_detected_body = None      # whatever shows up next is news again
     if state.idle_checks == 0:
         state.idle_since = time.time()
     state.idle_checks += 1
 
+def note_repeat_check() -> None:
+    """Count one check that found the same needs as the "detected:" line above it, with nothing handled since
+    (e.g. disabled needs sitting on screen). Logged together as "same checks: N over Ss" by flush_idle_checks()."""
+    if state.repeat_checks == 0:
+        state.repeat_since = time.time()
+    state.repeat_checks += 1
+
 def flush_idle_checks() -> None:
-    """Write the counted idle checks (note_idle_check()) to the run log and start counting again."""
+    """Write the counted idle checks (note_idle_check()) and repeated checks (note_repeat_check()) to the run log
+    and start counting again."""
     if state.idle_checks:
         log_run_event(f"idle checks: {state.idle_checks} over {time.time() - state.idle_since:.0f}s")
         state.idle_checks = 0
+    if state.repeat_checks:
+        log_run_event(f"same checks: {state.repeat_checks} over {time.time() - state.repeat_since:.0f}s")
+        state.repeat_checks = 0
 
 def flush_idle_checks_if_due() -> None:
     """flush_idle_checks() once QUIET_LOG_INTERVAL has passed since the first of them, so a long idle stretch
     reaches the log (and a crash loses at most that much)."""
-    if state.idle_checks and time.time() - state.idle_since >= cfg.QUIET_LOG_INTERVAL:
+    now = time.time()
+    if (state.idle_checks and now - state.idle_since >= cfg.QUIET_LOG_INTERVAL) or \
+            (state.repeat_checks and now - state.repeat_since >= cfg.QUIET_LOG_INTERVAL):
         flush_idle_checks()
 
 def log_run_event(message: str) -> None:
@@ -1031,6 +1054,7 @@ def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAI
     wait_interruptible() runs during a task.) Interruptible."""
     print(f"[debug] waiting up to {max_wait}s for {need_name} to clear...")
     reset_icon_watch()
+    state.need_cleared = True
     deadline = time.time() + max_wait
     unreadable = False
     while True:
@@ -1041,6 +1065,7 @@ def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAI
             else:
                 print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
                 log_failure(f"{need_name} still showing after {max_wait}s")
+                state.need_cleared = False
             return
         wait_interruptible(min(poll_interval, remaining))
         cleared = _need_cleared(need_name)
@@ -1049,7 +1074,7 @@ def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAI
             print(f"[debug] {need_name} cleared")
             return
 
-def _watch_need_gone(need_name: str, cleared_event: threading.Event, stop_event: threading.Event) -> None:
+def _watch_need_gone(need_name: str, cleared_event: threading.Event, stop_event: threading.Event, answers: Optional[list] = None) -> None:
     """Background-thread body for walk_alternating()'s optional `need_name`:
     checks whether the need has cleared (_need_cleared()) every
     NEED_GONE_POLL_INTERVAL *while* the character is still moving - the same
@@ -1064,7 +1089,10 @@ def _watch_need_gone(need_name: str, cleared_event: threading.Event, stop_event:
         while not stop_event.is_set():
             if stop_event.wait(cfg.NEED_GONE_POLL_INTERVAL):
                 return
-            if _need_cleared(need_name) is True:
+            cleared = _need_cleared(need_name)
+            if answers is not None:
+                answers.append(cleared)       # the last answer tells walk_alternating() whether the icons were readable
+            if cleared is True:
                 cleared_event.set()
                 return
     except (StopRequested, FocusLost):
@@ -1367,16 +1395,20 @@ def walk_alternating(direction_pair: tuple[str, str], total_duration: float, ste
     polls for it clearing *while* the character is still moving, instead
     of only checking once the movement finishes - the walk stops as soon
     as that thread confirms it, rather than always running the full
-    total_duration."""
+    total_duration. If the time runs out with the need still showing, that is
+    logged as a failure and state.need_cleared is set False (not when the
+    last check couldn't read the icons - then nothing is known)."""
     print(f"[debug] walking alternating {direction_pair} pattern for {total_duration}s...")
     if not focus_roblox():
         return
 
+    state.need_cleared = True
     cleared_event = threading.Event()
     stop_event = threading.Event()
+    answers: list = []
     watcher = None
     if need_name is not None:
-        watcher = threading.Thread(target=_watch_need_gone, args=(need_name, cleared_event, stop_event), daemon=True)
+        watcher = threading.Thread(target=_watch_need_gone, args=(need_name, cleared_event, stop_event, answers), daemon=True)
         watcher.start()
 
     try:
@@ -1399,6 +1431,10 @@ def walk_alternating(direction_pair: tuple[str, str], total_duration: float, ste
 
     if cleared_event.is_set():
         print(f"[debug] {need_name} cleared, stopping early")
+    elif need_name is not None and answers and answers[-1] is False:
+        print(f"[debug] {need_name} still showing after {total_duration}s")
+        log_failure(f"{need_name} still showing after {total_duration}s")
+        state.need_cleared = False
     print("[debug] alternating walk complete")
 
 # ============================================================================
@@ -2078,22 +2114,27 @@ class TeleportWalkNeedHandler(NeedHandler):
         return True
 
     def _open_dialog(self) -> bool:
-        """Press the prompt's key ('e') and wait for the need's dialog (sick: the doctor's Yes/No). If it doesn't
-        come up the pet was most likely focused - the prompt is then a hand button 'e' doesn't press - so back out
-        of the pet view and click the prompt on screen (the entry's `prompt_pos`), and look once more. Returns
-        whether the dialog is up."""
+        """Press the prompt's key ('e') and wait for the need's dialog (sick: the doctor's Yes/No). If it isn't
+        recognised and the pet view is open - the prompt is then a hand button 'e' doesn't press - back out of it
+        and click the prompt on screen (the entry's `prompt_pos`), and look once more. If the pet view is not open
+        the answer is to go on (the dialog was most likely just not recognised). Returns whether to click Yes."""
         wait_interruptible(cfg.SICK_PRE_E_WAIT)
         pydirectinput.press("e")
         wait_interruptible(cfg.SICK_CONFIRM_WAIT)
         if detect_sick_dialog(grab_screen()):
             return True
+        if not detect_pet_focus(grab_screen()):
+            # Not the pet view. Most likely the dialog is up and just wasn't recognised: run 2 had 27 sick attempts in a
+            # row end here with the pet not focused, where the plain click on Yes had cleared sick every time in run 1.
+            # So carry on as before - click Yes, and the wait for the icon says whether it worked.
+            log_run_event(f"{self.name}: dialog not recognised after e (pet focused: False) - clicking Yes anyway")
+            return True
         prompt_pos = self.config.get("prompt_pos")
         if prompt_pos is None:
             return False
-        pet_focused = detect_pet_focus(grab_screen())
-        log_run_event(f"{self.name}: no dialog after e (pet focused: {pet_focused}) - clicking the prompt")
+        log_run_event(f"{self.name}: no dialog after e (pet focused: True) - clicking the prompt")
         print(f"[debug] no {self.name} dialog after e - backing out of the pet view, clicking the prompt at {prompt_pos}...")
-        dismiss_stray_windows()                     # backs out of the pet focus view, if that is what it is
+        dismiss_stray_windows()                     # backs out of the pet focus view
         hover_click(*prompt_pos)
         wait_interruptible(cfg.SICK_CONFIRM_WAIT)
         return detect_sick_dialog(grab_screen())
@@ -2141,6 +2182,7 @@ def record_detection(detected: list[str]) -> None:
     for need_name in sorted(stuck):
         state.disabled_needs.add(need_name)
         print(f"[!] {need_name} still there after {cfg.NEED_STUCK_CHECKS} attempts in a row - disabling it for this run")
+        log_run_event(f"disabled: {need_name}")
         log_failure(f"{need_name} stuck for {cfg.NEED_STUCK_CHECKS} attempts - disabled for this run "
                     f"({len(state.disabled_needs)} disabled now: {', '.join(sorted(state.disabled_needs))})")
 
@@ -2180,14 +2222,20 @@ def process_needs() -> bool:
 
     names = [name for name, _ in matched_needs]
     if names:
-        flush_idle_checks()
-        print(f"\n[!] Found {len(found_icons)} icon(s): " + ", ".join(f"{n} ({s:.4f})" for n, s in matched_needs))
-        log_run_event(f"detected: {', '.join(names)}")
+        body = ", ".join(names)
+        if body == state.last_detected_body:
+            note_repeat_check()      # the same needs as the line above, nothing handled since: counted, not repeated
+        else:
+            flush_idle_checks()
+            print(f"\n[!] Found {len(found_icons)} icon(s): " + ", ".join(f"{n} ({s:.4f})" for n, s in matched_needs))
+            log_run_event(f"detected: {body}")
+            state.last_detected_body = body
         state.none_matched_logged = False
     elif not state.none_matched_logged:
         flush_idle_checks()
         log_run_event(f"detected: none matched ({len(found_icons)} icon(s) on screen)")
         state.none_matched_logged = True
+        state.last_detected_body = None
     else:
         note_idle_check()   # more icons nothing matched: logged once already, counted with the idle checks
     run_stats.last_detected = names
@@ -2205,6 +2253,9 @@ def process_needs() -> bool:
                 print(f"[debug] {need_name} is disabled, skipping")
                 continue
             attempted.add(need_name)
+            flush_idle_checks()
+            state.last_detected_body = None     # whatever is detected after this is news again
+            state.need_cleared = True
             started = time.time()
             try:
                 with task_unscrew():
@@ -2229,6 +2280,14 @@ def process_needs() -> bool:
 
             respawn_character()
             seconds = time.time() - started
+            if not state.need_cleared:
+                # The handler ran its course but the need was still showing when its wait ran out (already logged
+                # as a failure): not resolved. The character is respawned all the same, since it was moved.
+                print(f"[debug] {need_name} was not cleared, counting it as failed")
+                run_stats.failed[need_name] = run_stats.failed.get(need_name, 0) + 1
+                log_run_event(f"not cleared: {need_name} ({seconds:.0f}s)")
+                write_status()
+                return True
             run_stats.resolved[need_name] = run_stats.resolved.get(need_name, 0) + 1
             run_stats.last_resolved = {"need": need_name, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
             state.last_progress = time.time()
@@ -3023,11 +3082,54 @@ def process_memory_mb() -> Optional[float]:
     except Exception:
         return None
 
+def system_cpu_times() -> Optional[tuple[float, float]]:
+    """(idle, total) CPU time of the whole machine so far, in any one unit (the difference between two readings is
+    what counts - see ResourceMonitor), or None if it can't be read."""
+    try:
+        if os.name == "nt":
+            from ctypes import wintypes
+            idle, kernel, user = wintypes.FILETIME(), wintypes.FILETIME(), wintypes.FILETIME()
+            if not ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)):  # type: ignore[attr-defined]  # Windows only
+                return None
+            def value(ft: Any) -> float:
+                return float((ft.dwHighDateTime << 32) | ft.dwLowDateTime)
+            return value(idle), value(kernel) + value(user)     # the kernel time includes the idle time
+        with open("/proc/stat") as f:
+            fields = [float(x) for x in f.readline().split()[1:]]
+        return fields[3] + fields[4], sum(fields[:8])          # idle + iowait; the guest columns are already in user
+    except Exception:
+        return None
+
+def system_memory_percent() -> Optional[float]:
+    """How much of the machine's memory is in use, in percent, or None if it can't be read."""
+    try:
+        if os.name == "nt":
+            from ctypes import wintypes
+            class MemoryStatus(ctypes.Structure):
+                _fields_ = [("dwLength", wintypes.DWORD), ("dwMemoryLoad", wintypes.DWORD)] + [
+                    (name, ctypes.c_uint64) for name in (
+                        "ullTotalPhys", "ullAvailPhys", "ullTotalPageFile", "ullAvailPageFile", "ullTotalVirtual",
+                        "ullAvailVirtual", "ullAvailExtendedVirtual")]
+            status = MemoryStatus()
+            status.dwLength = ctypes.sizeof(status)
+            if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):  # type: ignore[attr-defined]  # Windows only
+                return None
+            return float(status.dwMemoryLoad)
+        info = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                key, _, rest = line.partition(":")
+                info[key] = float(rest.split()[0])
+        return 100 * (1 - info["MemAvailable"] / info["MemTotal"])
+    except Exception:
+        return None
+
 class ResourceMonitor(threading.Thread):
     """Every RESOURCE_LOG_INTERVAL while the loop runs, logs this script's CPU
     use (percent of the whole machine, over the interval just gone) and memory
-    - "resources: cpu 2.4% mem 215MB" - and keeps the latest in run_stats. The
-    run report charts them. Stopped by stop()."""
+    - plus, when they can be read, the whole machine's CPU use and memory in
+    use: "resources: cpu 2.4% mem 215MB pc 38.5% pcmem 71%" - and keeps the
+    latest in run_stats. The run report charts them. Stopped by stop()."""
 
     def __init__(self) -> None:
         super().__init__(daemon=True)
@@ -3038,6 +3140,7 @@ class ResourceMonitor(threading.Thread):
 
     def run(self) -> None:
         wall, cpu = time.time(), time.process_time()
+        system = system_cpu_times()
         while not self.stopped.wait(cfg.RESOURCE_LOG_INTERVAL):
             now_wall, now_cpu = time.time(), time.process_time()
             percent = 100 * (now_cpu - cpu) / max(1e-6, (now_wall - wall) * (os.cpu_count() or 1))
@@ -3045,9 +3148,18 @@ class ResourceMonitor(threading.Thread):
             memory = process_memory_mb()
             run_stats.cpu_percent = round(percent, 1)
             run_stats.memory_mb = None if memory is None else round(memory)
+            pc = ""
+            now_system = system_cpu_times()
+            if system and now_system and now_system[1] > system[1]:
+                pc_cpu = 100 * (1 - (now_system[0] - system[0]) / (now_system[1] - system[1]))
+                pc = f" pc {min(100.0, max(0.0, pc_cpu)):.1f}%"
+                pc_memory = system_memory_percent()
+                if pc_memory is not None:
+                    pc += f" pcmem {pc_memory:.0f}%"
+            system = now_system
             if memory is not None:
                 try:
-                    log_run_event(f"resources: cpu {percent:.1f}% mem {memory:.0f}MB")
+                    log_run_event(f"resources: cpu {percent:.1f}% mem {memory:.0f}MB{pc}")
                 except OSError:
                     pass   # a transient write failure: sample again next time
 
@@ -3201,7 +3313,9 @@ RESOLVED_RE = re.compile(r"^resolved: (\S+) \((\d+)s\)$")
 DETECTED_RE = re.compile(r"^detected: (.*)$")
 NONE_MATCHED_RE = re.compile(r"^none matched")
 IDLE_CHECKS_RE = re.compile(r"^idle checks: (\d+) over (\d+)s$")
-RESOURCES_RE = re.compile(r"^resources: cpu ([\d.]+)% mem (\d+)MB$")
+SAME_CHECKS_RE = re.compile(r"^same checks: (\d+) over (\d+)s$")
+DISABLED_RE = re.compile(r"^disabled: (\S+)$")
+RESOURCES_RE = re.compile(r"^resources: cpu ([\d.]+)% mem (\d+)MB(?: pc ([\d.]+)%(?: pcmem (\d+)%)?)?$")
 MINIGAME_RE = re.compile(r"^minigame (started|finished): (.*?)(?: \(\d+s\))?$")
 
 TARGET_BUCKETS = 40
@@ -3214,6 +3328,8 @@ COLOR_TELEPORT = (60, 160, 60)
 COLOR_OTHER = (160, 100, 190)
 COLOR_FAILURE = (60, 60, 220)
 COLOR_REJOIN = (220, 120, 40)
+COLOR_DISABLED = (90, 90, 90)
+COLOR_PC = (30, 140, 230)
 COLOR_TEXT = (40, 40, 40)
 COLOR_GRID = (225, 225, 225)
 COLOR_BG = (255, 255, 255)
@@ -3231,7 +3347,10 @@ def parse_run(log_path: str, run: Union[int, str]) -> Optional[dict[str, Any]]:
     the log at `log_path`, as a dict, or None if the run isn't in it:
       start, end - epoch seconds of the first and last line;
       resolved - [(t, need, seconds)]; detected - [(t, matched, icons)] per check;
-      failures - [(t, text)]; rejoins - [t]; resources - [(t, cpu %, memory MB)]; events - Counter of everything else."""
+      failures - [(t, text)]; rejoins - [t]; disabled - [(t, need)];
+      resources - [(t, cpu %, memory MB, whole-PC cpu %, whole-PC memory %)] (the last two None in older logs);
+      events - Counter of everything else.
+    A "same checks: N over Ss" line stands for N more checks that found what the "detected:" line before it did."""
     run = str(run)
     lines = []
     if not os.path.exists(log_path):
@@ -3244,7 +3363,7 @@ def parse_run(log_path: str, run: Union[int, str]) -> Optional[dict[str, Any]]:
     if not lines:
         return None
     data: dict[str, Any] = {"start": lines[0][0], "end": lines[-1][0], "resolved": [], "detected": [],
-            "failures": [], "rejoins": [], "resources": [], "events": Counter()}
+            "failures": [], "rejoins": [], "disabled": [], "resources": [], "events": Counter()}
     for t, text in lines:
         if m := RESOLVED_RE.match(text):
             data["resolved"].append((t, m.group(1), int(m.group(2))))
@@ -3259,8 +3378,17 @@ def parse_run(log_path: str, run: Union[int, str]) -> Optional[dict[str, Any]]:
         elif m := IDLE_CHECKS_RE.match(text):
             count, span = int(m.group(1)), int(m.group(2))     # `count` checks that found nothing, spread over the `span` s before this line
             data["detected"] += [(t - span + span * (k + 0.5) / count, 0, 0) for k in range(count)]
+        elif m := SAME_CHECKS_RE.match(text):
+            count, span = int(m.group(1)), int(m.group(2))
+            if data["detected"]:
+                _, matched, icons = data["detected"][-1]
+                data["detected"] += [(t - span + span * (k + 0.5) / count, matched, icons) for k in range(count)]
+        elif m := DISABLED_RE.match(text):
+            data["disabled"].append((t, m.group(1)))
         elif m := RESOURCES_RE.match(text):
-            data["resources"].append((t, float(m.group(1)), int(m.group(2))))
+            data["resources"].append((t, float(m.group(1)), int(m.group(2)),
+                                      None if m.group(3) is None else float(m.group(3)),
+                                      None if m.group(4) is None else int(m.group(4))))
         elif text.startswith("no need detected for "):
             data["events"]["idle respawns"] += 1
         elif text.startswith("quiet: "):
@@ -3270,6 +3398,8 @@ def parse_run(log_path: str, run: Union[int, str]) -> Optional[dict[str, Any]]:
         elif text.startswith("recovery complete"):   # once per rejoin ("scheduled rejoin" is logged at its start too)
             data["rejoins"].append(t)
             data["events"]["rejoins"] += 1
+        elif text.startswith("not cleared: "):
+            data["events"]["needs not cleared"] += 1
         elif text.startswith("paycheck popup"):
             data["events"]["paycheck popups"] += 1
         elif text.startswith("stray window closed"):
@@ -3427,9 +3557,16 @@ def draw_report(data: dict[str, Any], run: Union[int, str], basic: set[str], tel
     for t in data["rejoins"]:
         x = panel.x(t - start)
         cv2.line(img, (x, pt), (x, pb), COLOR_REJOIN, 1)
+    # A need that was disabled (stuck) stays off until the next rejoin: one bar per need, from then until the
+    # rejoin (or the run's end), named above it, stacked above the failure ticks.
+    for row, (t, need) in enumerate(data["disabled"]):
+        end = next((r for r in sorted(data["rejoins"]) if r > t), start + duration)
+        y = pb - 24 - 14 * (row % 12)
+        cv2.line(img, (panel.x(t - start), y), (panel.x(end - start), y), COLOR_DISABLED, 5)
+        draw_text(img, need, panel.x(t - start), y - 5, 0.38, COLOR_DISABLED)
     legend_x = pl + 10
     for label, color in (("basic", COLOR_BASIC), ("teleport", COLOR_TELEPORT), ("other", COLOR_OTHER),
-                         ("failure", COLOR_FAILURE), ("rejoin", COLOR_REJOIN)):
+                         ("failure", COLOR_FAILURE), ("rejoin", COLOR_REJOIN), ("disabled", COLOR_DISABLED)):
         cv2.rectangle(img, (legend_x, pt + 8), (legend_x + 12, pt + 20), color, -1)
         draw_text(img, label, legend_x + 18, pt + 19, 0.45)
         legend_x += 95
@@ -3486,18 +3623,35 @@ def draw_report(data: dict[str, Any], run: Union[int, str], basic: set[str], tel
         draw_text(img, f"{count:>4}  {label}", left, y, 0.5)
         y += 22
 
-    # 5. the script's own CPU and memory use
-    for box, title, column, color, unit in (
-            ((20, 1090, 800, 1650), "Script CPU use (% of the machine)", 1, COLOR_BASIC, "%"),
-            ((820, 1090, width - 20, 1650), "Script memory (MB)", 2, COLOR_TELEPORT, "MB")):
+    # 5. the script's own CPU and memory use - and the whole PC's, as a second line: CPU on the same % scale, memory
+    # in % on its own scale (labelled down the right-hand edge)
+    for box, title, column, color, unit, pc_column in (
+            ((20, 1090, 800, 1650), "CPU use (% of the machine)", 1, COLOR_BASIC, "%", 3),
+            ((820, 1090, width - 20, 1650), "Memory (script MB; PC % in use)", 2, COLOR_TELEPORT, "MB", 4)):
         values = [r[column] for r in data["resources"]]
-        top_value = nice_max(max(values + [1]))
+        pc_rows = [r for r in data["resources"] if r[pc_column] is not None]
+        pc_own_scale = pc_column == 4
+        top_value = nice_max(max(values + ([] if pc_own_scale else [r[pc_column] for r in pc_rows]) + [1]))
         panel = Panel(img, box, title, duration, top_value, time_ticks(duration))
         if values:
             points = np.array([[panel.x(r[0] - start), panel.y(r[column])] for r in data["resources"]], np.int32)
             cv2.polylines(img, [points], False, color, 2, cv2.LINE_AA)
-            draw_text(img, f"mean {np.mean(values):.1f}{unit}, max {max(values):.1f}{unit}",
-                      panel.plot[0] + 10, panel.plot[1] + 16, 0.45)
+            note = f"script: mean {np.mean(values):.1f}{unit}, max {max(values):.1f}{unit}"
+            if pc_rows:
+                pc_values = [r[pc_column] for r in pc_rows]
+                scale = top_value / 100 if pc_own_scale else 1
+                points = np.array([[panel.x(r[0] - start), panel.y(r[pc_column] * scale)] for r in pc_rows], np.int32)
+                cv2.polylines(img, [points], False, COLOR_PC, 2, cv2.LINE_AA)
+                note += f"   |   PC: mean {np.mean(pc_values):.0f}%, max {max(pc_values):.0f}%"
+                if pc_own_scale:
+                    for pct in (0, 50, 100):
+                        draw_text(img, f"{pct}%", panel.plot[2] - 4, panel.y(pct * scale) + 4, 0.4, COLOR_PC, anchor="right")
+            draw_text(img, note, panel.plot[0] + 10, panel.plot[1] + 16, 0.45)
+            if pc_rows:
+                cv2.line(img, (panel.plot[0] + 10, panel.plot[1] + 30), (panel.plot[0] + 30, panel.plot[1] + 30), color, 3)
+                draw_text(img, "script", panel.plot[0] + 36, panel.plot[1] + 34, 0.4)
+                cv2.line(img, (panel.plot[0] + 100, panel.plot[1] + 30), (panel.plot[0] + 120, panel.plot[1] + 30), COLOR_PC, 3)
+                draw_text(img, "whole PC", panel.plot[0] + 126, panel.plot[1] + 34, 0.4)
         else:
             draw_text(img, "no samples (run too short, or an older log)", panel.plot[0] + 10, panel.plot[1] + 20, 0.45)
     return img

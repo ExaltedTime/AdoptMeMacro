@@ -1,4 +1,5 @@
 """The run report: the parser reads the exact wording the macro logs, so these tests guard that wording."""
+import os
 import subprocess
 import sys
 import time
@@ -55,7 +56,7 @@ def test_parse_run_counts_detections_failures_rejoins_and_resources(macro, tmp_p
     assert [(matched, icons) for _, matched, icons in data["detected"]] == [(4, 4), (0, 3)]
     assert [macro.failure_kind(text) for _, text in data["failures"]] == ["pizza still", "pizza still", "Roblox isn't".lower()]
     assert len(data["rejoins"]) == 1                                  # a rejoin is logged twice (its start and "recovery complete"): counted once
-    assert [(cpu, mem) for _, cpu, mem in data["resources"]] == [(3.2, 215), (4.0, 220)]
+    assert [(r[1], r[2]) for r in data["resources"]] == [(3.2, 215), (4.0, 220)]
 
 
 def test_parse_run_event_counts(macro, tmp_path):
@@ -79,7 +80,7 @@ def test_what_the_macro_logs_is_what_the_parser_reads(macro, tmp_path, monkeypat
     macro.check_quiet()
     data = macro.parse_run(macro.cfg.RUN_LOG_PATH, 5)
     assert data["detected"][0][1:] == (2, 2) and data["detected"][1][1:] == (0, 2)
-    assert data["resolved"][0][1:] == ("hungry", 28) and data["resources"][0][1:] == (2.5, 100)
+    assert data["resolved"][0][1:] == ("hungry", 28) and data["resources"][0][1:3] == (2.5, 100)
     assert data["events"]["idle respawns"] == 1 and data["events"]["quiet periods logged"] == 1
 
 
@@ -117,3 +118,81 @@ def test_idle_check_lines_become_one_empty_check_each_spread_over_their_span(mac
     times = [t for t, _, _ in data["detected"]]
     assert times == sorted(times) and data["start"] < times[0] and times[3] < data["start"] + 600     # inside the idle stretch
     assert "idle checks" not in data["events"]
+
+
+def log_of(tmp_path, *lines):
+    path = tmp_path / "log.txt"
+    path.write_text("\n".join(f"[2026-10-10 22:{line}" for line in lines) + "\n")
+    return str(path)
+
+
+def test_same_checks_lines_stand_for_that_many_more_of_the_detection_above(macro, tmp_path):
+    path = log_of(tmp_path, "00:00] [RUN 7] LOOP started", "01:00] [RUN 7] detected: hungry, pet",
+                  "11:00] [RUN 7] same checks: 4 over 600s", "11:05] [RUN 7] detected: none matched (2 icon(s) on screen)")
+    data = macro.parse_run(path, 7)
+    assert [(matched, icons) for _, matched, icons in data["detected"]] == [(2, 2)] * 5 + [(0, 2)]
+    times = [t for t, _, _ in data["detected"][1:5]]
+    assert times == sorted(times) and data["start"] + 60 < times[0] and times[-1] < data["start"] + 660
+    assert "same checks" not in data["events"]
+
+
+def test_disabled_lines_are_read_with_their_time(macro, tmp_path):
+    path = log_of(tmp_path, "00:00] [RUN 7] LOOP started", "05:00] [RUN 7] disabled: pizza", "06:00] [RUN 7] LOOP stopped")
+    assert [(t - macro.parse_run(path, 7)["start"], need) for t, need in macro.parse_run(path, 7)["disabled"]] == [(300, "pizza")]
+
+
+def test_resources_lines_carry_the_whole_pcs_use_when_it_was_logged(macro, tmp_path):
+    path = log_of(tmp_path, "00:00] [RUN 7] resources: cpu 1.0% mem 100MB",
+                  "01:00] [RUN 7] resources: cpu 2.0% mem 110MB pc 35.5%",
+                  "02:00] [RUN 7] resources: cpu 3.0% mem 120MB pc 40.0% pcmem 71%")
+    assert [r[1:] for r in macro.parse_run(path, 7)["resources"]] == [(1.0, 100, None, None), (2.0, 110, 35.5, None), (3.0, 120, 40.0, 71)]
+
+
+def test_the_resource_monitor_logs_what_the_parser_reads(macro, monkeypatch):
+    readings = iter([(100.0, 1000.0), (150.0, 1200.0), (170.0, 1400.0), (170.0, 1400.0)])    # the PC: (idle, total) each time
+    monkeypatch.setattr(macro, "system_cpu_times", lambda: next(readings, None))
+    monkeypatch.setattr(macro, "system_memory_percent", lambda: 62.4)
+    monkeypatch.setattr(macro.cfg, "RESOURCE_LOG_INTERVAL", 0.02)
+    macro.state.run_number = 9
+    monitor = macro.ResourceMonitor()
+    monitor.start()
+    deadline = time.time() + 5
+    while time.time() < deadline and (not os.path.exists(macro.cfg.RUN_LOG_PATH)
+                                      or open(macro.cfg.RUN_LOG_PATH).read().count("resources: cpu") < 2):
+        time.sleep(0.02)
+    monitor.stop()
+    monitor.join(2)
+    rows = macro.parse_run(macro.cfg.RUN_LOG_PATH, 9)["resources"]
+    assert rows[0][3:] == (75.0, 62) and rows[1][3:] == (90.0, 62)           # 1 - 50/200 and 1 - 20/200 of the interval was busy
+
+
+def test_the_machines_own_readings_are_sane(macro):
+    first, second = macro.system_cpu_times(), macro.system_cpu_times()
+    assert first and second and 0 <= first[0] <= first[1] and second[1] >= first[1]
+    assert 0 <= macro.system_memory_percent() <= 100
+
+
+def pixels_of(image, color, box):
+    left, top, right, bottom = box
+    return int((abs(image[top:bottom, left:right].astype(int) - color).sum(axis=2) == 0).sum())
+
+
+def test_the_report_draws_the_whole_pcs_line_only_when_it_was_logged(macro, tmp_path):
+    with_pc = log_of(tmp_path, "00:00] [RUN 7] LOOP started", "01:00] [RUN 7] resources: cpu 1.0% mem 100MB pc 35.5% pcmem 60%",
+                     "02:00] [RUN 7] resources: cpu 2.0% mem 110MB pc 50.0% pcmem 62%", "03:00] [RUN 7] LOOP stopped")
+    without = tmp_path / "old.txt"
+    without.write_text(open(with_pc).read().replace(" pc 35.5% pcmem 60%", "").replace(" pc 50.0% pcmem 62%", ""))
+    drawn = macro.draw_report(macro.parse_run(with_pc, 7), 7, set(), set())
+    old = macro.draw_report(macro.parse_run(str(without), 7), 7, set(), set())
+    bottom = (0, 1090, 1600, 1660)
+    assert pixels_of(drawn, macro.COLOR_PC, bottom) > 100 and pixels_of(old, macro.COLOR_PC, bottom) == 0
+
+
+def test_the_report_shows_a_disabled_need_until_the_next_rejoin(macro, tmp_path):
+    path = log_of(tmp_path, "00:00] [RUN 7] LOOP started", "05:00] [RUN 7] disabled: pizza",
+                  "10:00] [RUN 7] recovery complete: rejoined", "20:00] [RUN 7] LOOP stopped")
+    data = macro.parse_run(path, 7)
+    plain = macro.draw_report({**data, "disabled": []}, 7, set(), set())
+    drawn = macro.draw_report(data, 7, set(), set())
+    top = (0, 50, 1600, 560)
+    assert pixels_of(drawn, macro.COLOR_DISABLED, top) > pixels_of(plain, macro.COLOR_DISABLED, top) + 100

@@ -62,7 +62,13 @@ every second instead of a line per check.
    Ss` line before the next detection, every `QUIET_LOG_INTERVAL`, and when the
    loop stops - the run report spreads those N empty checks over the S seconds,
    so "needs detected per check" counts every check, not only those that found
-   something. The list is also handed to `record_detection()` -
+   something. The same goes for checks that find exactly the needs the last
+   `detected:` line named with nothing handled since (disabled needs sitting
+   on screen, say): `note_repeat_check()` counts them and the flush writes
+   `same checks: N over Ss`, which `parse_run()` turns back into N more checks
+   like the `detected:` line above it. Anything that changes the picture - a
+   different set, an empty stretch, a handler running - logs `detected:`
+   again (`state.last_detected_body`). The list is also handed to `record_detection()` -
    on every check, including ones that find nothing - which is what catches
    [stuck needs](#stuck-needs).
 5. The list is then worked through in order until one need is resolved. For
@@ -80,6 +86,14 @@ every second instead of a line per check.
      e.g. no buttons detected, or a UI element `ChooseNeedHandler` needed
      wasn't found), the need is logged and skipped with no respawn, and the
      next one in the list is tried.
+   - If it returns `True` but one of its waits ran out with the need still
+     showing (`wait_until_need_gone()` and `walk_alternating()` set
+     `state.need_cleared` to `False` and log the failure; not when the bar
+     was unreadable, where nothing is known), the character is respawned
+     (it was moved) but the need counts as *failed*, not resolved:
+     `not cleared: <need> (Ns)` is logged, `last_progress` is left alone, and
+     it is still an attempt, so a need that never clears is disabled by
+     `record_detection()` in the end.
 6. `process_needs()` returns `False` if nothing was resolved (e.g. every
    match turned out to be disabled, or every handler that ran returned
    `False`), which sends `run_full_cycle()` back to waiting and
@@ -428,7 +442,7 @@ rather than a flat sleep after the fact.
 | `pet` | `PetNeedHandler`: `focus_pet()` (see below), then hold the mouse down and swipe once down from `PET_SWIPE_START_OFFSET` above screen center to `PET_SWIPE_END_OFFSET` below it over `PET_SWIPE_DURATION` (8s). Same as `catch` - always the full fixed duration. |
 | `choose` | `ChooseNeedHandler`: `focus_pet()` (see below), find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. It doesn't wait for the icon to clear (it's gone at once; the next check confirms). |
 | `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then `equip_favorite_vehicle()` (backpack → vehicles → first vehicle → equip → close backpack), hold `r` (`KEY_HELICOPTER`) for `RIDE_R_HOLD_DURATION` (1.5s), then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT` (75s), ending early the moment "ride" is confirmed cleared (see below). |
-| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`: after pressing `e` and waiting `SICK_CONFIRM_WAIT` the handler checks the doctor's dialog is up, `detect_sick_dialog()`. If it isn't - most likely the pet got focused, when the prompt is a hand button `e` doesn't press - it logs `sick: no dialog after e (pet focused: ...)`, backs out of the pet view (`dismiss_stray_windows()`), clicks the prompt on screen (`prompt_pos`, `SICK_PROMPT_POS`) and looks once more. Only if the dialog still isn't up has the need failed: the character respawns and the handler returns False at once, with no wait for the icon to clear, and `process_needs()` logs the failure), `helicopter` (see below) and `max_wait` (how long to wait for the need to clear afterwards; default `NEED_GONE_MAX_WAIT`, 75s). `sick` waits `SICK_PRE_E_WAIT` after its last hold before pressing `e`. Which table is used depends on `HALLOWEEN` - see below. |
+| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`: after pressing `e` and waiting `SICK_CONFIRM_WAIT` the handler looks for the doctor's dialog, `detect_sick_dialog()`. Recognised: it clicks Yes. Not recognised and the pet view is not open: it logs `sick: dialog not recognised after e (pet focused: False) - clicking Yes anyway` and clicks Yes all the same, and the wait for the icon says whether it worked (in run 2 the recognition failed on 27 of 27 real attempts while the plain click had worked in run 1, so it is not trusted to fail the need). Not recognised and the pet view *is* open - the prompt is then a hand button `e` doesn't press: it logs `sick: no dialog after e (pet focused: True) - clicking the prompt`, backs out of the pet view (`dismiss_stray_windows()`), clicks the prompt on screen (`prompt_pos`, `SICK_PROMPT_POS`) and looks once more. Only if the dialog still isn't up has the need failed: the character respawns and the handler returns False at once, with no wait for the icon to clear, and `process_needs()` logs the failure), `helicopter` (see below) and `max_wait` (how long to wait for the need to clear afterwards; default `NEED_GONE_MAX_WAIT`, 75s). `sick` waits `SICK_PRE_E_WAIT` after its last hold before pressing `e`. Which table is used depends on `HALLOWEEN` - see below. |
 | `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")` - up to `NEED_GONE_MAX_WAIT` (75s), same early-exit as `ride` above. |
 
 **Helicopter.** A teleport-walk entry can fly instead of walk. `HELICOPTER_REQUIRED`
@@ -1085,9 +1099,13 @@ again, since the counter goes with the logs.
   `quiet: no need resolved for N min` (every `QUIET_LOG_INTERVAL`, by
   `check_quiet()` at the top of each cycle, while nothing is being resolved -
   well before the `NO_PROGRESS_REJOIN_INTERVAL` rejoin) and
-  `resources: cpu X% mem YMB` (every `RESOURCE_LOG_INTERVAL`, from the
-  `ResourceMonitor` thread: the script's own CPU use as a percentage of the
-  whole machine, and its memory). The run report charts the resources.
+  `resources: cpu X% mem YMB pc P% pcmem M%` (every `RESOURCE_LOG_INTERVAL`,
+  from the `ResourceMonitor` thread: the script's own CPU use as a percentage
+  of the whole machine, its memory, and - when readable
+  (`system_cpu_times()`, `system_memory_percent()`: `GetSystemTimes` /
+  `GlobalMemoryStatusEx` on Windows, `/proc` elsewhere) - the whole PC's CPU
+  and memory use; older logs lack the last two). A need switched off as stuck
+  logs `disabled: <need>`. The run report charts the resources.
 - **`reports/run<N>.png`** - a chart of one run, drawn from `run_log.txt` by
   `generate_run_report()` in `main.py` with OpenCV (no extra dependency). Written automatically when a
   run stops (`write_run_report()`, in the `finally` of `run_workflow_loop()`)
@@ -1095,7 +1113,7 @@ again, since the counter goes with the logs.
   from `BUCKET_STEPS` so the run fills about `TARGET_BUCKETS` bars, stacked by
   basic / teleport / other need, with failures and rejoins marked); needs
   detected per check; average seconds per resolved need with how many there
-  were; counts of failures by kind and other events; and the script's own CPU and memory use over time. `parse_run()` reads
+  were; counts of failures by kind and other events; and the script's own CPU and memory use over time, each with the whole PC's use as a second line (CPU on the same scale; memory in % on its own axis, labelled down the right edge). A need disabled as stuck is drawn in the first panel as a grey bar from when it was disabled until the next rejoin (which clears them), named above it. `parse_run()` reads
   the log by the exact line wording `log_run_event()` writes, so a wording
   change there needs the matching regex in the RUN REPORT section of `main.py`. It never raises -
   a report problem can't take a run down.

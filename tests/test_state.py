@@ -824,8 +824,19 @@ def test_sick_backs_out_of_the_pet_view_and_clicks_the_prompt_when_e_brings_up_n
     assert "sick: no dialog after e (pet focused: True) - clicking the prompt" in log and "FAILURE" not in log
 
 
+def test_sick_goes_on_to_click_yes_when_the_dialog_is_not_recognised_and_the_pet_is_not_focused(macro, sick_run):
+    """Run 2: 27 sick attempts in a row found no dialog with the pet NOT focused (the recognition was failing; the
+    plain click had cleared sick every time in run 1). Not the pet view: click Yes as before."""
+    sick_run["dialog"] = [False]
+    assert macro.TeleportWalkNeedHandler("sick").handle() is True
+    assert sick_run["events"] == ["look", ("click", sick_run["final"])]            # no back-out, no prompt click
+    assert sick_run["waited"] == ["sick"] and sick_run["respawns"] == 0
+    assert "dialog not recognised after e (pet focused: False) - clicking Yes anyway" in open(macro.cfg.RUN_LOG_PATH).read()
+
+
 def test_sick_fails_at_once_when_the_prompt_click_brings_up_no_dialog_either(macro, sick_run):
     sick_run["dialog"] = [False]
+    sick_run["pet_focused"] = True
     assert macro.TeleportWalkNeedHandler("sick").handle() is False
     assert sick_run["events"] == ["look", "back out", ("click", sick_run["prompt"]), "look"]   # never the Yes click
     assert sick_run["waited"] == [] and sick_run["respawns"] == 1                                    # no waiting for the icon
@@ -834,6 +845,7 @@ def test_sick_fails_at_once_when_the_prompt_click_brings_up_no_dialog_either(mac
 def test_a_need_without_a_prompt_to_click_fails_after_the_first_look(macro, sick_run, monkeypatch):
     monkeypatch.setitem(macro.cfg.TELEPORT_WALK_NEEDS["sick"], "prompt_pos", None)
     sick_run["dialog"] = [False]
+    sick_run["pet_focused"] = True
     assert macro.TeleportWalkNeedHandler("sick").handle() is False
     assert sick_run["events"] == ["look"] and sick_run["respawns"] == 1
 
@@ -841,6 +853,7 @@ def test_a_need_without_a_prompt_to_click_fails_after_the_first_look(macro, sick
 def test_a_failed_sick_is_logged_as_a_failure_by_process_needs(macro, sick_run, monkeypatch):
     import numpy as np
     sick_run["dialog"] = [False]
+    sick_run["pet_focused"] = True
     screen = np.zeros((1080, 1920, 3), np.uint8)
     monkeypatch.setattr(macro, "focus_roblox_click", lambda: True)
     monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([(100, 50, 30)], screen))
@@ -849,3 +862,150 @@ def test_a_failed_sick_is_logged_as_a_failure_by_process_needs(macro, sick_run, 
     monkeypatch.setattr(macro, "save_failure_report", lambda reason: None)
     assert macro.process_needs() is False
     assert macro.run_stats.failed == {"sick": 1} and "sick handler could not resolve it" in open(macro.cfg.RUN_LOG_PATH).read()
+
+
+# --- a wait that ran out is not a resolved need ---
+
+def test_a_wait_that_runs_out_marks_the_need_as_not_cleared(need_gone, macro, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(macro.time, "time", lambda: clock[0])
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: clock.__setitem__(0, clock[0] + duration))
+    need_gone["script"]()
+    macro.wait_until_need_gone("hungry", max_wait=10, poll_interval=POLL)
+    assert macro.state.need_cleared is False
+    need_gone["script"](([], True), ([], True))
+    macro.wait_until_need_gone("hungry", max_wait=10, poll_interval=POLL)
+    assert macro.state.need_cleared is True                                  # every wait starts afresh
+
+
+def test_an_unreadable_bar_does_not_mark_the_need_as_not_cleared(need_gone, macro, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(macro.time, "time", lambda: clock[0])
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: clock.__setitem__(0, clock[0] + duration))
+    need_gone["script"](*[([], False)] * 20)
+    macro.wait_until_need_gone("hungry", max_wait=10, poll_interval=POLL)
+    assert macro.state.need_cleared is True
+
+
+def walk_with_watcher_answers(macro, monkeypatch, answers, cleared=False):
+    """walk_alternating("hungry") on a made-up clock, its watcher thread replaced by one that reports `answers`."""
+    clock = [1000.0]
+    failures = []
+    monkeypatch.setattr(macro.time, "time", lambda: clock[0])
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "hold_key", lambda key, duration: clock.__setitem__(0, clock[0] + duration))
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: clock.__setitem__(0, clock[0] + duration))
+    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: failures.append(reason))
+
+    def watcher(need, cleared_event, stop_event, seen=None):
+        seen.extend(answers)
+        if cleared:
+            cleared_event.set()
+    monkeypatch.setattr(macro, "_watch_need_gone", watcher)
+    macro.walk_alternating(("a", "d"), 10, step_duration=1, need_name="hungry")
+    return failures
+
+
+def test_a_walk_that_ends_with_the_need_still_showing_is_not_cleared(macro, monkeypatch):
+    failures = walk_with_watcher_answers(macro, monkeypatch, [False, False])
+    assert macro.state.need_cleared is False and failures == ["hungry still showing after 10s"]
+
+
+def test_a_walk_that_ends_with_the_icons_unreadable_proves_nothing(macro, monkeypatch):
+    failures = walk_with_watcher_answers(macro, monkeypatch, [False, None])
+    assert macro.state.need_cleared is True and failures == []
+
+
+def test_a_walk_that_clears_the_need_is_cleared(macro, monkeypatch):
+    failures = walk_with_watcher_answers(macro, monkeypatch, [False, True], cleared=True)
+    assert macro.state.need_cleared is True and failures == []
+
+
+def test_a_need_that_was_not_cleared_is_failed_not_resolved(macro, one_need, monkeypatch):
+    respawns = []
+    monkeypatch.setattr(macro, "respawn_character", lambda: respawns.append(1))
+
+    class Handler:
+        def handle(self):
+            macro.state.need_cleared = False          # what the waits do when they run out
+            return True
+    monkeypatch.setattr(macro, "get_need_handler", lambda name: Handler())
+    macro.state.run_number = 4
+    stalled = macro.state.last_progress = time.time() - 100
+    assert macro.process_needs() is True              # the character was moved: a fresh check follows
+    assert respawns == [1]
+    assert macro.run_stats.resolved == {} and macro.run_stats.failed == {"hungry": 1}
+    assert macro.state.last_progress == stalled
+    log = open(macro.cfg.RUN_LOG_PATH).read()
+    assert "not cleared: hungry (" in log and "resolved: hungry" not in log
+    assert macro.state.attempted_last == {"hungry"}   # an attempt, so a need that never clears is disabled in the end
+
+
+def test_a_handler_that_forgets_the_flag_still_resolves(macro, one_need):
+    macro.state.need_cleared = False                  # left over from an earlier need
+    assert macro.process_needs() is True
+    assert macro.run_stats.resolved == {"hungry": 1}
+
+
+# --- the same needs on screen, check after check ---
+
+def test_the_same_needs_on_every_check_are_logged_once_and_counted(macro, one_need, monkeypatch):
+    monkeypatch.setattr(macro, "get_need_handler", lambda name: None)       # disabled: nothing is handled
+    macro.state.run_number = 4
+    for _ in range(5):
+        macro.process_needs()
+    log = open(macro.cfg.RUN_LOG_PATH).read()
+    assert log.count("detected: hungry") == 1 and macro.state.repeat_checks == 4
+    macro.flush_idle_checks()
+    assert macro.state.repeat_checks == 0 and "same checks: 4 over" in open(macro.cfg.RUN_LOG_PATH).read()
+    data = macro.parse_run(macro.cfg.RUN_LOG_PATH, 4)
+    assert [matched for _, matched, _ in data["detected"]] == [1] * 5       # the per-check chart still counts all five
+    assert "same checks" not in data["events"]
+
+
+def test_a_change_in_what_is_on_screen_is_logged_again(macro, one_need, monkeypatch):
+    monkeypatch.setattr(macro, "get_need_handler", lambda name: None)
+    macro.state.run_number = 4
+    macro.process_needs()
+    macro.process_needs()
+    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(0, one_need[:10, :10], "thirsty", 0.9)]))
+    macro.process_needs()
+    log = open(macro.cfg.RUN_LOG_PATH).read()
+    assert log.index("detected: hungry") < log.index("same checks: 1 over") < log.index("detected: thirsty")
+
+
+def test_a_need_seen_again_after_a_handler_ran_is_logged_again(macro, one_need):
+    macro.state.run_number = 4
+    macro.process_needs()                                                    # handled (and resolved)
+    macro.process_needs()
+    assert open(macro.cfg.RUN_LOG_PATH).read().count("detected: hungry") == 2
+
+
+def test_an_empty_stretch_between_two_identical_detections_logs_the_second(macro, one_need, monkeypatch):
+    monkeypatch.setattr(macro, "get_need_handler", lambda name: None)
+    macro.state.run_number = 4
+    macro.process_needs()
+    macro.note_idle_check()
+    macro.process_needs()
+    assert open(macro.cfg.RUN_LOG_PATH).read().count("detected: hungry") == 2
+
+
+def test_repeated_checks_are_flushed_after_a_quiet_interval(macro):
+    macro.state.run_number = 4
+    macro.note_repeat_check()
+    macro.flush_idle_checks_if_due()
+    assert macro.state.repeat_checks == 1
+    macro.state.repeat_since -= macro.cfg.QUIET_LOG_INTERVAL
+    macro.flush_idle_checks_if_due()
+    assert macro.state.repeat_checks == 0 and "same checks: 1 over" in open(macro.cfg.RUN_LOG_PATH).read()
+
+
+def test_a_need_disabled_for_being_stuck_is_logged_by_name(macro, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "ENABLED_NEEDS", {"hungry"})
+    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: None)
+    macro.state.run_number = 4
+    for _ in range(macro.cfg.NEED_STUCK_CHECKS):
+        macro.state.attempted_last = {"hungry"}
+        macro.record_detection(["hungry"])
+    assert "hungry" in macro.state.disabled_needs
+    assert "[RUN 4] disabled: hungry\n" in open(macro.cfg.RUN_LOG_PATH).read()

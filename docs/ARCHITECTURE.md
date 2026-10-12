@@ -171,7 +171,7 @@ an extra walk from wherever the previous need left the character standing.
   runs them during a task; and `side_quest()`.
 - **RUN RECORDING** - `RunRecorder` and `start_recording_if_requested()`. See
   [Recording a run](#recording-a-run).
-- **INPUT CAPTURE** - `InputCapture`, `toggle_input_capture()` and the key / mouse
+- **INPUT CAPTURE** - `InputCapture`, `toggle_input_capture()`, `zip_capture()` and the key / mouse
   readers (`pressed_inputs()`, `cursor_position()`, `to_reference()`). See
   [Input capture](#input-capture).
 - **WORKFLOWS** - `run_full_cycle()` and `run_workflow_loop()` (plus
@@ -1086,9 +1086,14 @@ video of a macro run): it works whether or not the macro is running, and the mac
 and clicks are recorded too, since `GetAsyncKeyState` sees them like any others.
 
 Each capture is a folder in `debug/captures/` (`CAPTURES_DIR`, git-ignored, emptied by **Refresh debug**;
-the newest `MAX_CAPTURES` are kept) named `capture_<date>_<time>`. To get one to someone else, zip the folder
-(or just the stretch that matters - a frame is 1-2 MB and PNGs don't compress further) and send the zip; it
-arrives byte for byte, unlike a pasted image, which is recompressed:
+the newest `MAX_CAPTURES` are kept) named `capture_<date>_<time>`. **Getting one to someone else:** when a
+capture stops, `zip_capture()` (on a thread of its own) also splits it into zips of at most `CAPTURE_ZIP_MB`
+(25, since chat attachments are limited to 30 MB) in the capture's `zips/` folder:
+`capture_<time>_part01.zip`, `_part02.zip`, ... The frames are in time order, none twice; part 1 also holds
+`events.jsonl` and `info.json`. They are stored, not compressed (PNGs don't shrink), so a 25 MB part is about
+14 frames. Attach them all (send them in order); a zip arrives byte for byte, unlike a pasted image, which
+is recompressed. For a zip that already exists (a capture zipped by hand, say) `python tools/split_zip.py big.zip` cuts it into
+`big_part01.zip`, ... of at most 25 MB (or the number of MB given as a second argument), every file kept whole. The files themselves stay in the folder:
 
 - `frame_<n>_<seconds>.png` - `grab_screen()` (the Roblox window at the reference size, the macro's own
   window included if it is on top), lossless. The screen is looked at every `CAPTURE_FRAME_INTERVAL`
@@ -1158,7 +1163,7 @@ exact values and rationale):
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
 | Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
-| Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES` |
+| Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
@@ -1287,7 +1292,7 @@ clicks instead of making them. They cover:
   popups and stray windows against the real crops in `ref/` (including that every `POPUP_TEMPLATES` entry has a crop that fits its box);
 - `test_icon_screenshots.py` - every real screenshot in `tests/icon_detection/<folder>/` (the need bar over dark, bright, busy and white scenes) run through the circle search and the matching; each must be listed in `EXPECTED` with the needs on its bar, so a screenshot added without a label fails;
 - `test_loop.py` - the whole workflow loop run for a moment with the game stubbed out (idle respawns, the resource monitor starting and stopping, the report being written);
-- `test_capture.py` - the input capture against a made-up keyboard, mouse and screen (events, both coordinate systems, click frames, skipping unchanged frames, the summary, stopping by itself, the hotkey toggle and pruning);
+- `test_capture.py` - the input capture against a made-up keyboard, mouse and screen (events, both coordinate systems, click frames, skipping unchanged frames, the summary, the zips, stopping by itself, the hotkey toggle and pruning);
 - `test_features.py` - the daily money reset, the run-every-need sequence, the win screen and the like;
 - `test_config.py` - the real need tables in `magic_numbers.py`, without pinning any value: every entry is well formed (known keys, on-screen positions, movement keys, a `final_click` has its `prompt_pos`), has a handler, and the handler carries out exactly what the entry says (run over whichever needs exist, so `HALLOWEEN` off just drops `sick`). The handler tests elsewhere use made-up entries; this is what keeps the real ones honest;
 - `test_report.py` - the run-report parser against the exact log wording the

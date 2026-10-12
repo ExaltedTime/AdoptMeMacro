@@ -225,3 +225,73 @@ def test_the_key_names_cover_what_the_game_uses(macro):
     names = set(macro.VK_NAMES.values())
     assert {"w", "a", "s", "d", "space", "shift", "e", "r", "mouse_left", "mouse_right", "esc", "enter", "1", "f1"} <= names
     assert len(names) == len(macro.VK_NAMES)                                         # no name used twice
+
+
+# --- zips for sending ---
+
+def fake_capture(folder, frames, size):
+    os.makedirs(folder)
+    rng = np.random.RandomState(0)
+    for n in range(1, frames + 1):
+        with open(os.path.join(folder, f"frame_{n:06d}_{n * 0.5:.3f}.png"), "wb") as f:
+            f.write(rng.bytes(size))
+    with open(os.path.join(folder, "events.jsonl"), "w") as f:
+        f.write('{"t": 0.1, "type": "move"}\n')
+    with open(os.path.join(folder, "info.json"), "w") as f:
+        f.write("{}")
+    return folder
+
+
+def test_a_capture_is_split_into_zips_under_the_limit_with_every_file_once(macro, tmp_path, monkeypatch):
+    import zipfile
+    monkeypatch.setattr(macro.cfg, "CAPTURE_ZIP_MB", 0.01)                          # ~10 KB: three 4 KB frames to a zip
+    folder = fake_capture(str(tmp_path / "capture_x"), 10, 4000)
+    paths = macro.zip_capture(folder)
+    assert len(paths) >= 4 and [os.path.basename(p) for p in paths][:2] == ["capture_x_part01.zip", "capture_x_part02.zip"]
+    assert all(os.path.getsize(p) <= macro.cfg.CAPTURE_ZIP_MB * 1024 * 1024 + 500 for p in paths)       # (a zip's own headers)
+    members = [zipfile.ZipFile(p).namelist() for p in paths]
+    flat = [name for names in members for name in names]
+    assert sorted(flat) == sorted([f for f in os.listdir(folder) if f != "zips"])           # everything, none twice
+    assert {"events.jsonl", "info.json"} <= set(members[0])                                    # the small files are in the first part
+    frames = [n for names in members for n in names if n.startswith("frame_")]
+    assert frames == sorted(frames)                                                            # in time order across the parts
+    with zipfile.ZipFile(paths[1]) as z:
+        name = next(n for n in z.namelist() if n.startswith("frame_"))
+        assert z.read(name) == open(os.path.join(folder, name), "rb").read()                  # byte for byte
+
+
+def test_a_small_capture_is_one_zip(macro, tmp_path):
+    folder = fake_capture(str(tmp_path / "capture_y"), 3, 1000)
+    assert len(macro.zip_capture(folder)) == 1
+
+
+def test_stopping_a_capture_with_the_hotkey_zips_it(macro, capture):
+    first = macro.toggle_input_capture()
+    wait_for(lambda: first.frames >= 1)
+    macro.toggle_input_capture()
+    assert wait_for(lambda: os.path.isdir(os.path.join(first.folder, "zips")) and os.listdir(os.path.join(first.folder, "zips")))
+
+
+def test_split_zip_cuts_an_existing_zip_into_parts_without_changing_a_file(tmp_path, monkeypatch):
+    import zipfile
+    monkeypatch.syspath_prepend(os.path.join(os.path.dirname(os.path.dirname(__file__)), "tools"))
+    import split_zip
+    source = str(tmp_path / "big.zip")
+    rng = np.random.RandomState(1)
+    originals = {f"capture_x/frame_{n:06d}.png": rng.bytes(3000) for n in range(1, 9)}
+    originals["capture_x/events.jsonl"] = b'{"t": 1}\n'
+    with zipfile.ZipFile(source, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, data in originals.items():
+            z.writestr(name, data)
+    paths = split_zip.split_zip(source, 0.007)                                       # ~7 KB: two frames to a part
+    assert len(paths) >= 4 and paths[0].endswith("big_part01.zip")
+    got = {}
+    for p in paths:
+        assert os.path.getsize(p) < 0.007 * 1024 * 1024 + 800
+        with zipfile.ZipFile(p) as z:
+            for name in z.namelist():
+                assert name not in got                                              # none twice
+                got[name] = z.read(name)
+    assert got == originals                                                         # none lost, none changed, paths kept
+    assert list(got) == list(originals)                                             # in the original order
+    assert len(split_zip.split_zip(source, 25)) == 1

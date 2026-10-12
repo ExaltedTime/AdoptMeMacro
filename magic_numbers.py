@@ -310,6 +310,7 @@ SICK_CONFIRM_WAIT = 7.0           # wait after pressing 'e' and before the sick 
 TELEPORT_PETS_TAB_POS = (817, 713)       # nursery: pets tab
 TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
 SICK_FINAL_CLICK_POS = (1045, 660)       # click after the sick need's walk
+SICK_PROMPT_POS = (957, 708)             # the doctor's prompt button (an E; a hand button when the pet is focused), clicked if e brought up no dialog
 
 # Whether a teleport-walk need flies by helicopter by default; an entry can
 # override it with `helicopter=True/False`. Only the Halloween bored, beach
@@ -321,7 +322,7 @@ HELICOPTER_HOLD_DURATION = 4.0     # then hold KEY_HELICOPTER this long
 # Needs that teleport somewhere and walk (see TeleportWalkNeedHandler), then
 # wait for the need to clear. Each entry: where to teleport, the
 # (key, seconds) holds to perform in order, optionally a `final_click`
-# position to click after the last hold, optionally `helicopter` (above) and optionally
+# position to click after the last hold (with a `prompt_pos`: the prompt button to click if pressing 'e' brought up no dialog), optionally `helicopter` (above) and optionally
 # `max_wait` (how long to wait for the need to clear afterwards; default NEED_GONE_MAX_WAIT).
 TELEPORT_WALK_NEEDS_NORMAL: dict[str, dict[str, Any]] = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
@@ -342,7 +343,7 @@ TELEPORT_WALK_NEEDS_HALLOWEEN: dict[str, dict[str, Any]] = {
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.8), ("a", 10))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("s", 20),), helicopter=True),
     "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 3.0), ("w", 0.8)),
-                    final_click=SICK_FINAL_CLICK_POS),
+                    final_click=SICK_FINAL_CLICK_POS, prompt_pos=SICK_PROMPT_POS),
 }
 
 # The set actually used everywhere else (TeleportWalkNeedHandler and the

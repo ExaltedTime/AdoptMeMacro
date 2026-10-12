@@ -2064,12 +2064,8 @@ class TeleportWalkNeedHandler(NeedHandler):
 
         final_click = self.config.get("final_click")
         if final_click:
-            wait_interruptible(cfg.SICK_PRE_E_WAIT)
-            pydirectinput.press("e")
-            wait_interruptible(cfg.SICK_CONFIRM_WAIT)
-            if not detect_sick_dialog(grab_screen()):
-                # The prompt was not pressed (with the pet focused it is a hand button, which 'e' doesn't press): the
-                # need can't be served from here, so it has failed - no waiting for it to clear.
+            if not self._open_dialog():
+                # Nothing more can be done from here: the need has failed - no waiting for it to clear.
                 print(f"[debug] the {self.name} dialog never came up - the need failed")
                 respawn_character()
                 return False
@@ -2080,6 +2076,27 @@ class TeleportWalkNeedHandler(NeedHandler):
 
         print(f"[!] {self.name.capitalize()} complete!")
         return True
+
+    def _open_dialog(self) -> bool:
+        """Press the prompt's key ('e') and wait for the need's dialog (sick: the doctor's Yes/No). If it doesn't
+        come up the pet was most likely focused - the prompt is then a hand button 'e' doesn't press - so back out
+        of the pet view and click the prompt on screen (the entry's `prompt_pos`), and look once more. Returns
+        whether the dialog is up."""
+        wait_interruptible(cfg.SICK_PRE_E_WAIT)
+        pydirectinput.press("e")
+        wait_interruptible(cfg.SICK_CONFIRM_WAIT)
+        if detect_sick_dialog(grab_screen()):
+            return True
+        prompt_pos = self.config.get("prompt_pos")
+        if prompt_pos is None:
+            return False
+        pet_focused = detect_pet_focus(grab_screen())
+        log_run_event(f"{self.name}: no dialog after e (pet focused: {pet_focused}) - clicking the prompt")
+        print(f"[debug] no {self.name} dialog after e - backing out of the pet view, clicking the prompt at {prompt_pos}...")
+        dismiss_stray_windows()                     # backs out of the pet focus view, if that is what it is
+        hover_click(*prompt_pos)
+        wait_interruptible(cfg.SICK_CONFIRM_WAIT)
+        return detect_sick_dialog(grab_screen())
 
 # Handler factory (class, or partial of one) for each need.
 # get_need_handler() uses this plus ENABLED_NEEDS (magic_numbers.py) to

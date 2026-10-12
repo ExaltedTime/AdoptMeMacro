@@ -2067,6 +2067,12 @@ class TeleportWalkNeedHandler(NeedHandler):
             wait_interruptible(cfg.SICK_PRE_E_WAIT)
             pydirectinput.press("e")
             wait_interruptible(cfg.SICK_CONFIRM_WAIT)
+            if not detect_sick_dialog(grab_screen()):
+                # The prompt was not pressed (with the pet focused it is a hand button, which 'e' doesn't press): the
+                # need can't be served from here, so it has failed - no waiting for it to clear.
+                print(f"[debug] the {self.name} dialog never came up - the need failed")
+                respawn_character()
+                return False
             print(f"[debug] clicking {final_click}...")
             hover_click(*final_click)
 
@@ -2416,6 +2422,12 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
     write_status()
     return True
 
+def detect_sick_dialog(img: Image) -> bool:
+    """True if the sick need's "Ask Doctor Heart to heal your family?" dialog is on screen in `img` (the
+    "sick_dialog" crop in STRAY_WINDOW_DIR, found within SICK_DIALOG_BOX)."""
+    crop = load_templates(cfg.STRAY_WINDOW_DIR).get("sick_dialog")
+    return crop is not None and template_score(img, crop, cfg.SICK_DIALOG_BOX) >= cfg.SICK_DIALOG_MATCH_THRESHOLD
+
 def detect_minigame_popup(img: Image) -> bool:
     """True if one of the Halloween minigame popups ("Ghost Gallery is
     starting soon! Teleport there now?", "Hauntlet 2 is starting soon!...")
@@ -2425,8 +2437,7 @@ def detect_minigame_popup(img: Image) -> bool:
     green, the No red is also the Exit Home button), so it needs both: the
     Yes green, with the No red close by to its left. Not the sick need's
     doctor dialog, which looks the same but belongs to that handler."""
-    sick = load_templates(cfg.STRAY_WINDOW_DIR).get("sick_dialog")
-    if sick is not None and template_score(img, sick, cfg.SICK_DIALOG_BOX) >= cfg.SICK_DIALOG_MATCH_THRESHOLD:
+    if detect_sick_dialog(img):
         return False
     ys, xs = np.where(exact_color_mask(img, cfg.GREEN_BUTTON_COLOR) > 0)
     if len(xs) < cfg.MINIGAME_POPUP_MIN_BUTTON_PIXELS:

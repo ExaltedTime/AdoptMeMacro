@@ -314,3 +314,10 @@ def test_templates_are_read_once_and_reread_when_a_file_changes(macro, tmp_path,
     assert macro.load_templates(str(tmp_path / "missing")) == {}
     (folder / "notes.txt").write_text("x")
     assert list(macro.load_templates(str(folder))) == ["a"]                    # only .png files count
+
+
+def test_the_sick_dialog_is_found_by_its_crop(macro):
+    screen = blank()
+    assert not macro.detect_sick_dialog(screen)
+    put(screen, reference(macro, "sick_dialog"), macro.cfg.SICK_DIALOG_BOX)
+    assert macro.detect_sick_dialog(screen)

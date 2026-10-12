@@ -726,3 +726,45 @@ def test_without_a_window_titled_exactly_roblox_any_roblox_title_still_counts(ma
     monkeypatch.setattr(macro, "roblox_windows", lambda: [_window("Roblox Player")])
     monkeypatch.setattr(macro.gw, "getActiveWindow", lambda: _window("Roblox Player"))
     assert macro.is_roblox_focused() is True
+
+
+@pytest.fixture
+def sick_run(macro, monkeypatch):
+    """The sick handler up to its press of 'e', with the screen's answer to 'is the dialog up?' set by the test."""
+    import numpy as np
+    run = {"dialog": True, "waited": [], "respawns": 0, "sequence": []}
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "teleport_to", lambda pos: None)
+    monkeypatch.setattr(macro, "hold_key", lambda key, duration: None)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: run["sequence"].append(("wait", duration)))
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((1080, 1920, 3), np.uint8))
+    monkeypatch.setattr(macro, "detect_sick_dialog", lambda img: run["dialog"])
+    monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=60.0, **kw: run["waited"].append(name))
+    monkeypatch.setattr(macro, "respawn_character", lambda: run.update(respawns=run["respawns"] + 1))
+    return run
+
+
+def test_sick_clicks_yes_once_the_dialog_is_up(macro, sick_run):
+    assert macro.TeleportWalkNeedHandler("sick").handle() is True
+    assert macro.cfg.SICK_FINAL_CLICK_POS in macro.clicks and sick_run["waited"] == ["sick"] and sick_run["respawns"] == 0
+
+
+def test_sick_fails_at_once_when_the_dialog_never_comes_up(macro, sick_run):
+    """With the pet focused the prompt is a hand button that 'e' doesn't press: no dialog, so no clicking and no 75s wait."""
+    sick_run["dialog"] = False
+    assert macro.TeleportWalkNeedHandler("sick").handle() is False
+    assert not macro.clicks and sick_run["waited"] == []                 # nothing clicked, nothing waited for
+    assert sick_run["respawns"] == 1                                    # the character is put back where it can start over
+
+
+def test_a_failed_sick_is_logged_as_a_failure_by_process_needs(macro, sick_run, monkeypatch):
+    import numpy as np
+    sick_run["dialog"] = False
+    screen = np.zeros((1080, 1920, 3), np.uint8)
+    monkeypatch.setattr(macro, "focus_roblox_click", lambda: True)
+    monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([(100, 50, 30)], screen))
+    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(0, screen[:10, :10], "sick", 0.9)]))
+    monkeypatch.setattr(macro, "check_focus", lambda: None)
+    monkeypatch.setattr(macro, "save_failure_report", lambda reason: None)
+    assert macro.process_needs() is False
+    assert macro.run_stats.failed == {"sick": 1} and "sick handler could not resolve it" in open(macro.cfg.RUN_LOG_PATH).read()

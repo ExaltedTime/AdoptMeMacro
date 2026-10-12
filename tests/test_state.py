@@ -539,3 +539,37 @@ def test_a_run_whose_clock_stepped_back_still_gets_a_report(macro, tmp_path):
         "[2026-10-25 02:10:00] [RUN 9] resolved: hungry (20s)",     # an hour back
         "[2026-10-25 03:30:00] [RUN 9] LOOP stopped"]) + "\n")
     assert macro.generate_run_report(str(log), 9, str(tmp_path)) is not None
+
+
+class _FakeText:
+    """Just enough of a Tk Text for DebugCapture.trim(): a list of lines."""
+    def __init__(self, lines):
+        self.lines = list(lines)
+
+    def index(self, where):
+        assert where == "end-1c"
+        return f"{len(self.lines) + 1}.0"        # a Text always ends in one more empty line
+
+    def delete(self, start, end):
+        assert start == "1.0"
+        del self.lines[:int(end.split(".")[0]) - 1]
+
+
+def test_the_console_keeps_only_its_last_lines(macro, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "CONSOLE_MAX_LINES", 5)
+    capture = object.__new__(macro.DebugCapture)
+    capture.text = _FakeText(f"line {i}" for i in range(12))
+    capture.trim()
+    assert capture.text.lines == [f"line {i}" for i in range(7, 12)]
+    capture.trim()                                   # already short enough: untouched
+    assert len(capture.text.lines) == 5
+
+
+def test_only_the_newest_run_reports_are_kept(macro, tmp_path):
+    for i in range(6):
+        path = tmp_path / f"run{i}.png"
+        path.write_text("x")
+        os.utime(path, (1000 + i, 1000 + i))
+    macro.keep_newest_files(str(tmp_path), 3)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["run3.png", "run4.png", "run5.png"]
+    macro.keep_newest_files(str(tmp_path / "missing"), 3)       # never raises

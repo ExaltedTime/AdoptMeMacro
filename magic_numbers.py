@@ -149,6 +149,8 @@ REPORTS_DIR = os.path.join(IMAGES_DIR, "reports")           # run<N>.png charts 
 RECORDINGS_DIR = os.path.join(DEBUG_DIR, "recordings")      # run videos - see RunRecorder
 OUTPUT_LOG_MAX_BYTES = 5 * 1024 * 1024   # output.log moves to output.log.old (replacing the last one) past this size
 MAX_FAILURE_FOLDERS = 100                # oldest failure folders are deleted beyond this many
+MAX_REPORTS = 50                         # oldest run report images are deleted beyond this many (the logs they are drawn from are kept)
+CONSOLE_MAX_LINES = 2000                 # the GUI's output box keeps its last this many lines (output.log keeps them all)
 
 # Recording a run ("Record the next run" on the Options tab): low quality on purpose, a video of a whole
 # unattended run is large. Every frame has the time on it, to line it up with the logs.

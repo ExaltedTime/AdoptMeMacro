@@ -3414,12 +3414,24 @@ def generate_run_report(log_path: str, run: Union[int, str], out_dir: str, basic
 # GUI
 # ============================================================================
 
+def keep_newest_files(directory: str, keep: int) -> None:
+    """Delete the oldest files in `directory` beyond the newest `keep`. Never raises. (A pruned run report can be
+    drawn again from the logs, which are kept - see generate_run_report().)"""
+    try:
+        files = sorted((os.path.join(directory, f) for f in os.listdir(directory)), key=os.path.getmtime)
+        for old in files[:max(0, len(files) - keep)]:
+            if os.path.isfile(old):
+                os.remove(old)
+    except OSError:
+        pass
+
 def write_run_report(run: Union[int, str]) -> Optional[str]:
     """Chart run `run` from the log into REPORTS_DIR (see RUN REPORT above) and print
     where it went. Returns the path, or None. Never raises."""
     path = generate_run_report(cfg.RUN_LOG_PATH, run, cfg.REPORTS_DIR, cfg.BUTTON_NAMES, cfg.TELEPORT_WALK_NEEDS)
     if path:
         print(f"[debug] run report: {path}")
+        keep_newest_files(cfg.REPORTS_DIR, cfg.MAX_REPORTS)
     return path
 
 def run_all_need_handlers(handlers: Optional[dict[str, Callable[[], NeedHandler]]] = None) -> dict[str, str]:
@@ -3495,11 +3507,19 @@ class DebugCapture:
                 self.text.config(state=tk.NORMAL)
                 for msg in batch:
                     self.render(msg)
+                self.trim()
                 self.text.see(tk.END)
                 self.text.config(state=tk.DISABLED)
             self.root.after(cfg.CONSOLE_DRAIN_INTERVAL_MS, self.drain)
         except tk.TclError:
             pass   # the window is gone
+
+    def trim(self) -> None:
+        """Keep the widget to its last CONSOLE_MAX_LINES lines (Tk thread only): it holds everything printed
+        otherwise, and a run left going for days is a lot of text. output.log on disk keeps all of it."""
+        lines = int(self.text.index("end-1c").split(".")[0])
+        if lines - 1 > cfg.CONSOLE_MAX_LINES:   # (the last "line" is the empty one after the final newline)
+            self.text.delete("1.0", f"{lines - cfg.CONSOLE_MAX_LINES}.0")
 
     def render(self, msg: str) -> None:
         """Add one message to the widget (Tk thread only)."""

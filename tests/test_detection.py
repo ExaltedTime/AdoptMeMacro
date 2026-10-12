@@ -20,12 +20,6 @@ def put(img, crop, box):
     return img
 
 
-def test_need_bar_is_readable_on_a_dark_background_and_not_on_a_white_one(macro):
-    assert macro.detect_need_bar_readable(blank())
-    white = np.full(BLACK, 255, np.uint8)
-    assert not macro.detect_need_bar_readable(white)
-
-
 def test_need_icon_strip_is_the_configured_top_left_part(macro):
     strip = macro.need_icon_strip(blank())
     assert strip.shape[0] == int(1080 * macro.cfg.NEED_ICON_TOP_PERCENT)

@@ -4,7 +4,6 @@ import os
 import threading
 import time
 
-import numpy as np
 import pytest
 
 
@@ -59,10 +58,10 @@ def test_write_status_has_the_documented_keys_and_is_valid_json(macro):
 def test_state_snapshot_is_json_friendly(macro):
     macro.state.disabled_needs.add("pizza")
     macro.state.macro_window = object()
-    macro.state.need_icon_crops["sick"] = np.zeros((57, 57, 3), np.uint8)       # pictures must not end up in the JSON
+    macro.state.attempted_last = {"sick"}                                          # sets must not end up in the JSON
     snapshot = macro.state.snapshot()
     assert snapshot["disabled_needs"] == ["pizza"] and snapshot["macro_window"] == "set"
-    assert snapshot["need_icon_crops"] == {"sick": "image 57x57"}
+    assert snapshot["attempted_last"] == ["sick"]
     json.dumps(snapshot)
 
 
@@ -264,15 +263,7 @@ def test_a_detected_need_that_cannot_be_resolved_still_counts_as_detected(macro,
     assert macro.run_stats.failed == {"hungry": 1}
 
 
-def test_an_unreadable_need_bar_is_not_a_reason_to_respawn(macro, one_need, monkeypatch):
-    import numpy as np
-    monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([], np.full((1080, 1920, 3), 255, np.uint8)))
-    macro.state.last_detection = time.time() - 1000
-    assert macro.process_needs() is False
-    assert time.time() - macro.state.last_detection < 1
-
-
-def test_no_icons_on_a_readable_bar_leaves_the_idle_clock_running(macro, one_need, monkeypatch):
+def test_no_icons_leaves_the_idle_clock_running(macro, one_need, monkeypatch):
     import numpy as np
     monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([], np.zeros((1080, 1920, 3), np.uint8)))
     before = macro.state.last_detection = time.time() - 1000
@@ -374,8 +365,6 @@ def test_a_teleport_need_waits_for_the_need_to_clear_up_to_the_default_time(macr
     assert walker.waited == [macro.cfg.NEED_GONE_MAX_WAIT]
 
 
-
-
 def test_a_need_can_set_its_own_wait(walker):
     walker(max_wait=150.0).handle()
     assert walker.waited == [150.0]
@@ -417,14 +406,14 @@ def need_gone(macro, monkeypatch):
 
         def scan_needs(fresh=False):
             log["scans"].append(fresh)
-            return queue.pop(0) if queue else (["hungry"], True)
+            return queue.pop(0) if queue else ["hungry"]
         monkeypatch.setattr(macro, "scan_needs", scan_needs)
     log["script"] = script
     return log
 
 
 def test_the_wait_ends_at_the_first_check_that_finds_the_need_gone(need_gone, macro):
-    need_gone["script"]((["hungry"], True), ([], True), ([], True))      # check 1: still there; check 2: gone on both looks
+    need_gone["script"](["hungry"], [], [])      # check 1: still there; check 2: gone on both looks
     macro.wait_until_need_gone("hungry", max_wait=60, poll_interval=POLL)
     assert need_gone["scans"] == [False, False, True]                      # the second look of the last check was a fresh search
     assert [w for w in need_gone["waits"] if w > 1] == [POLL] * 2   # polled every poll_interval, no extra confirmations
@@ -432,7 +421,7 @@ def test_the_wait_ends_at_the_first_check_that_finds_the_need_gone(need_gone, ma
 
 
 def test_a_flicker_on_the_first_look_does_not_end_the_wait(need_gone, macro):
-    need_gone["script"]((([]), True), (["hungry"], True), (["hungry"], True), ([], True), ([], True))
+    need_gone["script"]((([]), True), ["hungry"], ["hungry"], [], [])
     macro.wait_until_need_gone("hungry", max_wait=60)
     assert len(need_gone["scans"]) == 5                                    # check 1 missed it once but saw it on the second look
 
@@ -444,16 +433,6 @@ def test_a_need_that_never_clears_is_a_failure_after_the_wait(need_gone, macro, 
     need_gone["script"]()                                                  # always still there
     macro.wait_until_need_gone("hungry", max_wait=10)
     assert need_gone["failures"] == ["hungry still showing after 10s"]
-
-
-def test_an_unreadable_bar_is_not_a_failure(need_gone, macro, monkeypatch):
-    clock = [1000.0]
-    monkeypatch.setattr(macro.time, "time", lambda: clock[0])
-    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: clock.__setitem__(0, clock[0] + duration))
-    need_gone["script"](*[([], False)] * 20)
-    macro.wait_until_need_gone("hungry", max_wait=10, poll_interval=POLL)
-    assert "failures" not in need_gone
-
 
 
 def test_config_reads_never_see_a_half_written_file(macro, monkeypatch, tmp_path):
@@ -873,18 +852,9 @@ def test_a_wait_that_runs_out_marks_the_need_as_not_cleared(need_gone, macro, mo
     need_gone["script"]()
     macro.wait_until_need_gone("hungry", max_wait=10, poll_interval=POLL)
     assert macro.state.need_cleared is False
-    need_gone["script"](([], True), ([], True))
+    need_gone["script"]([], [])
     macro.wait_until_need_gone("hungry", max_wait=10, poll_interval=POLL)
     assert macro.state.need_cleared is True                                  # every wait starts afresh
-
-
-def test_an_unreadable_bar_does_not_mark_the_need_as_not_cleared(need_gone, macro, monkeypatch):
-    clock = [1000.0]
-    monkeypatch.setattr(macro.time, "time", lambda: clock[0])
-    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: clock.__setitem__(0, clock[0] + duration))
-    need_gone["script"](*[([], False)] * 20)
-    macro.wait_until_need_gone("hungry", max_wait=10, poll_interval=POLL)
-    assert macro.state.need_cleared is True
 
 
 def walk_with_watcher_answers(macro, monkeypatch, answers, cleared=False):
@@ -909,11 +879,6 @@ def walk_with_watcher_answers(macro, monkeypatch, answers, cleared=False):
 def test_a_walk_that_ends_with_the_need_still_showing_is_not_cleared(macro, monkeypatch):
     failures = walk_with_watcher_answers(macro, monkeypatch, [False, False])
     assert macro.state.need_cleared is False and failures == ["hungry still showing after 10s"]
-
-
-def test_a_walk_that_ends_with_the_icons_unreadable_proves_nothing(macro, monkeypatch):
-    failures = walk_with_watcher_answers(macro, monkeypatch, [False, None])
-    assert macro.state.need_cleared is True and failures == []
 
 
 def test_a_walk_that_clears_the_need_is_cleared(macro, monkeypatch):

@@ -332,13 +332,6 @@ class State:
     task_thread: Optional[int] = None
     last_task_unscrew: float = 0.0
     in_unscrew: bool = False
-    # Where each need's icon was last recognised in the need bar (reference
-    # space, centre), by need name - see icon_gone_by_frame_change().
-    need_icon_positions: dict[str, tuple[int, int]] = field(default_factory=dict)
-    # Each need's icon as it last looked when the bar could be read (identify_icons()): what
-    # icon_gone_by_frame_change() looks for when it can't read the bar - its stored position can be
-    # another need's icon by then, the others having shifted about.
-    need_icon_crops: dict[str, Image] = field(default_factory=dict)
     # How many in-task checks in a row have seen the backpack open (see
     # close_backpack_if_stuck()).
     backpack_strikes: int = 0
@@ -359,8 +352,6 @@ class State:
                 value = None if value is None else "set"
             elif isinstance(value, set):
                 value = sorted(value)
-            elif item.name == "need_icon_crops":
-                value = {name: f"image {crop.shape[1]}x{crop.shape[0]}" for name, crop in list(value.items())}   # pictures: not JSON
             out[item.name] = value
         return out
 
@@ -776,8 +767,7 @@ def detect_need_icons(save_debug: bool = False, fresh: bool = False) -> tuple[li
     past it, is captured (grab_screen_region()): returns ((cx, cy, radius) per
     icon, left to right) and that image, whose pixels sit at the same
     positions as in grab_screen() (it just ends sooner).
-    Everything that uses the image (identify_icons(), detect_need_bar_readable())
-    stays within it."""
+    Everything that uses the image (identify_icons()) stays within it."""
     margin = cfg.ICON_CROP_RADIUS + cfg.ICON_EXTRACT_PADDING + cfg.ICON_SHIFT_TOLERANCE + 2
     strip_w, strip_h = int(cfg.REFERENCE_WIDTH * cfg.NEED_ICON_WIDTH_PERCENT), int(cfg.REFERENCE_HEIGHT * cfg.NEED_ICON_TOP_PERCENT)
     img = grab_screen_region(0, 0, min(cfg.REFERENCE_WIDTH, strip_w + margin), min(cfg.REFERENCE_HEIGHT, strip_h + margin))
@@ -877,15 +867,6 @@ def prompt_rename_need(icon_img: Image, idx: int) -> str:
     print(f"[!] Saved: {need_name}")
     return need_name
 
-def icon_crop_for_storage(full_img: Image, cx: int, cy: int) -> Optional[Image]:
-    """The icon at (cx, cy) as icon_gone_by_frame_change() will look for it later - the picture it was last read
-    as - or None if it reaches past the image."""
-    r = cfg.ICON_CROP_RADIUS
-    if cx < r or cy < r:
-        return None
-    crop = full_img[cy - r:cy + r + 1, cx - r:cx + r + 1]
-    return crop.copy() if crop.shape[:2] == (2 * r + 1, 2 * r + 1) else None
-
 def identify_icons(found_icons: list[tuple[int, int, int]], full_img: Image) -> Iterator[tuple[int, Image, Optional[str], float]]:
     """Match each detected icon against the saved needs. Yields
     (index, icon_image, need_name_or_None, score) per icon, checking
@@ -894,166 +875,22 @@ def identify_icons(found_icons: list[tuple[int, int, int]], full_img: Image) -> 
         check_running()
         icon_img = extract_icon(full_img, cx, cy, cfg.ICON_CROP_RADIUS)
         need_name, score = find_matching_need(icon_variants(full_img, cx, cy))
-        if need_name:
-            state.need_icon_positions[need_name] = (cx, cy)
-            crop = icon_crop_for_storage(full_img, cx, cy)
-            if crop is not None:
-                state.need_icon_crops[need_name] = crop
         yield idx, icon_img, need_name, score
 
-def detect_need_bar_readable(img: Image) -> bool:
-    """False if the strip the icons sit in is mostly near-white in `img`
-    (NEED_BAR_BRIGHT_LEVEL / NEED_BAR_MAX_BRIGHT_FRACTION) - the Pizza Party's
-    bright background, say. The icons can't be recognised against that, so
-    a missing icon there says nothing about whether the need is gone."""
-    strip = img[0:int(cfg.REFERENCE_HEIGHT * cfg.NEED_ICON_TOP_PERCENT),
-                int(cfg.REFERENCE_WIDTH * cfg.NEED_ICON_BLANK_WIDTH):int(cfg.REFERENCE_WIDTH * cfg.NEED_ICON_WIDTH_PERCENT)]
-    bright = np.count_nonzero(cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY) > cfg.NEED_BAR_BRIGHT_LEVEL)
-    return bright / (strip.shape[0] * strip.shape[1]) < cfg.NEED_BAR_MAX_BRIGHT_FRACTION
-
-def scan_needs(fresh: bool = False) -> tuple[list[Optional[str]], bool]:
-    """One-shot snapshot: (every need name currently detected on screen, whether
-    the icons could be read at all - see detect_need_bar_readable()). `fresh`
+def scan_needs(fresh: bool = False) -> list[Optional[str]]:
+    """One-shot snapshot: every need name currently detected on screen. `fresh`
     makes the circle search run even if the strip looks unchanged (see
     detect_need_icons())."""
     found_icons, full_img = detect_need_icons(fresh=fresh)
-    if not detect_need_bar_readable(full_img):
-        return [], False
-    return [name for _, _, name, _ in identify_icons(found_icons, full_img)], True
+    return [name for _, _, name, _ in identify_icons(found_icons, full_img)]
 
-# The icon region being watched while the need bar is unreadable: {"need", "pos", "crop"} - see icon_gone_by_frame_change().
-_ICON_WATCH: dict[str, Any] = {"need": None, "pos": None, "crop": None}
-
-def reset_icon_watch() -> None:
-    """Forget the icon being watched: each wait for a need to clear starts from the picture of its icon taken
-    when it was last read, not from where an earlier wait for the same need happened to leave off."""
-    _ICON_WATCH.update(need=None, pos=None, crop=None)
-
-def icon_region(pos: tuple[int, int]) -> Optional[Image]:
-    """The square around a need icon centred on `pos` (ICON_CROP_RADIUS each
-    way), captured now - or None if it would reach past the screen's edge."""
-    radius = cfg.ICON_CROP_RADIUS
-    x0, y0 = pos[0] - radius, pos[1] - radius
-    if x0 < 0 or y0 < 0:
-        return None
-    return grab_screen_region(x0, y0, 2 * radius + 1, 2 * radius + 1)
-
-def icon_region_change(before: Image, after: Image) -> float:
-    """The fraction of the circle of an icon-sized square that differs between
-    two captures by more than ICON_FRAME_CHANGE_LEVEL on any colour channel."""
-    size = before.shape[0]
-    yy, xx = np.ogrid[:size, :size]
-    inside = (yy - size // 2) ** 2 + (xx - size // 2) ** 2 <= (size // 2) ** 2
-    changed = cv2.absdiff(before, after).max(axis=2) > cfg.ICON_FRAME_CHANGE_LEVEL
-    return float(np.count_nonzero(changed & inside) / np.count_nonzero(inside))
-
-def icon_mask(size: int) -> Image:
-    """1 inside the icon's circle, 0 in the four corners of its square capture - the scene behind the icon."""
-    yy, xx = np.ogrid[:size, :size]
-    centre = size // 2
-    return ((yy - centre) ** 2 + (xx - centre) ** 2 <= (centre - 1) ** 2).astype(np.uint8)
-
-def masked_match_scores(image: Image, template: Image, mask: Image) -> Image:
-    """cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED) counting only the pixels where `mask` is 1 (all
-    single-channel 8-bit; the scores are 0-1 per position, as there). OpenCV can't mask that method, and the
-    others (CCORR) rate any bright patch as a match. Worked out by hand: with the template made zero-mean over
-    the mask, the numerator is one plain correlation, and the image's masked mean and spread come from two
-    correlations with the mask. Positions whose masked patch is flat score 0."""
-    pic = image.astype(np.float32)
-    pic -= pic.mean()                       # shifting changes no score, and keeps the sums small enough for float32
-    weight = mask.astype(np.float32)
-    count = float(weight.sum())
-    tmpl = template.astype(np.float32)
-    tmpl = (tmpl - float((tmpl * weight).sum()) / count) * weight
-    numerator = cv2.matchTemplate(pic, tmpl, cv2.TM_CCORR)
-    total = cv2.matchTemplate(pic, weight, cv2.TM_CCORR)
-    total_sq = cv2.matchTemplate(pic * pic, weight, cv2.TM_CCORR)
-    spread = np.sqrt(np.maximum(total_sq - total * total / count, 0))
-    denominator = float(np.sqrt((tmpl * tmpl).sum())) * spread
-    return np.where(denominator > 1e-3 * count, numerator / np.maximum(denominator, 1e-9), 0).astype(np.float32)
-
-def locate_icon(template: Image, row: int) -> Optional[tuple[int, int]]:
-    """Where `template` (an icon-sized capture of a need icon) is in the need
-    bar now: the centre (x, y) of its best match along the bar at about `row`,
-    or None if nothing there matches well enough (ICON_LOCATE_THRESHOLD). The
-    match is on the whiteness of the pixels (the least of B, G, R), which is
-    the icon's white ring and glyph - they don't change as its timer
-    changes the colour of a section of the disc - and a bright background or
-    another icon matches poorly. Only the icon's circle counts (icon_mask()):
-    the corners of the square hold the scene behind it, which is not the
-    scene it is looked for in. The whole width of the bar is searched, so
-    the icon is found wherever the others shifting around it have put it."""
-    radius = cfg.ICON_CROP_RADIUS
-    y0 = max(0, row - radius - cfg.ICON_LOCATE_ROW_MARGIN)
-    band = grab_screen_region(0, y0, int(cfg.REFERENCE_WIDTH * cfg.NEED_ICON_WIDTH_PERCENT), 2 * radius + 2 * cfg.ICON_LOCATE_ROW_MARGIN + 1)
-    scores = masked_match_scores(band.min(axis=2), template.min(axis=2), icon_mask(template.shape[0]))
-    _, best, _, where = cv2.minMaxLoc(scores)
-    if best < cfg.ICON_LOCATE_THRESHOLD:
-        return None
-    return where[0] + radius, y0 + where[1] + radius
-
-def icon_gone_by_frame_change(need_name: str) -> Optional[bool]:
-    """Whether `need_name`'s icon is gone, judged from how it changes between
-    looks - for when the bar can't be read by matching icons (a bright
-    background, see detect_need_bar_readable()). A need's icon fills its
-    circle with a timer: a section that slowly grows and changes colour. So
-    each look searches the bar for the icon *as it looked at the previous look*
-    (locate_icon()): the timer moves on a little between looks, and the
-    icon's white ring and glyph still match. Found - wherever the other icons
-    shifting about when one clears have put it, which is noted in
-    State.need_icon_positions - means it is still there. Not found, and still
-    not found NEED_GONE_FLICKER_RECHECK_DELAY later (so a one-frame glitch
-    doesn't count), means it is gone: cleared, or replaced by a neighbour that
-    has slid into its place. The icon's starting place is where it was last
-    recognised. The first look only records the icon (None: nothing to
-    compare with yet), so one that went before that is not noticed, and the
-    wait runs out as it did before. None too if the place isn't known."""
-    pos = state.need_icon_positions.get(need_name)
-    here = icon_region(pos) if pos is not None else None
-    if pos is None or here is None:
-        return None
-    watch = _ICON_WATCH
-    if watch["need"] != need_name or watch["crop"] is None:
-        stored = state.need_icon_crops.get(need_name)
-        if stored is None:
-            watch.update(need=need_name, pos=pos, crop=here)
-            return None
-        # What is at the stored position now may be another need's icon (the others shift as they clear):
-        # search for the icon as it looked when it was last read instead, so a clear is noticed at the first look.
-        watch.update(need=need_name, pos=pos, crop=stored)
-    found = locate_icon(watch["crop"], pos[1])
-    if found is None:
-        wait_interruptible(cfg.NEED_GONE_FLICKER_RECHECK_DELAY)
-        found = locate_icon(watch["crop"], pos[1])
-        if found is None:
-            print(f"[debug] {need_name}: need bar unreadable, and its icon is no longer in the bar")
-            log_run_event(f"{need_name} icon gone by frame change - the need bar is unreadable")
-            reset_icon_watch()
-            return True
-    now = icon_region(found)
-    if now is None:
-        return None
-    change = icon_region_change(watch["crop"], now) if found == pos else None
-    where = f"{pos} -> {found}" if found != pos else f"{pos}, {change:.0%} changed"
-    print(f"[debug] {need_name}: need bar unreadable, its icon is still there ({where})")
-    state.need_icon_positions[need_name] = found
-    watch.update(pos=found, crop=now)      # the next look searches for the icon as it is now
-    return False
-
-def _need_cleared(need_name: str) -> Optional[bool]:
+def _need_cleared(need_name: str) -> bool:
     """True if `need_name`'s icon is missing on two quick checks in a row
     (NEED_GONE_FLICKER_RECHECK_DELAY apart, the second one a fresh circle
     search) - the single-frame-flicker guard shared by wait_until_need_gone()
-    and _watch_need_gone() below.
-    While the icons can't be read (see detect_need_bar_readable()) the answer
-    comes from icon_gone_by_frame_change() instead - None if that can't tell
-    either: neither cleared nor not cleared."""
+    and _watch_need_gone() below."""
     for attempt in range(2):
-        names, readable = scan_needs(fresh=attempt > 0)   # the second look must not just repeat the first
-        if not readable:
-            return icon_gone_by_frame_change(need_name)
-        reset_icon_watch()   # readable again: a later unreadable stretch starts afresh
-        if need_name in names:
+        if need_name in scan_needs(fresh=attempt > 0):   # the second look must not just repeat the first
             return False
         if attempt == 0:
             wait_interruptible(cfg.NEED_GONE_FLICKER_RECHECK_DELAY)
@@ -1064,31 +901,23 @@ def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAI
     `max_wait` seconds - whichever happens first. It is looked for every
     `poll_interval` seconds, and one check that finds it gone ends the wait:
     a single missed detection can't end it early because each check looks
-    twice, a moment apart (see _need_cleared()).
-    While the icons can't be read (a bright background, see
-    detect_need_bar_readable()) nothing counts as a miss, so that wait runs its
-    full length - and ending it isn't logged as a failure. (Popups and
+    twice, a moment apart (see _need_cleared()). (Popups and
     minigames that turn up meanwhile are handled by the unscrew() checks
-    wait_interruptible() runs during a task.) Interruptible."""
+    wait_interruptible() runs during a task.) Interruptible. If the time runs
+    out with the need still showing that is logged as a failure and
+    state.need_cleared is set False."""
     print(f"[debug] waiting up to {max_wait}s for {need_name} to clear...")
-    reset_icon_watch()
     state.need_cleared = True
     deadline = time.time() + max_wait
-    unreadable = False
     while True:
         remaining = deadline - time.time()
         if remaining <= 0:
-            if unreadable:
-                print(f"[debug] couldn't read the need icons (bright background) - waited {max_wait}s, moving on")
-            else:
-                print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
-                log_failure(f"{need_name} still showing after {max_wait}s")
-                state.need_cleared = False
+            print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
+            log_failure(f"{need_name} still showing after {max_wait}s")
+            state.need_cleared = False
             return
         wait_interruptible(min(poll_interval, remaining))
-        cleared = _need_cleared(need_name)
-        unreadable = cleared is None
-        if cleared:
+        if _need_cleared(need_name):
             print(f"[debug] {need_name} cleared")
             return
 
@@ -1103,14 +932,13 @@ def _watch_need_gone(need_name: str, cleared_event: threading.Event, stop_event:
     main thread's check_running() calls are allowed to unwind the workflow, so
     this thread must never let StopRequested/FocusLost escape uncaught."""
     try:
-        reset_icon_watch()
         while not stop_event.is_set():
             if stop_event.wait(cfg.NEED_GONE_POLL_INTERVAL):
                 return
             cleared = _need_cleared(need_name)
             if answers is not None:
-                answers.append(cleared)       # the last answer tells walk_alternating() whether the icons were readable
-            if cleared is True:
+                answers.append(cleared)       # the last answer tells walk_alternating() whether the need was still showing
+            if cleared:
                 cleared_event.set()
                 return
     except (StopRequested, FocusLost):
@@ -1449,7 +1277,7 @@ def walk_alternating(direction_pair: tuple[str, str], total_duration: float, ste
 
     if cleared_event.is_set():
         print(f"[debug] {need_name} cleared, stopping early")
-    elif need_name is not None and answers and answers[-1] is False:
+    elif need_name is not None and answers and not answers[-1]:
         print(f"[debug] {need_name} still showing after {total_duration}s")
         log_failure(f"{need_name} still showing after {total_duration}s")
         state.need_cleared = False
@@ -2218,8 +2046,6 @@ def process_needs() -> bool:
         return False
 
     found_icons, full_img = detect_need_icons(save_debug=True)
-    if not detect_need_bar_readable(full_img):
-        state.last_detection = time.time()   # can't tell whether there are needs - not a reason to respawn
     if not found_icons:
         record_detection([])
         note_idle_check()
@@ -3186,7 +3012,7 @@ def check_quiet() -> None:
     """Every cycle: note in run_stats how many whole minutes no need has been
     resolved for, and log "quiet: no need resolved for N min" each
     QUIET_LOG_INTERVAL of it, so a stretch where nothing happens (the loop
-    alive but stuck, or the need bar unreadable) shows in the log well before
+    alive but stuck) shows in the log well before
     the NO_PROGRESS_REJOIN_INTERVAL rejoin."""
     quiet = time.time() - state.last_progress if state.last_progress else 0.0
     run_stats.quiet_minutes = int(quiet // 60)

@@ -88,8 +88,7 @@ every second instead of a line per check.
      next one in the list is tried.
    - If it returns `True` but one of its waits ran out with the need still
      showing (`wait_until_need_gone()` and `walk_alternating()` set
-     `state.need_cleared` to `False` and log the failure; not when the bar
-     was unreadable, where nothing is known), the character is respawned
+     `state.need_cleared` to `False` and log the failure), the character is respawned
      (it was moved) but the need counts as *failed*, not resolved:
      `not cleared: <need> (Ns)` is logged, `last_progress` is left alone, and
      it is still an attempt, so a need that never clears is disabled by
@@ -286,54 +285,14 @@ frame (or against a momentarily busy background) without the need having
 actually cleared. (There used to be a further three-misses-in-a-row
 confirmation on top of this; it was removed to speed up resolving.) This only guards against a one-frame flicker -
 a detection failure caused by a *sustained* background change behind the
-icon isn't something this re-check can fix, since it'll fail again on the
-immediate retry too. The one such case that is handled: the Pizza Party's
-background is near-white, which the icons can't be recognised against, so
-the pizza need looked "gone" a few seconds in - the handler returned early,
-the character respawned with the pizza still unserved, and it had to run
-twice. `detect_need_bar_readable()` spots it (more than
-`NEED_BAR_MAX_BRIGHT_FRACTION` of the icon strip brighter than
-`NEED_BAR_BRIGHT_LEVEL`); while the icons are unreadable `_need_cleared()`
-falls back to `icon_gone_by_frame_change()` (below); if that can't tell either it
-returns `None`, which counts as neither a miss nor a sighting, so the wait runs
-its full length - and ending it isn't logged as a failure.
-
-**Judging an icon by how it changes between looks.** A need's icon has a
-timer: a section of its circle that slowly grows and changes colour (it is
-the progress of serving the need). While the bar can't be read,
-`icon_gone_by_frame_change()` takes the icon as it looked when it was last
-read (`State.need_icon_crops`, with its place in `State.need_icon_positions`,
-both set by `identify_icons()` - the place alone can hold another need's icon by
-now, the others having shifted while the walk ran: run 3's sick, 17:09, was
-followed as its neighbour and never seen to clear), searches the whole bar for it
-at the first look (the picture is stored by `icon_crop_for_storage()`; the match counts only the icon's circle - `icon_mask()`, through
-`masked_match_scores()`, a hand-written masked `TM_CCOEFF_NORMED` since OpenCV can't mask that method - because the square's
-four corners hold the scene behind the icon when it was read, and a dark one scored 0.60-0.73 unmasked against the
-bright bar, under `ICON_LOCATE_THRESHOLD`, so the icon read as gone; masked, the same icon scores 1.00 whatever was behind it), and then every later look
-searches the whole bar for the icon *as it looked at the previous look*
-(`locate_icon()`: normalised correlation of the white ring and glyph, which the
-timer's colour change leaves alone). Found at a match of at least
-`ICON_LOCATE_THRESHOLD` (0.75) means it is still there - and wherever it now
-is: when a neighbour to its left clears, the icons slide left, and the icon is
-followed to its new place (the position is updated). Not found, and still not
-found `NEED_GONE_FLICKER_RECHECK_DELAY` later, means it is gone - cleared, or
-replaced by a neighbour that slid into its place, which matches poorly - and
-that ends the wait (logged as `<need> icon gone by frame change`). Measured on
-real frames of the salon icon, the same icon scores 0.90-1.0 whatever its
-timer shows or where it has shifted to (the timer alone changes 22-39% of the
-circle between two looks), a neighbouring icon or a bright background 0.3-0.56.
-Without a stored picture (the need was never read while the bar was readable)
-the first look only records what is at the stored place, so one that went before
-then isn't noticed (the wait runs out as before). Each wait starts afresh
-(`reset_icon_watch()`, at the start of `wait_until_need_gone()` and of the
-walking watcher thread, and whenever the bar is readable again), so a wait never
-carries on from where an earlier wait for the same need left off. The timer is deliberately not visible to
-the black-and-white icon matching, which is why this is a separate check. On a real
-Pizza Party frame (`tests/fixtures/pizza_party_bar.png`: the bar is 79% bright, so
-unreadable; the circles are still found, but the icons score only 0.84-0.89
-against the saved ones, under the 0.93 needed) each of the five icons finds
-itself at 1.0 and the best of the other four at 0.65. The icon is found again
-only if it was recognised before the bar went bright (its place is recorded then).
+icon isn't something this re-check could fix, since it would fail again on the
+immediate retry too - which is why the matching itself has to work on any
+background (see [Need-icon matching](#need-icon-matching): only the disc inside the
+icon's ring is compared, checked against the real screenshots in
+`tests/icon_detection/`, bright ones included). There used to be a fallback for
+a near-white bar (the Pizza Party's) that judged an icon gone by how it changed
+between looks; with the matching reliable on those backgrounds it was removed,
+and so was the "bar unreadable" state: a wait that runs out is always a failure.
 
 Popups, stray windows and minigames that turn up during the wait are handled
 by the `unscrew()` checks that `wait_interruptible()` runs during a task - see
@@ -1061,7 +1020,6 @@ exact values and rationale):
 | Window / coordinates | `REFERENCE_WIDTH`, `REFERENCE_HEIGHT`, `REFERENCE_CENTER_X/Y`, `ROBLOX_RECT_TTL` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `STOP_CLICK_GRACE`, `NEED_GONE_*` |
 | Stuck needs | `NEED_STUCK_CHECKS` |
-| Icon readability | `NEED_BAR_BRIGHT_LEVEL`, `NEED_BAR_MAX_BRIGHT_FRACTION`, `ICON_LOCATE_THRESHOLD`, `ICON_LOCATE_ROW_MARGIN`, `ICON_FRAME_CHANGE_LEVEL` (log only) |
 | Pet focusing | `FOCUS_PET_REGION_TOP_PERCENT`, `FOCUS_PET_FRAME_GAP`, `FOCUS_PET_DIFF_THRESHOLD`, `FOCUS_PET_MERGE_KERNEL`, `FOCUS_PET_MIN_AREA` |
 | Screen positions | `CATCH_*_POS`, `EMPTY_POS`, `RIDE_*_POS`, `LURE_NEW_POS_*`, `SETUP_*_POS` |
 | Side quest / setup | `TREE_HARVEST_YIELD`, `MONEY_COLLECTED_TARGET`, `TREE_CHECK_INTERVAL`, `MONEY_RESET_HOUR`, `LURE_RECOLLECT_INTERVAL`, `LURE_COLLECT_*`, `TREE_COLLECT_*` |
@@ -1189,14 +1147,14 @@ clicks instead of making them. They cover:
 
 - `test_pure.py` - the small pure functions (server link parsing, durations,
   colour masks, axis rounding, failure kinds);
-- `test_state.py` - stuck-need disabling, `process_needs()` (resolved, unresolvable and unreadable-bar cases), `RunStats`, `status.json`, the
+- `test_state.py` - stuck-need disabling, `process_needs()` (resolved, unresolvable and not-cleared cases), `RunStats`, `status.json`, the
   failure folders, the quiet and idle-respawn checks (including that a respawn
   leaves the 20-minute rejoin clock alone), stopping, and the open `output.log`;
 - `test_detection.py` - the need-strip capture and its cache, and the
   popups and stray windows against the real crops in `ref/`;
 - `test_icon_screenshots.py` - every real screenshot in `tests/icon_detection/<folder>/` (the need bar over dark, bright, busy and white scenes) run through the circle search and the matching; each must be listed in `EXPECTED` with the needs on its bar, so a screenshot added without a label fails;
 - `test_loop.py` - the whole workflow loop run for a moment with the game stubbed out (idle respawns, the resource monitor starting and stopping, the report being written);
-- `test_features.py` - the daily money reset, the run-every-need sequence and judging an icon gone by how it changes between looks (with real salon-icon frames in `tests/fixtures/`);
+- `test_features.py` - the daily money reset, the run-every-need sequence, the win screen and the like;
 - `test_config.py` - the real need tables in `magic_numbers.py`, without pinning any value: every entry is well formed (known keys, on-screen positions, movement keys, a `final_click` has its `prompt_pos`), has a handler, and the handler carries out exactly what the entry says (run over whichever needs exist, so `HALLOWEEN` off just drops `sick`). The handler tests elsewhere use made-up entries; this is what keeps the real ones honest;
 - `test_report.py` - the run-report parser against the exact log wording the
   macro writes (a round trip through `log_run_event()`), the chart itself,

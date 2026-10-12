@@ -287,6 +287,8 @@ class State:
     idle_since: float = 0.0
     # Since when the screen has been completely white, without a break (see detect_white_screen()); None when it isn't.
     white_since: Optional[float] = None
+    # The input capture that is running, if any (see toggle_input_capture()). A State field only so snapshot() sees it as text.
+    capture: Optional[Any] = None
     # The needs named by the last "detected:" line, and how many checks since then found exactly the same with no
     # handler run in between (not yet written to the run log - see note_repeat_check()).
     last_detected_body: Optional[str] = None
@@ -329,6 +331,8 @@ class State:
             value = getattr(self, item.name)
             if item.name == "macro_window":
                 value = None if value is None else "set"
+            elif item.name == "capture":
+                value = None if value is None else value.folder
             elif isinstance(value, set):
                 value = sorted(value)
             out[item.name] = value
@@ -2711,6 +2715,196 @@ def start_recording_if_requested() -> Optional[RunRecorder]:
     return recorder
 
 # ============================================================================
+# INPUT CAPTURE
+# ============================================================================
+# Press CAPTURE_HOTKEY (any window) to start recording what is on screen and every key, mouse button and mouse
+# movement; press it again to stop. For working out how something is played by hand (the Hauntlet 2 rooms, say):
+# the frames are lossless PNGs and the events carry the same clock. See docs/ARCHITECTURE.md#input-capture.
+
+# Windows virtual-key codes the capture looks at, by the name written in the events.
+VK_NAMES: dict[int, str] = {
+    0x01: "mouse_left", 0x02: "mouse_right", 0x04: "mouse_middle", 0x05: "mouse_x1", 0x06: "mouse_x2",
+    0x08: "backspace", 0x09: "tab", 0x0D: "enter", 0x10: "shift", 0x11: "ctrl", 0x12: "alt", 0x14: "caps_lock",
+    0x1B: "esc", 0x20: "space", 0x21: "page_up", 0x22: "page_down", 0x23: "end", 0x24: "home",
+    0x25: "left", 0x26: "up", 0x27: "right", 0x28: "down", 0x2D: "insert", 0x2E: "delete",
+    0xBA: ";", 0xBB: "=", 0xBC: ",", 0xBD: "-", 0xBE: ".", 0xBF: "/", 0xC0: "`", 0xDB: "[", 0xDC: "\\", 0xDD: "]", 0xDE: "'",
+    **{code: chr(code) for code in range(0x30, 0x3A)},
+    **{code: chr(code).lower() for code in range(0x41, 0x5B)},
+    **{0x70 + i: f"f{i + 1}" for i in range(12)},
+}
+
+def pressed_inputs() -> set[str]:
+    """The names (VK_NAMES) of the keys and mouse buttons held down right now, whichever window has the focus;
+    empty off Windows."""
+    if os.name != "nt":
+        return set()
+    get_state = ctypes.windll.user32.GetAsyncKeyState  # type: ignore[attr-defined]  # Windows only
+    return {name for code, name in VK_NAMES.items() if get_state(code) & 0x8000}
+
+def cursor_position() -> Point:
+    """The mouse position in screen pixels; (0, 0) off Windows."""
+    if os.name != "nt":
+        return 0, 0
+    from ctypes import wintypes
+    point = wintypes.POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(point))  # type: ignore[attr-defined]  # Windows only
+    return point.x, point.y
+
+def to_reference(x: float, y: float) -> Point:
+    """The reverse of to_screen(): the reference-space position of a screen pixel (outside the Roblox window it
+    comes out negative or past the reference size)."""
+    left, top, width, height = roblox_rect()
+    return int((x - left) * cfg.REFERENCE_WIDTH / width), int((y - top) * cfg.REFERENCE_HEIGHT / height)
+
+class InputCapture:
+    """Records into `folder`: frame_<n>_<seconds>.png (grab_screen(), lossless) every CAPTURE_FRAME_INTERVAL and
+    right after every mouse click, and events.jsonl, one JSON object per line on the same clock ("t", seconds since
+    the start): key_down / key_up with the key, mouse_down / mouse_up with the button, move (rate limited), and a
+    frame line for each screenshot. Mouse events carry the screen position (x, y) and the reference-space one
+    (rx, ry). The capture hotkey itself is left out. It stops by itself after CAPTURE_MAX_MINUTES or when the disk
+    runs low (`stopped_because` says why). See docs/ARCHITECTURE.md#input-capture."""
+
+    def __init__(self, folder: str) -> None:
+        self.folder = folder
+        self.stop_event = threading.Event()
+        self.shot_now = threading.Event()
+        self.stopped_because: Optional[str] = None
+        self.frames = 0
+        self.events = 0
+        self.started = 0.0
+        self._lock = threading.Lock()
+        self._file: Any = None
+        self._threads: list[threading.Thread] = []
+
+    @property
+    def running(self) -> bool:
+        return bool(self._threads) and not self.stop_event.is_set()
+
+    def start(self) -> None:
+        os.makedirs(self.folder, exist_ok=True)
+        self.started = time.time()
+        left, top, width, height = roblox_rect()
+        with open(os.path.join(self.folder, "info.json"), "w") as f:
+            json.dump({"started": time.strftime("%Y-%m-%d %H:%M:%S"), "screen": list(pyautogui.size()),
+                       "roblox_rect": [left, top, width, height], "reference": [cfg.REFERENCE_WIDTH, cfg.REFERENCE_HEIGHT],
+                       "frame_interval": cfg.CAPTURE_FRAME_INTERVAL}, f, indent=1)
+        self._file = open(os.path.join(self.folder, "events.jsonl"), "w", encoding="utf-8")
+        self._threads = [threading.Thread(target=self._poll, daemon=True), threading.Thread(target=self._shots, daemon=True)]
+        for thread in self._threads:
+            thread.start()
+
+    def stop(self) -> str:
+        """Stop, close the files and say what was recorded."""
+        self.stop_event.set()
+        for thread in self._threads:
+            thread.join(timeout=5.0)
+        with self._lock:
+            if self._file is not None:
+                self._file.close()
+                self._file = None
+        seconds = time.time() - self.started
+        size_mb = sum(os.path.getsize(os.path.join(self.folder, f)) for f in os.listdir(self.folder)) / (1024 * 1024)
+        summary = f"{self.frames} frames, {self.events} events, {seconds:.0f}s, {size_mb:.0f} MB in {self.folder}"
+        try:
+            with open(os.path.join(self.folder, "info.json")) as f:
+                info = json.load(f)
+            info.update(stopped=time.strftime("%Y-%m-%d %H:%M:%S"), seconds=round(seconds, 1), frames=self.frames,
+                        events=self.events, stopped_because=self.stopped_because or "hotkey")
+            with open(os.path.join(self.folder, "info.json"), "w") as f:
+                json.dump(info, f, indent=1)
+        except (OSError, ValueError):
+            pass
+        return summary
+
+    def _emit(self, kind: str, **fields: Any) -> None:
+        line = json.dumps({"t": round(time.time() - self.started, 3), "type": kind, **fields})
+        with self._lock:
+            if self._file is not None:
+                self._file.write(line + "\n")
+                self._file.flush()
+                self.events += 1
+
+    def _where(self) -> dict[str, int]:
+        x, y = cursor_position()
+        rx, ry = to_reference(x, y)
+        return {"x": x, "y": y, "rx": rx, "ry": ry}
+
+    def _poll(self) -> None:
+        """Thread body: write a key or mouse button going down or up, and the mouse moving, as it is noticed."""
+        held: set[str] = set()
+        last_position: Optional[Point] = None
+        last_move = 0.0
+        while not self.stop_event.wait(cfg.CAPTURE_POLL_INTERVAL):
+            try:
+                now_held = pressed_inputs() - {cfg.CAPTURE_HOTKEY}
+                for name in sorted(now_held - held):
+                    if name.startswith("mouse_"):
+                        self._emit("mouse_down", button=name[len("mouse_"):], **self._where())
+                        self.shot_now.set()
+                    else:
+                        self._emit("key_down", key=name)
+                for name in sorted(held - now_held):
+                    if name.startswith("mouse_"):
+                        self._emit("mouse_up", button=name[len("mouse_"):], **self._where())
+                    else:
+                        self._emit("key_up", key=name)
+                held = now_held
+                position = cursor_position()
+                if position != last_position and time.time() - last_move >= cfg.CAPTURE_MOVE_INTERVAL:
+                    self._emit("move", **self._where())
+                    last_position, last_move = position, time.time()
+            except Exception as error:   # a failed look must not end the capture
+                print(f"[!] input capture: {error}")
+
+    def _shots(self) -> None:
+        """Thread body: a screenshot every CAPTURE_FRAME_INTERVAL and right after each click; stops the capture when
+        it has run CAPTURE_MAX_MINUTES or the disk is nearly full."""
+        while not self.stop_event.is_set():
+            self.shot_now.clear()
+            try:
+                if time.time() - self.started >= cfg.CAPTURE_MAX_MINUTES * 60:
+                    self._give_up(f"{cfg.CAPTURE_MAX_MINUTES:g} minutes")
+                    return
+                if shutil.disk_usage(self.folder).free < cfg.CAPTURE_MIN_FREE_MB * 1024 * 1024:
+                    self._give_up("the disk is nearly full")
+                    return
+                seconds = time.time() - self.started
+                name = f"frame_{self.frames + 1:06d}_{seconds:.3f}.png"
+                if cv2.imwrite(os.path.join(self.folder, name), grab_screen(), [cv2.IMWRITE_PNG_COMPRESSION, 1]):
+                    self.frames += 1
+                    self._emit("frame", file=name)
+            except Exception as error:
+                print(f"[!] input capture: couldn't save a frame: {error}")
+            self.shot_now.wait(cfg.CAPTURE_FRAME_INTERVAL)
+            if self.shot_now.is_set():
+                self.stop_event.wait(0.02)      # let the click land on screen before looking
+
+    def _give_up(self, reason: str) -> None:
+        self.stopped_because = reason
+        self.stop_event.set()
+        print(f"[!] Input capture stopped by itself: {reason}")
+
+def toggle_input_capture() -> Optional[InputCapture]:
+    """Start a capture (a fresh folder in CAPTURES_DIR, the oldest beyond MAX_CAPTURES deleted) or, if one is
+    running, stop it - what the capture hotkey does. Returns the capture that is running now, or None."""
+    current = state.capture
+    if current is not None:
+        state.capture = None
+        was_running = current.running
+        print(f"[!] Capture stopped: {current.stop()}")
+        if was_running:
+            return None            # (one that had stopped by itself is only tidied up here: this press starts a new one)
+    os.makedirs(cfg.CAPTURES_DIR, exist_ok=True)
+    folders = sorted((os.path.join(cfg.CAPTURES_DIR, f) for f in os.listdir(cfg.CAPTURES_DIR)), key=os.path.getmtime)
+    for old in folders[:max(0, len(folders) - (cfg.MAX_CAPTURES - 1))]:
+        shutil.rmtree(old, ignore_errors=True)
+    capture = InputCapture(os.path.join(cfg.CAPTURES_DIR, "capture_" + time.strftime("%Y%m%d_%H%M%S")))
+    capture.start()
+    state.capture = capture
+    print(f"[!] Capture started (press {cfg.CAPTURE_HOTKEY.upper()} again to stop): {capture.folder}")
+    return capture
+
+# ============================================================================
 # WORKFLOWS
 # ============================================================================
 
@@ -3485,27 +3679,39 @@ class AdoptMeGUI:
         """The window's X button: stop whatever is running and let go of every key and the mouse before the
         process ends - the worker is a daemon thread, which dies with the process before its own cleanup can run
         (a movement key or the mouse button would stay held down in the game)."""
+        if state.capture is not None:
+            state.capture.stop()
+            state.capture = None
         STOP_EVENT.set()
         time.sleep(cfg.STOP_CHECK_INTERVAL * 3)   # the worker notices the stop within a check or two and releases what it holds
         release_all_inputs()
         self.root.destroy()
 
     def watch_stop_hotkey(self) -> None:
-        """Start a thread that stops the macro when STOP_HOTKEY goes down in any window.
-        See docs/ARCHITECTURE.md#gui-internals.
-        """
+        """Start a thread that watches the hotkeys in any window: STOP_HOTKEY stops the macro, CAPTURE_HOTKEY starts or
+        stops an input capture. See docs/ARCHITECTURE.md#gui-internals."""
+        hotkeys = [(cfg.STOP_HOTKEY, self.stop_by_hotkey, True), (cfg.CAPTURE_HOTKEY, self.capture_by_hotkey, False)]   # (key, action, only while a run is going)
+
         def watch():
-            was_down = False
+            was_down = [False] * len(hotkeys)
             while True:
                 try:
-                    down = hotkey_down(cfg.STOP_HOTKEY)
-                    if down and not was_down and self.is_running:
-                        self.root.after(0, self.stop_by_hotkey)
+                    for i, (key, action, only_while_running) in enumerate(hotkeys):
+                        down = hotkey_down(key)
+                        if down and not was_down[i] and (self.is_running or not only_while_running):
+                            self.root.after(0, action)
+                        was_down[i] = down
                 except (RuntimeError, tk.TclError):
                     return  # the window is gone
-                was_down = down
                 time.sleep(cfg.STOP_HOTKEY_POLL_INTERVAL)
         threading.Thread(target=watch, daemon=True).start()
+
+    def capture_by_hotkey(self) -> None:
+        """CAPTURE_HOTKEY was pressed: start or stop the input capture (Tk's thread; the capture's own threads do the work)."""
+        try:
+            toggle_input_capture()
+        except OSError as error:
+            print(f"[!] Input capture: {error}")
 
     def stop_by_hotkey(self) -> None:
         """STOP_HOTKEY was pressed: stop, same as the [STOP] button, and say so."""
@@ -3786,6 +3992,8 @@ class AdoptMeGUI:
         """Fill the Other subtab: record the next run, refresh the debug
         folder, reset the config."""
         self.add_config_checkbox(parent, "Record the next run (low quality video)", "record_next_run", load_game_config())
+        tk.Label(parent, text=f"Press {cfg.CAPTURE_HOTKEY.upper()} anywhere to start / stop capturing screenshots and input",
+                 font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
         tk.Button(parent, text="Refresh debug", command=self.refresh_debug_folder,
                   font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.accent, fg=self.fg, cursor="hand2"
                   ).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)

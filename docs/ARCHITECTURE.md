@@ -171,6 +171,9 @@ an extra walk from wherever the previous need left the character standing.
   runs them during a task; and `side_quest()`.
 - **RUN RECORDING** - `RunRecorder` and `start_recording_if_requested()`. See
   [Recording a run](#recording-a-run).
+- **INPUT CAPTURE** - `InputCapture`, `toggle_input_capture()` and the key / mouse
+  readers (`pressed_inputs()`, `cursor_position()`, `to_reference()`). See
+  [Input capture](#input-capture).
 - **WORKFLOWS** - `run_full_cycle()` and `run_workflow_loop()` (plus
   `ResourceMonitor`, `check_quiet()` and `respawn_if_no_detection()`, which run
   inside the loop). See [The workflow lifecycle](#the-workflow-lifecycle) above.
@@ -1056,10 +1059,11 @@ knowing if you're modifying it:
   (which is only safe from its own thread): it queues `func`, waits until it
   has run or `timeout` seconds pass (`None` = as long as it takes, for a
   dialog such as the new-need name prompt) and returns what it returned.
-- **`watch_stop_hotkey()`** starts a thread that stops a running macro when
-  `STOP_HOTKEY` goes down in any window (holding it doesn't retrigger; it does
-  nothing while nothing runs), so you can take over the computer without
-  reaching for the GUI. The stop itself is handed to Tk's thread.
+- **`watch_stop_hotkey()`** starts a thread that watches two hotkeys in any
+  window (holding one doesn't retrigger): `STOP_HOTKEY` stops a running macro (it
+  does nothing while nothing runs), so you can take over the computer without
+  reaching for the GUI, and `CAPTURE_HOTKEY` starts or stops an
+  [input capture](#input-capture). The action is handed to Tk's thread.
 - **`add_config_checkbox(key)`** makes a checkbox for a persisted switch. It is
   deliberately not in `action_buttons`: the switches stay usable while a
   workflow runs, which is safe because `update_game_config()` is locked.
@@ -1072,6 +1076,39 @@ knowing if you're modifying it:
   replaces the previous status line instead of adding one, and goes into
   `output.log` only the first time (this is the "Waiting for a need..."
   counter).
+
+### Input capture
+
+Press `CAPTURE_HOTKEY` (`m`) in any window to start recording and again to stop. It is for working out
+how something is played by hand - the Hauntlet 2 rooms, say - and gives the macro's author lossless
+frames and the inputs that went with them. It is separate from **Record the next run** (a low-quality
+video of a macro run): it works whether or not the macro is running, and the macro's own key presses
+and clicks are recorded too, since `GetAsyncKeyState` sees them like any others.
+
+Each capture is a folder in `debug/captures/` (`CAPTURES_DIR`, git-ignored, emptied by **Refresh debug**;
+the newest `MAX_CAPTURES` are kept) named `capture_<date>_<time>`:
+
+- `frame_<n>_<seconds>.png` - `grab_screen()` (the Roblox window at the reference size, the macro's own
+  window included if it is on top), lossless, every `CAPTURE_FRAME_INTERVAL` (1 s) and once more
+  right after every mouse click, so a click's frame shows what it landed on. `<seconds>` is on the same clock
+  as the events.
+- `events.jsonl` - one JSON object per line, in time order, `t` being seconds since the start:
+  `key_down` / `key_up` (`key`: `w`, `space`, `shift`, `f1`, ... - the names in `VK_NAMES`),
+  `mouse_down` / `mouse_up` (`button`: `left`, `right`, `middle`, `x1`, `x2`, with the position),
+  `move` (the position, written at most every `CAPTURE_MOVE_INTERVAL`) and `frame` (`file`).
+  Positions are both `x`, `y` (screen pixels) and `rx`, `ry` (the reference space everything in
+  `magic_numbers.py` uses, `to_reference()`). The capture hotkey itself is left out.
+- `info.json` - when it started and stopped, the screen and Roblox window sizes, the frame and event
+  counts and why it stopped.
+
+Keys and mouse buttons are read by polling `GetAsyncKeyState` every `CAPTURE_POLL_INTERVAL` (10 ms) -
+the same call as the stop hotkey, so no extra package is needed - and the position with `GetCursorPos`.
+The cost of polling is that **the mouse wheel isn't seen** (no async state to read) and a key pressed
+and released between two polls is missed. A capture stops by itself after `CAPTURE_MAX_MINUTES` (15) or
+when less than `CAPTURE_MIN_FREE_MB` of disk is free - a frame is roughly 1-3 MB, so a minute is 60-180 MB and a full 15 minutes up to a few GB - and the next
+press of the hotkey then tidies it up and starts a new one. Screenshots and input are written from two
+threads of the capture's own; the hotkey is watched by the GUI's hotkey thread (with the stop hotkey) and
+acted on in Tk's thread, so typing an `m` into the private server link box starts a capture too.
 
 ### Recording a run
 
@@ -1115,6 +1152,7 @@ exact values and rationale):
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
 | Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
+| Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
@@ -1243,6 +1281,7 @@ clicks instead of making them. They cover:
   popups and stray windows against the real crops in `ref/` (including that every `POPUP_TEMPLATES` entry has a crop that fits its box);
 - `test_icon_screenshots.py` - every real screenshot in `tests/icon_detection/<folder>/` (the need bar over dark, bright, busy and white scenes) run through the circle search and the matching; each must be listed in `EXPECTED` with the needs on its bar, so a screenshot added without a label fails;
 - `test_loop.py` - the whole workflow loop run for a moment with the game stubbed out (idle respawns, the resource monitor starting and stopping, the report being written);
+- `test_capture.py` - the input capture against a made-up keyboard, mouse and screen (events, both coordinate systems, click frames, the summary, stopping by itself, the hotkey toggle and pruning);
 - `test_features.py` - the daily money reset, the run-every-need sequence, the win screen and the like;
 - `test_config.py` - the real need tables in `magic_numbers.py`, without pinning any value: every entry is well formed (known keys, on-screen positions, movement keys, a `final_click` has its `prompt_pos`), has a handler, and the handler carries out exactly what the entry says (run over whichever needs exist, so `HALLOWEEN` off just drops `sick`). The handler tests elsewhere use made-up entries; this is what keeps the real ones honest;
 - `test_report.py` - the run-report parser against the exact log wording the

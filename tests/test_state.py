@@ -339,12 +339,6 @@ def test_teleport_needs_wait_for_the_need_to_clear_up_to_the_configured_time(mac
     assert waited == [expected] == [macro.cfg.NEED_GONE_MAX_WAIT]
 
 
-@pytest.mark.parametrize("need", ["cafe", "beach"])
-def test_the_slow_needs_wait_longer(macro, need):
-    entry = macro.cfg.TELEPORT_WALK_NEEDS_HALLOWEEN.get(need) or macro.cfg.TELEPORT_WALK_NEEDS_NORMAL[need]
-    assert entry["max_wait"] == macro.cfg.NEED_GONE_SLOW_MAX_WAIT > macro.cfg.NEED_GONE_MAX_WAIT
-
-
 def test_a_need_can_set_its_own_wait(macro, monkeypatch):
     waited = []
     monkeypatch.setitem(macro.cfg.TELEPORT_WALK_NEEDS, "camping", {**macro.cfg.TELEPORT_WALK_NEEDS["camping"], "max_wait": 150.0})
@@ -539,3 +533,265 @@ def test_a_run_whose_clock_stepped_back_still_gets_a_report(macro, tmp_path):
         "[2026-10-25 02:10:00] [RUN 9] resolved: hungry (20s)",     # an hour back
         "[2026-10-25 03:30:00] [RUN 9] LOOP stopped"]) + "\n")
     assert macro.generate_run_report(str(log), 9, str(tmp_path)) is not None
+
+
+class _FakeText:
+    """Just enough of a Tk Text for DebugCapture.trim(): a list of lines."""
+    def __init__(self, lines):
+        self.lines = list(lines)
+
+    def index(self, where):
+        assert where == "end-1c"
+        return f"{len(self.lines) + 1}.0"        # a Text always ends in one more empty line
+
+    def delete(self, start, end):
+        assert start == "1.0"
+        del self.lines[:int(end.split(".")[0]) - 1]
+
+
+def test_the_console_keeps_only_its_last_lines(macro, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "CONSOLE_MAX_LINES", 5)
+    capture = object.__new__(macro.DebugCapture)
+    capture.text = _FakeText(f"line {i}" for i in range(12))
+    capture.trim()
+    assert capture.text.lines == [f"line {i}" for i in range(7, 12)]
+    capture.trim()                                   # already short enough: untouched
+    assert len(capture.text.lines) == 5
+
+
+def test_only_the_newest_run_reports_are_kept(macro, tmp_path):
+    for i in range(6):
+        path = tmp_path / f"run{i}.png"
+        path.write_text("x")
+        os.utime(path, (1000 + i, 1000 + i))
+    macro.keep_newest_files(str(tmp_path), 3)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["run3.png", "run4.png", "run5.png"]
+    macro.keep_newest_files(str(tmp_path / "missing"), 3)       # never raises
+
+
+def test_every_check_reaches_the_log_even_when_it_finds_nothing(macro, one_need, monkeypatch):
+    """The run report charts needs per check, so checks that find no need must be counted - as one summary line,
+    not a line every few seconds."""
+    import numpy as np
+    monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([], np.zeros((1080, 1920, 3), np.uint8)))
+    macro.state.run_number = 4
+    for _ in range(3):
+        assert macro.process_needs() is False
+    assert not os.path.exists(macro.cfg.RUN_LOG_PATH) or "idle checks" not in open(macro.cfg.RUN_LOG_PATH).read()   # not yet
+    macro.state.idle_since -= 90                                         # the three checks were 90s ago
+    monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([(100, 50, 30)], np.zeros((1080, 1920, 3), np.uint8)))
+    assert macro.process_needs() is True                                 # a need turns up (one_need's handler resolves it)
+    lines = open(macro.cfg.RUN_LOG_PATH).read().splitlines()
+    idle = [i for i, line in enumerate(lines) if "idle checks: 3 over 9" in line]
+    detected = [i for i, line in enumerate(lines) if "detected: hungry" in line]
+    assert idle and detected and idle[0] < detected[0]                   # written before the detection that ended the streak
+    assert macro.state.idle_checks == 0
+    data = macro.parse_run(macro.cfg.RUN_LOG_PATH, 4)
+    assert [matched for _, matched, _ in data["detected"]] == [0, 0, 0, 1]    # four checks, three of them empty
+
+
+def test_idle_checks_that_found_icons_nothing_matched_are_counted_too(macro, one_need, monkeypatch):
+    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(0, img[:10, :10], None, 0.5)]))
+    macro.state.run_number = 4
+    for _ in range(4):
+        macro.process_needs()
+    log = open(macro.cfg.RUN_LOG_PATH).read()
+    assert log.count("detected: none matched") == 1 and macro.state.idle_checks == 3   # logged once, the other three counted
+    macro.flush_idle_checks()
+    assert [matched for _, matched, _ in macro.parse_run(macro.cfg.RUN_LOG_PATH, 4)["detected"]] == [0, 0, 0, 0]
+
+
+def test_idle_checks_are_flushed_after_a_quiet_interval(macro):
+    macro.state.run_number = 4
+    macro.note_idle_check()
+    macro.flush_idle_checks_if_due()
+    assert macro.state.idle_checks == 1                                  # too soon
+    macro.state.idle_since -= macro.cfg.QUIET_LOG_INTERVAL
+    macro.flush_idle_checks_if_due()
+    assert macro.state.idle_checks == 0 and "idle checks: 1 over" in open(macro.cfg.RUN_LOG_PATH).read()
+
+
+def test_roblox_not_running_at_the_start_is_not_a_failure(macro, monkeypatch):
+    monkeypatch.setattr(macro, "rejoin_reason", lambda: ("disconnect", macro.ROBLOX_NOT_RUNNING))
+    monkeypatch.setattr(macro, "leave_and_rejoin", lambda clean_leave=True: True)
+    monkeypatch.setattr(macro, "setup_game", lambda: True)
+    macro.state.run_start_pending = True
+    assert macro.rejoin_game() is True
+    log = open(macro.cfg.RUN_LOG_PATH).read()
+    assert "Roblox isn't running at the start - starting it" in log and "FAILURE" not in log
+    assert macro.run_stats.failures == 0 and macro.run_stats.recoveries == 0 and macro.state.run_start_pending is False
+    assert macro.rejoin_game() is True                                          # the same later on is a failure
+    assert "FAILURE: Roblox isn't running - rejoining" in open(macro.cfg.RUN_LOG_PATH).read()
+
+
+def test_only_the_first_look_of_a_run_counts_as_the_start(macro, monkeypatch):
+    monkeypatch.setattr(macro, "rejoin_reason", lambda: None)
+    macro.state.run_start_pending = True
+    macro.rejoin_game(kinds=("disconnect",))                                     # an in-task look is not the start of the run
+    assert macro.state.run_start_pending is True
+    macro.rejoin_game()
+    assert macro.state.run_start_pending is False
+
+
+def test_the_zoom_key_is_released_with_the_rest(macro, monkeypatch):
+    released = []
+    monkeypatch.setattr(macro.pydirectinput, "keyUp", lambda key: released.append(key), raising=False)
+    monkeypatch.setattr(macro.pydirectinput, "mouseUp", lambda: None, raising=False)
+    macro.release_all_inputs()
+    assert macro.cfg.KEY_ZOOM_IN in released and macro.cfg.KEY_HELICOPTER in released
+
+
+def test_the_rejoin_is_booked_before_the_respawn_that_can_lose_focus(macro, monkeypatch):
+    """A FocusLost out of the post-join respawn must not leave the old rejoin/progress times behind (the next cycle
+    would rejoin the fresh game again)."""
+    import numpy as np
+    monkeypatch.setattr(macro, "close_roblox", lambda clean_leave=True: None)
+    monkeypatch.setattr(macro, "run_deeplink", lambda server=None: None)
+    monkeypatch.setattr(macro, "roblox_windows", lambda: [object()])
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((1080, 1920, 3), np.uint8))
+    monkeypatch.setattr(macro, "detect_play_button", lambda img: True)
+    monkeypatch.setattr(macro, "wait_stoppable", lambda duration: None)
+
+    def lose_focus():
+        raise macro.FocusLost()
+
+    monkeypatch.setattr(macro, "respawn_character", lose_focus)
+    macro.state.last_rejoin = macro.state.last_progress = macro.state.last_detection = time.time() - 3600
+    with pytest.raises(macro.FocusLost):
+        macro.leave_and_rejoin()
+    assert time.time() - macro.state.last_rejoin < 5 and time.time() - macro.state.last_progress < 5
+
+
+def test_a_dismissed_minigame_popup_does_not_lose_the_abort(macro, monkeypatch):
+    monkeypatch.setattr(macro, "rejoin_game", lambda kinds=None: False)
+    monkeypatch.setattr(macro, "close_backpack_if_stuck", lambda in_task: False)
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: "cant_spawn_vehicle")     # flagged abort_task
+    monkeypatch.setattr(macro, "close_minigame_win_screen", lambda abandon=True: False)
+    monkeypatch.setattr(macro, "minigame_popup", lambda play=True: "dismissed")
+    monkeypatch.setattr(macro, "detect_paycheck", lambda: False)
+    monkeypatch.setattr(macro.cfg, "HALLOWEEN", True)
+    assert macro.unscrew(in_task=True) == "aborted"
+
+
+def test_setup_keeps_its_backpack_open_without_the_in_task_check_closing_it(macro, monkeypatch):
+    """Setup holds the backpack open ~8s on purpose; two sightings 4s apart count as stuck elsewhere."""
+    def stuck_check(in_task):
+        raise AssertionError("the in-task backpack check must not run during setup")
+
+    monkeypatch.setattr(macro, "rejoin_game", lambda kinds=None: False)
+    monkeypatch.setattr(macro, "close_backpack_if_stuck", stuck_check)
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: None)
+    monkeypatch.setattr(macro, "detect_paycheck", lambda: False)
+    monkeypatch.setattr(macro.cfg, "HALLOWEEN", False)
+    assert macro.unscrew(in_task=True, play_minigames=False) is None
+
+
+def test_the_recorder_does_not_spin_while_no_frame_can_be_grabbed(macro, monkeypatch):
+    attempts = []
+    recorder = macro.RunRecorder("unused")
+    recorder.writer = type("Writer", (), {"write": lambda self, frame: None})()
+    monkeypatch.setattr(recorder, "_frame", lambda: attempts.append(1) or (_ for _ in ()).throw(RuntimeError("no window")))
+    thread = threading.Thread(target=recorder._record)
+    thread.start()
+    time.sleep(0.45)
+    recorder.stop_event.set()
+    thread.join()
+    assert len(attempts) <= 4                                                      # about one try per frame time, not thousands
+
+
+def test_time_spent_in_the_in_task_checks_counts_towards_a_wait(macro, monkeypatch):
+    monkeypatch.setattr(macro, "check_focus", lambda: None)
+    monkeypatch.setattr(macro, "task_unscrew_tick", lambda: time.sleep(0.1))       # a slow check on every pass
+    started = time.time()
+    macro.wait_interruptible(0.5)
+    assert 0.45 < time.time() - started < 0.75                                     # it used to add every check's time on top (~1s)
+
+
+def _window(title):
+    return type("Window", (), {"title": title})()
+
+
+def test_a_browser_tab_about_roblox_is_not_the_roblox_window(macro, monkeypatch):
+    game = _window("Roblox")
+    monkeypatch.setattr(macro, "roblox_windows", lambda: [_window("Roblox - Google Chrome"), game])
+    for title, expected in (("Roblox", True), ("Roblox - Google Chrome", False), ("Notepad", False)):
+        monkeypatch.setattr(macro.gw, "getActiveWindow", lambda title=title: _window(title))
+        assert macro.is_roblox_focused() is expected, title
+    monkeypatch.setattr(macro.gw, "getActiveWindow", lambda: None)
+    assert macro.is_roblox_focused() is False
+
+
+def test_without_a_window_titled_exactly_roblox_any_roblox_title_still_counts(macro, monkeypatch):
+    monkeypatch.setattr(macro, "roblox_windows", lambda: [_window("Roblox Player")])
+    monkeypatch.setattr(macro.gw, "getActiveWindow", lambda: _window("Roblox Player"))
+    assert macro.is_roblox_focused() is True
+
+
+@pytest.fixture
+def sick_run(macro, monkeypatch):
+    """The sick handler up to its press of 'e': run["dialog"] is what each look for the doctor's dialog sees, in order."""
+    import numpy as np
+    run = {"dialog": [True], "waited": [], "respawns": 0, "events": [], "pet_focused": False}
+
+    def dialog_up(img):
+        run["events"].append("look")
+        looks = run["dialog"]
+        return looks.pop(0) if len(looks) > 1 else looks[0]
+
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "teleport_to", lambda pos: None)
+    monkeypatch.setattr(macro, "hold_key", lambda key, duration: None)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((1080, 1920, 3), np.uint8))
+    monkeypatch.setattr(macro, "detect_sick_dialog", dialog_up)
+    monkeypatch.setattr(macro, "detect_pet_focus", lambda img: run["pet_focused"])
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: run["events"].append("back out") or None)
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: run["events"].append(("click", (x, y))))
+    monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=60.0, **kw: run["waited"].append(name))
+    monkeypatch.setattr(macro, "respawn_character", lambda: run.update(respawns=run["respawns"] + 1))
+    return run
+
+
+def test_sick_clicks_yes_once_the_dialog_is_up(macro, sick_run):
+    assert macro.TeleportWalkNeedHandler("sick").handle() is True
+    assert sick_run["events"] == ["look", ("click", macro.cfg.SICK_FINAL_CLICK_POS)]        # no prompt click needed
+    assert sick_run["waited"] == ["sick"] and sick_run["respawns"] == 0
+
+
+def test_sick_backs_out_of_the_pet_view_and_clicks_the_prompt_when_e_brings_up_no_dialog(macro, sick_run):
+    sick_run["dialog"] = [False, True]                                   # nothing after e, the dialog after the click
+    sick_run["pet_focused"] = True
+    assert macro.TeleportWalkNeedHandler("sick").handle() is True
+    assert sick_run["events"] == ["look", "back out", ("click", macro.cfg.SICK_PROMPT_POS), "look",
+                                  ("click", macro.cfg.SICK_FINAL_CLICK_POS)]
+    assert sick_run["waited"] == ["sick"] and sick_run["respawns"] == 0
+    log = open(macro.cfg.RUN_LOG_PATH).read()
+    assert "sick: no dialog after e (pet focused: True) - clicking the prompt" in log and "FAILURE" not in log
+
+
+def test_sick_fails_at_once_when_the_prompt_click_brings_up_no_dialog_either(macro, sick_run):
+    sick_run["dialog"] = [False]
+    assert macro.TeleportWalkNeedHandler("sick").handle() is False
+    assert sick_run["events"] == ["look", "back out", ("click", macro.cfg.SICK_PROMPT_POS), "look"]   # never the Yes click
+    assert sick_run["waited"] == [] and sick_run["respawns"] == 1                                    # no waiting for the icon
+
+
+def test_a_need_without_a_prompt_to_click_fails_after_the_first_look(macro, sick_run, monkeypatch):
+    monkeypatch.setitem(macro.cfg.TELEPORT_WALK_NEEDS["sick"], "prompt_pos", None)
+    sick_run["dialog"] = [False]
+    assert macro.TeleportWalkNeedHandler("sick").handle() is False
+    assert sick_run["events"] == ["look"] and sick_run["respawns"] == 1
+
+
+def test_a_failed_sick_is_logged_as_a_failure_by_process_needs(macro, sick_run, monkeypatch):
+    import numpy as np
+    sick_run["dialog"] = [False]
+    screen = np.zeros((1080, 1920, 3), np.uint8)
+    monkeypatch.setattr(macro, "focus_roblox_click", lambda: True)
+    monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([(100, 50, 30)], screen))
+    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(0, screen[:10, :10], "sick", 0.9)]))
+    monkeypatch.setattr(macro, "check_focus", lambda: None)
+    monkeypatch.setattr(macro, "save_failure_report", lambda reason: None)
+    assert macro.process_needs() is False
+    assert macro.run_stats.failed == {"sick": 1} and "sick handler could not resolve it" in open(macro.cfg.RUN_LOG_PATH).read()

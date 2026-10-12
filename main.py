@@ -143,7 +143,15 @@ def is_roblox_focused() -> bool:
     """Return True if a window with 'roblox' in its title is currently the
     active (focused) window."""
     active = gw.getActiveWindow()
-    return active is not None and "roblox" in (active.title or "").lower()
+    title = (active.title or "") if active is not None else ""
+    if title == "Roblox":
+        return True
+    if "roblox" not in title.lower():
+        return False
+    # An ambiguous title (a browser tab, the crash window): the game only if no window is titled exactly "Roblox" -
+    # the same choice roblox_window() makes.
+    game = roblox_window()
+    return game is None or game.title != "Roblox"
 
 def focus_roblox_click() -> bool:
     """Focus Roblox and click near the top edge to make sure input registers."""
@@ -296,6 +304,13 @@ class State:
     # True while the last "detected:" line in the run log was "none matched", so
     # an unrecognised icon sitting on screen is logged once, not on every check.
     none_matched_logged: bool = False
+    # Checks in a row that found no need, not yet written to the run log (see note_idle_check()): how many, and
+    # when the first one was.
+    idle_checks: int = 0
+    idle_since: float = 0.0
+    # True from the start of a run until rejoin_game() has looked once: the game not running then is just where the
+    # run begins (it is started), not a failure.
+    run_start_pending: bool = False
     # Needs switched off for the rest of this launch of the script because they
     # kept showing up without ever clearing. Deliberately not persisted (unlike
     # the game config): relaunching the script gives every enabled need a fresh
@@ -403,6 +418,26 @@ def reset_need_tracking() -> None:
     state.attempt_streaks.clear()
     state.attempted_last = set()
     state.none_matched_logged = False
+
+def note_idle_check() -> None:
+    """Count one check that found no need. They are logged together, as one "idle checks: N over Ss" line
+    (flush_idle_checks()), so a long wait doesn't write a line every few seconds - and the run report can still
+    count every check, not just the ones that found something."""
+    if state.idle_checks == 0:
+        state.idle_since = time.time()
+    state.idle_checks += 1
+
+def flush_idle_checks() -> None:
+    """Write the counted idle checks (note_idle_check()) to the run log and start counting again."""
+    if state.idle_checks:
+        log_run_event(f"idle checks: {state.idle_checks} over {time.time() - state.idle_since:.0f}s")
+        state.idle_checks = 0
+
+def flush_idle_checks_if_due() -> None:
+    """flush_idle_checks() once QUIET_LOG_INTERVAL has passed since the first of them, so a long idle stretch
+    reaches the log (and a crash loses at most that much)."""
+    if state.idle_checks and time.time() - state.idle_since >= cfg.QUIET_LOG_INTERVAL:
+        flush_idle_checks()
 
 def log_run_event(message: str) -> None:
     """Append one timestamped line to RUN_LOG_PATH, tagged with
@@ -801,6 +836,15 @@ def prompt_rename_need(icon_img: Image, idx: int) -> str:
     print(f"[!] Saved: {need_name}")
     return need_name
 
+def icon_crop_for_storage(full_img: Image, cx: int, cy: int) -> Optional[Image]:
+    """The icon at (cx, cy) as icon_gone_by_frame_change() will look for it later - the picture it was last read
+    as - or None if it reaches past the image."""
+    r = cfg.ICON_CROP_RADIUS
+    if cx < r or cy < r:
+        return None
+    crop = full_img[cy - r:cy + r + 1, cx - r:cx + r + 1]
+    return crop.copy() if crop.shape[:2] == (2 * r + 1, 2 * r + 1) else None
+
 def identify_icons(found_icons: list[tuple[int, int, int]], full_img: Image) -> Iterator[tuple[int, Image, Optional[str], float]]:
     """Match each detected icon against the saved needs. Yields
     (index, icon_image, need_name_or_None, score) per icon, checking
@@ -811,10 +855,9 @@ def identify_icons(found_icons: list[tuple[int, int, int]], full_img: Image) -> 
         need_name, score = find_matching_need(icon_variants(full_img, cx, cy))
         if need_name:
             state.need_icon_positions[need_name] = (cx, cy)
-            r = cfg.ICON_CROP_RADIUS
-            crop = full_img[cy - r:cy + r + 1, cx - r:cx + r + 1] if cx >= r and cy >= r else None
-            if crop is not None and crop.shape[:2] == (2 * r + 1, 2 * r + 1):
-                state.need_icon_crops[need_name] = crop.copy()
+            crop = icon_crop_for_storage(full_img, cx, cy)
+            if crop is not None:
+                state.need_icon_crops[need_name] = crop
         yield idx, icon_img, need_name, score
 
 def detect_need_bar_readable(img: Image) -> bool:
@@ -863,6 +906,31 @@ def icon_region_change(before: Image, after: Image) -> float:
     changed = cv2.absdiff(before, after).max(axis=2) > cfg.ICON_FRAME_CHANGE_LEVEL
     return float(np.count_nonzero(changed & inside) / np.count_nonzero(inside))
 
+def icon_mask(size: int) -> Image:
+    """1 inside the icon's circle, 0 in the four corners of its square capture - the scene behind the icon."""
+    yy, xx = np.ogrid[:size, :size]
+    centre = size // 2
+    return ((yy - centre) ** 2 + (xx - centre) ** 2 <= (centre - 1) ** 2).astype(np.uint8)
+
+def masked_match_scores(image: Image, template: Image, mask: Image) -> Image:
+    """cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED) counting only the pixels where `mask` is 1 (all
+    single-channel 8-bit; the scores are 0-1 per position, as there). OpenCV can't mask that method, and the
+    others (CCORR) rate any bright patch as a match. Worked out by hand: with the template made zero-mean over
+    the mask, the numerator is one plain correlation, and the image's masked mean and spread come from two
+    correlations with the mask. Positions whose masked patch is flat score 0."""
+    pic = image.astype(np.float32)
+    pic -= pic.mean()                       # shifting changes no score, and keeps the sums small enough for float32
+    weight = mask.astype(np.float32)
+    count = float(weight.sum())
+    tmpl = template.astype(np.float32)
+    tmpl = (tmpl - float((tmpl * weight).sum()) / count) * weight
+    numerator = cv2.matchTemplate(pic, tmpl, cv2.TM_CCORR)
+    total = cv2.matchTemplate(pic, weight, cv2.TM_CCORR)
+    total_sq = cv2.matchTemplate(pic * pic, weight, cv2.TM_CCORR)
+    spread = np.sqrt(np.maximum(total_sq - total * total / count, 0))
+    denominator = float(np.sqrt((tmpl * tmpl).sum())) * spread
+    return np.where(denominator > 1e-3 * count, numerator / np.maximum(denominator, 1e-9), 0).astype(np.float32)
+
 def locate_icon(template: Image, row: int) -> Optional[tuple[int, int]]:
     """Where `template` (an icon-sized capture of a need icon) is in the need
     bar now: the centre (x, y) of its best match along the bar at about `row`,
@@ -870,12 +938,14 @@ def locate_icon(template: Image, row: int) -> Optional[tuple[int, int]]:
     match is on the whiteness of the pixels (the least of B, G, R), which is
     the icon's white ring and glyph - they don't change as its timer
     changes the colour of a section of the disc - and a bright background or
-    another icon matches poorly. The whole width of the bar is searched, so
+    another icon matches poorly. Only the icon's circle counts (icon_mask()):
+    the corners of the square hold the scene behind it, which is not the
+    scene it is looked for in. The whole width of the bar is searched, so
     the icon is found wherever the others shifting around it have put it."""
     radius = cfg.ICON_CROP_RADIUS
     y0 = max(0, row - radius - cfg.ICON_LOCATE_ROW_MARGIN)
     band = grab_screen_region(0, y0, int(cfg.REFERENCE_WIDTH * cfg.NEED_ICON_WIDTH_PERCENT), 2 * radius + 2 * cfg.ICON_LOCATE_ROW_MARGIN + 1)
-    scores = cv2.matchTemplate(band.min(axis=2), template.min(axis=2), cv2.TM_CCOEFF_NORMED)
+    scores = masked_match_scores(band.min(axis=2), template.min(axis=2), icon_mask(template.shape[0]))
     _, best, _, where = cv2.minMaxLoc(scores)
     if best < cfg.ICON_LOCATE_THRESHOLD:
         return None
@@ -1073,13 +1143,13 @@ def wait_interruptible(duration: float) -> None:
     check_running() between each chunk. Raises StopRequested or FocusLost
     the moment either condition is noticed, instead of returning a bool the
     caller has to check after every call."""
-    elapsed = 0.0
-    while elapsed < duration:
+    end = time.monotonic() + duration   # a deadline, so the time the in-task checks take counts too
+    while time.monotonic() < end:
         check_running()
         task_unscrew_tick()
-        sleep_chunk = min(cfg.STOP_CHECK_INTERVAL, duration - elapsed)
-        STOP_EVENT.wait(sleep_chunk)   # returns early if [STOP] is pressed; check_running() then raises
-        elapsed += sleep_chunk
+        remaining = end - time.monotonic()
+        if remaining > 0:
+            STOP_EVENT.wait(min(cfg.STOP_CHECK_INTERVAL, remaining))   # returns early if [STOP] is pressed; check_running() then raises
     check_running()
 
 def wait_stoppable(duration: float) -> None:
@@ -1099,7 +1169,7 @@ def release_all_inputs() -> None:
     more whenever a background task ends (run_async's worker finally block)
     as a last line of defense - a bug in a handler we haven't caught yet
     still shouldn't be able to leave an input stuck down in the game."""
-    for key in (*cfg.MOVE_KEYS, cfg.KEY_HELICOPTER):
+    for key in (*cfg.MOVE_KEYS, cfg.KEY_HELICOPTER, cfg.KEY_ZOOM_IN):
         try:
             pydirectinput.keyUp(key)
         except Exception:
@@ -1213,6 +1283,10 @@ def refresh_button_mapping() -> bool:
         return False
 
     print(f"\n[!] DETECTED {len(positions)} BUTTON(S)")
+    if len(positions) != len(cfg.BUTTON_NAMES):
+        # The buttons are named by their order left to right, so a missed one shifts every name after it.
+        log_run_event(f"button scan found {len(positions)} of {len(cfg.BUTTON_NAMES)}: "
+                      + ", ".join(f"({x}, {y})" for x, y in positions))
     for i, (cx, cy) in enumerate(positions):
         if i < len(cfg.BUTTON_NAMES):
             name = cfg.BUTTON_NAMES[i]
@@ -1559,8 +1633,8 @@ def leave_and_rejoin(clean_leave: bool = True) -> bool:
         hover_click(*cfg.REJOIN_JOIN_POS)
         print(f"[debug] waiting {cfg.REJOIN_AFTER_JOIN_WAIT}s, then respawning...")
         wait_stoppable(cfg.REJOIN_AFTER_JOIN_WAIT)
+        state.last_rejoin = state.last_progress = state.last_detection = time.time()   # first: the respawn can raise FocusLost
         respawn_character()
-        state.last_rejoin = state.last_progress = state.last_detection = time.time()
         print("[!] Rejoin complete!")
         return True
 
@@ -1760,27 +1834,9 @@ class WalkNeedHandler(NeedHandler):
         walk_alternating(("a", "d"), cfg.NEED_GONE_MAX_WAIT, need_name="walk")
         return True
 
-def click_until_need_gone(pos: Point, interval: float, max_wait: float, need_name: str) -> None:
-    """Click `pos` every `interval` seconds for at most `max_wait` - or less,
-    once `need_name` is confirmed gone (the watcher thread walk_alternating()
-    uses)."""
-    print(f"[debug] clicking {pos} every {interval}s for up to {max_wait}s until {need_name} clears...")
-    cleared_event = threading.Event()
-    stop_event = threading.Event()
-    watcher = threading.Thread(target=_watch_need_gone, args=(need_name, cleared_event, stop_event), daemon=True)
-    watcher.start()
-    try:
-        deadline = time.time() + max_wait
-        while time.time() < deadline and not cleared_event.is_set():
-            hover_click(*pos)
-            wait_interruptible(interval)
-    finally:
-        stop_event.set()
-        watcher.join(timeout=cfg.NEED_WATCH_JOIN_TIMEOUT)
-
 class CatchNeedHandler(NeedHandler):
-    """The 'catch' need requires opening backpack, equipping a toy, then throwing it
-    (clicking) until the need clears, then unequipping it."""
+    """The 'catch' need requires opening backpack, equipping a toy, throwing it
+    (clicking) CATCH_THROW_COUNT times, then unequipping it."""
 
     def handle(self) -> bool:
         print("[!] CATCH NEED")
@@ -1818,8 +1874,11 @@ class CatchNeedHandler(NeedHandler):
         # Zoom in, to avoid focusing the pet on toy throw
         hold_key(cfg.KEY_ZOOM_IN, cfg.CATCH_ZOOM_DURATION)
         
-        # Click empty space to throw, every CATCH_THROW_INTERVAL, until the need clears
-        click_until_need_gone(cfg.EMPTY_POS, cfg.CATCH_THROW_INTERVAL, cfg.NEED_GONE_MAX_WAIT, "catch")
+        # Click empty space to throw, with a delay between throws
+        for i in range(cfg.CATCH_THROW_COUNT):
+            print(f"[debug] throw {i + 1}/{cfg.CATCH_THROW_COUNT}...")
+            hover_click(*cfg.EMPTY_POS)
+            wait_interruptible(cfg.CATCH_EMOTE_DELAY)
 
         # Unequip the toy
         print("[debug] unequipping toy...")
@@ -2005,9 +2064,11 @@ class TeleportWalkNeedHandler(NeedHandler):
 
         final_click = self.config.get("final_click")
         if final_click:
-            wait_interruptible(cfg.SICK_PRE_E_WAIT)
-            pydirectinput.press("e")
-            wait_interruptible(cfg.SICK_CONFIRM_WAIT)
+            if not self._open_dialog():
+                # Nothing more can be done from here: the need has failed - no waiting for it to clear.
+                print(f"[debug] the {self.name} dialog never came up - the need failed")
+                respawn_character()
+                return False
             print(f"[debug] clicking {final_click}...")
             hover_click(*final_click)
 
@@ -2015,6 +2076,27 @@ class TeleportWalkNeedHandler(NeedHandler):
 
         print(f"[!] {self.name.capitalize()} complete!")
         return True
+
+    def _open_dialog(self) -> bool:
+        """Press the prompt's key ('e') and wait for the need's dialog (sick: the doctor's Yes/No). If it doesn't
+        come up the pet was most likely focused - the prompt is then a hand button 'e' doesn't press - so back out
+        of the pet view and click the prompt on screen (the entry's `prompt_pos`), and look once more. Returns
+        whether the dialog is up."""
+        wait_interruptible(cfg.SICK_PRE_E_WAIT)
+        pydirectinput.press("e")
+        wait_interruptible(cfg.SICK_CONFIRM_WAIT)
+        if detect_sick_dialog(grab_screen()):
+            return True
+        prompt_pos = self.config.get("prompt_pos")
+        if prompt_pos is None:
+            return False
+        pet_focused = detect_pet_focus(grab_screen())
+        log_run_event(f"{self.name}: no dialog after e (pet focused: {pet_focused}) - clicking the prompt")
+        print(f"[debug] no {self.name} dialog after e - backing out of the pet view, clicking the prompt at {prompt_pos}...")
+        dismiss_stray_windows()                     # backs out of the pet focus view, if that is what it is
+        hover_click(*prompt_pos)
+        wait_interruptible(cfg.SICK_CONFIRM_WAIT)
+        return detect_sick_dialog(grab_screen())
 
 # Handler factory (class, or partial of one) for each need.
 # get_need_handler() uses this plus ENABLED_NEEDS (magic_numbers.py) to
@@ -2080,6 +2162,7 @@ def process_needs() -> bool:
         state.last_detection = time.time()   # can't tell whether there are needs - not a reason to respawn
     if not found_icons:
         record_detection([])
+        note_idle_check()
         return False
 
     matched_needs = []
@@ -2097,12 +2180,16 @@ def process_needs() -> bool:
 
     names = [name for name, _ in matched_needs]
     if names:
+        flush_idle_checks()
         print(f"\n[!] Found {len(found_icons)} icon(s): " + ", ".join(f"{n} ({s:.4f})" for n, s in matched_needs))
         log_run_event(f"detected: {', '.join(names)}")
         state.none_matched_logged = False
     elif not state.none_matched_logged:
+        flush_idle_checks()
         log_run_event(f"detected: none matched ({len(found_icons)} icon(s) on screen)")
         state.none_matched_logged = True
+    else:
+        note_idle_check()   # more icons nothing matched: logged once already, counted with the idle checks
     run_stats.last_detected = names
     if names:
         state.last_detection = time.time()
@@ -2277,6 +2364,8 @@ def detect_disconnect(img: Image) -> bool:
     mask = exact_color_mask(img[top:bottom, left:right], cfg.DISCONNECT_PANEL_COLOR, cfg.DISCONNECT_PANEL_TOLERANCE)
     return bool(np.count_nonzero(mask) / mask.size >= cfg.DISCONNECT_PANEL_MIN_FRACTION)
 
+ROBLOX_NOT_RUNNING = "Roblox isn't running"
+
 def rejoin_reason() -> Optional[tuple[str, str]]:
     """Why the game needs rejoining right now, as (kind, reason) - or None if
     it doesn't. In order of priority:
@@ -2292,7 +2381,7 @@ def rejoin_reason() -> Optional[tuple[str, str]]:
     if any(w.title == cfg.ROBLOX_CRASH_WINDOW_TITLE for w in windows):
         return "disconnect", "Roblox crashed"
     if not any("roblox" in w.title.lower() for w in windows):
-        return "disconnect", "Roblox isn't running"
+        return "disconnect", ROBLOX_NOT_RUNNING
     if detect_disconnect(grab_screen()):
         return "disconnect", "disconnected from the game"
     if len(state.disabled_needs) >= cfg.DISABLED_NEEDS_REJOIN_THRESHOLD:
@@ -2315,6 +2404,9 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
     rejoin is a failure: it's logged with a screenshot, which shows the
     Disconnected dialog and its error code if that's why. The clean esc/l/
     enter leave is skipped when the game is already gone."""
+    at_start = state.run_start_pending and kinds is None
+    if kinds is None:
+        state.run_start_pending = False   # (an in-task look is never the start of a run)
     found = rejoin_reason()
     if found is None or (kinds is not None and found[0] not in kinds):
         return False
@@ -2323,6 +2415,9 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
         print(f"[!] {reason} - rejoining")
         log_run_event(f"scheduled rejoin: {reason}")
         run_stats.scheduled_rejoins += 1
+    elif at_start and reason == ROBLOX_NOT_RUNNING:
+        print(f"[!] {reason} - starting it")
+        log_run_event(f"{reason} at the start - starting it")
     else:
         log_failure(f"{reason} - rejoining")
         run_stats.recoveries += 1
@@ -2344,6 +2439,12 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
     write_status()
     return True
 
+def detect_sick_dialog(img: Image) -> bool:
+    """True if the sick need's "Ask Doctor Heart to heal your family?" dialog is on screen in `img` (the
+    "sick_dialog" crop in STRAY_WINDOW_DIR, found within SICK_DIALOG_BOX)."""
+    crop = load_templates(cfg.STRAY_WINDOW_DIR).get("sick_dialog")
+    return crop is not None and template_score(img, crop, cfg.SICK_DIALOG_BOX) >= cfg.SICK_DIALOG_MATCH_THRESHOLD
+
 def detect_minigame_popup(img: Image) -> bool:
     """True if one of the Halloween minigame popups ("Ghost Gallery is
     starting soon! Teleport there now?", "Hauntlet 2 is starting soon!...")
@@ -2353,8 +2454,7 @@ def detect_minigame_popup(img: Image) -> bool:
     green, the No red is also the Exit Home button), so it needs both: the
     Yes green, with the No red close by to its left. Not the sick need's
     doctor dialog, which looks the same but belongs to that handler."""
-    sick = load_templates(cfg.STRAY_WINDOW_DIR).get("sick_dialog")
-    if sick is not None and template_score(img, sick, cfg.SICK_DIALOG_BOX) >= cfg.SICK_DIALOG_MATCH_THRESHOLD:
+    if detect_sick_dialog(img):
         return False
     ys, xs = np.where(exact_color_mask(img, cfg.GREEN_BUTTON_COLOR) > 0)
     if len(xs) < cfg.MINIGAME_POPUP_MIN_BUTTON_PIXELS:
@@ -2712,14 +2812,16 @@ def unscrew(in_task: bool = False, play_minigames: bool = True) -> Optional[str]
             return "rejoined"
     else:
         rejoin_game()
-    backpack_open = close_backpack_if_stuck(in_task)
+    # Setup (play_minigames False) keeps the backpack open for ~8s on purpose - longer than the two checks that
+    # count as stuck - and closes it itself at the end, so the check leaves it alone there.
+    backpack_open = False if (in_task and not play_minigames) else close_backpack_if_stuck(in_task)
     closed = dismiss_stray_windows()
     if cfg.HALLOWEEN and close_minigame_win_screen(abandon=play_minigames):
         if play_minigames:
             return "played"    # back in the world somewhere unknown: the task is abandoned like after a minigame
     played = minigame_popup(play=play_minigames) if cfg.HALLOWEEN else None
     paycheck = detect_paycheck() if not backpack_open else False
-    if in_task and play_minigames and played is None and (paycheck or (closed and cfg.STRAY_WINDOWS[closed].get("abort_task"))):
+    if in_task and play_minigames and played != "played" and (paycheck or (closed and cfg.STRAY_WINDOWS[closed].get("abort_task"))):
         return "aborted"   # (not setup, which can't be abandoned halfway - that is `play_minigames` False)
     return played
 
@@ -2846,7 +2948,8 @@ class RunRecorder:
                 for _ in range(max(1, due - written)):
                     self.writer.write(frame)
                     written += 1
-            self.stop_event.wait(max(0.0, (written / cfg.RECORD_FPS) - (time.time() - started)))
+            self.stop_event.wait(max(0.0, (written / cfg.RECORD_FPS) - (time.time() - started)) if frame is not None
+                                 else 1.0 / cfg.RECORD_FPS)   # nothing to write yet: try again in a frame's time
 
     def stop(self) -> None:
         """Stop recording and close the file."""
@@ -2994,6 +3097,7 @@ def run_full_cycle() -> None:
         check_stop()
         run_stats.cycles += 1
         check_quiet()
+        flush_idle_checks_if_due()
         write_status()
         unscrew()
         side_quest()
@@ -3016,6 +3120,8 @@ def run_workflow_loop() -> None:
     STOP_EVENT.clear()
     state.run_number = next_run_number()
     reset_need_tracking()
+    state.idle_checks = 0
+    state.run_start_pending = True
     reset_run_stats()
     state.last_rejoin = state.last_progress = state.last_detection = time.time()  # the scheduled and no-progress rejoins count from here
     log_run_event("LOOP started")
@@ -3068,6 +3174,7 @@ def run_workflow_loop() -> None:
         monitor.stop()
         if recorder is not None:
             recorder.stop()
+        flush_idle_checks()
         log_run_event("LOOP stopped")
         write_run_report(state.run_number)
         print("\n[LOOP] Stopped\n")
@@ -3093,6 +3200,7 @@ LINE_RE = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] \[RUN ([^\]]+)\] (.
 RESOLVED_RE = re.compile(r"^resolved: (\S+) \((\d+)s\)$")
 DETECTED_RE = re.compile(r"^detected: (.*)$")
 NONE_MATCHED_RE = re.compile(r"^none matched")
+IDLE_CHECKS_RE = re.compile(r"^idle checks: (\d+) over (\d+)s$")
 RESOURCES_RE = re.compile(r"^resources: cpu ([\d.]+)% mem (\d+)MB$")
 MINIGAME_RE = re.compile(r"^minigame (started|finished): (.*?)(?: \(\d+s\))?$")
 
@@ -3148,6 +3256,9 @@ def parse_run(log_path: str, run: Union[int, str]) -> Optional[dict[str, Any]]:
             else:
                 names = [n for n in body.split(", ") if n]
                 data["detected"].append((t, len(names), len(names)))
+        elif m := IDLE_CHECKS_RE.match(text):
+            count, span = int(m.group(1)), int(m.group(2))     # `count` checks that found nothing, spread over the `span` s before this line
+            data["detected"] += [(t - span + span * (k + 0.5) / count, 0, 0) for k in range(count)]
         elif m := RESOURCES_RE.match(text):
             data["resources"].append((t, float(m.group(1)), int(m.group(2))))
         elif text.startswith("no need detected for "):
@@ -3414,12 +3525,24 @@ def generate_run_report(log_path: str, run: Union[int, str], out_dir: str, basic
 # GUI
 # ============================================================================
 
+def keep_newest_files(directory: str, keep: int) -> None:
+    """Delete the oldest files in `directory` beyond the newest `keep`. Never raises. (A pruned run report can be
+    drawn again from the logs, which are kept - see generate_run_report().)"""
+    try:
+        files = sorted((os.path.join(directory, f) for f in os.listdir(directory)), key=os.path.getmtime)
+        for old in files[:max(0, len(files) - keep)]:
+            if os.path.isfile(old):
+                os.remove(old)
+    except OSError:
+        pass
+
 def write_run_report(run: Union[int, str]) -> Optional[str]:
     """Chart run `run` from the log into REPORTS_DIR (see RUN REPORT above) and print
     where it went. Returns the path, or None. Never raises."""
     path = generate_run_report(cfg.RUN_LOG_PATH, run, cfg.REPORTS_DIR, cfg.BUTTON_NAMES, cfg.TELEPORT_WALK_NEEDS)
     if path:
         print(f"[debug] run report: {path}")
+        keep_newest_files(cfg.REPORTS_DIR, cfg.MAX_REPORTS)
     return path
 
 def run_all_need_handlers(handlers: Optional[dict[str, Callable[[], NeedHandler]]] = None) -> dict[str, str]:
@@ -3495,11 +3618,19 @@ class DebugCapture:
                 self.text.config(state=tk.NORMAL)
                 for msg in batch:
                     self.render(msg)
+                self.trim()
                 self.text.see(tk.END)
                 self.text.config(state=tk.DISABLED)
             self.root.after(cfg.CONSOLE_DRAIN_INTERVAL_MS, self.drain)
         except tk.TclError:
             pass   # the window is gone
+
+    def trim(self) -> None:
+        """Keep the widget to its last CONSOLE_MAX_LINES lines (Tk thread only): it holds everything printed
+        otherwise, and a run left going for days is a lot of text. output.log on disk keeps all of it."""
+        lines = int(self.text.index("end-1c").split(".")[0])
+        if lines - 1 > cfg.CONSOLE_MAX_LINES:   # (the last "line" is the empty one after the final newline)
+            self.text.delete("1.0", f"{lines - cfg.CONSOLE_MAX_LINES}.0")
 
     def render(self, msg: str) -> None:
         """Add one message to the widget (Tk thread only)."""

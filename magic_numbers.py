@@ -149,6 +149,8 @@ REPORTS_DIR = os.path.join(IMAGES_DIR, "reports")           # run<N>.png charts 
 RECORDINGS_DIR = os.path.join(DEBUG_DIR, "recordings")      # run videos - see RunRecorder
 OUTPUT_LOG_MAX_BYTES = 5 * 1024 * 1024   # output.log moves to output.log.old (replacing the last one) past this size
 MAX_FAILURE_FOLDERS = 100                # oldest failure folders are deleted beyond this many
+MAX_REPORTS = 50                         # oldest run report images are deleted beyond this many (the logs they are drawn from are kept)
+CONSOLE_MAX_LINES = 2000                 # the GUI's output box keeps its last this many lines (output.log keeps them all)
 
 # Recording a run ("Record the next run" on the Options tab): low quality on purpose, a video of a whole
 # unattended run is large. Every frame has the time on it, to line it up with the logs.
@@ -199,7 +201,8 @@ STOP_HOTKEY = "p"              # a letter or digit: pressing it, in any window, 
 STOP_HOTKEY_POLL_INTERVAL = 0.05  # how often the key is looked at (seconds)
 CONSOLE_DRAIN_INTERVAL_MS = 50   # how often queued output is put on the GUI console (see DebugCapture)
 CATCH_WAIT_AFTER_EQUIP = 1.0   # wait after equipping toy before throwing
-CATCH_THROW_INTERVAL = 0.5     # the toy is thrown (a click) this often until the need clears
+CATCH_THROW_COUNT = 3           # number of times the toy is thrown
+CATCH_EMOTE_DELAY = 5.0        # delay between throw clicks
 CATCH_ZOOM_DURATION = 2.0      # seconds the zoom-in key is held before throwing
 PET_SWIPE_DURATION = 8.0      # how long the one downward swipe (mouse held down) takes
 PET_SWIPE_START_OFFSET = -15           # px from screen center the swipe starts at (negative = above it)
@@ -287,7 +290,7 @@ RIDE_FORWARD_DURATION = 2.0    # walk forward briefly after mounting, before the
 RIDE_VEHICLES_POS = (816, 804)
 RIDE_FIRST_VEHICLE_POS = (976, 708)
 RIDE_EQUIP_POS = (1062, 814)
-RIDE_R_HOLD_DURATION = 1.0     # hold KEY_HELICOPTER this long after equipping, before walking back and forth
+RIDE_R_HOLD_DURATION = 1.5     # hold KEY_HELICOPTER this long after equipping, before walking back and forth
 
 # Backpack-teleport sequence, shared by every teleport destination: open
 # backpack -> category tab -> two more fixed clicks that confirm/execute
@@ -304,10 +307,10 @@ TELEPORT_WALK_STEP_GAP = 4.0      # pause between consecutive steps of a telepor
 SICK_PRE_E_WAIT = 2.0             # after the sick need's walk, before pressing 'e' (let the character come to rest)
 SICK_CONFIRM_WAIT = 7.0           # wait after pressing 'e' and before the sick need's final click
 
-NEED_GONE_SLOW_MAX_WAIT = 90.0   # the same for cafe and beach, which were seen clearing ~80s after their walk
 TELEPORT_PETS_TAB_POS = (817, 713)       # nursery: pets tab
 TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
 SICK_FINAL_CLICK_POS = (1045, 660)       # click after the sick need's walk
+SICK_PROMPT_POS = (957, 708)             # the doctor's prompt button (an E; a hand button when the pet is focused), clicked if e brought up no dialog
 
 # Whether a teleport-walk need flies by helicopter by default; an entry can
 # override it with `helicopter=True/False`. Only the Halloween bored, beach
@@ -319,7 +322,7 @@ HELICOPTER_HOLD_DURATION = 4.0     # then hold KEY_HELICOPTER this long
 # Needs that teleport somewhere and walk (see TeleportWalkNeedHandler), then
 # wait for the need to clear. Each entry: where to teleport, the
 # (key, seconds) holds to perform in order, optionally a `final_click`
-# position to click after the last hold, optionally `helicopter` (above) and optionally
+# position to click after the last hold (with a `prompt_pos`: the prompt button to click if pressing 'e' brought up no dialog), optionally `helicopter` (above) and optionally
 # `max_wait` (how long to wait for the need to clear afterwards; default NEED_GONE_MAX_WAIT).
 TELEPORT_WALK_NEEDS_NORMAL: dict[str, dict[str, Any]] = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
@@ -340,7 +343,7 @@ TELEPORT_WALK_NEEDS_HALLOWEEN: dict[str, dict[str, Any]] = {
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.8), ("a", 10))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("s", 20),), helicopter=True),
     "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 3.0), ("w", 0.8)),
-                    final_click=SICK_FINAL_CLICK_POS),
+                    final_click=SICK_FINAL_CLICK_POS, prompt_pos=SICK_PROMPT_POS),
 }
 
 # The set actually used everywhere else (TeleportWalkNeedHandler and the
@@ -354,7 +357,7 @@ NEED_STUCK_CHECKS = 5            # an enabled need still on screen after this ma
                                   # disabled for the rest of the run - see record_detection()
 NEED_GONE_MAX_WAIT = 75.0        # most any need is waited on to clear: wait_until_need_gone() (the teleport-walk needs and the button
                                   # needs; they time out by themselves in the game, and camping was seen clearing ~66s after its walk),
-                                  # and the total duration of the walk/ride/catch actions that end early once it has cleared
+                                  # and the total duration of the walk/ride actions that end early once it has cleared
 NEED_GONE_POLL_INTERVAL = 3.5    # how often to check for the icon during that wait (and, while walking, from the watcher thread)
 NEED_GONE_FLICKER_RECHECK_DELAY = 0.3  # before counting any single miss, re-sample this soon after -
                                         # the icon can flash for a frame (or briefly drop out against a

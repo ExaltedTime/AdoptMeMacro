@@ -103,3 +103,17 @@ def test_generate_run_report_never_raises(macro, tmp_path, monkeypatch):
 def test_constants_check_passes_on_the_repo():
     result = subprocess.run([sys.executable, "tools/check_constants.py"], cwd=conftest.ROOT, capture_output=True, text=True)
     assert result.returncode == 0, result.stdout
+
+
+def test_idle_check_lines_become_one_empty_check_each_spread_over_their_span(macro, tmp_path):
+    log = tmp_path / "log.txt"
+    log.write_text("\n".join([
+        "[2026-10-10 22:00:00] [RUN 7] LOOP started",
+        "[2026-10-10 22:10:00] [RUN 7] idle checks: 4 over 600s",
+        "[2026-10-10 22:10:03] [RUN 7] detected: hungry, thirsty",
+        "[2026-10-10 22:10:40] [RUN 7] resolved: hungry (30s)"]) + "\n")
+    data = macro.parse_run(str(log), 7)
+    assert [matched for _, matched, _ in data["detected"]] == [0, 0, 0, 0, 2]
+    times = [t for t, _, _ in data["detected"]]
+    assert times == sorted(times) and data["start"] < times[0] and times[3] < data["start"] + 600     # inside the idle stretch
+    assert "idle checks" not in data["events"]

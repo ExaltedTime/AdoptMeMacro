@@ -56,7 +56,13 @@ every second instead of a line per check.
 4. Every icon that *did* match is collected into an ordered list of need
    names, in the order they were detected, and printed and logged
    (`detected: ...`; icons on screen but none recognised are logged once,
-   not on every check). The list is also handed to `record_detection()` -
+   not on every check). A check that finds no need isn't logged line by line
+   either: `note_idle_check()` counts them (including the not-recognised ones
+   after the first) and `flush_idle_checks()` writes one `idle checks: N over
+   Ss` line before the next detection, every `QUIET_LOG_INTERVAL`, and when the
+   loop stops - the run report spreads those N empty checks over the S seconds,
+   so "needs detected per check" counts every check, not only those that found
+   something. The list is also handed to `record_detection()` -
    on every check, including ones that find nothing - which is what catches
    [stuck needs](#stuck-needs).
 5. The list is then worked through in order until one need is resolved. For
@@ -89,7 +95,8 @@ an extra walk from wherever the previous need left the character standing.
   `check_running()`** - see [Stopping & focus safety](#stopping--focus-safety).
 - **WINDOW FOCUS & SCREEN CAPTURE** - `focus_roblox()` / `focus_roblox_click()`
   bring Roblox to the front; `is_roblox_focused()` checks whether it still
-  is; `roblox_windows()` lists the open Roblox windows; `grab_screen()`
+  is (a window titled exactly "Roblox"; a title that only contains it, a browser tab or the crash window, counts only if no
+  window is titled exactly "Roblox" - the same choice `roblox_window()` makes, so keys never go to a browser tab); `roblox_windows()` lists the open Roblox windows; `grab_screen()`
   takes a screenshot via `mss`; `exact_color_mask()` / `find_exact_color()`
   find things by their exact pixel color rather than their shape (the
   choose need's button, the popups and the Play button all work this way).
@@ -281,7 +288,10 @@ read (`State.need_icon_crops`, with its place in `State.need_icon_positions`,
 both set by `identify_icons()` - the place alone can hold another need's icon by
 now, the others having shifted while the walk ran: run 3's sick, 17:09, was
 followed as its neighbour and never seen to clear), searches the whole bar for it
-at the first look, and then every later look
+at the first look (the picture is stored by `icon_crop_for_storage()`; the match counts only the icon's circle - `icon_mask()`, through
+`masked_match_scores()`, a hand-written masked `TM_CCOEFF_NORMED` since OpenCV can't mask that method - because the square's
+four corners hold the scene behind the icon when it was read, and a dark one scored 0.60-0.73 unmasked against the
+bright bar, under `ICON_LOCATE_THRESHOLD`, so the icon read as gone; masked, the same icon scores 1.00 whatever was behind it), and then every later look
 searches the whole bar for the icon *as it looked at the previous look*
 (`locate_icon()`: normalised correlation of the white ring and glyph, which the
 timer's colour change leaves alone). Found at a match of at least
@@ -414,11 +424,11 @@ rather than a flat sleep after the fact.
 | Need | How it's handled |
 |---|---|
 | `hungry` / `thirsty` / `dirty` / `potty` / `sleepy` | `ButtonNeedHandler`: walk to the action buttons (`walk_to_buttons()`), refresh the button mapping (`refresh_button_mapping()`), click the matching one (`click_need_button()`), which then calls `wait_until_need_gone()` for that need name. |
-| `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → hold zoom-in → click empty space every `CATCH_THROW_INTERVAL` (0.5s) until the "catch" icon is confirmed gone (`click_until_need_gone()`, the same watcher thread `walk_alternating()` uses; at most `NEED_GONE_MAX_WAIT`) → unequip. |
+| `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → hold zoom-in → throw the toy by clicking empty space `CATCH_THROW_COUNT` (3) times, `CATCH_EMOTE_DELAY` (5s) after each → unequip. A fixed sequence: it doesn't wait for the icon (the next check sees whether it cleared). |
 | `pet` | `PetNeedHandler`: `focus_pet()` (see below), then hold the mouse down and swipe once down from `PET_SWIPE_START_OFFSET` above screen center to `PET_SWIPE_END_OFFSET` below it over `PET_SWIPE_DURATION` (8s). Same as `catch` - always the full fixed duration. |
 | `choose` | `ChooseNeedHandler`: `focus_pet()` (see below), find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. It doesn't wait for the icon to clear (it's gone at once; the next check confirms). |
-| `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then `equip_favorite_vehicle()` (backpack → vehicles → first vehicle → equip → close backpack), hold `r` (`KEY_HELICOPTER`) for `RIDE_R_HOLD_DURATION` (1s), then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT` (75s), ending early the moment "ride" is confirmed cleared (see below). |
-| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`), `helicopter` (see below) and `max_wait` (how long to wait for the need to clear afterwards; default `NEED_GONE_MAX_WAIT`, 75s; `cafe` and `beach` use `NEED_GONE_SLOW_MAX_WAIT`, 90s, as they were seen clearing about 80s after their walk). `sick` waits `SICK_PRE_E_WAIT` after its last hold before pressing `e`. Which table is used depends on `HALLOWEEN` - see below. |
+| `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then `equip_favorite_vehicle()` (backpack → vehicles → first vehicle → equip → close backpack), hold `r` (`KEY_HELICOPTER`) for `RIDE_R_HOLD_DURATION` (1.5s), then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT` (75s), ending early the moment "ride" is confirmed cleared (see below). |
+| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`: after pressing `e` and waiting `SICK_CONFIRM_WAIT` the handler checks the doctor's dialog is up, `detect_sick_dialog()`. If it isn't - most likely the pet got focused, when the prompt is a hand button `e` doesn't press - it logs `sick: no dialog after e (pet focused: ...)`, backs out of the pet view (`dismiss_stray_windows()`), clicks the prompt on screen (`prompt_pos`, `SICK_PROMPT_POS`) and looks once more. Only if the dialog still isn't up has the need failed: the character respawns and the handler returns False at once, with no wait for the icon to clear, and `process_needs()` logs the failure), `helicopter` (see below) and `max_wait` (how long to wait for the need to clear afterwards; default `NEED_GONE_MAX_WAIT`, 75s). `sick` waits `SICK_PRE_E_WAIT` after its last hold before pressing `e`. Which table is used depends on `HALLOWEEN` - see below. |
 | `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")` - up to `NEED_GONE_MAX_WAIT` (75s), same early-exit as `ride` above. |
 
 **Helicopter.** A teleport-walk entry can fly instead of walk. `HELICOPTER_REQUIRED`
@@ -445,7 +455,7 @@ calls `minigame_popup()`, which plays or dismisses the minigame popups
 
 Every cycle, `unscrew()` runs `rejoin_game()` first (nothing else works
 while disconnected), then `close_backpack_if_stuck()` (the backpack, either
-form), then
+form; not during setup, which keeps it open for ~8s on purpose and closes it itself), then
 `dismiss_stray_windows()`, then, if `HALLOWEEN` is on, `close_minigame_win_screen()`
 (whenever the minigame win screen is up - the red GAME OVER! banner and the green
 NICE! button, `detect_minigame_victory()` - NICE! is clicked, the character
@@ -692,7 +702,10 @@ already run setup, so the `TaskInterrupted` it raises is caught here and logged
 as `setup interrupted by a rejoin`, rather than ending the run.) A disconnect, stuck or stalled recovery counts as
 a failure: `log_failure()` saves a screenshot first, which shows the dialog
 and its error code. A scheduled rejoin isn't one: it's a line in the run log,
-counted in `scheduled_rejoins`. If the rejoin fails the cause is still
+counted in `scheduled_rejoins`. Nor is Roblox not running when the run starts
+(`State.run_start_pending`, cleared by the first top-of-cycle `rejoin_game()`):
+that is where the run begins, logged as "Roblox isn't running at the start -
+starting it" and not counted as a recovery or a failure. If the rejoin fails the cause is still
 there, so the next cycle tries again. The check only runs once per cycle, so
 a disconnect in the middle of a long handler is noticed when that handler
 finishes.
@@ -821,6 +834,9 @@ checked the same way:
   raised right then waits up to `STOP_CLICK_GRACE` (`stop_pressed_soon()`) for
   the stop: if it comes, the run ends as an ordinary user stop rather than a
   "Roblox lost focus" failure.
+
+`wait_interruptible()` runs to a deadline, so the time the in-task checks take counts
+towards the wait (a key held for a timed step is held for that long, not longer).
 
 `check_running()` checks both (`check_stop()` then `check_focus()`) and is
 the single checkpoint used everywhere: inside `wait_interruptible()` (so
@@ -989,7 +1005,7 @@ knowing if you're modifying it:
   anywhere in the macro shows up there automatically (`write()` only logs
   and queues - from any thread - and the Tk thread puts the queue on the
   widget every `CONSOLE_DRAIN_INTERVAL_MS`, since Tk isn't thread-safe), each line starting with
-  the time (`[HH:MM:SS]`). A print starting with `\r` is a status line: it
+  the time (`[HH:MM:SS]`). The widget keeps only its last `CONSOLE_MAX_LINES` lines (`trim()`) - it would otherwise hold everything printed, about 25 MB of memory per 100,000 lines - while `output.log` keeps all of it. A print starting with `\r` is a status line: it
   replaces the previous status line instead of adding one, and goes into
   `output.log` only the first time (this is the "Waiting for a need..."
   counter).
@@ -1034,7 +1050,7 @@ exact values and rationale):
 | Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN/MAX_RADIUS`, `NEED_ICON_HOUGH_*`, `NEED_STRIP_*` (when the circle search is skipped) |
 | Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
-| Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
+| Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_BOX`, `PAYCHECK_MATCH_THRESHOLD` |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
@@ -1075,7 +1091,7 @@ again, since the counter goes with the logs.
 - **`reports/run<N>.png`** - a chart of one run, drawn from `run_log.txt` by
   `generate_run_report()` in `main.py` with OpenCV (no extra dependency). Written automatically when a
   run stops (`write_run_report()`, in the `finally` of `run_workflow_loop()`)
-  (so there is no button for it). Five panels: needs resolved per unit of time (the unit is picked
+  (so there is no button for it); the oldest reports beyond `MAX_REPORTS` (50) are deleted then (`keep_newest_files()`) - the logs they are drawn from are kept, so one can be drawn again. Five panels: needs resolved per unit of time (the unit is picked
   from `BUCKET_STEPS` so the run fills about `TARGET_BUCKETS` bars, stacked by
   basic / teleport / other need, with failures and rejoins marked); needs
   detected per check; average seconds per resolved need with how many there

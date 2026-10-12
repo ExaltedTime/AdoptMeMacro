@@ -568,3 +568,66 @@ def test_a_paycheck_at_the_top_of_a_cycle_does_not_abort(macro, quiet_screen, mo
 def test_setup_is_not_aborted_by_a_paycheck(macro, quiet_screen, monkeypatch):
     monkeypatch.setattr(macro, "detect_paycheck", lambda: True)
     assert macro.unscrew(in_task=True, play_minigames=False) is None
+
+
+def test_a_stored_icon_from_a_dark_scene_is_still_found_on_the_bright_bar(macro, watch):
+    """The picture stored while the bar was readable has the old scene in its corners (outside the icon's circle);
+    an unmasked match against the bright bar scored 0.60-0.73 with a dark one, under ICON_LOCATE_THRESHOLD, so the
+    icon read as gone at the first look. Only the circle counts now."""
+    bright = bar_screen(0, 1, 2, 3, 4)
+    r = macro.cfg.ICON_CROP_RADIUS
+    yy, xx = np.ogrid[:2 * r + 1, :2 * r + 1]
+    corners = (yy - r) ** 2 + (xx - r) ** 2 > r * r
+    watch["screen"] = bright
+    for corner_level in (0, 25, 60, 120):
+        for x, y in ICONS:
+            stored = bright[y - r:y + r + 1, x - r:x + r + 1].copy()
+            stored[corners] = corner_level                                       # a dark world behind the icon, as when it was read
+            assert macro.locate_icon(stored, y) == (x, y), (corner_level, x)
+            plain = cv2.matchTemplate(bright[y - r - 10:y + r + 11, :1344].min(axis=2), stored.min(axis=2), cv2.TM_CCOEFF_NORMED)
+            if corner_level == 25:
+                assert cv2.minMaxLoc(plain)[1] < macro.cfg.ICON_LOCATE_THRESHOLD      # what it was without the mask
+
+
+def test_the_masked_match_is_the_ordinary_one_when_nothing_is_masked(macro):
+    rng = np.random.RandomState(0)
+    image = rng.randint(0, 255, (77, 400), np.uint8)
+    template = image[10:67, 150:207].copy()
+    ours = macro.masked_match_scores(image, template, np.ones((57, 57), np.uint8))
+    theirs = cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED)
+    assert np.abs(ours - theirs).max() < 1e-4
+
+
+def test_the_masked_match_ignores_what_the_mask_leaves_out(macro):
+    rng = np.random.RandomState(1)
+    image = rng.randint(0, 255, (77, 400), np.uint8)
+    mask = macro.icon_mask(57)
+    template = image[10:67, 150:207].copy()
+    template[mask == 0] = rng.randint(0, 255, int((mask == 0).sum()))            # garbage where the mask is 0
+    scores = macro.masked_match_scores(image, template, mask)
+    assert scores[10, 150] > 0.999 and np.unravel_index(scores.argmax(), scores.shape) == (10, 150)
+
+
+def test_a_flat_patch_scores_zero_not_noise(macro):
+    scores = macro.masked_match_scores(np.full((77, 200), 240, np.uint8), np.random.RandomState(2).randint(0, 255, (57, 57), np.uint8), macro.icon_mask(57))
+    assert (scores == 0).all()
+
+
+def test_the_icon_mask_is_a_disc(macro):
+    mask = macro.icon_mask(57)
+    assert mask[28, 28] == 1 and mask[0, 0] == 0 and mask[0, 56] == 0 and mask[28, 1] == 1 and mask[28, 0] == 0
+
+
+def test_the_stored_icon_picture_is_none_at_the_screen_edge(macro):
+    assert macro.icon_crop_for_storage(np.zeros((200, 200, 3), np.uint8), 10, 100) is None
+    assert macro.icon_crop_for_storage(np.zeros((100, 200, 3), np.uint8), 100, 90) is None
+
+
+def test_a_button_scan_that_misses_one_is_logged(macro, monkeypatch):
+    monkeypatch.setattr(macro, "detect_buttons", lambda save_debug=False: [(620, 600), (960, 600), (1130, 600), (1300, 600)])
+    assert macro.refresh_button_mapping() is True
+    assert "button scan found 4 of 5" in open(macro.cfg.RUN_LOG_PATH).read()
+    five = [(620 + 170 * i, 600) for i in range(5)]
+    monkeypatch.setattr(macro, "detect_buttons", lambda save_debug=False: five)
+    macro.refresh_button_mapping()
+    assert open(macro.cfg.RUN_LOG_PATH).read().count("button scan found") == 1       # all five: nothing to say

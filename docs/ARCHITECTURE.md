@@ -1191,7 +1191,15 @@ which decides whether `sick` exists) or reads the constant (`cfg.QUIET_LOG_INTER
 not "5 minutes"). Waits are tested on a fake clock (`fake_clock`), not by timing
 them, and the loop test runs until it has seen what it checks instead of for a
 fixed time, so a slow machine only makes it slower.
-`python tools/retune_check.py` runs the suite against retuned copies of
-`magic_numbers.py` (every timing and step scaled up and down, other intervals
-and counts changed, the event flag off, every click position moved, optional
-need keys dropped) and names any test that breaks - run it after adding tests.
+`python tools/retune_check.py` runs the suite against changed copies of the repo
+and names any test that breaks - run it after adding tests (about 28 runs, a few
+minutes; `python tools/retune_check.py halloween_off timings_x20` runs just those).
+The variants: every timing and walk step scaled by 0.05, 0.5, 1.7 and 20; other
+intervals, hours and counts changed; counts at their lowest and highest; the
+event flag off; needs removed from or added to the table; button names reordered;
+helicopter for every need; thresholds nudged up and down, colour tolerances
+widened, search boxes and click positions moved; other key bindings; behaviour
+flags flipped (`SAVE_NEW_NEEDS`, `MATCH_ONLY_LEFT_HALF`); two other time zones; a
+different hash seed; run from another working directory; a `debug/` folder with a
+real config and logs in it; extra files in `ref/`; the tests in reverse and in
+shuffled order; and each test file run on its own.

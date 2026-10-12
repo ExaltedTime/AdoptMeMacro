@@ -484,7 +484,8 @@ def test_a_win_screen_is_closed_and_the_character_respawned(macro, winner):
     assert macro.state.last_progress is not None
 
 
-def test_a_click_that_missed_is_repeated(macro, winner):
+def test_a_click_that_missed_is_repeated(macro, winner, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "MINIGAME_VICTORY_CLICK_TRIES", 3)
     winner["sticky"] = 1
     assert macro.close_minigame_win_screen() is True
     assert macro.clicks.count(macro.cfg.MINIGAME_VICTORY_BUTTON_POS) == 2 and winner["respawns"] == [1]
@@ -501,7 +502,7 @@ def test_the_real_win_screen_is_recognised(macro):
     import cv2
     screen = bright_screen()
     for box, name in ((macro.cfg.MINIGAME_VICTORY_BANNER_BOX, "win_banner.png"), (macro.cfg.MINIGAME_VICTORY_BUTTON_BOX, "win_button.png")):
-        crop = cv2.imread(f"tests/fixtures/{name}")
+        crop = fixture(name)                                                     # (relative to this file, not the working directory)
         left, top, right, bottom = box
         screen[top:top + crop.shape[0], left:left + crop.shape[1]] = crop
     assert macro.detect_minigame_victory(screen) is True
@@ -589,9 +590,6 @@ def test_a_stored_icon_from_a_dark_scene_is_still_found_on_the_bright_bar(macro,
             stored = bright[y - r:y + r + 1, x - r:x + r + 1].copy()
             stored[corners] = corner_level                                       # a dark world behind the icon, as when it was read
             assert macro.locate_icon(stored, y) == (x, y), (corner_level, x)
-            plain = cv2.matchTemplate(bright[y - r - 10:y + r + 11, :1344].min(axis=2), stored.min(axis=2), cv2.TM_CCOEFF_NORMED)
-            if corner_level == 25:
-                assert cv2.minMaxLoc(plain)[1] < macro.cfg.ICON_LOCATE_THRESHOLD      # what it was without the mask
 
 
 def test_the_masked_match_is_the_ordinary_one_when_nothing_is_masked(macro):

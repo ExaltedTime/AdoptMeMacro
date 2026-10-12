@@ -16,7 +16,8 @@ def test_record_detection_disables_a_need_attempted_and_still_there(macro, monke
     assert "hungry" in macro.state.disabled_needs
 
 
-def test_record_detection_one_clear_check_breaks_the_streak(macro):
+def test_record_detection_one_clear_check_breaks_the_streak(macro, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "NEED_STUCK_CHECKS", 3)
     for _ in range(macro.cfg.NEED_STUCK_CHECKS - 1):
         macro.state.attempted_last = {"hungry"}
         macro.record_detection(["hungry"])
@@ -105,7 +106,7 @@ def test_failure_folders_keep_only_the_newest(macro, monkeypatch):
 
 def test_check_quiet_logs_once_per_interval_and_reports_minutes(macro):
     interval = macro.cfg.QUIET_LOG_INTERVAL
-    quiet = 2 * interval + 60                          # two whole intervals and a bit
+    quiet = 2.5 * interval                             # two whole intervals and a bit
     macro.state.last_progress = time.time() - quiet
     macro.check_quiet()
     macro.check_quiet()                                # the same stretch: not logged again
@@ -226,6 +227,7 @@ def one_need(macro, monkeypatch):
     """process_needs() with a single 'hungry' icon on a dark screen and a handler that succeeds."""
     import numpy as np
     screen = np.zeros((1080, 1920, 3), np.uint8)
+    monkeypatch.setattr(macro.cfg, "SAVE_NEW_NEEDS", False)                  # (True would ask for a name for an unknown icon)
     monkeypatch.setattr(macro, "focus_roblox_click", lambda: True)
     monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([(100, 50, 30)], screen))
     monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(0, screen[:10, :10], "hungry", 0.9)]))
@@ -398,10 +400,14 @@ def test_rejoin_reason_knows_a_crashed_or_missing_roblox(macro, monkeypatch):
     assert macro.rejoin_reason() == ("disconnect", "Roblox isn't running")
 
 
+POLL = 3.5          # the poll interval these tests use (passed in: the default is the tuned one, fixed when main.py is imported)
+
+
 @pytest.fixture
 def need_gone(macro, monkeypatch):
     """wait_until_need_gone() with scripted scan results: scans[i] is what the i-th look at the screen sees."""
     log = {"waits": [], "scans": []}
+    monkeypatch.setattr(macro.cfg, "NEED_GONE_FLICKER_RECHECK_DELAY", 0.3)
     monkeypatch.setattr(macro, "wait_interruptible", lambda duration: log["waits"].append(round(duration, 2)))
     monkeypatch.setattr(macro, "check_focus", lambda: None)
     monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: log.setdefault("failures", []).append(reason))
@@ -419,9 +425,9 @@ def need_gone(macro, monkeypatch):
 
 def test_the_wait_ends_at_the_first_check_that_finds_the_need_gone(need_gone, macro):
     need_gone["script"]((["hungry"], True), ([], True), ([], True))      # check 1: still there; check 2: gone on both looks
-    macro.wait_until_need_gone("hungry", max_wait=60)
+    macro.wait_until_need_gone("hungry", max_wait=60, poll_interval=POLL)
     assert need_gone["scans"] == [False, False, True]                      # the second look of the last check was a fresh search
-    assert [w for w in need_gone["waits"] if w > 1] == [macro.cfg.NEED_GONE_POLL_INTERVAL] * 2   # polled every NEED_GONE_POLL_INTERVAL, no extra confirmations
+    assert [w for w in need_gone["waits"] if w > 1] == [POLL] * 2   # polled every poll_interval, no extra confirmations
     assert "failures" not in need_gone
 
 
@@ -445,7 +451,7 @@ def test_an_unreadable_bar_is_not_a_failure(need_gone, macro, monkeypatch):
     monkeypatch.setattr(macro.time, "time", lambda: clock[0])
     monkeypatch.setattr(macro, "wait_interruptible", lambda duration: clock.__setitem__(0, clock[0] + duration))
     need_gone["script"](*[([], False)] * 20)
-    macro.wait_until_need_gone("hungry", max_wait=10)
+    macro.wait_until_need_gone("hungry", max_wait=10, poll_interval=POLL)
     assert "failures" not in need_gone
 
 

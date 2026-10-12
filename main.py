@@ -1488,11 +1488,6 @@ def moving_blobs(img_a: Image, img_b: Image, top_percent: float = cfg.FOCUS_PET_
         blobs.append((x, top + y, w, h, int(area)))
     return blobs, mask, top
 
-def find_moving_blobs(img_a: Image, img_b: Image, top_percent: float = cfg.FOCUS_PET_REGION_TOP_PERCENT, ignore: Sequence[Box] = ()) -> list[Point]:
-    """The (x, y) center of every blob moving_blobs() finds, largest first."""
-    blobs, _, _ = moving_blobs(img_a, img_b, top_percent, ignore)
-    return [(x + w // 2, y + h // 2) for x, y, w, h, _ in blobs]
-
 def save_focus_pet_debug(img: Image, blobs: list[tuple[int, int, int, int, int]], mask: Image, top: int, name: str = "debug_focus_pet.png", ignore: Sequence[Box] = ()) -> None:
     """Write debug/<name>: `img` (the second frame) with the searched region
     marked, the changed pixels in red, and a numbered box around every blob -
@@ -2930,13 +2925,15 @@ def run_workflow_loop() -> None:
 # drawn with OpenCV by draw_report(), so there's no dependency beyond what the
 # macro already has. generate_run_report() does both and writes the file.
 #
-# The report has four panels:
+# The report has five panels:
 #   1. needs resolved per unit of time - the unit is picked so the run fills
 #      about TARGET_BUCKETS bars - stacked by basic / teleport / other need,
-#      with failures (red) and rejoins (blue) marked along the bottom;
+#      with failures (red) and rejoins (blue) marked along the bottom and each
+#      need disabled as stuck drawn as a grey bar until the next rejoin;
 #   2. needs detected per check, over time;
 #   3. average seconds per resolved need, with how many there were;
-#   4. counts of failures by kind, popups, minigames and the like.
+#   4. counts of failures by kind, popups, minigames and the like;
+#   5. CPU and memory use: the script's, and the whole PC's as a second line.
 
 LINE_RE = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] \[RUN ([^\]]+)\] (.*)$")
 RESOLVED_RE = re.compile(r"^resolved: (\S+) \((\d+)s\)$")

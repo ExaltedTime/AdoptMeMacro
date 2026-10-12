@@ -142,6 +142,8 @@ STRAY_WINDOW_DIR = os.path.join(SCRIPT_DIR, "ref", "popups")
 MINIGAME_OVERLAY_DIR = os.path.join(SCRIPT_DIR, "ref", "overlays")
 NEEDS_DIR = os.path.join(SCRIPT_DIR, "ref", "needs")      # the learned need icons - the one folder in ref/ the macro also writes to (see prompt_rename_need())
 HAUNTLET_DIGIT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet", "digits")   # 0.png ... 9.png: the digits of the ROOM panel, see read_hauntlet_room()
+HAUNTLET_ITEM_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet", "items")      # a folder per item (phone/, key/, ...) of pictures of its slot; see read_hauntlet_items()
+HAUNTLET_COUNT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet", "counts")    # x/, 1/, 2/: the glyphs of an item's "x2" badge
 DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
 # debug/ holds two subfolders - images/ for every png (the debug_*.png views, failures/, reports/) and logs/ for
 # every text and json file - plus the game config, which stays in debug/ itself so "Refresh debug" (which
@@ -205,6 +207,44 @@ HAUNTLET_DIGIT_MIN_AREA = 25                 # px: smaller white specks are not 
 HAUNTLET_DIGIT_SIZE = (14, 20)
 HAUNTLET_DIGIT_MAX_DIFF = 20
 HAUNTLET_ROOM_MAX_DIGITS = 3
+
+# The item slots along the bottom of the Hauntlet 2 screen: round white-ringed icons, about HAUNTLET_SLOT_PITCH apart,
+# centred on the screen, up to four. They are found as circles within HAUNTLET_SLOT_BAND (top, bottom). A slot's picture is
+# the HAUNTLET_ITEM_CROP px square around its centre, matched by correlation (0-1) with the pictures of each saved item;
+# the best must reach HAUNTLET_ITEM_MATCH or the item is unknown (and saved as unknown_<n> to be named - see
+# read_hauntlet_items()). These names are not items and are left out of the list.
+HAUNTLET_SLOT_BAND = (930, 1080)
+HAUNTLET_SLOT_RADIUS = (44, 58)
+HAUNTLET_SLOT_MIN_DISTANCE = 80
+HAUNTLET_ITEM_CROP = 60
+HAUNTLET_ITEM_MATCH = 0.75
+HAUNTLET_NOT_ITEMS = {"backpack"}          # the lobby's backpack button sits where the first slot would
+# The "x2" badge on a slot: purple, at the slot's top left. The "x" and each digit are white pieces on it, cut out, shrunk
+# to HAUNTLET_COUNT_SIZE and compared with the saved glyphs (mean difference, 0-255, under HAUNTLET_COUNT_MAX_DIFF).
+HAUNTLET_BADGE_BOX = (-62, -60, 12, -18)    # left, top, right, bottom, relative to the slot's centre
+HAUNTLET_BADGE_WIDTH = (40, 70)              # px: the badge is a purple piece this wide and tall; a bigger or smaller
+HAUNTLET_BADGE_HEIGHT = (16, 30)             # one is background of the same colour, not the badge
+HAUNTLET_COUNT_MIN_HEIGHT = 6                # px: a flatter white piece is a bit of the slot's ring, not a glyph
+HAUNTLET_COUNT_SIZE = (10, 14)
+HAUNTLET_COUNT_MAX_DIFF = 22
+
+# The hearts above the player's head: a row of heart icons, pink with a black outline, or solid black once lost. Found by
+# their pink (HSV, two ranges because red wraps round 0): pieces of the right shape and size, none higher up the screen
+# than HAUNTLET_HEART_MIN_Y (the room panel); the row nearest the middle of the screen is the player's. The row is then
+# followed along its line, one HAUNTLET_HEART_PITCH x a heart's width at a time: a cell with a pink heart is red, one
+# that is nearly all pure black (every channel at most HAUNTLET_HEART_BLACK_LEVEL) is black, anything else ends the row.
+HAUNTLET_HEART_PINK = (((0, 70, 190), (12, 175, 255)), ((168, 70, 190), (180, 175, 255)))
+HAUNTLET_HEART_MIN_WIDTH = 15
+HAUNTLET_HEART_MIN_Y = 110
+HAUNTLET_HEART_MIN_FILL = 0.45             # a heart piece fills this much of its bounding box (a bar or a ring doesn't)
+HAUNTLET_HEART_ASPECT = (0.8, 1.25)        # width / height of a heart piece
+HAUNTLET_HEART_PITCH = 1.3
+HAUNTLET_HEART_BLACK_LEVEL = 6
+HAUNTLET_HEART_BLACK_FRACTION = 0.55
+HAUNTLET_HEART_MAX_EACH_SIDE = 4
+HAUNTLET_HEART_PINK_FRACTION = 0.35           # a cell this pink is a heart even where no heart-shaped piece was found
+HAUNTLET_HEART_MIN = 2                     # a row shorter than this isn't one (every row seen had 3 or 4 hearts, lost ones included)
+HAUNTLET_HEART_MAX = 5                     # a row longer than this isn't a row of hearts (4 were seen at most)
 
 # ============================================================================
 # SCREEN / INPUT SETUP

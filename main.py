@@ -2998,6 +2998,178 @@ def read_hauntlet_room(img: Image) -> Optional[int]:
         number = number * 10 + digit
     return number
 
+@dataclass
+class HauntletItem:
+    """An item slot on the Hauntlet 2 screen: its `name` (a folder of HAUNTLET_ITEM_DIR, or unknown_<n>), the `count`
+    on its badge (None if the badge couldn't be read), and the slot's centre `pos`."""
+    name: str
+    count: Optional[int]
+    pos: Point
+
+def find_item_slots(img: Image) -> list[tuple[int, int, int]]:
+    """(x, y, radius) of every item slot along the bottom of `img`, left to right."""
+    top, bottom = cfg.HAUNTLET_SLOT_BAND
+    gray = cv2.medianBlur(cv2.cvtColor(img[top:bottom], cv2.COLOR_BGR2GRAY), 5)
+    circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, dp=1, minDist=cfg.HAUNTLET_SLOT_MIN_DISTANCE, param1=100, param2=30,
+                               minRadius=cfg.HAUNTLET_SLOT_RADIUS[0], maxRadius=cfg.HAUNTLET_SLOT_RADIUS[1])
+    return [] if circles is None else sorted((int(x), int(y) + top, int(r)) for x, y, r in circles[0])
+
+def _folder_stamp(directory: str) -> tuple[tuple[str, str, float], ...]:
+    """What is in a folder of folders and when each file changed - different when a file is added, changed, removed or
+    its folder renamed."""
+    return tuple(sorted((root, f, os.path.getmtime(os.path.join(root, f))) for root, _, files in os.walk(directory) for f in files))
+
+@lru_cache(maxsize=8)
+def _picture_folders(directory: str, stamp: tuple[tuple[str, str, float], ...], gray: bool) -> dict[str, list[Image]]:
+    found: dict[str, list[Image]] = {}
+    for name in sorted(os.listdir(directory)):
+        folder = os.path.join(directory, name)
+        if os.path.isdir(folder):
+            pictures = [cv2.imread(os.path.join(folder, f), cv2.IMREAD_GRAYSCALE if gray else cv2.IMREAD_COLOR)
+                        for f in sorted(os.listdir(folder)) if f.endswith(".png")]
+            found[name] = [p for p in pictures if p is not None]
+    return found
+
+def picture_folders(directory: str, gray: bool = True) -> dict[str, list[Image]]:
+    """{folder name: its pictures} for a folder of folders of .png files (the items, the badge glyphs), re-read when
+    anything in it changes; {} if it doesn't exist."""
+    return _picture_folders(directory, _folder_stamp(directory), gray) if os.path.isdir(directory) else {}
+
+def identify_item(crop: Image) -> tuple[Optional[str], float]:
+    """(name, score) of the saved item `crop` (the square around a slot's centre) matches best, name None if the best
+    score is under HAUNTLET_ITEM_MATCH. Compared as grey pictures: the slot's blue or dim teal background doesn't matter much."""
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    best_name, best = None, -1.0
+    for name, pictures in picture_folders(cfg.HAUNTLET_ITEM_DIR).items():
+        for picture in pictures:
+            if picture.shape == gray.shape:
+                score = float(cv2.matchTemplate(gray, picture, cv2.TM_CCOEFF_NORMED)[0][0])
+                if score > best:
+                    best_name, best = name, score
+    return (best_name if best >= cfg.HAUNTLET_ITEM_MATCH else None), best
+
+def learn_hauntlet_item(crop: Image) -> str:
+    """Save `crop` as a new item, unknown_<n>/1.png in HAUNTLET_ITEM_DIR, to be renamed (the folder) to what it is.
+    Returns the name."""
+    os.makedirs(cfg.HAUNTLET_ITEM_DIR, exist_ok=True)
+    taken = {int(n[len("unknown_"):]) for n in os.listdir(cfg.HAUNTLET_ITEM_DIR) if n.startswith("unknown_") and n[len("unknown_"):].isdigit()}
+    name = f"unknown_{max(taken, default=0) + 1}"
+    os.makedirs(os.path.join(cfg.HAUNTLET_ITEM_DIR, name))
+    cv2.imwrite(os.path.join(cfg.HAUNTLET_ITEM_DIR, name, "1.png"), crop if crop.ndim == 2 else cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY))
+    print(f"[!] New Hauntlet item saved as {name} in {cfg.HAUNTLET_ITEM_DIR} - rename the folder to what it is")
+    return name
+
+def read_item_count(img: Image, x: int, y: int) -> Optional[int]:
+    """The number on the "x2" badge of the slot centred at (x, y), or None if it can't be read (no badge, or a glyph
+    that matches none of the saved ones)."""
+    left, top, right, bottom = cfg.HAUNTLET_BADGE_BOX
+    region = img[max(0, y + top):y + bottom, max(0, x + left):x + right]
+    if region.size == 0:
+        return None
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    purple = cv2.morphologyEx(cv2.inRange(hsv, (125, 100, 120), (150, 255, 255)), cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(purple, connectivity=8)
+    if count < 2:
+        return None
+    shaped = [i for i in range(1, count) if cfg.HAUNTLET_BADGE_WIDTH[0] <= stats[i, cv2.CC_STAT_WIDTH] <= cfg.HAUNTLET_BADGE_WIDTH[1]
+              and cfg.HAUNTLET_BADGE_HEIGHT[0] <= stats[i, cv2.CC_STAT_HEIGHT] <= cfg.HAUNTLET_BADGE_HEIGHT[1]
+              and stats[i, cv2.CC_STAT_AREA] >= 300]
+    if not shaped:
+        return None
+    badge = max(shaped, key=lambda i: stats[i, cv2.CC_STAT_AREA])
+    bx, by, bw, bh, area = (int(v) for v in stats[badge])
+    white = ((region[by:by + bh, bx:bx + bw].min(axis=2) >= 225) & (labels[by:by + bh, bx:bx + bw] == badge)).astype(np.uint8)
+    pieces_count, _, piece_stats, _ = cv2.connectedComponentsWithStats(white, connectivity=8)
+    pieces = sorted((int(piece_stats[i, 0]), int(piece_stats[i, 1]), int(piece_stats[i, 2]), int(piece_stats[i, 3]))
+                    for i in range(1, pieces_count) if piece_stats[i, cv2.CC_STAT_AREA] >= 6 and piece_stats[i, cv2.CC_STAT_HEIGHT] >= cfg.HAUNTLET_COUNT_MIN_HEIGHT)
+    glyphs = picture_folders(cfg.HAUNTLET_COUNT_DIR)
+    if len(pieces) < 2 or "x" not in glyphs:
+        return None
+    text = ""
+    for px, py, pw, ph in pieces:
+        picture = cv2.resize(white[py:py + ph, px:px + pw] * 255, cfg.HAUNTLET_COUNT_SIZE, interpolation=cv2.INTER_AREA).astype(int)
+        diffs = {name: min(float(np.abs(picture - g.astype(int)).mean()) for g in pictures) for name, pictures in glyphs.items() if pictures}
+        name = min(diffs, key=lambda n: diffs[n])
+        if diffs[name] > cfg.HAUNTLET_COUNT_MAX_DIFF:
+            return None
+        text += name
+    return int(text[1:]) if text.startswith("x") and text[1:].isdigit() else None
+
+def read_hauntlet_items(img: Image, learn: bool = False) -> list[HauntletItem]:
+    """The items in the slots along the bottom of `img`, left to right: each one's name, count and position. An item
+    that matches none of the saved ones is named "unknown" - or, with `learn`, saved with learn_hauntlet_item() and
+    named after the folder it got. Names in HAUNTLET_NOT_ITEMS (the lobby's backpack button) are left out."""
+    items = []
+    for x, y, radius in find_item_slots(img):
+        half = cfg.HAUNTLET_ITEM_CROP // 2
+        crop = img[y - half:y + half, x - half:x + half]
+        if crop.shape[:2] != (cfg.HAUNTLET_ITEM_CROP, cfg.HAUNTLET_ITEM_CROP):
+            continue
+        name, _ = identify_item(crop)
+        if name is None:
+            name = learn_hauntlet_item(crop) if learn else "unknown"
+        if name not in cfg.HAUNTLET_NOT_ITEMS:
+            items.append(HauntletItem(name, read_item_count(img, x, y), (x, y)))
+    return items
+
+@dataclass
+class HauntletHearts:
+    """The player's hearts: how many are `red` (left) and `black` (lost), one heart's `width` in px, and the row's
+    top-left `pos`."""
+    red: int
+    black: int
+    width: int
+    pos: Point
+
+def pink_heart_pieces(img: Image) -> list[tuple[int, int, int, int]]:
+    """(x, y, w, h) of every heart-shaped pink piece of `img` (HAUNTLET_HEART_*), nothing above HAUNTLET_HEART_MIN_Y."""
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    mask = cv2.bitwise_or(cv2.inRange(hsv, *cfg.HAUNTLET_HEART_PINK[0]), cv2.inRange(hsv, *cfg.HAUNTLET_HEART_PINK[1]))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    count, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    pieces = []
+    for i in range(1, count):
+        x, y, w, h, area = (int(v) for v in stats[i])
+        if (y >= cfg.HAUNTLET_HEART_MIN_Y and w >= cfg.HAUNTLET_HEART_MIN_WIDTH and area >= 150
+                and cfg.HAUNTLET_HEART_ASPECT[0] <= w / h <= cfg.HAUNTLET_HEART_ASPECT[1] and area / (w * h) >= cfg.HAUNTLET_HEART_MIN_FILL):
+            pieces.append((x, y, w, h))
+    return pieces
+
+def read_hauntlet_hearts(img: Image) -> Optional[HauntletHearts]:
+    """The player's hearts in `img`, or None when there are none to see (a close-up of a door, a transition, the lobby,
+    or all of them lost - a row of nothing but black hearts has no pink one to find it by). One frame can be wrong, a
+    heart hidden or a stray pink thing taken for one: a caller that acts on it should see the same on a few frames."""
+    pieces = pink_heart_pieces(img)
+    if not pieces:
+        return None
+    ax, ay, aw, ah = min(pieces, key=lambda p: abs(p[0] + p[2] / 2 - cfg.REFERENCE_CENTER_X))
+    pitch = cfg.HAUNTLET_HEART_PITCH * aw
+    black = img.max(axis=2) <= cfg.HAUNTLET_HEART_BLACK_LEVEL
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    pink = cv2.bitwise_or(cv2.inRange(hsv, *cfg.HAUNTLET_HEART_PINK[0]), cv2.inRange(hsv, *cfg.HAUNTLET_HEART_PINK[1])) > 0
+
+    def kind(step: int) -> Optional[str]:
+        centre = ax + aw / 2 + step * pitch
+        if any(abs(px + pw / 2 - centre) <= pitch / 2 and abs(py - ay) <= 0.4 * ah for px, py, pw, ph in pieces):
+            return "red"
+        columns = slice(max(0, int(centre - aw / 2)), int(centre + aw / 2))
+        if pink[ay:ay + ah, columns].mean() >= cfg.HAUNTLET_HEART_PINK_FRACTION:       # a heart the piece search missed (two touching, or part hidden)
+            return "red"
+        cell = black[ay:ay + ah, columns]
+        return "black" if cell.size and cell.mean() >= cfg.HAUNTLET_HEART_BLACK_FRACTION else None
+
+    row = {0: "red"}
+    for direction in (1, -1):
+        for n in range(1, cfg.HAUNTLET_HEART_MAX_EACH_SIDE + 1):
+            found = kind(direction * n)
+            if found is None:
+                break
+            row[direction * n] = found
+    kinds = list(row.values())
+    if not cfg.HAUNTLET_HEART_MIN <= len(kinds) <= cfg.HAUNTLET_HEART_MAX:
+        return None                     # not a row of hearts: one pink thing alone, or something pink next to the row counted too
+    return HauntletHearts(kinds.count("red"), kinds.count("black"), aw, (int(ax + min(row) * pitch), ay))
+
 # ============================================================================
 # WORKFLOWS
 # ============================================================================

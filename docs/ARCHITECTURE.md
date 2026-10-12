@@ -174,7 +174,7 @@ an extra walk from wherever the previous need left the character standing.
 - **INPUT CAPTURE** - `InputCapture`, `toggle_input_capture()`, `zip_capture()` and the key / mouse
   readers (`pressed_inputs()`, `cursor_position()`, `to_reference()`). See
   [Input capture](#input-capture).
-- **HAUNTLET 2 READER** - `read_hauntlet_room()` and its digit pictures. See
+- **HAUNTLET 2 READER** - `read_hauntlet_room()`, `read_hauntlet_items()`, `read_hauntlet_hearts()` and their pictures. See
   [Reading Hauntlet 2](#reading-hauntlet-2).
 - **WORKFLOWS** - `run_full_cycle()` and `run_workflow_loop()` (plus
   `ResourceMonitor`, `check_quiet()` and `respawn_if_no_detection()`, which run
@@ -1137,6 +1137,36 @@ door close-up that hides it), no digit pieces, more than `HAUNTLET_ROOM_MAX_DIGI
 none of the digits all give `None` rather than a guess. `tests/test_hauntlet.py` runs a crop of each of the 29
 rooms (`tests/hauntlet2/room_panels/`) back through the reader.
 
+**Items.** `read_hauntlet_items()` returns the item slots along the bottom of the screen, left to right, as
+`HauntletItem(name, count, pos)`. The slots are round white-ringed icons about 115 px apart, found as circles in
+`HAUNTLET_SLOT_BAND` (`find_item_slots()`, Hough, radius `HAUNTLET_SLOT_RADIUS`; a slot that has just changed is a
+little bigger). Each slot's `HAUNTLET_ITEM_CROP`-px square is matched by correlation, as a grey picture so the slot's
+bright blue or dim teal background matters little, against the pictures in `ref/hauntlet/items/<name>/` (a folder per
+item, several pictures each - bright, dim, slightly enlarged). The best must reach `HAUNTLET_ITEM_MATCH` (0.75) or the
+item is `unknown`. They were cut from the 382 slots of a 256-frame run: `phone`, `key`, `gold_key`, `cyan_potion`,
+`heart_potion`, `red_potion`, plus `backpack` (the lobby's button, which sits where a slot would and is left out,
+`HAUNTLET_NOT_ITEMS`); every slot of that run is read as the item it is (60 ms a frame). The wand was not in it, so
+it has no pictures yet. **Learning:** with `learn=True` an unknown slot is saved as `ref/hauntlet/items/unknown_<n>/1.png`
+(`learn_hauntlet_item()`) and is known from then on; renaming the folder to what it is names it. The count is the number
+on the purple "x2" badge at a slot's top left (`read_item_count()`): the badge is the purple piece of the right size
+(`HAUNTLET_BADGE_*`), its white pieces are the "x" and the digits, each compared with the glyphs in
+`ref/hauntlet/counts/` (`x`, `1`, `2` - the only counts in the run, so no other digit is known yet: a glyph that
+matches none gives `None`, not a guess).
+
+**Hearts.** `read_hauntlet_hearts()` returns `HauntletHearts(red, black, width, pos)` for the row above the player's head.
+Hearts are pink with a black outline and become solid black when lost. The pink ones are found by colour and shape
+(`pink_heart_pieces()`; nothing above `HAUNTLET_HEART_MIN_Y`, which keeps the room panel's pink spot out), the row nearest
+the middle of the screen is the player's, and the row is then followed outward one `HAUNTLET_HEART_PITCH` x a heart's
+width at a time: a cell with a heart-shaped piece or mostly pink is red, a cell that is nearly all pure black (every
+channel at most `HAUNTLET_HEART_BLACK_LEVEL` - a doorway or the player's clothes are not that black) is black, anything
+else ends the row. A row shorter than `HAUNTLET_HEART_MIN` or longer than `HAUNTLET_HEART_MAX` isn't taken for hearts
+(`None`). Across the 256 frames of the run the counts go 3/0, 2/1, 3/1 (a red heart picked up), 2/2, 1/3, 4/0 (a heart potion),
+3/1, 2/2, 1/3 and no frame is wrong in between except where it gives `None`. What it does **not** do: find a row of
+*only* black hearts (nothing pink to find it by - the run's last frames), see the cyan temporary heart (it ends the row),
+or read a frame where the row is hidden (a door close-up, a transition) or where something pink sits next to it (one frame
+in the run, a pink door, was declined as too long). One frame can still be wrong or missing, so whatever acts on the hearts should
+look at a few frames in a row.
+
 ### Recording a run
 
 Tick **Record the next run (low quality video)** on the Debug tab's Other subtab (the
@@ -1179,7 +1209,7 @@ exact values and rationale):
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
 | Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
-| Hauntlet 2 reader | `HAUNTLET_ROOM_BOX`, `HAUNTLET_DIGIT_*`, `HAUNTLET_ROOM_MAX_DIGITS`, `HAUNTLET_DIGIT_DIR` |
+| Hauntlet 2 reader | `HAUNTLET_ROOM_BOX`, `HAUNTLET_DIGIT_*`, `HAUNTLET_ROOM_MAX_DIGITS`, `HAUNTLET_SLOT_*`, `HAUNTLET_ITEM_*`, `HAUNTLET_BADGE_*`, `HAUNTLET_COUNT_*`, `HAUNTLET_NOT_ITEMS`, `HAUNTLET_HEART_*`, `HAUNTLET_*_DIR` |
 | Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |

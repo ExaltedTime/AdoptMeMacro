@@ -75,7 +75,7 @@ def test_what_the_macro_logs_is_what_the_parser_reads(macro, tmp_path, monkeypat
     macro.state.last_detection = time.time() - macro.cfg.NO_DETECTION_RESPAWN_INTERVAL - 1
     monkeypatch.setattr(macro, "respawn_character", lambda: None)
     macro.respawn_if_no_detection()
-    macro.state.last_progress = time.time() - 6 * 60
+    macro.state.last_progress = time.time() - macro.cfg.QUIET_LOG_INTERVAL - 60
     macro.check_quiet()
     data = macro.parse_run(macro.cfg.RUN_LOG_PATH, 5)
     assert data["detected"][0][1:] == (2, 2) and data["detected"][1][1:] == (0, 2)

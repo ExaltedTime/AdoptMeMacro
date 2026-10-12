@@ -1174,9 +1174,32 @@ clicks instead of making them. They cover:
   popups and stray windows against the real crops in `ref/`;
 - `test_loop.py` - the whole workflow loop run for a moment with the game stubbed out (idle respawns, the resource monitor starting and stopping, the report being written);
 - `test_features.py` - the daily money reset, the run-every-need sequence and judging an icon gone by how it changes between looks (with real salon-icon frames in `tests/fixtures/`);
+- `test_config.py` - the real need tables in `magic_numbers.py`, without pinning any value: every entry is well formed (known keys, on-screen positions, movement keys, a `final_click` has its `prompt_pos`), has a handler, and the handler carries out exactly what the entry says (run over whichever needs exist, so `HALLOWEEN` off just drops `sick`). The handler tests elsewhere use made-up entries; this is what keeps the real ones honest;
 - `test_report.py` - the run-report parser against the exact log wording the
   macro writes (a round trip through `log_run_event()`), the chart itself,
   and the constant check.
 
 Fixtures are synthetic images or the lossless crops in `ref/`; compressed
 screenshots (`.webp`) don't match exact colours, so they aren't used.
+
+**Tests don't pin tuned values.** `magic_numbers.py` is edited constantly (timings,
+routes, intervals, the `HALLOWEEN` flag), so a test must pass for any sensible
+tuning: it states what it is about itself (the daily-reset tests set
+`MONEY_RESET_HOUR` to 17; the teleport-walk and sick tests give a made-up need
+an entry of its own, so they don't depend on the real table or on `HALLOWEEN`,
+which decides whether `sick` exists) or reads the constant (`cfg.QUIET_LOG_INTERVAL`,
+not "5 minutes"). Waits are tested on a fake clock (`fake_clock`), not by timing
+them, and the loop test runs until it has seen what it checks instead of for a
+fixed time, so a slow machine only makes it slower.
+`python tools/retune_check.py` runs the suite against changed copies of the repo
+and names any test that breaks - run it after adding tests (about 28 runs, a few
+minutes; `python tools/retune_check.py halloween_off timings_x20` runs just those).
+The variants: every timing and walk step scaled by 0.05, 0.5, 1.7 and 20; other
+intervals, hours and counts changed; counts at their lowest and highest; the
+event flag off; needs removed from or added to the table; button names reordered;
+helicopter for every need; thresholds nudged up and down, colour tolerances
+widened, search boxes and click positions moved; other key bindings; behaviour
+flags flipped (`SAVE_NEW_NEEDS`, `MATCH_ONLY_LEFT_HALF`); two other time zones; a
+different hash seed; run from another working directory; a `debug/` folder with a
+real config and logs in it; extra files in `ref/`; the tests in reverse and in
+shuffled order; and each test file run on its own.

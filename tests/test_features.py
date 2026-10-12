@@ -15,6 +15,12 @@ def stamp(year, month, day, hour, minute=0):
 
 # --- the tree's money total, reset every day at MONEY_RESET_HOUR -------------------------------
 
+@pytest.fixture
+def hour_17(macro, monkeypatch):
+    """These tests are about the daily reset at 17:00, whatever MONEY_RESET_HOUR is tuned to."""
+    monkeypatch.setattr(macro.cfg, "MONEY_RESET_HOUR", 17)
+
+
 @pytest.mark.parametrize("now, expected", [
     (stamp(2026, 10, 11, 16, 59), stamp(2026, 10, 10, 17)),    # just before: still yesterday's
     (stamp(2026, 10, 11, 17, 0), stamp(2026, 10, 11, 17)),     # on the dot
@@ -22,8 +28,7 @@ def stamp(year, month, day, hour, minute=0):
     (stamp(2026, 10, 12, 0, 30), stamp(2026, 10, 11, 17)),     # after midnight: still the previous 17:00
     (stamp(2026, 3, 1, 3, 0), stamp(2026, 2, 28, 17)),         # across a month end
 ])
-def test_last_money_reset_time(macro, now, expected):
-    assert macro.cfg.MONEY_RESET_HOUR == 17
+def test_last_money_reset_time(macro, hour_17, now, expected):
     assert macro.last_money_reset_time(now) == expected
 
 
@@ -40,7 +45,7 @@ def at(macro, monkeypatch, when):
     monkeypatch.setattr(macro.time, "time", lambda: when)
 
 
-def test_money_is_reset_once_the_daily_moment_has_passed(macro, config_file, monkeypatch):
+def test_money_is_reset_once_the_daily_moment_has_passed(macro, hour_17, config_file, monkeypatch):
     config_file(money_collected=150, money_reset_boundary=stamp(2026, 10, 10, 17))
     at(macro, monkeypatch, stamp(2026, 10, 11, 17, 30))
     config = macro.reset_money_if_due(macro.load_game_config())
@@ -49,13 +54,13 @@ def test_money_is_reset_once_the_daily_moment_has_passed(macro, config_file, mon
     assert "money total reset: 150 -> 0" in open(macro.cfg.RUN_LOG_PATH).read()
 
 
-def test_money_is_kept_before_the_next_daily_moment(macro, config_file, monkeypatch):
+def test_money_is_kept_before_the_next_daily_moment(macro, hour_17, config_file, monkeypatch):
     config_file(money_collected=150, money_reset_boundary=stamp(2026, 10, 10, 17))
     at(macro, monkeypatch, stamp(2026, 10, 11, 16, 59))
     assert macro.reset_money_if_due(macro.load_game_config())["money_collected"] == 150
 
 
-def test_the_first_time_it_is_seen_the_moment_is_only_recorded(macro, config_file, monkeypatch):
+def test_the_first_time_it_is_seen_the_moment_is_only_recorded(macro, hour_17, config_file, monkeypatch):
     """A fresh or older config has no recorded moment: an update must not wipe the day's total."""
     config_file(money_collected=150)
     assert macro.load_game_config()["money_reset_boundary"] is None
@@ -479,7 +484,8 @@ def test_a_win_screen_is_closed_and_the_character_respawned(macro, winner):
     assert macro.state.last_progress is not None
 
 
-def test_a_click_that_missed_is_repeated(macro, winner):
+def test_a_click_that_missed_is_repeated(macro, winner, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "MINIGAME_VICTORY_CLICK_TRIES", 3)
     winner["sticky"] = 1
     assert macro.close_minigame_win_screen() is True
     assert macro.clicks.count(macro.cfg.MINIGAME_VICTORY_BUTTON_POS) == 2 and winner["respawns"] == [1]
@@ -493,10 +499,9 @@ def test_a_win_screen_that_will_not_close_is_retried_then_reported(macro, winner
 
 
 def test_the_real_win_screen_is_recognised(macro):
-    import cv2
     screen = bright_screen()
     for box, name in ((macro.cfg.MINIGAME_VICTORY_BANNER_BOX, "win_banner.png"), (macro.cfg.MINIGAME_VICTORY_BUTTON_BOX, "win_button.png")):
-        crop = cv2.imread(f"tests/fixtures/{name}")
+        crop = fixture(name)                                                     # (relative to this file, not the working directory)
         left, top, right, bottom = box
         screen[top:top + crop.shape[0], left:left + crop.shape[1]] = crop
     assert macro.detect_minigame_victory(screen) is True
@@ -532,14 +537,14 @@ def test_the_win_screen_is_only_looked_for_while_halloween_is_on(macro, winner, 
     assert macro.unscrew() is None and not macro.clicks
 
 
-def test_the_scheduled_rejoin_is_two_hours(macro, monkeypatch):
-    assert macro.cfg.REJOIN_INTERVAL == 2 * 60 * 60
-    macro.state.last_rejoin = time.time() - 119 * 60
+def test_a_scheduled_rejoin_comes_once_the_interval_has_passed(macro, monkeypatch):
+    interval = macro.cfg.REJOIN_INTERVAL
+    macro.state.last_rejoin = time.time() - (interval - 60)
     macro.state.last_progress = time.time()
     monkeypatch.setattr(macro.gw, "getAllWindows", lambda: [type("W", (), {"title": "Roblox"})()])
     monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((1080, 1920, 3), np.uint8))
     assert macro.rejoin_reason() is None
-    macro.state.last_rejoin = time.time() - 121 * 60
+    macro.state.last_rejoin = time.time() - (interval + 60)
     assert macro.rejoin_reason()[0] == "scheduled"
 
 
@@ -584,9 +589,6 @@ def test_a_stored_icon_from_a_dark_scene_is_still_found_on_the_bright_bar(macro,
             stored = bright[y - r:y + r + 1, x - r:x + r + 1].copy()
             stored[corners] = corner_level                                       # a dark world behind the icon, as when it was read
             assert macro.locate_icon(stored, y) == (x, y), (corner_level, x)
-            plain = cv2.matchTemplate(bright[y - r - 10:y + r + 11, :1344].min(axis=2), stored.min(axis=2), cv2.TM_CCOEFF_NORMED)
-            if corner_level == 25:
-                assert cv2.minMaxLoc(plain)[1] < macro.cfg.ICON_LOCATE_THRESHOLD      # what it was without the mask
 
 
 def test_the_masked_match_is_the_ordinary_one_when_nothing_is_masked(macro):

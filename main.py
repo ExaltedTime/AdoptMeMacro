@@ -3903,6 +3903,15 @@ class AdoptMeGUI:
 
         def worker():
             final_status = "[ERROR]"   # bound before anything can fail, so the finally below always re-enables the UI
+
+            def record(log: Callable[[str], Any], message: str) -> None:
+                """Log how the action ended; a log that can't be written (a locked file, a full disk) must not
+                take the worker down - the status below is what the person sees."""
+                try:
+                    log(message)
+                except Exception:
+                    pass
+
             try:
                 func()
                 final_status = "[DONE]"
@@ -3911,25 +3920,25 @@ class AdoptMeGUI:
                 # StopRequested is itself an Exception subclass, so if the
                 # broad handler came first it would catch this too and
                 # misreport a clean stop as "[ERROR]".
-                log_run_event("stopped by the user")
+                record(log_run_event, "stopped by the user")
                 final_status = "[STOPPED]"
             except TaskInterrupted as interruption:
                 # The GUI's Setup button ran setup_game() with the in-task checks on, and a disconnect made them
                 # rejoin the game - which ran setup itself. The action is done, not crashed.
-                log_run_event(f"interrupted by {interruption.reason}")
+                record(log_run_event, f"interrupted by {interruption.reason}")
                 final_status = "[DONE]"
             except FocusLost:
                 # Same reasoning as StopRequested above - must come before
                 # the generic Exception handler.
                 if stop_pressed_soon():
-                    log_run_event("stopped by the user")
+                    record(log_run_event, "stopped by the user")
                     final_status = "[STOPPED]"
                 else:
-                    log_failure("stopped: Roblox lost focus")
+                    record(log_failure, "stopped: Roblox lost focus")
                     final_status = "[STOPPED: Roblox not focused]"
             except Exception as e:
                 print(f"\n[ERROR] {e}\n{traceback.format_exc()}")
-                log_failure(f"crashed: {type(e).__name__}: {e}")
+                record(log_failure, f"crashed: {type(e).__name__}: {e}")
                 final_status = "[ERROR]"
             finally:
                 release_all_inputs()  # last line of defense against stuck keys/mouse

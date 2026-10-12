@@ -31,9 +31,15 @@ def test_the_loop_respawns_when_idle_logs_resources_stops_and_writes_the_report(
 
     worker = threading.Thread(target=run)
     worker.start()
-    time.sleep(1.7)
+    # Run until it has done what is checked below (not for a fixed time: a slow machine takes longer, that's all).
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        text = open(cfg.RUN_LOG_PATH).read() if os.path.exists(cfg.RUN_LOG_PATH) else ""
+        if text.count("no need detected for") >= 2 and "resources: cpu" in text and macro.run_stats.cycles > 5:
+            break
+        time.sleep(0.05)
     macro.STOP_EVENT.set()
-    worker.join(5)
+    worker.join(30)
     assert not worker.is_alive()
     assert len(outcome) == 1 and isinstance(outcome[0], macro.StopRequested)
 
@@ -44,7 +50,7 @@ def test_the_loop_respawns_when_idle_logs_resources_stops_and_writes_the_report(
     assert "resources: cpu" in log                                   # the monitor ran, and was stopped with the loop
     assert macro.run_stats.cycles > 5
     assert macro.state.last_progress is not None
-    assert time.time() - macro.state.last_progress > 1.0             # nothing resolved: the respawns left the progress clock alone
+    assert time.time() - macro.state.last_progress > cfg.NO_DETECTION_RESPAWN_INTERVAL   # nothing resolved: the respawns left the progress clock alone
     assert os.path.exists(os.path.join(cfg.REPORTS_DIR, f"run{macro.state.run_number}.png"))
     time.sleep(0.5)
     lines_after = open(cfg.RUN_LOG_PATH).read().count("resources: cpu")

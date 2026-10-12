@@ -328,19 +328,21 @@ TELEPORT_WALK_NEEDS_NORMAL: dict[str, dict[str, Any]] = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),)),
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 1.2), ("a", 10.0))),
-    "cafe":    dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 3.2), ("s", 5.5))),
+    "cafe":    dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 3.2), ("s", 5), ("a", 0.2), ("s", 3))),
     "salon":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 2.5), ("w", 15.0))),
-    "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 2.0), ("a", 5.5), ("s", 3.0), ("w", 10.0))),
+    "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 3.0), ("a", 7.2), ("s", 4.0))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 0.1), ("d", 3.0), ("s", 2.2), ("d", 15.0), ("w",20.0))),
+    "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 3.0), ("w", 0.8)),
+                    final_click=SICK_FINAL_CLICK_POS, prompt_pos=SICK_PROMPT_POS),
 }
 
 # Used instead of the entry of the same name above while HALLOWEEN is on (Halloween
 # moves the nursery) - and "sick" only exists here, so it isn't a need at all
 # outside Halloween.
 TELEPORT_WALK_NEEDS_HALLOWEEN: dict[str, dict[str, Any]] = {
-    "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 7.7),), helicopter=True),
+    "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 9),), helicopter=True),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 20.0),), helicopter=True),
-    "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.8), ("a", 10))),
+    "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 3), ("a", 10))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("s", 20),), helicopter=True),
     "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 3.0), ("w", 0.8)),
                     final_click=SICK_FINAL_CLICK_POS, prompt_pos=SICK_PROMPT_POS),

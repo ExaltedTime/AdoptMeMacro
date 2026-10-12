@@ -499,7 +499,6 @@ def test_a_win_screen_that_will_not_close_is_retried_then_reported(macro, winner
 
 
 def test_the_real_win_screen_is_recognised(macro):
-    import cv2
     screen = bright_screen()
     for box, name in ((macro.cfg.MINIGAME_VICTORY_BANNER_BOX, "win_banner.png"), (macro.cfg.MINIGAME_VICTORY_BUTTON_BOX, "win_button.png")):
         crop = fixture(name)                                                     # (relative to this file, not the working directory)

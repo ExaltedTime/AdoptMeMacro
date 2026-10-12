@@ -15,7 +15,7 @@ from __future__ import annotations
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
-import os, sys, re, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib, shutil
+import os, sys, re, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib, shutil, zipfile
 import datetime
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field, fields
@@ -2896,6 +2896,45 @@ class InputCapture:
         self.stop_event.set()
         print(f"[!] Input capture stopped by itself: {reason}")
 
+def zip_capture(folder: str) -> list[str]:
+    """Split a capture's files into zips of at most CAPTURE_ZIP_MB each, in <folder>/zips/ as
+    <name>_part01.zip, _part02.zip, ... (stored, not compressed: PNGs don't shrink). The first part also holds
+    events.jsonl and info.json, which are small; the frames go in time order, none twice. Returns the zip paths."""
+    limit = int(cfg.CAPTURE_ZIP_MB * 1024 * 1024)
+    out = os.path.join(folder, "zips")
+    os.makedirs(out, exist_ok=True)
+    frames = sorted(f for f in os.listdir(folder) if f.startswith("frame_") and f.endswith(".png"))
+    parts: list[list[str]] = [["info.json", "events.jsonl"]]
+    used = sum(os.path.getsize(os.path.join(folder, f)) for f in parts[0] if os.path.exists(os.path.join(folder, f)))
+    for name in frames:
+        size = os.path.getsize(os.path.join(folder, name))
+        if used + size > limit and len(parts[-1]) > (2 if len(parts) == 1 else 0):
+            parts.append([])
+            used = 0
+        parts[-1].append(name)
+        used += size
+    paths = []
+    for number, names in enumerate(parts, 1):
+        path = os.path.join(out, f"{os.path.basename(folder)}_part{number:02d}.zip")
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as z:
+            for name in names:
+                if os.path.exists(os.path.join(folder, name)):
+                    z.write(os.path.join(folder, name), name)
+        paths.append(path)
+    return paths
+
+def zip_capture_in_background(folder: str) -> threading.Thread:
+    """zip_capture() on a thread of its own (a long capture takes a while to copy), saying where the zips are."""
+    def work() -> None:
+        try:
+            paths = zip_capture(folder)
+            print(f"[!] Capture zipped for sending ({len(paths)} file(s), at most {cfg.CAPTURE_ZIP_MB:g} MB each): {os.path.join(folder, 'zips')}")
+        except OSError as error:
+            print(f"[!] Couldn't zip the capture: {error}")
+    thread = threading.Thread(target=work, daemon=True)
+    thread.start()
+    return thread
+
 def toggle_input_capture() -> Optional[InputCapture]:
     """Start a capture (a fresh folder in CAPTURES_DIR, the oldest beyond MAX_CAPTURES deleted) or, if one is
     running, stop it - what the capture hotkey does. Returns the capture that is running now, or None."""
@@ -2904,6 +2943,7 @@ def toggle_input_capture() -> Optional[InputCapture]:
         state.capture = None
         was_running = current.running
         print(f"[!] Capture stopped: {current.stop()}")
+        zip_capture_in_background(current.folder)
         if was_running:
             return None            # (one that had stopped by itself is only tidied up here: this press starts a new one)
     os.makedirs(cfg.CAPTURES_DIR, exist_ok=True)

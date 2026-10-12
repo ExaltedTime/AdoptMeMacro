@@ -190,6 +190,7 @@ CAPTURE_MOVE_INTERVAL = 0.03             # the mouse position is written at most
 CAPTURE_MAX_MINUTES = 15                 # a capture stops by itself after this long...
 CAPTURE_MIN_FREE_MB = 3000               # ...or when less than this much disk is free
 MAX_CAPTURES = 5                         # oldest captures are deleted beyond this many
+CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into zips of at most this size (chat attachments are limited to 30 MB)
 
 # ============================================================================
 # SCREEN / INPUT SETUP

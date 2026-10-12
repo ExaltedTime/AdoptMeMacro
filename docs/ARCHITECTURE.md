@@ -479,7 +479,7 @@ paycheck check because their green buttons (Okay, Yes) are the same green as
 the paycheck's CASH OUT button, so `detect_paycheck()` would mistake them for
 one. For the same reason
 `detect_paycheck()` matches the crop of the popup's bank-card header
-(`ref/popups/paycheck.png`, within `PAYCHECK_BOX`) instead of counting green:
+(`ref/popups/paycheck.png`, within its `POPUP_TEMPLATES` box) instead of counting green:
 it used to count green pixels, and the green tiles of an open backpack passed
 that, so it "dismissed" a paycheck every cycle - and its second dismiss click,
 `PAYCHECK_DISMISS_POS_2` (948, 627), lands on the little orange box next to the
@@ -557,10 +557,23 @@ check decides from the screen what's still needed. During setup a minigame is
 only declined (No, without "do not show again"), since setup's clicks toggle
 things and can't be abandoned halfway.
 
+**Popup templates.** Everything recognised by a crop in `ref/popups/` is looked up the same
+way, by `popup_found(img, name)` / `popup_visible(img, name)`: the crop is matched
+(`cv2.matchTemplate`, `TM_CCOEFF_NORMED`) within a box and counts as found when the score reaches
+a threshold - the crop's centre is returned too, for the BACK button's click. Each name's box and
+threshold are in `POPUP_TEMPLATES` (`paycheck`, `sick_dialog`, `backpack_normal`, `backpack_back`) or, for
+a stray window (and `pet_focus`), in `STRAY_WINDOWS` with `STRAY_WINDOW_MATCH_THRESHOLD`. The
+detectors (`detect_paycheck()`, `detect_sick_dialog()`, `detect_pet_focus()`, the title check in
+`detect_backpack_normal()`, the BACK button in `close_backpack_if_open()`) are that lookup plus
+whatever they do with the answer, and `dismiss_stray_windows()` walks `STRAY_WINDOWS` through it. A
+new crop is a file in `ref/popups/` plus an entry in one of the two tables. A name with no crop file is
+never found. The minigame title (`identify_minigame()`) and overlay (`detect_minigame_overlay()`) crops
+live in their own folders and pick the best of several, so they keep their own constants.
+
 **Backpack tabs.** The backpack remembers its last category tab, and clicking a tab that is already selected (orange background) expands the backpack. `select_backpack_tab()` therefore only clicks the vehicles / toys tab when `is_backpack_tab_selected()` doesn't see the orange tile.
 
 **The BACK button.** The expanded backpack has a BACK button at the top
-(`ref/popups/backpack_back.png`, found within `BACKPACK_BACK_BOX`) that closes
+(`ref/popups/backpack_back.png`, found within its `POPUP_TEMPLATES["backpack_back"]` box) that closes
 it entirely, where the backpack key only shrinks it to the normal form first.
 `close_backpack_if_open()` clicks it when it sees the expanded form, and
 falls back to the key presses if it isn't found. The pet focus view has a BACK
@@ -578,7 +591,7 @@ is recognised by its purple frame (`BACKPACK_NORMAL_COLOR`, at least
 the white of its item grid (`BACKPACK_NORMAL_WHITE_*`); the frame alone or the
 white alone isn't enough, since the white is also any bright scenery. It is also
 recognised by a crop of its "BACKPACK" title (`ref/popups/backpack_normal.png`,
-`BACKPACK_NORMAL_TITLE_*`), because the color check, tuned on one screenshot,
+`POPUP_TEMPLATES["backpack_normal"]`), because the color check, tuned on one screenshot,
 missed another (`ref/test` is for more). `detect_backpack_open()` is either. `close_backpack_if_open()` presses
 `KEY_BACKPACK` - but only while Roblox has the focus, so the key can't go to
 another window - looks again, and presses once more if it's still open (the
@@ -597,7 +610,7 @@ color is unique alone (Yes green = `GREEN_BUTTON_COLOR`, No red = the
 Exit Home button), so it needs the Yes green (`GREEN_BUTTON_COLOR`, at
 least `MINIGAME_POPUP_MIN_BUTTON_PIXELS` px) with the No red
 (`MINIGAME_POPUP_NO_COLOR`) within `MINIGAME_POPUP_NO_MAX_DX` / `_DY` px to
-its left - except the sick need's own "Ask Doctor Heart to heal your family?" dialog, which has the same Yes/No look but is the sick handler's to answer (its Yes is `SICK_FINAL_CLICK_POS`): `ref/popups/sick_dialog.png`, within `SICK_DIALOG_BOX`, makes the detector ignore it. (Before that, the every-4s in-task check took it for a minigame popup and clicked its decline positions in the middle of the sick sequence - `unknown` popups clustered in the sick handler in the logs.) `identify_minigame()` then says which one it is: it matches the
+its left - except the sick need's own "Ask Doctor Heart to heal your family?" dialog, which has the same Yes/No look but is the sick handler's to answer (its Yes is `SICK_FINAL_CLICK_POS`): `ref/popups/sick_dialog.png`, within its `POPUP_TEMPLATES` box, makes the detector ignore it. (Before that, the every-4s in-task check took it for a minigame popup and clicked its decline positions in the middle of the sick sequence - `unknown` popups clustered in the sick handler in the logs.) `identify_minigame()` then says which one it is: it matches the
 first line of the title (`MINIGAME_TITLE_BOX`) against the crops in
 `ref/halloween/` (`cv2.matchTemplate`, best score at least
 `MINIGAME_TITLE_MATCH_THRESHOLD`); a minigame's name is its file name,
@@ -1091,7 +1104,8 @@ exact values and rationale):
 | Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_MATCH_RADIUS_FRACTION`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
 | Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
-| Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_BOX`, `PAYCHECK_MATCH_THRESHOLD` |
+| Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
+| Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
 | GUI | colors/fonts (`GUI_BG`, `GUI_FONT`, ...) and layout spacing (`GUI_OUTER_PADDING`, `GUI_ROW_SPACING`, ...) for the `tkinter` panel |
@@ -1216,7 +1230,7 @@ clicks instead of making them. They cover:
   failure folders, the quiet and idle-respawn checks (including that a respawn
   leaves the 20-minute rejoin clock alone), stopping, and the open `output.log`;
 - `test_detection.py` - the need-strip capture and its cache, and the
-  popups and stray windows against the real crops in `ref/`;
+  popups and stray windows against the real crops in `ref/` (including that every `POPUP_TEMPLATES` entry has a crop that fits its box);
 - `test_icon_screenshots.py` - every real screenshot in `tests/icon_detection/<folder>/` (the need bar over dark, bright, busy and white scenes) run through the circle search and the matching; each must be listed in `EXPECTED` with the needs on its bar, so a screenshot added without a label fails;
 - `test_loop.py` - the whole workflow loop run for a moment with the game stubbed out (idle respawns, the resource monitor starting and stopping, the report being written);
 - `test_features.py` - the daily money reset, the run-every-need sequence, the win screen and the like;

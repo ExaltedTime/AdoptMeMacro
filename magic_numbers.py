@@ -108,11 +108,23 @@ STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     # tried again from scratch on the next check) - see unscrew().
     "cant_spawn_vehicle": {"box": (760, 420, 1160, 630), "close_pos": (962, 657), "abort_task": True},
 }
-# The sick need's own "Ask Doctor Heart to heal your family?" Yes/No dialog (ref/popups/sick_dialog.png, found
-# within SICK_DIALOG_BOX) has the same Yes green + No red as a minigame popup; it is the sick handler's to
-# answer (SICK_FINAL_CLICK_POS is its Yes), so detect_minigame_popup() ignores it.
-SICK_DIALOG_BOX = (700, 400, 1220, 700)
-SICK_DIALOG_MATCH_THRESHOLD = 0.8
+
+# Other things recognised by a crop in STRAY_WINDOW_DIR (file name = the name here) found within "box"
+# (left, top, right, bottom) with a TM_CCOEFF_NORMED score of at least "threshold" - see popup_visible(). The
+# stray windows above work the same way (their "threshold" is STRAY_WINDOW_MATCH_THRESHOLD) and "pet_focus"
+# is also looked up there.
+POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
+    # The paycheck popup's bank-card header ("BANK of Adopt Me!").
+    "paycheck":        {"box": (740, 400, 1180, 490), "threshold": 0.8},
+    # The sick need's Yes/No dialog.
+    "sick_dialog":     {"box": (700, 400, 1220, 700), "threshold": 0.8},
+    # The normal backpack's "BACKPACK" title, and the expanded one's BACK button.
+    "backpack_normal": {"box": (700, 600, 1000, 690), "threshold": 0.8},
+    "backpack_back":   {"box": (700, 80, 1000, 200), "threshold": 0.8},
+}
+# The sick need's own "Ask Doctor Heart to heal your family?" Yes/No dialog (POPUP_TEMPLATES["sick_dialog"]) has the
+# same Yes green + No red as a minigame popup; it is the sick handler's to answer (SICK_FINAL_CLICK_POS is its Yes),
+# so detect_minigame_popup() ignores it.
 STRAY_OKAY_BOX = (800, 637, 1120, 680)
 STRAY_OKAY_MIN_PIXELS = 5000      # the button is ~11000 exact-color px in that box
 STRAY_OKAY_POS = (962, 657)
@@ -245,9 +257,7 @@ CHOOSE_SLOW_MOVE_DURATION = 1.0  # deliberate, slow mouse travel to the found bu
 # The paycheck popup's CASH OUT button, matched by exact color the same way
 # as CHOOSE_BUTTON_COLOR above.
 # The popup itself is recognised by a crop of its bank-card header ("BANK of Adopt Me!", ref/popups/paycheck.png)
-# found within PAYCHECK_BOX (left, top, right, bottom) with a match of at least PAYCHECK_MATCH_THRESHOLD.
-PAYCHECK_BOX = (740, 400, 1180, 490)
-PAYCHECK_MATCH_THRESHOLD = 0.8
+# found as described in POPUP_TEMPLATES["paycheck"].
 PAYCHECK_DISMISS_POS_1 = (946, 679)
 PAYCHECK_DISMISS_POS_2 = (948, 627)
 
@@ -271,16 +281,11 @@ BACKPACK_NORMAL_MIN_WHITE_FRACTION = 0.2
 # unscrew() closes either backpack at once at the start of a cycle; during a task (where a handler has the
 # normal one open for a few seconds on purpose) only once it's been seen open on this many checks in a
 # row, UNSCREW_TASK_INTERVAL apart.
-# The normal backpack is also recognised by a crop of its "BACKPACK" title (ref/popups/backpack_normal.png, found
-# within BACKPACK_NORMAL_TITLE_BOX with a match of at least BACKPACK_NORMAL_TITLE_THRESHOLD): the color check
-# above was tuned on one screenshot and missed another.
-BACKPACK_NORMAL_TITLE_BOX = (700, 600, 1000, 690)
-BACKPACK_NORMAL_TITLE_THRESHOLD = 0.8
+# The normal backpack is also recognised by a crop of its "BACKPACK" title (POPUP_TEMPLATES["backpack_normal"]):
+# the color check above was tuned on one screenshot and missed another.
 BACKPACK_CLOSE_CONFIRMATIONS = 2
-# The EXPANDED backpack has its own BACK button (ref/popups/backpack_back.png, searched for within
-# BACKPACK_BACK_BOX): clicking it closes the backpack entirely, where the key only shrinks it to the normal form.
-BACKPACK_BACK_BOX = (700, 80, 1000, 200)
-BACKPACK_BACK_MATCH_THRESHOLD = 0.8
+# The EXPANDED backpack has its own BACK button (POPUP_TEMPLATES["backpack_back"]): clicking it closes the
+# backpack entirely, where the key only shrinks it to the normal form.
 
 # Ride need: positions for the backpack -> vehicles -> first vehicle -> equip
 # sequence, plus how long to hold each step.

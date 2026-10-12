@@ -1504,10 +1504,8 @@ def save_focus_pet_debug(img: Image, blobs: list[tuple[int, int, int, int, int]]
     cv2.imwrite(os.path.join(cfg.IMAGES_DIR, name), marked)
 
 def detect_pet_focus(img: Image) -> bool:
-    """True if the pet focus view is showing in `img` - the "pet_focus" crop
-    of STRAY_WINDOWS (its BACK button)."""
-    crop = load_templates(cfg.STRAY_WINDOW_DIR).get("pet_focus")
-    return crop is not None and template_score(img, crop, cfg.STRAY_WINDOWS["pet_focus"]["box"]) >= cfg.STRAY_WINDOW_MATCH_THRESHOLD
+    """True if the pet focus view (its BACK button) is showing in `img`."""
+    return popup_visible(img, "pet_focus")
 
 def focus_pet(click_duration: float = cfg.CLICK_MOVE_DURATION) -> bool:
     """Click the pet to open its menu: found by movement between two frames, clicked at the
@@ -2032,8 +2030,7 @@ def detect_paycheck() -> bool:
     """Detect the paycheck popup by the crop of its bank-card header and dismiss it. Returns
     True if it was there. See docs/ARCHITECTURE.md#need-handlers.
     """
-    crop = load_templates(cfg.STRAY_WINDOW_DIR).get("paycheck")
-    if crop is None or template_score(grab_screen(), crop, cfg.PAYCHECK_BOX) < cfg.PAYCHECK_MATCH_THRESHOLD:
+    if not popup_visible(grab_screen(), "paycheck"):
         return False
 
     print("[debug] paycheck popup detected, dismissing...")
@@ -2053,8 +2050,7 @@ def detect_backpack_normal(img: Image) -> bool:
     """True if the normal backpack is open: its purple frame plus the white item grid, or its
     title crop. See docs/ARCHITECTURE.md#need-handlers.
     """
-    title = load_templates(cfg.STRAY_WINDOW_DIR).get("backpack_normal")
-    if title is not None and template_score(img, title, cfg.BACKPACK_NORMAL_TITLE_BOX) >= cfg.BACKPACK_NORMAL_TITLE_THRESHOLD:
+    if popup_visible(img, "backpack_normal"):
         return True
     left, top, right, bottom = cfg.BACKPACK_NORMAL_PANEL_BOX
     frame = exact_color_mask(img[top:bottom, left:right], cfg.BACKPACK_NORMAL_COLOR, cfg.BACKPACK_NORMAL_TOLERANCE)
@@ -2084,10 +2080,9 @@ def close_backpack_if_open(step: str = "") -> bool:
     cv2.imwrite(os.path.join(cfg.IMAGES_DIR, "debug_backpack_open.png"), img)
     if detect_backpack_expanded(img):
         # Its BACK button closes it entirely; the key would only shrink it first.
-        crop = load_templates(cfg.STRAY_WINDOW_DIR).get("backpack_back")
-        score, center = find_template(img, crop, cfg.BACKPACK_BACK_BOX) if crop is not None else (0.0, None)
-        if center is not None and score >= cfg.BACKPACK_BACK_MATCH_THRESHOLD:
-            hover_click(*center)
+        back = popup_found(img, "backpack_back")
+        if back is not None:
+            hover_click(*back)
             wait_interruptible(cfg.UI_SETTLE)
             if not detect_backpack_open(grab_screen()):
                 log_run_event("backpack was left open - closed it (BACK)" + (f" after {step}" if step else ""))
@@ -2197,10 +2192,8 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
     return True
 
 def detect_sick_dialog(img: Image) -> bool:
-    """True if the sick need's "Ask Doctor Heart to heal your family?" dialog is on screen in `img` (the
-    "sick_dialog" crop in STRAY_WINDOW_DIR, found within SICK_DIALOG_BOX)."""
-    crop = load_templates(cfg.STRAY_WINDOW_DIR).get("sick_dialog")
-    return crop is not None and template_score(img, crop, cfg.SICK_DIALOG_BOX) >= cfg.SICK_DIALOG_MATCH_THRESHOLD
+    """True if the sick need's "Ask Doctor Heart to heal your family?" dialog is on screen in `img`."""
+    return popup_visible(img, "sick_dialog")
 
 def detect_minigame_popup(img: Image) -> bool:
     """True if a Halloween minigame popup is on screen: the Yes green with the No red close
@@ -2256,6 +2249,20 @@ def find_template(img: Image, crop: Image, box: Box) -> tuple[float, Optional[Po
     _, score, _, (x, y) = cv2.minMaxLoc(cv2.matchTemplate(band, crop, cv2.TM_CCOEFF_NORMED))
     return float(score), (left + x + crop.shape[1] // 2, top + y + crop.shape[0] // 2)
 
+def popup_found(img: Image, name: str) -> Optional[Point]:
+    """Where the STRAY_WINDOW_DIR crop `name` is in `img` - its centre - if it matches within its box well enough
+    (POPUP_TEMPLATES, or STRAY_WINDOWS for a stray window), else None. See docs/ARCHITECTURE.md#popup-templates."""
+    crop = load_templates(cfg.STRAY_WINDOW_DIR).get(name)
+    entry = cfg.POPUP_TEMPLATES.get(name) or cfg.STRAY_WINDOWS[name]
+    if crop is None:
+        return None
+    score, centre = find_template(img, crop, entry["box"])
+    return centre if score >= entry.get("threshold", cfg.STRAY_WINDOW_MATCH_THRESHOLD) else None
+
+def popup_visible(img: Image, name: str) -> bool:
+    """True if the crop `name` is on screen in `img` (see popup_found())."""
+    return popup_found(img, name) is not None
+
 def identify_minigame(img: Image) -> Optional[str]:
     """Which minigame the popup in `img` is for: the name whose title crop
     (MINIGAME_TEMPLATE_DIR) matches best within MINIGAME_TITLE_BOX, if that
@@ -2285,9 +2292,8 @@ def dismiss_stray_windows() -> Optional[str]:
     its name or None. See docs/ARCHITECTURE.md#need-handlers.
     """
     img = grab_screen()
-    for name, crop in load_templates(cfg.STRAY_WINDOW_DIR).items():
-        config = cfg.STRAY_WINDOWS.get(name)
-        if config is None or template_score(img, crop, config["box"]) < cfg.STRAY_WINDOW_MATCH_THRESHOLD:
+    for name, config in cfg.STRAY_WINDOWS.items():
+        if not popup_visible(img, name):
             continue
         if config.get("only_when_unwanted") and state.pet_focus_wanted:
             continue
@@ -3509,16 +3515,8 @@ class AdoptMeGUI:
 
         self.action_buttons = []  # every button that starts a background task
 
-        # One row: [LOOP] (the continuous workflow) expanding to fill the left,
-        # [STOP] (square) on the right. Both sit in their own fixed-HEIGHT
-        # container (pack_propagate(False)) so they're always the same height
-        # regardless of font metrics - a
-        # Button's own width/height (character units) don't scale consistently
-        # across font sizes, and an unconstrained button's natural height grows
-        # with its font size, which is what broke this row last time the icon
-        # font got bigger. The stop container also fixes its WIDTH (making it a
-        # square); the loop container only fixes height and otherwise expands
-        # to fill the remaining width.
+        # One row: [LOOP] expanding to fill the left, [STOP] (square) on the right, each in a fixed-HEIGHT container
+        # so the row stays aligned whatever the font (see docs/ARCHITECTURE.md#gui-internals).
         NO_BORDER: dict[str, Any] = dict(bd=0, highlightthickness=0)  # flat edges, no default Tk bevel/focus ring
 
         main_row = tk.Frame(btn_frame, bg=self.bg)
@@ -3538,7 +3536,7 @@ class AdoptMeGUI:
         loop_container.pack(side=tk.LEFT, fill=tk.X, expand=True)
         loop_container.pack_propagate(False)
 
-        btn_loop = tk.Button(loop_container, text="\U0001F504", command=self.run_workflow_loop,
+        btn_loop = tk.Button(loop_container, text="\U0001F504", command=lambda: self.run_async(run_workflow_loop),
                               font=(cfg.GUI_FONT, cfg.GUI_LOOP_ICON_FONT_SIZE, "bold"), bg=cfg.GUI_LOOP_COLOR, fg=self.fg,
                               cursor="hand2", **NO_BORDER)
         btn_loop.pack(fill=tk.BOTH, expand=True)
@@ -3552,23 +3550,12 @@ class AdoptMeGUI:
         tk.Label(btn_frame, text="Functions", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"),
                  bg=self.bg, fg=self.accent).pack(anchor=tk.W)
 
-        btn_respawn = tk.Button(btn_frame, text="Respawn", command=lambda: self.run_async(respawn_character),
-                                 font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_RESPAWN_COLOR, fg=self.fg,
-                                 height=cfg.GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
-        btn_respawn.pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
-        self.action_buttons.append(btn_respawn)
-
-        btn_setup = tk.Button(btn_frame, text="Setup", command=lambda: self.run_async(setup_game),
-                               font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_RESPAWN_COLOR, fg=self.fg,
-                               height=cfg.GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
-        btn_setup.pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
-        self.action_buttons.append(btn_setup)
-
-        btn_rejoin = tk.Button(btn_frame, text="Leave & rejoin", command=lambda: self.run_async(leave_and_rejoin),
-                                font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_RESPAWN_COLOR, fg=self.fg,
-                                height=cfg.GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
-        btn_rejoin.pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
-        self.action_buttons.append(btn_rejoin)
+        for label, action in (("Respawn", respawn_character), ("Setup", setup_game), ("Leave & rejoin", leave_and_rejoin)):
+            btn = tk.Button(btn_frame, text=label, command=lambda a=action: self.run_async(a),  # type: ignore[misc]
+                            font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_RESPAWN_COLOR, fg=self.fg,
+                            height=cfg.GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
+            btn.pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
+            self.action_buttons.append(btn)
 
         # Options tab
         # Persisted switches (see load_game_config()). Deliberately not in
@@ -3711,9 +3698,6 @@ class AdoptMeGUI:
             btn.config(state=button_state)  # type: ignore[call-overload]
         self.status.config(text="Running..." if running else (status_text or "Ready"))
 
-    def run_workflow_loop(self) -> None:
-        self.run_async(run_workflow_loop)
-
     def add_config_checkbox(self, parent: Any, label: str, key: str, config: dict[str, Any]) -> None:
         """A checkbox for the persisted switch `key`; not in action_buttons (usable while a
         workflow runs). See docs/ARCHITECTURE.md#gui-internals.
@@ -3766,7 +3750,7 @@ class AdoptMeGUI:
         DEBUG_HANDLERS."""
         for col in range(2):
             parent.grid_columnconfigure(col, weight=1, uniform="debug")
-        btn_all = tk.Button(parent, text="Test every need, one after another", command=self.test_all_handlers,
+        btn_all = tk.Button(parent, text="Test every need, one after another", command=lambda: self.run_async(run_all_need_handlers),
                             font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"), bg=cfg.GUI_LOOP_COLOR, fg=self.fg, cursor="hand2")
         btn_all.grid(row=0, column=0, columnspan=2, sticky=tk.EW, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
         self.action_buttons.append(btn_all)
@@ -3801,11 +3785,6 @@ class AdoptMeGUI:
         if messagebox.askyesno("Refresh debug", "Delete everything in the debug folder (logs, images, recordings)?\n"
                                                 "The game config is kept."):
             print(f"[debug] debug folder refreshed ({refresh_debug()} entries removed)")
-
-    def test_all_handlers(self) -> None:
-        """Run every need handler in DEBUG_HANDLERS once, one after another
-        (run_all_need_handlers())."""
-        self.run_async(run_all_need_handlers)
 
     def test_handler(self, name: str, handler_cls: Callable[[], NeedHandler]) -> None:
         """Run one need handler on its own, outside the normal need-detection

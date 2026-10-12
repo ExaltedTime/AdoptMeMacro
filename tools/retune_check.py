@@ -93,11 +93,11 @@ VARIANTS.update({
     "button_names_reordered": 'BUTTON_NAMES[:] = ["sleepy", "potty", "dirty", "thirsty", "hungry"]\n',
     "helicopter_everywhere": "HELICOPTER_REQUIRED = True\n",
     # thresholds and tolerances nudged either way (detection tuning)
-    "thresholds_up": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_THRESHOLD") and isinstance(_v, float):\n        globals()[_n] = min(0.99, _v * 1.03)\n',
-    "thresholds_down": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_THRESHOLD") and isinstance(_v, float):\n        globals()[_n] = _v * 0.94\n',
+    "thresholds_up": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_THRESHOLD") and isinstance(_v, float):\n        globals()[_n] = min(0.99, _v * 1.03)\nfor _e in POPUP_TEMPLATES.values():\n    _e["threshold"] = min(0.99, _e["threshold"] * 1.03)\n',
+    "thresholds_down": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_THRESHOLD") and isinstance(_v, float):\n        globals()[_n] = _v * 0.94\nfor _e in POPUP_TEMPLATES.values():\n    _e["threshold"] = _e["threshold"] * 0.94\n',
     "tolerances_wider": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_TOLERANCE") and isinstance(_v, int):\n        globals()[_n] = _v * 2 + 1\n',
     # every search box moved a few pixels
-    "boxes_shifted": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_BOX") and isinstance(_v, tuple) and len(_v) == 4:\n        globals()[_n] = (_v[0] + 4, _v[1] + 3, _v[2] + 4, _v[3] + 3)\n',
+    "boxes_shifted": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_BOX") and isinstance(_v, tuple) and len(_v) == 4:\n        globals()[_n] = (_v[0] + 4, _v[1] + 3, _v[2] + 4, _v[3] + 3)\nfor _e in POPUP_TEMPLATES.values():\n    _v = _e["box"]\n    _e["box"] = (_v[0] + 4, _v[1] + 3, _v[2] + 4, _v[3] + 3)\n',
     "timings_x0.05": SCALE % "0.05",
     "timings_x20": SCALE % "20",
     # counts and limits at both ends

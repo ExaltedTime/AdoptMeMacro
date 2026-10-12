@@ -339,12 +339,6 @@ def test_teleport_needs_wait_for_the_need_to_clear_up_to_the_configured_time(mac
     assert waited == [expected] == [macro.cfg.NEED_GONE_MAX_WAIT]
 
 
-@pytest.mark.parametrize("need", ["cafe", "beach"])
-def test_the_slow_needs_wait_longer(macro, need):
-    entry = macro.cfg.TELEPORT_WALK_NEEDS_HALLOWEEN.get(need) or macro.cfg.TELEPORT_WALK_NEEDS_NORMAL[need]
-    assert entry["max_wait"] == macro.cfg.NEED_GONE_SLOW_MAX_WAIT > macro.cfg.NEED_GONE_MAX_WAIT
-
-
 def test_a_need_can_set_its_own_wait(macro, monkeypatch):
     waited = []
     monkeypatch.setitem(macro.cfg.TELEPORT_WALK_NEEDS, "camping", {**macro.cfg.TELEPORT_WALK_NEEDS["camping"], "max_wait": 150.0})
@@ -573,3 +567,45 @@ def test_only_the_newest_run_reports_are_kept(macro, tmp_path):
     macro.keep_newest_files(str(tmp_path), 3)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["run3.png", "run4.png", "run5.png"]
     macro.keep_newest_files(str(tmp_path / "missing"), 3)       # never raises
+
+
+def test_every_check_reaches_the_log_even_when_it_finds_nothing(macro, one_need, monkeypatch):
+    """The run report charts needs per check, so checks that find no need must be counted - as one summary line,
+    not a line every few seconds."""
+    import numpy as np
+    monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([], np.zeros((1080, 1920, 3), np.uint8)))
+    macro.state.run_number = 4
+    for _ in range(3):
+        assert macro.process_needs() is False
+    assert not os.path.exists(macro.cfg.RUN_LOG_PATH) or "idle checks" not in open(macro.cfg.RUN_LOG_PATH).read()   # not yet
+    macro.state.idle_since -= 90                                         # the three checks were 90s ago
+    monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([(100, 50, 30)], np.zeros((1080, 1920, 3), np.uint8)))
+    assert macro.process_needs() is True                                 # a need turns up (one_need's handler resolves it)
+    lines = open(macro.cfg.RUN_LOG_PATH).read().splitlines()
+    idle = [i for i, line in enumerate(lines) if "idle checks: 3 over 9" in line]
+    detected = [i for i, line in enumerate(lines) if "detected: hungry" in line]
+    assert idle and detected and idle[0] < detected[0]                   # written before the detection that ended the streak
+    assert macro.state.idle_checks == 0
+    data = macro.parse_run(macro.cfg.RUN_LOG_PATH, 4)
+    assert [matched for _, matched, _ in data["detected"]] == [0, 0, 0, 1]    # four checks, three of them empty
+
+
+def test_idle_checks_that_found_icons_nothing_matched_are_counted_too(macro, one_need, monkeypatch):
+    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(0, img[:10, :10], None, 0.5)]))
+    macro.state.run_number = 4
+    for _ in range(4):
+        macro.process_needs()
+    log = open(macro.cfg.RUN_LOG_PATH).read()
+    assert log.count("detected: none matched") == 1 and macro.state.idle_checks == 3   # logged once, the other three counted
+    macro.flush_idle_checks()
+    assert [matched for _, matched, _ in macro.parse_run(macro.cfg.RUN_LOG_PATH, 4)["detected"]] == [0, 0, 0, 0]
+
+
+def test_idle_checks_are_flushed_after_a_quiet_interval(macro):
+    macro.state.run_number = 4
+    macro.note_idle_check()
+    macro.flush_idle_checks_if_due()
+    assert macro.state.idle_checks == 1                                  # too soon
+    macro.state.idle_since -= macro.cfg.QUIET_LOG_INTERVAL
+    macro.flush_idle_checks_if_due()
+    assert macro.state.idle_checks == 0 and "idle checks: 1 over" in open(macro.cfg.RUN_LOG_PATH).read()

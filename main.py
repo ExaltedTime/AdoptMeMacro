@@ -296,6 +296,10 @@ class State:
     # True while the last "detected:" line in the run log was "none matched", so
     # an unrecognised icon sitting on screen is logged once, not on every check.
     none_matched_logged: bool = False
+    # Checks in a row that found no need, not yet written to the run log (see note_idle_check()): how many, and
+    # when the first one was.
+    idle_checks: int = 0
+    idle_since: float = 0.0
     # Needs switched off for the rest of this launch of the script because they
     # kept showing up without ever clearing. Deliberately not persisted (unlike
     # the game config): relaunching the script gives every enabled need a fresh
@@ -403,6 +407,26 @@ def reset_need_tracking() -> None:
     state.attempt_streaks.clear()
     state.attempted_last = set()
     state.none_matched_logged = False
+
+def note_idle_check() -> None:
+    """Count one check that found no need. They are logged together, as one "idle checks: N over Ss" line
+    (flush_idle_checks()), so a long wait doesn't write a line every few seconds - and the run report can still
+    count every check, not just the ones that found something."""
+    if state.idle_checks == 0:
+        state.idle_since = time.time()
+    state.idle_checks += 1
+
+def flush_idle_checks() -> None:
+    """Write the counted idle checks (note_idle_check()) to the run log and start counting again."""
+    if state.idle_checks:
+        log_run_event(f"idle checks: {state.idle_checks} over {time.time() - state.idle_since:.0f}s")
+        state.idle_checks = 0
+
+def flush_idle_checks_if_due() -> None:
+    """flush_idle_checks() once QUIET_LOG_INTERVAL has passed since the first of them, so a long idle stretch
+    reaches the log (and a crash loses at most that much)."""
+    if state.idle_checks and time.time() - state.idle_since >= cfg.QUIET_LOG_INTERVAL:
+        flush_idle_checks()
 
 def log_run_event(message: str) -> None:
     """Append one timestamped line to RUN_LOG_PATH, tagged with
@@ -2080,6 +2104,7 @@ def process_needs() -> bool:
         state.last_detection = time.time()   # can't tell whether there are needs - not a reason to respawn
     if not found_icons:
         record_detection([])
+        note_idle_check()
         return False
 
     matched_needs = []
@@ -2097,12 +2122,16 @@ def process_needs() -> bool:
 
     names = [name for name, _ in matched_needs]
     if names:
+        flush_idle_checks()
         print(f"\n[!] Found {len(found_icons)} icon(s): " + ", ".join(f"{n} ({s:.4f})" for n, s in matched_needs))
         log_run_event(f"detected: {', '.join(names)}")
         state.none_matched_logged = False
     elif not state.none_matched_logged:
+        flush_idle_checks()
         log_run_event(f"detected: none matched ({len(found_icons)} icon(s) on screen)")
         state.none_matched_logged = True
+    else:
+        note_idle_check()   # more icons nothing matched: logged once already, counted with the idle checks
     run_stats.last_detected = names
     if names:
         state.last_detection = time.time()
@@ -2994,6 +3023,7 @@ def run_full_cycle() -> None:
         check_stop()
         run_stats.cycles += 1
         check_quiet()
+        flush_idle_checks_if_due()
         write_status()
         unscrew()
         side_quest()
@@ -3016,6 +3046,7 @@ def run_workflow_loop() -> None:
     STOP_EVENT.clear()
     state.run_number = next_run_number()
     reset_need_tracking()
+    state.idle_checks = 0
     reset_run_stats()
     state.last_rejoin = state.last_progress = state.last_detection = time.time()  # the scheduled and no-progress rejoins count from here
     log_run_event("LOOP started")
@@ -3068,6 +3099,7 @@ def run_workflow_loop() -> None:
         monitor.stop()
         if recorder is not None:
             recorder.stop()
+        flush_idle_checks()
         log_run_event("LOOP stopped")
         write_run_report(state.run_number)
         print("\n[LOOP] Stopped\n")
@@ -3093,6 +3125,7 @@ LINE_RE = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] \[RUN ([^\]]+)\] (.
 RESOLVED_RE = re.compile(r"^resolved: (\S+) \((\d+)s\)$")
 DETECTED_RE = re.compile(r"^detected: (.*)$")
 NONE_MATCHED_RE = re.compile(r"^none matched")
+IDLE_CHECKS_RE = re.compile(r"^idle checks: (\d+) over (\d+)s$")
 RESOURCES_RE = re.compile(r"^resources: cpu ([\d.]+)% mem (\d+)MB$")
 MINIGAME_RE = re.compile(r"^minigame (started|finished): (.*?)(?: \(\d+s\))?$")
 
@@ -3148,6 +3181,9 @@ def parse_run(log_path: str, run: Union[int, str]) -> Optional[dict[str, Any]]:
             else:
                 names = [n for n in body.split(", ") if n]
                 data["detected"].append((t, len(names), len(names)))
+        elif m := IDLE_CHECKS_RE.match(text):
+            count, span = int(m.group(1)), int(m.group(2))     # `count` checks that found nothing, spread over the `span` s before this line
+            data["detected"] += [(t - span + span * (k + 0.5) / count, 0, 0) for k in range(count)]
         elif m := RESOURCES_RE.match(text):
             data["resources"].append((t, float(m.group(1)), int(m.group(2))))
         elif text.startswith("no need detected for "):

@@ -56,7 +56,13 @@ every second instead of a line per check.
 4. Every icon that *did* match is collected into an ordered list of need
    names, in the order they were detected, and printed and logged
    (`detected: ...`; icons on screen but none recognised are logged once,
-   not on every check). The list is also handed to `record_detection()` -
+   not on every check). A check that finds no need isn't logged line by line
+   either: `note_idle_check()` counts them (including the not-recognised ones
+   after the first) and `flush_idle_checks()` writes one `idle checks: N over
+   Ss` line before the next detection, every `QUIET_LOG_INTERVAL`, and when the
+   loop stops - the run report spreads those N empty checks over the S seconds,
+   so "needs detected per check" counts every check, not only those that found
+   something. The list is also handed to `record_detection()` -
    on every check, including ones that find nothing - which is what catches
    [stuck needs](#stuck-needs).
 5. The list is then worked through in order until one need is resolved. For
@@ -418,7 +424,7 @@ rather than a flat sleep after the fact.
 | `pet` | `PetNeedHandler`: `focus_pet()` (see below), then hold the mouse down and swipe once down from `PET_SWIPE_START_OFFSET` above screen center to `PET_SWIPE_END_OFFSET` below it over `PET_SWIPE_DURATION` (8s). Same as `catch` - always the full fixed duration. |
 | `choose` | `ChooseNeedHandler`: `focus_pet()` (see below), find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. It doesn't wait for the icon to clear (it's gone at once; the next check confirms). |
 | `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then `equip_favorite_vehicle()` (backpack → vehicles → first vehicle → equip → close backpack), hold `r` (`KEY_HELICOPTER`) for `RIDE_R_HOLD_DURATION` (1s), then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT` (75s), ending early the moment "ride" is confirmed cleared (see below). |
-| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`), `helicopter` (see below) and `max_wait` (how long to wait for the need to clear afterwards; default `NEED_GONE_MAX_WAIT`, 75s; `cafe` and `beach` use `NEED_GONE_SLOW_MAX_WAIT`, 90s, as they were seen clearing about 80s after their walk). `sick` waits `SICK_PRE_E_WAIT` after its last hold before pressing `e`. Which table is used depends on `HALLOWEEN` - see below. |
+| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`), `helicopter` (see below) and `max_wait` (how long to wait for the need to clear afterwards; default `NEED_GONE_MAX_WAIT`, 75s). `sick` waits `SICK_PRE_E_WAIT` after its last hold before pressing `e`. Which table is used depends on `HALLOWEEN` - see below. |
 | `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")` - up to `NEED_GONE_MAX_WAIT` (75s), same early-exit as `ride` above. |
 
 **Helicopter.** A teleport-walk entry can fly instead of walk. `HELICOPTER_REQUIRED`

@@ -52,7 +52,11 @@ every second instead of a line per check.
    `ref/needs/` (`find_matching_need()`). An icon that doesn't match anything
    well enough triggers `prompt_rename_need()` (asks you, in a dialog, to
    name and save it - only when `SAVE_NEW_NEEDS` is on) and is otherwise skipped this pass - it isn't
-   "resolved," it's just been taught for next time.
+   "resolved," it's just been taught for next time. The saved icon is the
+   high-contrast black-and-white form (`preprocess_icon()`); cancelling the
+   dialog or an empty name saves it as `unnamed_<idx>`. The dialog runs on the
+   GUI's thread (`run_on_ui_thread()`, no timeout) since the worker has no
+   console to read from; without a GUI it asks on the console.
 4. Every icon that *did* match is collected into an ordered list of need
    names, in the order they were detected, and printed and logged
    (`detected: ...`; icons on screen but none recognised are logged once,
@@ -152,15 +156,25 @@ an extra walk from wherever the previous need left the character standing.
 - **NEED HANDLERS** - `NeedHandler` and one subclass per need (or per group
   of needs, via `partial()`). See [Need handlers](#need-handlers).
 - **PER-CYCLE CHECKS** - `unscrew()` and what it runs: `rejoin_game()`
-  (with `rejoin_reason()` / `detect_disconnect()`), The click sequences that open the backpack (setup, equipping a vehicle or toy) end with `close_backpack(step)`: the key press, then `close_backpack_if_open(step)`, so a backpack a misplaced click expanded is closed on the spot and the log line says after which step ("... closed it after equipping the toy"). `close_backpack_if_stuck()`
+  (with `rejoin_reason()` / `detect_disconnect()`), `close_backpack_if_stuck()`
   / `close_backpack_if_open()` (with `detect_backpack_expanded()` /
-  `detect_backpack_normal()`),
+  `detect_backpack_normal()`; the click sequences that open the backpack end
+  with `close_backpack(step)`, which calls the latter - see
+  [Click & input primitives](#click--input-primitives)),
   `dismiss_stray_windows()`, `minigame_popup()`,
   `detect_paycheck()`; the `task_unscrew()` / `task_unscrew_tick()` hook that
   runs them during a task; and `side_quest()`.
-- **WORKFLOWS** - `run_full_cycle()` and `run_workflow_loop()`. See
-  [The workflow lifecycle](#the-workflow-lifecycle) above.
+- **RUN RECORDING** - `RunRecorder` and `start_recording_if_requested()`. See
+  [Recording a run](#recording-a-run).
+- **WORKFLOWS** - `run_full_cycle()` and `run_workflow_loop()` (plus
+  `ResourceMonitor`, `check_quiet()` and `respawn_if_no_detection()`, which run
+  inside the loop). See [The workflow lifecycle](#the-workflow-lifecycle) above.
+- **RUN REPORT** - `parse_run()` / `draw_report()` / `generate_run_report()`,
+  which chart a run from the log. See
+  [Debugging an unattended run](#debugging-an-unattended-run).
 - **GUI** - the `tkinter` control panel. See [GUI internals](#gui-internals).
+- **MAIN** - starts the GUI. The top of the file, **EXTERNAL DEPENDENCIES**,
+  holds the imports and the `Image` / `Point` / `Box` / `Color` aliases.
 
 ## Window & coordinates
 
@@ -333,7 +347,9 @@ the buttons:
    stores the result in `state.button_positions`. This assumes the five buttons
    are always laid out in that fixed order on screen - if Roblox ever
    changes that order, this mapping (and only this mapping) would need
-   updating.
+   updating. It clears the previous mapping first, even when detection fails,
+   so a failed scan never leaves a stale position for `click_need_button()`;
+   when fewer than five buttons are found it logs `button scan found N of 5`.
 
 ## Click & input primitives
 
@@ -345,6 +361,17 @@ movement, so this is what makes a click register reliably whether it's on
 a UI button or into empty game-world space (there used to be a separate
 `simple_click()` with no hover wiggle for the latter case, but it wasn't
 actually needed - `hover_click()` works fine there too, so it was dropped).
+
+(`hover_move()` uses SendInput rather than `pyautogui.moveTo()` because
+`SetCursorPos`-style warps don't count as hover to Roblox, only real input
+events do.)
+
+`close_backpack(step)` ends a click sequence: it presses the backpack key and
+checks the backpack really closed - a misplaced click earlier can have expanded
+it, when the key only shrinks it - and closes it properly if not
+(`close_backpack_if_open()`, which gives up and logs a failure after a second
+press rather than risk reopening it, and does nothing unless Roblox has the
+focus).
 
 `wait_interruptible(duration)` is the delay primitive nearly everything
 else is built on - see [Stopping & focus safety](#stopping--focus-safety).
@@ -812,6 +839,22 @@ checked the same way:
   the stop: if it comes, the run ends as an ordinary user stop rather than a
   "Roblox lost focus" failure.
 
+**Why an exception and not killing the thread.** The stop is cooperative on
+purpose. Python has no safe way to terminate a running thread from outside
+(the closest trick, async-raising into it through `ctypes`, is explicitly
+unsafe), and for a game macro that matters: a kill that landed while a
+movement key or the mouse button was held would never release it, and it
+would stay stuck down in the game. Instead `wait_interruptible()` and
+`check_running()` raise `StopRequested` / `FocusLost` the moment they notice,
+and ordinary exception propagation unwinds the stack up to `run_async()`'s
+worker thread, which catches it. Every `try`/`finally` on the way (used
+wherever a key or the mouse is held) still runs, so cleanup happens wherever
+the stop lands, without each function checking a flag after every action.
+`TaskInterrupted` is the same mechanism for a different cause: a minigame or a
+rejoin took over the character, so the handler's waits raise it, the handler
+is abandoned, and `process_needs()` catches it - the next check decides from
+the screen what is still needed.
+
 `wait_interruptible()` runs to a deadline, so the time the in-task checks take counts
 towards the wait (a key held for a timed step is held for that long, not longer).
 
@@ -977,6 +1020,17 @@ knowing if you're modifying it:
   the **Debug** tab has two subtabs: **Needs** (a button that tests every need
   in turn, and one per need handler) and **Other** (Record the next run,
   Refresh debug, Reset Config).
+- **`run_on_ui_thread(func, timeout)`** is how the worker thread touches Tk
+  (which is only safe from its own thread): it queues `func`, waits until it
+  has run or `timeout` seconds pass (`None` = as long as it takes, for a
+  dialog such as the new-need name prompt) and returns what it returned.
+- **`watch_stop_hotkey()`** starts a thread that stops a running macro when
+  `STOP_HOTKEY` goes down in any window (holding it doesn't retrigger; it does
+  nothing while nothing runs), so you can take over the computer without
+  reaching for the GUI. The stop itself is handed to Tk's thread.
+- **`add_config_checkbox(key)`** makes a checkbox for a persisted switch. It is
+  deliberately not in `action_buttons`: the switches stay usable while a
+  workflow runs, which is safe because `update_game_config()` is locked.
 - **`DebugCapture`** redirects `sys.stdout` into the on-screen console
   (`self.debug_text`) for the lifetime of the GUI, so every `print()`
   anywhere in the macro shows up there automatically (`write()` only logs

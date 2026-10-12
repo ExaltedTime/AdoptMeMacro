@@ -285,6 +285,8 @@ class State:
     # when the first one was.
     idle_checks: int = 0
     idle_since: float = 0.0
+    # Since when the screen has been completely white, without a break (see detect_white_screen()); None when it isn't.
+    white_since: Optional[float] = None
     # The needs named by the last "detected:" line, and how many checks since then found exactly the same with no
     # handler run in between (not yet written to the run log - see note_repeat_check()).
     last_detected_body: Optional[str] = None
@@ -1427,6 +1429,7 @@ def leave_and_rejoin(clean_leave: bool = True) -> bool:
         print(f"[debug] waiting {cfg.REJOIN_AFTER_JOIN_WAIT}s, then respawning...")
         wait_stoppable(cfg.REJOIN_AFTER_JOIN_WAIT)
         state.last_rejoin = state.last_progress = state.last_detection = time.time()   # first: the respawn can raise FocusLost
+        state.white_since = None
         respawn_character()
         print("[!] Rejoin complete!")
         return True
@@ -2130,19 +2133,31 @@ def detect_disconnect(img: Image) -> bool:
     mask = exact_color_mask(img[top:bottom, left:right], cfg.DISCONNECT_PANEL_COLOR, cfg.DISCONNECT_PANEL_TOLERANCE)
     return bool(np.count_nonzero(mask) / mask.size >= cfg.DISCONNECT_PANEL_MIN_FRACTION)
 
+def detect_white_screen(img: Image) -> bool:
+    """True if most of `img` is completely white - the transition shown on a respawn, teleport or change of
+    location (WHITE_SCREEN_LEVEL / WHITE_SCREEN_MIN_FRACTION). See docs/ARCHITECTURE.md#stuck-needs."""
+    return bool(np.count_nonzero(img.min(axis=2) >= cfg.WHITE_SCREEN_LEVEL) / (img.shape[0] * img.shape[1]) >= cfg.WHITE_SCREEN_MIN_FRACTION)
+
 ROBLOX_NOT_RUNNING = "Roblox isn't running"
 
 def rejoin_reason() -> Optional[tuple[str, str]]:
     """Why the game needs rejoining now, as (kind, reason), or None - in priority order
-    "disconnect", "stuck", "stalled", "scheduled". See docs/ARCHITECTURE.md#stuck-needs.
+    "disconnect", "white_screen", "stuck", "stalled", "scheduled". See docs/ARCHITECTURE.md#stuck-needs.
     """
     windows = gw.getAllWindows()   # listed once (a Windows call that reads every window's title) for both questions
     if any(w.title == cfg.ROBLOX_CRASH_WINDOW_TITLE for w in windows):
         return "disconnect", "Roblox crashed"
     if not any("roblox" in w.title.lower() for w in windows):
         return "disconnect", ROBLOX_NOT_RUNNING
-    if detect_disconnect(grab_screen()):
+    screen = grab_screen()
+    if detect_disconnect(screen):
         return "disconnect", "disconnected from the game"
+    if not detect_white_screen(screen):
+        state.white_since = None
+    elif state.white_since is None:
+        state.white_since = time.time()
+    elif time.time() - state.white_since >= cfg.WHITE_SCREEN_REJOIN_AFTER:
+        return "white_screen", f"the screen has been white for {cfg.WHITE_SCREEN_REJOIN_AFTER:g}s"
     if len(state.disabled_needs) >= cfg.DISABLED_NEEDS_REJOIN_THRESHOLD:
         return "stuck", f"{len(state.disabled_needs)} needs disabled ({', '.join(sorted(state.disabled_needs))})"
     if state.last_progress is not None and time.time() - state.last_progress >= cfg.NO_PROGRESS_REJOIN_INTERVAL:
@@ -2457,7 +2472,7 @@ def click_nice_until_gone() -> bool:
 def play_minigame(name: str) -> bool:
     """Take the popup's Yes, play `name` until its victory screen, click NICE!, respawn. Gives
     up (a logged failure) if the overlay shows it over or never started, or after
-    MINIGAME_MAX_DURATION. Counts as progress. See docs/ARCHITECTURE.md#need-handlers.
+    MINIGAME_MAX_DURATION. Counts as progress only if won. See docs/ARCHITECTURE.md#need-handlers.
     """
     label = cfg.MINIGAME_LABELS.get(name, name)
     print(f"[!] playing {label}")
@@ -2478,7 +2493,9 @@ def play_minigame(name: str) -> bool:
     else:
         reason = watch.problem or f"did not reach the victory screen within {cfg.MINIGAME_MAX_DURATION:g}s"
         log_failure(f"{label} {reason}")
-    state.last_progress = state.last_detection = time.time()
+    state.last_detection = time.time()      # no needs could be seen while it ran
+    if won:
+        state.last_progress = time.time()   # a failed one (never started, left early) must not reset the no-progress rejoin
     respawn_character()
     return won
 
@@ -2525,7 +2542,7 @@ def unscrew(in_task: bool = False, play_minigames: bool = True) -> Optional[str]
     "played", "rejoined" or "aborted" (the callers abandon the task) or None. See docs/ARCHITECTURE.md#need-handlers.
     """
     if in_task:
-        if rejoin_game(kinds=("disconnect",)):
+        if rejoin_game(kinds=("disconnect", "white_screen")):
             return "rejoined"
     else:
         rejoin_game()
@@ -2867,6 +2884,7 @@ def run_workflow_loop() -> None:
     state.run_start_pending = True
     reset_run_stats()
     state.last_rejoin = state.last_progress = state.last_detection = time.time()  # the scheduled and no-progress rejoins count from here
+    state.white_since = None
     log_run_event("LOOP started")
     recorder = start_recording_if_requested()
     print("\n" + "=" * 50)

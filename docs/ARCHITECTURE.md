@@ -539,8 +539,8 @@ whole of a handler (a minute or two), and minigames are time-sensitive. So
 `task_unscrew()`, and during it every `wait_interruptible()` also runs
 `unscrew(in_task=True)` every `UNSCREW_TASK_INTERVAL` (only on the thread that
 started the task, and never from inside `unscrew()` itself). It's the same
-`unscrew()`, with two differences: the rejoin check only acts on a disconnect
-(`rejoin_game(kinds=("disconnect",))`; the scheduled and stalled rejoins wait
+`unscrew()`, with two differences: the rejoin check only acts on a disconnect or a
+white screen (`rejoin_game(kinds=("disconnect", "white_screen"))`; the stuck, scheduled and stalled rejoins wait
 for the top of a cycle), and the backpack is only closed once it has been seen
 open on `BACKPACK_CLOSE_CONFIRMATIONS` (2) checks in a row - a handler opens the
 normal backpack for a few seconds on purpose, so one sighting could be a
@@ -641,7 +641,7 @@ out (`click_nice_until_gone()`, which looks again and clicks up to
 `MINIGAME_VICTORY_CLICK_TRIES` times while the win screen is still up, logging a
 failure if it never closes), and the character respawns. If the victory screen hasn't shown after
 `MINIGAME_MAX_DURATION` it gives up with a logged failure (and releases every
-input). A minigame counts as progress for the no-progress rejoin.
+input). A minigame that was won counts as progress for the no-progress rejoin (`state.last_progress`); one that failed - never started, left early, timed out - does not, or a popup every few minutes would keep the 20-minute rejoin clock from ever running out. Either way it counts as a detection (no needs can be seen while it runs).
 
 *Telling whether it is on.* Each minigame has an overlay along the top of the
 screen while it runs (Hauntlet 2: the ROOM counter; Ghost Gallery: the TIME
@@ -696,13 +696,23 @@ asks `rejoin_reason()` whether the game needs rejoining. In order:
    (`detect_disconnect()`: at least `DISCONNECT_PANEL_MIN_FRACTION` of
    `DISCONNECT_PANEL_BOX` is the dialog's grey, `DISCONNECT_PANEL_COLOR` - the
    game behind it is blurred, so nothing else fills a box like that).
-2. *Stuck* - `DISABLED_NEEDS_REJOIN_THRESHOLD` (4) needs have been disabled as
+2. *White screen* - at least `WHITE_SCREEN_MIN_FRACTION` of the screen has been
+   completely white (every channel at or above `WHITE_SCREEN_LEVEL`,
+   `detect_white_screen()`) for `WHITE_SCREEN_REJOIN_AFTER` (30s) in a row. The
+   game shows a white screen for a moment on a respawn, teleport or change of
+   location, so only a long one counts; a bright scene is nowhere near it (the
+   real white transition in `tests/icon_detection/` is 93% white, every other
+   screenshot under 10%). It is looked for wherever `rejoin_reason()` is
+   asked, which is every cycle and every `UNSCREW_TASK_INTERVAL` mid-task, and
+   the clock (`state.white_since`) restarts whenever the screen isn't white.
+   (Needs stay visible on the white screen, so nothing else notices it.)
+3. *Stuck* - `DISABLED_NEEDS_REJOIN_THRESHOLD` (4) needs have been disabled as
    stuck.
-3. *Stalled* - no need has been resolved for `NO_PROGRESS_REJOIN_INTERVAL`
+4. *Stalled* - no need has been resolved for `NO_PROGRESS_REJOIN_INTERVAL`
    (20 minutes; `state.last_progress`, set when the loop starts, whenever a need is
    resolved and by every successful `leave_and_rejoin()`): the game is up but
    nothing is working, whatever the cause.
-4. *Scheduled* - it has been `REJOIN_INTERVAL` (two hours) since the last
+5. *Scheduled* - it has been `REJOIN_INTERVAL` (two hours) since the last
    rejoin (`state.last_rejoin`, set when the loop starts and by every successful
    `leave_and_rejoin()`): a refresh of a client that has been up a long time.
 
@@ -713,7 +723,7 @@ clears `state.disabled_needs` and the streaks so every need gets a fresh
 chance, and the workflow carries on. (If the game is rejoined *again* while
 setup runs - its in-task checks do that on a disconnect - the nested recovery has
 already run setup, so the `TaskInterrupted` it raises is caught here and logged
-as `setup interrupted by a rejoin`, rather than ending the run.) A disconnect, stuck or stalled recovery counts as
+as `setup interrupted by a rejoin`, rather than ending the run.) A disconnect, white-screen, stuck or stalled recovery counts as
 a failure: `log_failure()` saves a screenshot first, which shows the dialog
 and its error code. A scheduled rejoin isn't one: it's a line in the run log,
 counted in `scheduled_rejoins`. Nor is Roblox not running when the run starts
@@ -721,7 +731,7 @@ counted in `scheduled_rejoins`. Nor is Roblox not running when the run starts
 that is where the run begins, logged as "Roblox isn't running at the start -
 starting it" and not counted as a recovery or a failure. If the rejoin fails (`recovery: rejoin failed, will try again next cycle`, a logged failure) the cause is still
 there, so the next cycle tries again. The top-of-cycle check looks for all
-four reasons; during a handler only a disconnect is acted on (see *Per-cycle
+five reasons; during a handler only a disconnect or a white screen is acted on (see *Per-cycle
 checks while a task runs* above), and the stuck, stalled and scheduled rejoins
 wait for the next top of a cycle.
 
@@ -1104,7 +1114,7 @@ exact values and rationale):
 | Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_MATCH_RADIUS_FRACTION`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
 | Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
-| Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
+| Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |

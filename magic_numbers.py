@@ -454,6 +454,12 @@ DISCONNECT_PANEL_COLOR = (57, 59, 60)
 DISCONNECT_PANEL_TOLERANCE = 3
 DISCONNECT_PANEL_BOX = (760, 427, 1160, 677)   # left, top, right, bottom
 DISCONNECT_PANEL_MIN_FRACTION = 0.5
+# The white screen that shows briefly on a respawn, teleport or change of location: when at least this fraction of
+# the Roblox window is completely white (every channel at or above the level) for WHITE_SCREEN_REJOIN_AFTER seconds
+# in a row, the game is rejoined (see detect_white_screen()). A normal scene, even a bright one, has far less.
+WHITE_SCREEN_LEVEL = 250
+WHITE_SCREEN_MIN_FRACTION = 0.6
+WHITE_SCREEN_REJOIN_AFTER = 30.0
 ROBLOX_CRASH_WINDOW_TITLE = "Roblox Crash"
 
 # Optional: resume after Roblox loses focus instead of stopping (the "Resume after focus loss" checkbox).

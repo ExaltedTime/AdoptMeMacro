@@ -974,3 +974,87 @@ def test_a_need_disabled_for_being_stuck_is_logged_by_name(macro, monkeypatch):
         macro.record_detection(["hungry"])
     assert "hungry" in macro.state.disabled_needs
     assert "[RUN 4] disabled: hungry\n" in open(macro.cfg.RUN_LOG_PATH).read()
+
+
+# --- the white screen ---
+
+def white_screen_run(macro, monkeypatch, frames):
+    """rejoin_reason() with the game running and `frames` (a list, popped one per call) as what the screen shows."""
+    import numpy as np
+    clock = [1000.0]
+    window = type("Window", (), {"title": "Roblox"})()
+    monkeypatch.setattr(macro.time, "time", lambda: clock[0])
+    monkeypatch.setattr(macro.gw, "getAllWindows", lambda: [window])
+    white = np.full((1080, 1920, 3), 255, np.uint8)
+    dark = np.zeros((1080, 1920, 3), np.uint8)
+    monkeypatch.setattr(macro, "grab_screen", lambda: white if frames.pop(0) else dark)
+    return clock
+
+
+def test_a_screen_that_stays_white_is_rejoined_after_the_wait(macro, monkeypatch):
+    frames = [True] * 5
+    clock = white_screen_run(macro, monkeypatch, frames)
+    limit = macro.cfg.WHITE_SCREEN_REJOIN_AFTER
+    assert macro.rejoin_reason() is None                      # first white look: the clock starts
+    clock[0] += limit - 1
+    assert macro.rejoin_reason() is None                      # not long enough
+    clock[0] += 2
+    kind, reason = macro.rejoin_reason()
+    assert kind == "white_screen" and f"{limit:g}s" in reason
+
+
+def test_a_white_screen_that_clears_starts_the_wait_afresh(macro, monkeypatch):
+    frames = [True, False, True, True]
+    clock = white_screen_run(macro, monkeypatch, frames)
+    limit = macro.cfg.WHITE_SCREEN_REJOIN_AFTER
+    macro.rejoin_reason()
+    clock[0] += limit - 1
+    assert macro.rejoin_reason() is None and macro.state.white_since is None     # it cleared a moment before the limit
+    macro.rejoin_reason()
+    clock[0] += limit - 1
+    assert macro.rejoin_reason() is None                                          # the second white spell is a new one
+
+
+def test_a_white_screen_is_acted_on_mid_task_too(macro, monkeypatch):
+    seen = []
+    monkeypatch.setattr(macro, "rejoin_reason", lambda: ("white_screen", "white"))
+    monkeypatch.setattr(macro, "leave_and_rejoin", lambda clean_leave=True: seen.append(clean_leave) or True)
+    monkeypatch.setattr(macro, "setup_game", lambda: True)
+    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: None)
+    assert macro.unscrew(in_task=True) == "rejoined"
+    assert seen == [True]
+
+
+def test_detect_white_screen_wants_most_of_the_screen_completely_white(macro):
+    import numpy as np
+    screen = np.zeros((1080, 1920, 3), np.uint8)
+    assert not macro.detect_white_screen(screen)
+    screen[:, :int(1920 * (macro.cfg.WHITE_SCREEN_MIN_FRACTION + 0.05))] = 255
+    assert macro.detect_white_screen(screen)
+    bright = np.full((1080, 1920, 3), macro.cfg.WHITE_SCREEN_LEVEL - 20, np.uint8)       # bright is not white
+    assert not macro.detect_white_screen(bright)
+
+
+def test_the_real_white_transition_is_white_and_no_other_real_screenshot_is(macro):
+    import glob
+    import os
+    import cv2
+    folder = os.path.join(os.path.dirname(__file__), "icon_detection", "halloween1")
+    white = [os.path.basename(f) for f in sorted(glob.glob(os.path.join(folder, "*.png")))
+             if macro.detect_white_screen(cv2.imread(f))]
+    assert white == ["Screenshot (303).png"]
+
+
+def test_a_failed_minigame_does_not_count_as_progress_but_a_won_one_does(macro, monkeypatch):
+    stalled = time.time() - 100
+    monkeypatch.setattr(macro, "release_all_inputs", lambda: None)
+    monkeypatch.setattr(macro, "hover_click", lambda *a, **k: None)
+    monkeypatch.setattr(macro, "respawn_character", lambda: None)
+    monkeypatch.setattr(macro, "click_nice_until_gone", lambda: True)
+    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: None)
+    for won in (False, True):
+        macro.state.last_progress = stalled
+        monkeypatch.setitem(macro.MINIGAME_PLAYERS, "ghost_gallery", lambda deadline, watch, won=won: won)
+        assert macro.play_minigame("ghost_gallery") is won
+        assert (macro.state.last_progress == stalled) is (not won)
+        assert time.time() - macro.state.last_detection < 5                            # needs couldn't be seen meanwhile either way

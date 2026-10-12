@@ -2078,22 +2078,27 @@ class TeleportWalkNeedHandler(NeedHandler):
         return True
 
     def _open_dialog(self) -> bool:
-        """Press the prompt's key ('e') and wait for the need's dialog (sick: the doctor's Yes/No). If it doesn't
-        come up the pet was most likely focused - the prompt is then a hand button 'e' doesn't press - so back out
-        of the pet view and click the prompt on screen (the entry's `prompt_pos`), and look once more. Returns
-        whether the dialog is up."""
+        """Press the prompt's key ('e') and wait for the need's dialog (sick: the doctor's Yes/No). If it isn't
+        recognised and the pet view is open - the prompt is then a hand button 'e' doesn't press - back out of it
+        and click the prompt on screen (the entry's `prompt_pos`), and look once more. If the pet view is not open
+        the answer is to go on (the dialog was most likely just not recognised). Returns whether to click Yes."""
         wait_interruptible(cfg.SICK_PRE_E_WAIT)
         pydirectinput.press("e")
         wait_interruptible(cfg.SICK_CONFIRM_WAIT)
         if detect_sick_dialog(grab_screen()):
             return True
+        if not detect_pet_focus(grab_screen()):
+            # Not the pet view. Most likely the dialog is up and just wasn't recognised: run 2 had 27 sick attempts in a
+            # row end here with the pet not focused, where the plain click on Yes had cleared sick every time in run 1.
+            # So carry on as before - click Yes, and the wait for the icon says whether it worked.
+            log_run_event(f"{self.name}: dialog not recognised after e (pet focused: False) - clicking Yes anyway")
+            return True
         prompt_pos = self.config.get("prompt_pos")
         if prompt_pos is None:
             return False
-        pet_focused = detect_pet_focus(grab_screen())
-        log_run_event(f"{self.name}: no dialog after e (pet focused: {pet_focused}) - clicking the prompt")
+        log_run_event(f"{self.name}: no dialog after e (pet focused: True) - clicking the prompt")
         print(f"[debug] no {self.name} dialog after e - backing out of the pet view, clicking the prompt at {prompt_pos}...")
-        dismiss_stray_windows()                     # backs out of the pet focus view, if that is what it is
+        dismiss_stray_windows()                     # backs out of the pet focus view
         hover_click(*prompt_pos)
         wait_interruptible(cfg.SICK_CONFIRM_WAIT)
         return detect_sick_dialog(grab_screen())

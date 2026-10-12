@@ -824,8 +824,19 @@ def test_sick_backs_out_of_the_pet_view_and_clicks_the_prompt_when_e_brings_up_n
     assert "sick: no dialog after e (pet focused: True) - clicking the prompt" in log and "FAILURE" not in log
 
 
+def test_sick_goes_on_to_click_yes_when_the_dialog_is_not_recognised_and_the_pet_is_not_focused(macro, sick_run):
+    """Run 2: 27 sick attempts in a row found no dialog with the pet NOT focused (the recognition was failing; the
+    plain click had cleared sick every time in run 1). Not the pet view: click Yes as before."""
+    sick_run["dialog"] = [False]
+    assert macro.TeleportWalkNeedHandler("sick").handle() is True
+    assert sick_run["events"] == ["look", ("click", sick_run["final"])]            # no back-out, no prompt click
+    assert sick_run["waited"] == ["sick"] and sick_run["respawns"] == 0
+    assert "dialog not recognised after e (pet focused: False) - clicking Yes anyway" in open(macro.cfg.RUN_LOG_PATH).read()
+
+
 def test_sick_fails_at_once_when_the_prompt_click_brings_up_no_dialog_either(macro, sick_run):
     sick_run["dialog"] = [False]
+    sick_run["pet_focused"] = True
     assert macro.TeleportWalkNeedHandler("sick").handle() is False
     assert sick_run["events"] == ["look", "back out", ("click", sick_run["prompt"]), "look"]   # never the Yes click
     assert sick_run["waited"] == [] and sick_run["respawns"] == 1                                    # no waiting for the icon
@@ -834,6 +845,7 @@ def test_sick_fails_at_once_when_the_prompt_click_brings_up_no_dialog_either(mac
 def test_a_need_without_a_prompt_to_click_fails_after_the_first_look(macro, sick_run, monkeypatch):
     monkeypatch.setitem(macro.cfg.TELEPORT_WALK_NEEDS["sick"], "prompt_pos", None)
     sick_run["dialog"] = [False]
+    sick_run["pet_focused"] = True
     assert macro.TeleportWalkNeedHandler("sick").handle() is False
     assert sick_run["events"] == ["look"] and sick_run["respawns"] == 1
 
@@ -841,6 +853,7 @@ def test_a_need_without_a_prompt_to_click_fails_after_the_first_look(macro, sick
 def test_a_failed_sick_is_logged_as_a_failure_by_process_needs(macro, sick_run, monkeypatch):
     import numpy as np
     sick_run["dialog"] = [False]
+    sick_run["pet_focused"] = True
     screen = np.zeros((1080, 1920, 3), np.uint8)
     monkeypatch.setattr(macro, "focus_roblox_click", lambda: True)
     monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([(100, 50, 30)], screen))

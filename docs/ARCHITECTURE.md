@@ -288,9 +288,10 @@ read (`State.need_icon_crops`, with its place in `State.need_icon_positions`,
 both set by `identify_icons()` - the place alone can hold another need's icon by
 now, the others having shifted while the walk ran: run 3's sick, 17:09, was
 followed as its neighbour and never seen to clear), searches the whole bar for it
-at the first look (the picture is stored by `icon_crop_for_storage()` with the four corners outside the
-icon's circle made white: they held the scene behind the icon when it was read, and a dark one scored 0.60-0.73
-against the bright bar, under `ICON_LOCATE_THRESHOLD`, so the icon read as gone; whitened it scores 0.90-0.92), and then every later look
+at the first look (the picture is stored by `icon_crop_for_storage()`; the match counts only the icon's circle - `icon_mask()`, through
+`masked_match_scores()`, a hand-written masked `TM_CCOEFF_NORMED` since OpenCV can't mask that method - because the square's
+four corners hold the scene behind the icon when it was read, and a dark one scored 0.60-0.73 unmasked against the
+bright bar, under `ICON_LOCATE_THRESHOLD`, so the icon read as gone; masked, the same icon scores 1.00 whatever was behind it), and then every later look
 searches the whole bar for the icon *as it looked at the previous look*
 (`locate_icon()`: normalised correlation of the white ring and glyph, which the
 timer's colour change leaves alone). Found at a match of at least

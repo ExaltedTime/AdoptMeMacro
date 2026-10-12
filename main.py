@@ -838,19 +838,12 @@ def prompt_rename_need(icon_img: Image, idx: int) -> str:
 
 def icon_crop_for_storage(full_img: Image, cx: int, cy: int) -> Optional[Image]:
     """The icon at (cx, cy) as icon_gone_by_frame_change() will look for it later - the picture it was last read
-    as - or None if it reaches past the image. The square's four corners, outside the icon's circle, are made white:
-    that is the scene behind the icon *now*, and the picture is only used when the bar has gone bright, where
-    corners from a dark scene would match nothing."""
+    as - or None if it reaches past the image."""
     r = cfg.ICON_CROP_RADIUS
     if cx < r or cy < r:
         return None
     crop = full_img[cy - r:cy + r + 1, cx - r:cx + r + 1]
-    if crop.shape[:2] != (2 * r + 1, 2 * r + 1):
-        return None
-    crop = crop.copy()
-    yy, xx = np.ogrid[:2 * r + 1, :2 * r + 1]
-    crop[(yy - r) ** 2 + (xx - r) ** 2 > r * r] = cfg.PIXEL_MAX
-    return crop
+    return crop.copy() if crop.shape[:2] == (2 * r + 1, 2 * r + 1) else None
 
 def identify_icons(found_icons: list[tuple[int, int, int]], full_img: Image) -> Iterator[tuple[int, Image, Optional[str], float]]:
     """Match each detected icon against the saved needs. Yields
@@ -913,6 +906,31 @@ def icon_region_change(before: Image, after: Image) -> float:
     changed = cv2.absdiff(before, after).max(axis=2) > cfg.ICON_FRAME_CHANGE_LEVEL
     return float(np.count_nonzero(changed & inside) / np.count_nonzero(inside))
 
+def icon_mask(size: int) -> Image:
+    """1 inside the icon's circle, 0 in the four corners of its square capture - the scene behind the icon."""
+    yy, xx = np.ogrid[:size, :size]
+    centre = size // 2
+    return ((yy - centre) ** 2 + (xx - centre) ** 2 <= (centre - 1) ** 2).astype(np.uint8)
+
+def masked_match_scores(image: Image, template: Image, mask: Image) -> Image:
+    """cv2.matchTemplate(image, template, cv2.TM_CCOEFF_NORMED) counting only the pixels where `mask` is 1 (all
+    single-channel 8-bit; the scores are 0-1 per position, as there). OpenCV can't mask that method, and the
+    others (CCORR) rate any bright patch as a match. Worked out by hand: with the template made zero-mean over
+    the mask, the numerator is one plain correlation, and the image's masked mean and spread come from two
+    correlations with the mask. Positions whose masked patch is flat score 0."""
+    pic = image.astype(np.float32)
+    pic -= pic.mean()                       # shifting changes no score, and keeps the sums small enough for float32
+    weight = mask.astype(np.float32)
+    count = float(weight.sum())
+    tmpl = template.astype(np.float32)
+    tmpl = (tmpl - float((tmpl * weight).sum()) / count) * weight
+    numerator = cv2.matchTemplate(pic, tmpl, cv2.TM_CCORR)
+    total = cv2.matchTemplate(pic, weight, cv2.TM_CCORR)
+    total_sq = cv2.matchTemplate(pic * pic, weight, cv2.TM_CCORR)
+    spread = np.sqrt(np.maximum(total_sq - total * total / count, 0))
+    denominator = float(np.sqrt((tmpl * tmpl).sum())) * spread
+    return np.where(denominator > 1e-3 * count, numerator / np.maximum(denominator, 1e-9), 0).astype(np.float32)
+
 def locate_icon(template: Image, row: int) -> Optional[tuple[int, int]]:
     """Where `template` (an icon-sized capture of a need icon) is in the need
     bar now: the centre (x, y) of its best match along the bar at about `row`,
@@ -920,12 +938,14 @@ def locate_icon(template: Image, row: int) -> Optional[tuple[int, int]]:
     match is on the whiteness of the pixels (the least of B, G, R), which is
     the icon's white ring and glyph - they don't change as its timer
     changes the colour of a section of the disc - and a bright background or
-    another icon matches poorly. The whole width of the bar is searched, so
+    another icon matches poorly. Only the icon's circle counts (icon_mask()):
+    the corners of the square hold the scene behind it, which is not the
+    scene it is looked for in. The whole width of the bar is searched, so
     the icon is found wherever the others shifting around it have put it."""
     radius = cfg.ICON_CROP_RADIUS
     y0 = max(0, row - radius - cfg.ICON_LOCATE_ROW_MARGIN)
     band = grab_screen_region(0, y0, int(cfg.REFERENCE_WIDTH * cfg.NEED_ICON_WIDTH_PERCENT), 2 * radius + 2 * cfg.ICON_LOCATE_ROW_MARGIN + 1)
-    scores = cv2.matchTemplate(band.min(axis=2), template.min(axis=2), cv2.TM_CCOEFF_NORMED)
+    scores = masked_match_scores(band.min(axis=2), template.min(axis=2), icon_mask(template.shape[0]))
     _, best, _, where = cv2.minMaxLoc(scores)
     if best < cfg.ICON_LOCATE_THRESHOLD:
         return None

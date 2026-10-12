@@ -201,7 +201,8 @@ STOP_HOTKEY = "p"              # a letter or digit: pressing it, in any window, 
 STOP_HOTKEY_POLL_INTERVAL = 0.05  # how often the key is looked at (seconds)
 CONSOLE_DRAIN_INTERVAL_MS = 50   # how often queued output is put on the GUI console (see DebugCapture)
 CATCH_WAIT_AFTER_EQUIP = 1.0   # wait after equipping toy before throwing
-CATCH_THROW_INTERVAL = 0.5     # the toy is thrown (a click) this often until the need clears
+CATCH_THROW_COUNT = 3           # number of times the toy is thrown
+CATCH_EMOTE_DELAY = 5.0        # delay between throw clicks
 CATCH_ZOOM_DURATION = 2.0      # seconds the zoom-in key is held before throwing
 PET_SWIPE_DURATION = 8.0      # how long the one downward swipe (mouse held down) takes
 PET_SWIPE_START_OFFSET = -15           # px from screen center the swipe starts at (negative = above it)
@@ -289,7 +290,7 @@ RIDE_FORWARD_DURATION = 2.0    # walk forward briefly after mounting, before the
 RIDE_VEHICLES_POS = (816, 804)
 RIDE_FIRST_VEHICLE_POS = (976, 708)
 RIDE_EQUIP_POS = (1062, 814)
-RIDE_R_HOLD_DURATION = 1.0     # hold KEY_HELICOPTER this long after equipping, before walking back and forth
+RIDE_R_HOLD_DURATION = 1.5     # hold KEY_HELICOPTER this long after equipping, before walking back and forth
 
 # Backpack-teleport sequence, shared by every teleport destination: open
 # backpack -> category tab -> two more fixed clicks that confirm/execute
@@ -355,7 +356,7 @@ NEED_STUCK_CHECKS = 5            # an enabled need still on screen after this ma
                                   # disabled for the rest of the run - see record_detection()
 NEED_GONE_MAX_WAIT = 75.0        # most any need is waited on to clear: wait_until_need_gone() (the teleport-walk needs and the button
                                   # needs; they time out by themselves in the game, and camping was seen clearing ~66s after its walk),
-                                  # and the total duration of the walk/ride/catch actions that end early once it has cleared
+                                  # and the total duration of the walk/ride actions that end early once it has cleared
 NEED_GONE_POLL_INTERVAL = 3.5    # how often to check for the icon during that wait (and, while walking, from the watcher thread)
 NEED_GONE_FLICKER_RECHECK_DELAY = 0.3  # before counting any single miss, re-sample this soon after -
                                         # the icon can flash for a frame (or briefly drop out against a

@@ -1834,27 +1834,9 @@ class WalkNeedHandler(NeedHandler):
         walk_alternating(("a", "d"), cfg.NEED_GONE_MAX_WAIT, need_name="walk")
         return True
 
-def click_until_need_gone(pos: Point, interval: float, max_wait: float, need_name: str) -> None:
-    """Click `pos` every `interval` seconds for at most `max_wait` - or less,
-    once `need_name` is confirmed gone (the watcher thread walk_alternating()
-    uses)."""
-    print(f"[debug] clicking {pos} every {interval}s for up to {max_wait}s until {need_name} clears...")
-    cleared_event = threading.Event()
-    stop_event = threading.Event()
-    watcher = threading.Thread(target=_watch_need_gone, args=(need_name, cleared_event, stop_event), daemon=True)
-    watcher.start()
-    try:
-        deadline = time.time() + max_wait
-        while time.time() < deadline and not cleared_event.is_set():
-            hover_click(*pos)
-            wait_interruptible(interval)
-    finally:
-        stop_event.set()
-        watcher.join(timeout=cfg.NEED_WATCH_JOIN_TIMEOUT)
-
 class CatchNeedHandler(NeedHandler):
-    """The 'catch' need requires opening backpack, equipping a toy, then throwing it
-    (clicking) until the need clears, then unequipping it."""
+    """The 'catch' need requires opening backpack, equipping a toy, throwing it
+    (clicking) CATCH_THROW_COUNT times, then unequipping it."""
 
     def handle(self) -> bool:
         print("[!] CATCH NEED")
@@ -1892,8 +1874,11 @@ class CatchNeedHandler(NeedHandler):
         # Zoom in, to avoid focusing the pet on toy throw
         hold_key(cfg.KEY_ZOOM_IN, cfg.CATCH_ZOOM_DURATION)
         
-        # Click empty space to throw, every CATCH_THROW_INTERVAL, until the need clears
-        click_until_need_gone(cfg.EMPTY_POS, cfg.CATCH_THROW_INTERVAL, cfg.NEED_GONE_MAX_WAIT, "catch")
+        # Click empty space to throw, with a delay between throws
+        for i in range(cfg.CATCH_THROW_COUNT):
+            print(f"[debug] throw {i + 1}/{cfg.CATCH_THROW_COUNT}...")
+            hover_click(*cfg.EMPTY_POS)
+            wait_interruptible(cfg.CATCH_EMOTE_DELAY)
 
         # Unequip the toy
         print("[debug] unequipping toy...")

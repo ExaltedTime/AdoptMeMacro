@@ -141,6 +141,7 @@ MINIGAME_TEMPLATE_DIR = os.path.join(SCRIPT_DIR, "ref", "halloween")
 STRAY_WINDOW_DIR = os.path.join(SCRIPT_DIR, "ref", "popups")
 MINIGAME_OVERLAY_DIR = os.path.join(SCRIPT_DIR, "ref", "overlays")
 NEEDS_DIR = os.path.join(SCRIPT_DIR, "ref", "needs")      # the learned need icons - the one folder in ref/ the macro also writes to (see prompt_rename_need())
+HAUNTLET_DIGIT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet", "digits")   # 0.png ... 9.png: the digits of the ROOM panel, see read_hauntlet_room()
 DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
 # debug/ holds two subfolders - images/ for every png (the debug_*.png views, failures/, reports/) and logs/ for
 # every text and json file - plus the game config, which stays in debug/ itself so "Refresh debug" (which
@@ -191,6 +192,19 @@ CAPTURE_MAX_MINUTES = 15                 # a capture stops by itself after this 
 CAPTURE_MIN_FREE_MB = 3000               # ...or when less than this much disk is free
 MAX_CAPTURES = 5                         # oldest captures are deleted beyond this many
 CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into zips of at most this size (chat attachments are limited to 30 MB)
+
+# Hauntlet 2, read from the screen (see the HAUNTLET 2 READER section of main.py).
+# The ROOM panel's number: white digits on a dark panel, always in the same place, at most HAUNTLET_ROOM_MAX_DIGITS long.
+# Each digit is cut out, shrunk to HAUNTLET_DIGIT_SIZE and compared with the saved ones; the mean difference (0-255) of the
+# best must be under HAUNTLET_DIGIT_MAX_DIFF. The panel is flat UI, so a digit matches its saved picture exactly (0.0 on
+# every frame of a 256-frame run) and the two most alike saved digits are 43.7 apart: under half of that, the best
+# match can't be mistaken for another digit.
+HAUNTLET_ROOM_BOX = (1086, 84, 1170, 116)    # left, top, right, bottom
+HAUNTLET_DIGIT_WHITE_LEVEL = 200             # a pixel is part of a digit when all its channels are at least this
+HAUNTLET_DIGIT_MIN_AREA = 25                 # px: smaller white specks are not digits
+HAUNTLET_DIGIT_SIZE = (14, 20)
+HAUNTLET_DIGIT_MAX_DIFF = 20
+HAUNTLET_ROOM_MAX_DIGITS = 3
 
 # ============================================================================
 # SCREEN / INPUT SETUP

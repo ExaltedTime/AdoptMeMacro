@@ -2957,6 +2957,48 @@ def toggle_input_capture() -> Optional[InputCapture]:
     return capture
 
 # ============================================================================
+# HAUNTLET 2 READER
+# ============================================================================
+# What the Hauntlet 2 screen says, as plain values - no decisions and no input here. The room number first; see
+# docs/ARCHITECTURE.md#reading-hauntlet-2.
+
+def room_digit(mask: Image) -> Image:
+    """A digit's white pixels (`mask`, cropped to its bounding box), shrunk to HAUNTLET_DIGIT_SIZE, 0-255."""
+    return cv2.resize(mask * 255, cfg.HAUNTLET_DIGIT_SIZE, interpolation=cv2.INTER_AREA)
+
+@lru_cache(maxsize=None)
+def _digit_templates(directory: str, modified: float) -> dict[int, Image]:
+    found = {int(os.path.splitext(f)[0]): cv2.imread(os.path.join(directory, f), cv2.IMREAD_GRAYSCALE)
+             for f in os.listdir(directory) if f.endswith(".png") and os.path.splitext(f)[0].isdigit()}
+    return {digit: picture for digit, picture in found.items() if picture is not None}
+
+def digit_templates() -> dict[int, Image]:
+    """{digit: picture} for the saved room digits (HAUNTLET_DIGIT_DIR), re-read when the folder changes."""
+    directory = cfg.HAUNTLET_DIGIT_DIR
+    return _digit_templates(directory, os.path.getmtime(directory)) if os.path.isdir(directory) else {}
+
+def read_hauntlet_room(img: Image) -> Optional[int]:
+    """The room number on the ROOM panel of `img`, or None when it isn't readable (no panel - a transition, a
+    close-up of a door - or a digit that matches none of the saved ones)."""
+    left, top, right, bottom = cfg.HAUNTLET_ROOM_BOX
+    mask = (img[top:bottom, left:right].min(axis=2) >= cfg.HAUNTLET_DIGIT_WHITE_LEVEL).astype(np.uint8)
+    count, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    boxes = sorted((int(stats[i, 0]), int(stats[i, 1]), int(stats[i, 2]), int(stats[i, 3]))
+                   for i in range(1, count) if stats[i, cv2.CC_STAT_AREA] >= cfg.HAUNTLET_DIGIT_MIN_AREA)
+    templates = digit_templates()
+    if not 1 <= len(boxes) <= cfg.HAUNTLET_ROOM_MAX_DIGITS or not templates:
+        return None
+    number = 0
+    for x, y, w, h in boxes:
+        picture = room_digit(mask[y:y + h, x:x + w])
+        diffs = {digit: float(np.abs(picture.astype(int) - template.astype(int)).mean()) for digit, template in templates.items()}
+        digit = min(diffs, key=lambda d: diffs[d])
+        if diffs[digit] > cfg.HAUNTLET_DIGIT_MAX_DIFF:
+            return None
+        number = number * 10 + digit
+    return number
+
+# ============================================================================
 # WORKFLOWS
 # ============================================================================
 

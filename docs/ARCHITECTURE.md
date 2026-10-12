@@ -174,6 +174,8 @@ an extra walk from wherever the previous need left the character standing.
 - **INPUT CAPTURE** - `InputCapture`, `toggle_input_capture()`, `zip_capture()` and the key / mouse
   readers (`pressed_inputs()`, `cursor_position()`, `to_reference()`). See
   [Input capture](#input-capture).
+- **HAUNTLET 2 READER** - `read_hauntlet_room()` and its digit pictures. See
+  [Reading Hauntlet 2](#reading-hauntlet-2).
 - **WORKFLOWS** - `run_full_cycle()` and `run_workflow_loop()` (plus
   `ResourceMonitor`, `check_quiet()` and `respawn_if_no_detection()`, which run
   inside the loop). See [The workflow lifecycle](#the-workflow-lifecycle) above.
@@ -1121,6 +1123,20 @@ press of the hotkey then tidies it up and starts a new one. Screenshots and inpu
 threads of the capture's own; the hotkey is watched by the GUI's hotkey thread (with the stop hotkey) and
 acted on in Tk's thread, so typing an `m` into the private server link box starts a capture too.
 
+### Reading Hauntlet 2
+
+`read_hauntlet_room()` (the HAUNTLET 2 READER section of `main.py`) returns the number on the ROOM panel
+at the top of the screen, or `None` when it can't be read. It only reads: nothing here decides or presses a key.
+The panel is flat UI that never moves or scales, so the digits are matched exactly: the white pixels
+(`HAUNTLET_DIGIT_WHITE_LEVEL`) inside `HAUNTLET_ROOM_BOX` are split into connected pieces, each piece is cut
+out, shrunk to `HAUNTLET_DIGIT_SIZE` and compared with the saved digit pictures in `ref/hauntlet/digits/`
+(`0.png` ... `9.png`, cut from a real run) by mean difference. The best must be under
+`HAUNTLET_DIGIT_MAX_DIFF` (20); on a 256-frame run (rooms 1-29, three layers of the hotel) every readable frame
+matched at 0.0 and the two most alike digits are 43.7 apart. No panel (the white transition, the lobby, a
+door close-up that hides it), no digit pieces, more than `HAUNTLET_ROOM_MAX_DIGITS`, or a piece that matches
+none of the digits all give `None` rather than a guess. `tests/test_hauntlet.py` runs a crop of each of the 29
+rooms (`tests/hauntlet2/room_panels/`) back through the reader.
+
 ### Recording a run
 
 Tick **Record the next run (low quality video)** on the Debug tab's Other subtab (the
@@ -1163,6 +1179,7 @@ exact values and rationale):
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
 | Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
+| Hauntlet 2 reader | `HAUNTLET_ROOM_BOX`, `HAUNTLET_DIGIT_*`, `HAUNTLET_ROOM_MAX_DIGITS`, `HAUNTLET_DIGIT_DIR` |
 | Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
@@ -1293,6 +1310,7 @@ clicks instead of making them. They cover:
 - `test_icon_screenshots.py` - every real screenshot in `tests/icon_detection/<folder>/` (the need bar over dark, bright, busy and white scenes) run through the circle search and the matching; each must be listed in `EXPECTED` with the needs on its bar, so a screenshot added without a label fails;
 - `test_loop.py` - the whole workflow loop run for a moment with the game stubbed out (idle respawns, the resource monitor starting and stopping, the report being written);
 - `test_capture.py` - the input capture against a made-up keyboard, mouse and screen (events, both coordinate systems, click frames, skipping unchanged frames, the summary, the zips, stopping by itself, the hotkey toggle and pruning);
+- `test_hauntlet.py` - reading the Hauntlet 2 screen against crops of a real run;
 - `test_features.py` - the daily money reset, the run-every-need sequence, the win screen and the like;
 - `test_config.py` - the real need tables in `magic_numbers.py`, without pinning any value: every entry is well formed (known keys, on-screen positions, movement keys, a `final_click` has its `prompt_pos`), has a handler, and the handler carries out exactly what the entry says (run over whichever needs exist, so `HALLOWEEN` off just drops `sick`). The handler tests elsewhere use made-up entries; this is what keeps the real ones honest;
 - `test_report.py` - the run-report parser against the exact log wording the

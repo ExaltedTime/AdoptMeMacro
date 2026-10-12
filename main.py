@@ -21,7 +21,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, Union
 from abc import ABC, abstractmethod
-from functools import partial
+from functools import lru_cache, partial
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, simpledialog, ttk
 
@@ -704,18 +704,36 @@ def preprocess_icon(icon_img: Image) -> Image:
     _, binary = cv2.threshold(enhanced, cfg.ICON_BW_THRESHOLD, cfg.PIXEL_MAX, cv2.THRESH_BINARY)
     return binary
 
+def icon_disc_mask(width: int, height: int, radius_fraction: float) -> Image:
+    """Boolean mask, True inside the disc (centred, `radius_fraction` of half the width across) of a width x height image."""
+    yy, xx = np.mgrid[:height, :width]
+    cx, cy = (width - 1) / 2, (height - 1) / 2
+    return (xx - cx) ** 2 + (yy - cy) ** 2 <= (radius_fraction * width / 2) ** 2
+
+@lru_cache(maxsize=None)
+def icon_match_mask(size: tuple[int, int], radius_fraction: float, left_half: bool) -> Image:
+    """The part of a signature (see icon_signature()) that is compared: the disc inside the icon's ring, and only
+    its left half when `left_half`."""
+    mask = icon_disc_mask(size[0], size[1], radius_fraction)
+    return mask[:, :mask.shape[1] // 2] if left_half else mask
+
 def icon_signature(icon_img: Image) -> Image:
-    """Reduced, comparable form of an icon: preprocessed, resized to
-    ICON_COMPARE_SIZE, scaled to 0-1, and (if MATCH_ONLY_LEFT_HALF) cut down
-    to its left half so an overlapping event badge doesn't matter."""
+    """Reduced, comparable form of an icon: everything outside the disc inside its ring (ICON_MATCH_RADIUS_FRACTION
+    - the square crop's corners, which show whatever is behind the icon) is blacked out, then it is preprocessed,
+    resized to ICON_COMPARE_SIZE, scaled to 0-1, and (if MATCH_ONLY_LEFT_HALF) cut down to its left half so an
+    overlapping event badge doesn't matter."""
+    height, width = icon_img.shape[:2]
+    icon_img = np.where(icon_disc_mask(width, height, cfg.ICON_MATCH_RADIUS_FRACTION)[:, :, None], icon_img, 0).astype(icon_img.dtype)
     proc = cv2.resize(preprocess_icon(icon_img), cfg.ICON_COMPARE_SIZE).astype(np.float32) / cfg.PIXEL_MAX
     if cfg.MATCH_ONLY_LEFT_HALF:
         proc = proc[:, :proc.shape[1] // 2]
     return proc
 
 def compare_signatures(sig1: Image, sig2: Image) -> float:
-    """Return a 0-1 similarity score (1 = identical) between two signatures."""
-    return 1.0 - float(np.mean((sig1 - sig2) ** 2))
+    """Return a 0-1 similarity score (1 = identical) between two signatures: one minus the mean squared difference
+    over the part inside the icon's ring (icon_match_mask())."""
+    mask = icon_match_mask(cfg.ICON_COMPARE_SIZE, cfg.ICON_MATCH_RADIUS_FRACTION, cfg.MATCH_ONLY_LEFT_HALF)
+    return 1.0 - float(np.sum(((sig1 - sig2) ** 2) * mask) / np.count_nonzero(mask))
 
 # ============================================================================
 # NEED ICON DETECTION

@@ -240,11 +240,15 @@ crop to a high-contrast black & white image:
 3. Hard threshold (`ICON_BW_THRESHOLD`) - only near-white pixels survive,
    collapsing the icon to a black-and-white silhouette.
 
-`icon_signature()` then resizes the result to `ICON_COMPARE_SIZE`, scales it
+`icon_signature()` first blacks out everything outside the disc inside the
+icon's ring (`ICON_MATCH_RADIUS_FRACTION`) - the square crop's corners show
+whatever is behind the icon, and on a bright scene they used to wreck the
+CLAHE and the threshold - then resizes the result to `ICON_COMPARE_SIZE`, scales it
 to 0-1, and keeps only the **left half** (`MATCH_ONLY_LEFT_HALF`) so an
 event badge overlapping an icon's top right doesn't affect the match.
 `compare_signatures()` scores two signatures as `1 - mean squared
-difference`.
+difference`, over that disc only (`icon_match_mask()`). The saved icons are
+run through the same function when loaded, so none needed re-saving.
 
 A detected center can be a pixel or two off, which matters at this
 resolution, so `icon_variants()` cuts the live icon out at every offset
@@ -1062,7 +1066,7 @@ exact values and rationale):
 | Screen positions | `CATCH_*_POS`, `EMPTY_POS`, `RIDE_*_POS`, `LURE_NEW_POS_*`, `SETUP_*_POS` |
 | Side quest / setup | `TREE_HARVEST_YIELD`, `MONEY_COLLECTED_TARGET`, `TREE_CHECK_INTERVAL`, `MONEY_RESET_HOUR`, `LURE_RECOLLECT_INTERVAL`, `LURE_COLLECT_*`, `TREE_COLLECT_*` |
 | Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN/MAX_RADIUS`, `NEED_ICON_HOUGH_*`, `NEED_STRIP_*` (when the circle search is skipped) |
-| Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
+| Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_MATCH_RADIUS_FRACTION`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
 | Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_BOX`, `PAYCHECK_MATCH_THRESHOLD` |
@@ -1190,6 +1194,7 @@ clicks instead of making them. They cover:
   leaves the 20-minute rejoin clock alone), stopping, and the open `output.log`;
 - `test_detection.py` - the need-strip capture and its cache, and the
   popups and stray windows against the real crops in `ref/`;
+- `test_icon_screenshots.py` - every real screenshot in `tests/icon_detection/<folder>/` (the need bar over dark, bright, busy and white scenes) run through the circle search and the matching; each must be listed in `EXPECTED` with the needs on its bar, so a screenshot added without a label fails;
 - `test_loop.py` - the whole workflow loop run for a moment with the game stubbed out (idle respawns, the resource monitor starting and stopping, the report being written);
 - `test_features.py` - the daily money reset, the run-every-need sequence and judging an icon gone by how it changes between looks (with real salon-icon frames in `tests/fixtures/`);
 - `test_config.py` - the real need tables in `magic_numbers.py`, without pinning any value: every entry is well formed (known keys, on-screen positions, movement keys, a `final_click` has its `prompt_pos`), has a handler, and the handler carries out exactly what the entry says (run over whichever needs exist, so `HALLOWEEN` off just drops `sick`). The handler tests elsewhere use made-up entries; this is what keeps the real ones honest;

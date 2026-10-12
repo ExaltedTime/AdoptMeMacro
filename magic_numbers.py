@@ -502,6 +502,8 @@ ICON_BW_THRESHOLD = 230            # only near-white pixels survive B/W conversi
 ICON_CLAHE_CLIP = 3.0
 ICON_CLAHE_TILE = (8, 8)
 ICON_COMPARE_SIZE = (32, 32)
+ICON_MATCH_RADIUS_FRACTION = 0.7   # only the disc this fraction of the icon crop's width across is compared: the crop's corners and
+                                   # the ring's edge show the background, which on a bright scene is what used to break the match
 ICON_CROP_RADIUS = 28              # px, icon radius that saved/compared crops are cut at (plus ICON_EXTRACT_PADDING)
 ICON_SHIFT_TOLERANCE = 2           # px, how far off-center a detection may be and still match
 

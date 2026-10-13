@@ -227,7 +227,7 @@ GHOST_BOSS_FILL_MIN = 200
 # place every GHOST_FURNITURE_PERIOD seconds) and the camera is turned every GHOST_CAMERA_PERIOD seconds with nothing to aim at: the right
 # button held while the mouse is dragged GHOST_CAMERA_DRAG px (a random way, and up to GHOST_CAMERA_TILT px up or down). The character jumps
 # every GHOST_JUMP_MIN-GHOST_JUMP_MAX seconds.
-GHOST_FURNITURE_BOX = (300, 150, 1500, 800)
+GHOST_FURNITURE_BOX = (100, 120, 1820, 880)
 GHOST_FURNITURE_MIN_DISTANCE = 300           # px: the place is at least this far from the character
 GHOST_FURNITURE_PERIOD = 1.0
 GHOST_CAMERA_PERIOD = 3.0
@@ -239,6 +239,8 @@ GHOST_START_TILT = 200                       # px of mouse drag down, right butt
 GHOST_MOVE_PERIOD = 4.0                      # the character walks a step (a random MOVE_KEY held GHOST_MOVE_STEP_MIN-MAX seconds) this often
 GHOST_MOVE_STEP_MIN = 0.4
 GHOST_MOVE_STEP_MAX = 1.2
+GHOST_START_FORWARD = 3.0                    # seconds of W after the camera is set up: out of the doorway and into the middle of the hall
+GHOST_TOWARD_MARGIN = 150                    # px: a ghost this far from the character (GHOST_CHARACTER) on an axis is walked towards along it
 GHOST_JUMP_MIN = 3.0
 GHOST_JUMP_MAX = 7.0
 
@@ -588,6 +590,16 @@ TELEPORT_ARRIVE_MAX = 8.0           # at most this long is waited for the telepo
 ENTER_SEARCH_FORWARD = 0.6          # looking for the way in: forward this long, then sideways (alternating) ENTER_SEARCH_SIDE seconds more each time...
 ENTER_SEARCH_SIDE = 0.35
 ENTER_SEARCH_SIDE_MAX = 2.0         # ...up to this long
+ENTER_DOOR_STEP = 0.4               # looking for the way in, with the door in sight: walk towards it in steps this long (W, or A/D if it is more than ENTER_DOOR_MARGIN px off to a side)
+ENTER_DOOR_MARGIN = 120
+# The hospital's door, as find_door_light() sees it: the white light of its open doorway (WHITE_SCREEN_LEVEL) with the pale yellow panes of
+# the doors beside it, in a screen that leaves out the HUD, the character and the bottom (DOOR_IGNORE_BOXES: the pet, its tags, the backpack
+# button) and the macro's own window.
+DOOR_IGNORE_BOXES = ((0, 0, 1920, 90), (840, 330, 1080, 900), (0, 940, 1920, 1080), (1540, 100, 1920, 800))
+DOOR_MIN_AREA = 2500                # px of white light
+DOOR_YELLOW = ((20, 40, 235), (34, 140, 255))      # HSV of the panes
+DOOR_YELLOW_MIN = 1500              # px of them on screen
+DOOR_YELLOW_REACH = 61              # px: the panes are within this of the light
 ENTER_CLEAR_MAX = 6.0               # once in, at most this long is waited for the white screen to clear
 DISABLED_NEEDS_REJOIN_THRESHOLD = 4  # this many needs disabled for the run (see NEED_STUCK_CHECKS) means something is
                                      # badly wrong: rejoin the game, run setup, and give every need a fresh chance

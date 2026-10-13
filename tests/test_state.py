@@ -380,6 +380,7 @@ def indoors(macro, world, monkeypatch):
     monkeypatch.setattr(macro, "teleport_to", lambda pos: start.__setitem__(0, world.clock.now))
     monkeypatch.setattr(macro, "grab_screen", lambda: None)
     monkeypatch.setattr(macro, "save_failure_report", lambda reason: (events.append("shot"), "x/screen.png")[1])
+    monkeypatch.setattr(macro, "find_door_light", lambda img: None)
     monkeypatch.setattr(macro, "respawn_character", lambda: events.append("respawn"))
     monkeypatch.setattr(macro, "log_run_event", lambda text: events.append(text))
     monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=0, **kw: waited.append(max_wait))
@@ -415,6 +416,37 @@ def test_not_getting_in_makes_it_look_for_the_way_then_walk_on_inside(macro, ind
     assert set(keys[2:-1]) >= {"w"} and set(keys[2:-1]) <= {"w", "a", "d"} and len(keys) > 3
     assert keys[-1] == "w"                         # then the steps inside, which only a late entry needs
     assert indoors.waited and "respawn" not in indoors.events
+
+
+def door_image(shift=0):
+    import cv2
+    import numpy as np
+    door = cv2.imread(os.path.join(os.path.dirname(__file__), "sick_door", "door_ahead.png"))
+    return np.roll(door, shift, axis=1) if shift else door
+
+
+def test_the_hospital_door_is_found_by_its_light_and_panes(macro):
+    import numpy as np
+    x, y = macro.find_door_light(door_image())
+    assert 900 < x < 1200 and y < 500                                      # the doorway, ahead and above the character
+    assert macro.find_door_light(door_image(-400))[0] < x - 300 and macro.find_door_light(door_image(400))[0] > x + 300
+    assert macro.find_door_light(np.zeros((1080, 1920, 3), np.uint8)) is None
+    far_light = door_image()
+    far_light[500:800, 100:400] = 255                                       # a bigger patch of white, far from the panes
+    assert 900 < macro.find_door_light(far_light)[0] < 1200
+    assert macro.find_door_light(np.full((1080, 1920, 3), 255, np.uint8)) is None          # a white screen has no panes: not a door
+
+
+def test_with_the_door_in_sight_the_search_walks_towards_it_and_without_it_zigzags(macro, indoors, world, monkeypatch):
+    cfg = macro.cfg
+    cx = cfg.GHOST_CHARACTER[0]
+    sights = iter([(cx + 400, 300), (cx - 400, 300), (cx + 10, 300)])
+    monkeypatch.setattr(macro, "find_door_light", lambda img: next(sights, None))
+    indoors(macro.cfg.TELEPORT_WALK_STEP_GAP + 5.0, enter_wait=30.0).handle()
+    keys = downs(world)
+    after = keys[2:5]                                                      # after the entry's own two steps
+    assert after == [cfg.HAUNTLET_RIGHT_KEY, cfg.HAUNTLET_LEFT_KEY, "w"]   # right, left, then straight on
+    assert set(keys[5:-1]) <= {"w", "a", "d"} and keys[-1] == "w"          # then (door out of sight) the zigzag, and the walk inside
 
 
 def test_never_getting_in_fails_the_need_with_a_respawn(indoors, world):

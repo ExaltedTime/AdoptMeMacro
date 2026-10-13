@@ -1167,6 +1167,27 @@ def hold_key(key: str, duration: float, poll: Optional[Callable[[], Any]] = None
     finally:
         pydirectinput.keyUp(key)
 
+def find_door_light(img: Image) -> Optional[Point]:
+    """Where the hospital's open door is on screen in `img`: the middle of the biggest patch of white light (at least DOOR_MIN_AREA px, not in
+    DOOR_IGNORE_BOXES) that has the doors' yellow panes (DOOR_YELLOW, at least DOOR_YELLOW_MIN px of them) within DOOR_YELLOW_REACH px; None
+    if there is none. Shop windows of the plaza look like it from afar; it is for the last steps."""
+    white = (img.min(axis=2) >= cfg.WHITE_SCREEN_LEVEL).astype(np.uint8)
+    panes = cv2.inRange(cv2.cvtColor(img, cv2.COLOR_BGR2HSV), cfg.DOOR_YELLOW[0], cfg.DOOR_YELLOW[1])
+    for left, top, right, bottom in cfg.DOOR_IGNORE_BOXES:
+        white[top:bottom, left:right] = 0
+        panes[top:bottom, left:right] = 0
+    if np.count_nonzero(panes) < cfg.DOOR_YELLOW_MIN:
+        return None
+    closed = cv2.morphologyEx(white, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+    near = cv2.dilate(panes, np.ones((cfg.DOOR_YELLOW_REACH, cfg.DOOR_YELLOW_REACH), np.uint8)) > 0
+    count, labels, stats, centres = cv2.connectedComponentsWithStats(closed)
+    best: Optional[tuple[int, Point]] = None
+    for i in range(1, count):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        if area >= cfg.DOOR_MIN_AREA and np.count_nonzero((labels == i) & near) > 0.2 * area and (best is None or area > best[0]):
+            best = (area, (int(centres[i][0]), int(centres[i][1])))
+    return best[1] if best else None
+
 def wait_until_screen_clear(max_wait: float) -> None:
     """Wait (at most `max_wait` seconds) for the screen to stop being the white of a teleport or of going indoors
     (detect_white_screen())."""
@@ -1888,6 +1909,18 @@ class TeleportWalkNeedHandler(NeedHandler):
         print(f"[!] {self.name.capitalize()} complete!")
         return True
 
+    def _step_towards_the_door(self, watch: Callable[[], None]) -> bool:
+        """Look for the door (find_door_light()) and, if it is in sight, walk a step towards it: W, or A / D if it is more than
+        ENTER_DOOR_MARGIN px to the left / right of the character. Whether it was in sight."""
+        door = find_door_light(grab_screen())
+        if door is None:
+            return False
+        dx = door[0] - cfg.GHOST_CHARACTER[0]
+        key = "w" if abs(dx) <= cfg.ENTER_DOOR_MARGIN else (cfg.HAUNTLET_RIGHT_KEY if dx > 0 else cfg.HAUNTLET_LEFT_KEY)
+        print(f"[debug] the door is at {door} - stepping {key}")
+        hold_key(key, cfg.ENTER_DOOR_STEP, poll=watch)
+        return True
+
     def _find_the_way_in(self, watch: Callable[[], None], entered: list[float]) -> bool:
         """The walk didn't end indoors (no white screen was seen, which is what going in looks like): zigzag forward until one
         is, at most the entry's enter_wait seconds - forward ENTER_SEARCH_FORWARD seconds, then sideways, a way that alternates,
@@ -1898,6 +1931,10 @@ class TeleportWalkNeedHandler(NeedHandler):
         deadline = time.time() + wait
         sweep = 0
         while time.time() < deadline:
+            if self._step_towards_the_door(watch):
+                if entered:
+                    break
+                continue
             hold_key("w", cfg.ENTER_SEARCH_FORWARD, poll=watch)
             if entered:
                 break
@@ -2785,6 +2822,17 @@ def far_from_character(box: tuple[int, int, int, int], minimum: float) -> Point:
             return x, y
     return max(((left, top), (right, top), (left, bottom), (right, bottom)), key=lambda c: (c[0] - cx) ** 2 + (c[1] - cy) ** 2)
 
+def ghost_step_key(target: Optional[Point]) -> str:
+    """The key to walk a step with: towards `target` (W if it is above the character, S below, A/D left/right - along the axis
+    it is farther off on, if it is more than GHOST_TOWARD_MARGIN px off), else a random MOVE_KEYS key."""
+    if target is not None:
+        dx, dy = target[0] - cfg.GHOST_CHARACTER[0], target[1] - cfg.GHOST_CHARACTER[1]
+        if max(abs(dx), abs(dy)) > cfg.GHOST_TOWARD_MARGIN:
+            if abs(dx) > abs(dy):
+                return cfg.HAUNTLET_RIGHT_KEY if dx > 0 else cfg.HAUNTLET_LEFT_KEY
+            return cfg.HAUNTLET_BACK_KEY if dy > 0 else "w"
+    return random.choice(cfg.MOVE_KEYS)
+
 def rotate_camera(drag: tuple[int, int] = cfg.GHOST_CAMERA_DRAG, tilt: int = cfg.GHOST_CAMERA_TILT) -> None:
     """Turn the camera: hold the right mouse button and drag the mouse sideways (a random way, `drag` = least and most px, and
     up to `tilt` px up or down too) over GHOST_CAMERA_DRAG_DURATION seconds, in GHOST_CAMERA_DRAG_STEPS moves, as Roblox wants a drag."""
@@ -2814,6 +2862,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     minigame_wait(cfg.GHOST_INTRO_WAIT, watch)
     zoom_out()
     tilt_camera_down()
+    hold_key("w", cfg.GHOST_START_FORWARD)           # into the middle of the hall, from where the game puts the player
     target: Optional[Point] = None
     held = False
     moving: Optional[str] = None                     # the key being held to walk, and until when
@@ -2873,7 +2922,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 stop_walking()
                 next_move = now + cfg.GHOST_MOVE_PERIOD
             elif moving is None and now >= next_move:
-                moving = random.choice(cfg.MOVE_KEYS)
+                moving = ghost_step_key(target)
                 pydirectinput.keyDown(moving)
                 move_until = now + random.uniform(cfg.GHOST_MOVE_STEP_MIN, cfg.GHOST_MOVE_STEP_MAX)
             if now >= next_jump:

@@ -379,7 +379,6 @@ def indoors(macro, world, monkeypatch):
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
     monkeypatch.setattr(macro, "teleport_to", lambda pos: start.__setitem__(0, world.clock.now))
     monkeypatch.setattr(macro, "grab_screen", lambda: None)
-    monkeypatch.setattr(macro, "detect_pet_focus", lambda img: False)
     monkeypatch.setattr(macro, "respawn_character", lambda: events.append("respawn"))
     monkeypatch.setattr(macro, "log_run_event", lambda text: events.append(text))
     monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=0, **kw: waited.append(max_wait))
@@ -415,17 +414,6 @@ def test_not_getting_in_makes_it_look_for_the_way_then_walk_on_inside(macro, ind
     assert set(keys[2:-1]) >= {"w"} and set(keys[2:-1]) <= {"w", "a", "d"} and len(keys) > 3
     assert keys[-1] == "w"                         # then the steps inside, which only a late entry needs
     assert indoors.waited and "respawn" not in indoors.events
-
-
-def test_a_pet_focused_by_the_search_is_backed_out_of_before_the_dialog(macro, indoors, world, monkeypatch):
-    backed = []
-    monkeypatch.setattr(macro, "detect_pet_focus", lambda img: True)
-    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: backed.append(world.clock.now))
-    indoors(macro.cfg.TELEPORT_WALK_STEP_GAP + 5.0, enter_wait=30.0).handle()      # a late entry
-    assert len(backed) == 1
-    backed.clear()
-    indoors(1.0).handle()                                                          # an early one: nothing was searched
-    assert backed == []
 
 
 def test_never_getting_in_fails_the_need_with_a_respawn(indoors, world):

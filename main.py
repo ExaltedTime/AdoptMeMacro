@@ -1866,9 +1866,6 @@ class TeleportWalkNeedHandler(NeedHandler):
             for key, duration in self.config.get("inside_steps", ()):          # the walk the late entry skipped
                 print(f"[debug] holding {key} for {duration}s inside...")
                 hold_key(key, duration)
-            if detect_pet_focus(grab_screen()):                       # the search may have walked into / clicked a pet
-                print("[debug] a pet got focused while looking for the way in - backing out of the pet view...")
-                dismiss_stray_windows()
 
         if helicopter:
             print("[debug] arrived, pressing space...")

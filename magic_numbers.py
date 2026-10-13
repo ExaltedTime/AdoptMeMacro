@@ -246,6 +246,59 @@ HAUNTLET_HEART_PINK_FRACTION = 0.35           # a cell this pink is a heart even
 HAUNTLET_HEART_MIN = 2                     # a row shorter than this isn't one (every row seen had 3 or 4 hearts, lost ones included)
 HAUNTLET_HEART_MAX = 5                     # a row longer than this isn't a row of hearts (4 were seen at most)
 
+# The doors of a Hauntlet 2 room: each has a TV above it, its screen a light-cyan number (206, 255, 255 - the glow
+# saturates the green and blue channels). A room is a row of three such numbers (the same height, evenly spaced);
+# the TV spacing is the picture's scale (the camera zooms in and out), so the boxes below are in px at a spacing of
+# HAUNTLET_DOOR_SPACING and scaled to the spacing seen. The fork rooms have no TVs, just two doorways with signs.
+# The timer (white digits, top left of the ROOM panel) is hidden in a room's first moments and while the player passes
+# through a door: 950-1190 white pixels when shown, 0 when not - and a frame without the timer may still show the
+# last room's doors, so a room is only looked at while the timer shows.
+HAUNTLET_TIMER_BOX = (730, 55, 865, 122)     # left, top, right, bottom
+HAUNTLET_TIMER_WHITE_LEVEL = 215
+HAUNTLET_TIMER_MIN_WHITE = 500
+HAUNTLET_TV_GLOW = ((150, 248, 248), (225, 255, 255))   # (low, high) red, green, blue of the number's light
+HAUNTLET_TV_AREA = (150, 600)                # px of one such number
+HAUNTLET_TV_MIN_Y = 150                      # nothing above this is a TV (the room panel's glow)
+HAUNTLET_TV_SPACING = (200, 500)             # px between neighbouring TVs
+HAUNTLET_TV_ROW_TOLERANCE = 15               # px: the TVs of a row are this level...
+HAUNTLET_TV_SPACING_TOLERANCE = 0.25         # ...and these spacings this close
+HAUNTLET_DOOR_SPACING = 360
+# What a door looks like, from the pixels below its TV, boxes (left, top, right, bottom) relative to the TV's number.
+# Told apart so far, from the 29 rooms of one captured run: a locked door (a red light above it, 40-99 pixels of it where
+# every other door has none), a "???" door (pale grey, mean brightness 180-203 where the others are at most 163) and a
+# dark door (more than 40% of it near black, 44-74% where no other door has more than 37%). Plain and boarded doors
+# (planks) are not told apart: how much planks and panels show depends on the layer's lighting, and no measure
+# separated them across the three layers.
+HAUNTLET_LOCK_LIGHT_BOX = (-60, 20, 60, 70)
+HAUNTLET_LOCK_LIGHT_MIN = 25
+HAUNTLET_DOOR_BOX = (-45, 35, 45, 130)
+HAUNTLET_MYSTERY_BRIGHTNESS = 172
+HAUNTLET_DARK_LEVEL = 55
+HAUNTLET_DARK_FRACTION = 0.4
+
+# Playing Hauntlet 2: after the start wait the screen is read every HAUNTLET_LOOK_INTERVAL seconds. The room number
+# changes as the player passes through a door, while the last room's doors are still on screen (open, the camera
+# following the player), so a room is only looked at HAUNTLET_ROOM_SETTLE seconds after its number changed, with the
+# timer showing and the row of TVs still where it was on the look before (within HAUNTLET_TV_STABLE px: the camera
+# has stopped). Then a door is chosen and walked to - W held, with A (left door) or D (right door) held for the first
+# HAUNTLET_STRAFE_DURATION seconds (a human's runs: left 1.0-1.1 s, right 0.9-1.3 s; the middle door W only) - until
+# the room number changes, at most HAUNTLET_WALK_MAX seconds (a human's room: W held 3-4.8 s). If the number still
+# hasn't changed HAUNTLET_ROOM_TIMEOUT seconds after, a door is chosen again.
+# A room whose number is a multiple of HAUNTLET_FORK_EVERY (10 and 20 were seen) is a fork: no TVs, two doorways. A
+# room without a row of TVs HAUNTLET_DOORS_TIMEOUT seconds after its number changed is walked as if it had three doors.
+HAUNTLET_LEFT_KEY = "a"
+HAUNTLET_RIGHT_KEY = "d"
+HAUNTLET_STRAFE_DURATION = 1.1
+HAUNTLET_WALK_MAX = 6.0
+HAUNTLET_LOOK_INTERVAL = 0.35
+HAUNTLET_ROOM_SETTLE = 2.0
+HAUNTLET_TV_STABLE = 4
+HAUNTLET_ROOM_TIMEOUT = 15.0
+HAUNTLET_FORK_EVERY = 10
+HAUNTLET_DOORS_TIMEOUT = 8.0
+HAUNTLET_KEY_ITEMS = ("key", "gold_key")  # items that open a locked door
+HAUNTLET_LEARN_LIMIT = 4                     # new item pictures saved in one play (unknown_<n> folders); more is a misreading
+
 # ============================================================================
 # SCREEN / INPUT SETUP
 # ============================================================================

@@ -2393,14 +2393,16 @@ def minigame_popup_checks() -> None:
     if not dismiss_stray_windows():
         detect_paycheck()
 
-def minigame_won(watch: MinigameWatch) -> bool:
-    """Run the popup checks if they're due, then look at a fresh screenshot:
-    True on the victory screen (detect_minigame_victory()); either way `watch`
-    is told what the screenshot shows."""
+def minigame_look(watch: MinigameWatch) -> Image:
+    """Run the popup checks if they're due, then take a fresh screenshot, which `watch` is told about."""
     minigame_popup_checks()
     img = grab_screen()
     watch.update(img)
-    return detect_minigame_victory(img)
+    return img
+
+def minigame_won(watch: MinigameWatch) -> bool:
+    """minigame_look(), then True if it shows the victory screen (detect_minigame_victory())."""
+    return detect_minigame_victory(minigame_look(watch))
 
 def minigame_wait(duration: float, watch: MinigameWatch) -> None:
     """wait_interruptible(), with the popup checks every
@@ -2414,21 +2416,124 @@ def minigame_wait(duration: float, watch: MinigameWatch) -> None:
         if watch.problem:
             return
 
+class HauntletRun:
+    """What play_hauntlet_2() knows about the room it is in: its number, when that changed, and the TVs of the last
+    look. look() says when the doors can be chosen from. See docs/ARCHITECTURE.md#playing-hauntlet-2."""
+
+    def __init__(self) -> None:
+        self.room: Optional[int] = None
+        self.since = 0.0                              # when the number changed
+        self.chosen_at: Optional[float] = None        # when a door was last chosen, in this room
+        self.rooms = 0                                # numbers seen
+        self.tvs: Optional[list[tuple[int, int]]] = None   # of the last look: None if the timer was hidden
+        self.empty_looks = 0                          # looks in a row at a room without TVs
+        self.learned: set[str] = set()                # unknown items seen (and saved) so far
+
+    @property
+    def fork(self) -> bool:
+        """Whether this room's number is one of the forks (HAUNTLET_FORK_EVERY)."""
+        return self.room is not None and self.room > 0 and self.room % cfg.HAUNTLET_FORK_EVERY == 0
+
+    def look(self, img: Image, now: float) -> Optional[list[HauntletDoor]]:
+        """Take in a screenshot. The doors to choose from - three, or a fork's two - if it is time to, else None."""
+        room = read_hauntlet_room(img)
+        if room is not None and room != self.room:
+            self.room, self.since, self.chosen_at, self.rooms = room, now, None, self.rooms + 1
+            self.tvs, self.empty_looks = None, 0
+            print(f"[debug] hauntlet 2: room {room}")
+        if self.room is None:
+            return None
+        age = now - self.since
+        before, self.tvs = self.tvs, (find_door_tvs(img) if hauntlet_timer_visible(img) else None)
+        if self.tvs is None or age < cfg.HAUNTLET_ROOM_SETTLE or (self.chosen_at is not None and now < self.chosen_at + cfg.HAUNTLET_ROOM_TIMEOUT):
+            self.empty_looks = 0
+            return None
+        if self.tvs:
+            self.empty_looks = 0
+            steady = before is not None and len(before) == len(self.tvs) and all(
+                abs(a - b) <= cfg.HAUNTLET_TV_STABLE for old, new in zip(before, self.tvs) for a, b in zip(old, new))
+            return find_hauntlet_doors(img) if steady or age >= cfg.HAUNTLET_DOORS_TIMEOUT else None
+        self.empty_looks += 1
+        if self.fork and self.empty_looks >= 2:
+            return [HauntletDoor(0, 0, None), HauntletDoor(0, 0, None)]       # two doorways, not located
+        if age >= cfg.HAUNTLET_DOORS_TIMEOUT:
+            return [HauntletDoor(0, 0, None) for _ in range(3)]
+        return None
+
+def choose_hauntlet_door(doors: list[HauntletDoor], hearts: Optional[HauntletHearts], items: list[HauntletItem]) -> int:
+    """The index in `doors` (left to right) of the door to go through. A random one so far - `hearts` and `items` are
+    here for the decision logic to come - but a locked door only when a key is held (or every door is locked)."""
+    has_key = any(item.name in cfg.HAUNTLET_KEY_ITEMS for item in items)
+    options = [i for i, door in enumerate(doors) if door.kind != "locked" or has_key]
+    return random.choice(options or list(range(len(doors))))
+
+def hauntlet_direction(index: int, count: int) -> Optional[str]:
+    """The key to strafe with to reach door `index` of `count`: the left key for the first, the right for the last,
+    none for the one in the middle (a fork's two doorways are the first and the last)."""
+    if index == 0:
+        return cfg.HAUNTLET_LEFT_KEY
+    return cfg.HAUNTLET_RIGHT_KEY if index == count - 1 else None
+
+def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun) -> int:
+    """Read the hearts and items off `img`, choose a door (choose_hauntlet_door()) and log the lot."""
+    hearts = read_hauntlet_hearts(img)
+    items = read_hauntlet_items(img, learn=len(run.learned) < cfg.HAUNTLET_LEARN_LIMIT)
+    run.learned |= {item.name for item in items if item.name.startswith("unknown_")}
+    index = choose_hauntlet_door(doors, hearts, items)
+    names = ("left", "right") if len(doors) == 2 else ("left", "middle", "right")
+    print(f"[debug] hauntlet 2: room {run.room}, "
+          + (f"{hearts.red} hearts ({hearts.black} lost)" if hearts else "hearts not seen")
+          + f", items: {', '.join(f'{item.name} x{item.count or 1}' for item in items) or 'none'}"
+          + f", doors: {', '.join(door.kind or '-' for door in doors)}, going {names[index]}")
+    return index
+
+def hauntlet_walk(direction: Optional[str], run: HauntletRun, watch: MinigameWatch) -> bool:
+    """Walk to a door: hold forward, with `direction` (a strafe key, or None) held for the first HAUNTLET_STRAFE_DURATION
+    seconds, until the room number changes (at most HAUNTLET_WALK_MAX seconds). True if the victory screen showed."""
+    run.chosen_at = started = time.time()
+    pydirectinput.keyDown(cfg.HAUNTLET_2_FORWARD_KEY)
+    try:
+        if direction:
+            pydirectinput.keyDown(direction)
+            try:
+                wait_interruptible(cfg.HAUNTLET_STRAFE_DURATION)
+            finally:
+                pydirectinput.keyUp(direction)
+        while time.time() < started + cfg.HAUNTLET_WALK_MAX:
+            img = minigame_look(watch)
+            if detect_minigame_victory(img):
+                return True
+            room = read_hauntlet_room(img)
+            if (room is not None and room != run.room) or watch.problem:
+                break
+            wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
+    finally:
+        pydirectinput.keyUp(cfg.HAUNTLET_2_FORWARD_KEY)
+    return False
+
 def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
-    """Hauntlet 2: wait for it to start, hold forward until the victory screen shows or
-    the overlay says it's over. True if won before `deadline`. See docs/ARCHITECTURE.md#need-handlers.
+    """Hauntlet 2: wait for it to start, then room after room choose a door and walk to it (HauntletRun,
+    hauntlet_choose(), hauntlet_walk()) until the victory screen shows or the overlay says it's over. True if won
+    before `deadline`. See docs/ARCHITECTURE.md#playing-hauntlet-2.
     """
     print(f"[debug] hauntlet 2: waiting {cfg.MINIGAME_START_WAIT:g}s for it to start...")
     minigame_wait(cfg.MINIGAME_START_WAIT, watch)
     watch.start_wait_over()
-    pydirectinput.keyDown(cfg.HAUNTLET_2_FORWARD_KEY)
+    run = HauntletRun()
     try:
         while time.time() < deadline and not watch.problem:
-            wait_interruptible(cfg.MINIGAME_VICTORY_CHECK_INTERVAL)
-            if minigame_won(watch):
+            img = minigame_look(watch)
+            if detect_minigame_victory(img):
+                return True
+            doors = run.look(img, time.time())
+            if doors is None:
+                wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
+                continue
+            if hauntlet_walk(hauntlet_direction(hauntlet_choose(img, doors, run), len(doors)), run, watch):
                 return True
     finally:
-        pydirectinput.keyUp(cfg.HAUNTLET_2_FORWARD_KEY)
+        if run.room is not None:
+            log_run_event(f"hauntlet 2: got as far as room {run.room}")
     return False
 
 def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
@@ -3169,6 +3274,64 @@ def read_hauntlet_hearts(img: Image) -> Optional[HauntletHearts]:
     if not cfg.HAUNTLET_HEART_MIN <= len(kinds) <= cfg.HAUNTLET_HEART_MAX:
         return None                     # not a row of hearts: one pink thing alone, or something pink next to the row counted too
     return HauntletHearts(kinds.count("red"), kinds.count("black"), aw, (int(ax + min(row) * pitch), ay))
+
+def hauntlet_timer_visible(img: Image) -> bool:
+    """Whether the room's timer is shown (HAUNTLET_TIMER_*): it is hidden in a room's first moments and while the
+    player passes through a door, when the screen still shows the last room."""
+    left, top, right, bottom = cfg.HAUNTLET_TIMER_BOX
+    white = img[top:bottom, left:right].min(axis=2) >= cfg.HAUNTLET_TIMER_WHITE_LEVEL
+    return int(np.count_nonzero(white)) >= cfg.HAUNTLET_TIMER_MIN_WHITE
+
+@dataclass
+class HauntletDoor:
+    """A door of a Hauntlet 2 room: where its TV's number is on screen (`x`, `y`) and its `kind` - "locked", "mystery"
+    (the "???" door), "dark", or None for the others (plain and boarded doors aren't told apart)."""
+    x: int
+    y: int
+    kind: Optional[str]
+
+def find_door_tvs(img: Image) -> list[tuple[int, int]]:
+    """The centre of every TV number (HAUNTLET_TV_*) in `img`, left to right: the three above a room's doors, in
+    the row they make - [] when there isn't one (a fork's hall, a close-up, a transition)."""
+    low, high = cfg.HAUNTLET_TV_GLOW
+    mask = cv2.inRange(img, (low[2], low[1], low[0]), (high[2], high[1], high[0]))   # BGR
+    mask[:cfg.HAUNTLET_TV_MIN_Y] = 0
+    count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    found = sorted((float(centres[i][0]), float(centres[i][1])) for i in range(1, count)
+                   if cfg.HAUNTLET_TV_AREA[0] <= stats[i, cv2.CC_STAT_AREA] <= cfg.HAUNTLET_TV_AREA[1])
+    for i in range(len(found) - 2):
+        first, middle, last = found[i:i + 3]
+        gaps = (middle[0] - first[0], last[0] - middle[0])
+        if (abs(first[1] - middle[1]) <= cfg.HAUNTLET_TV_ROW_TOLERANCE and abs(middle[1] - last[1]) <= cfg.HAUNTLET_TV_ROW_TOLERANCE
+                and all(cfg.HAUNTLET_TV_SPACING[0] <= gap <= cfg.HAUNTLET_TV_SPACING[1] for gap in gaps)
+                and abs(gaps[0] - gaps[1]) <= cfg.HAUNTLET_TV_SPACING_TOLERANCE * max(gaps)):
+            return [(int(x), int(y)) for x, y in (first, middle, last)]
+    return []
+
+def hauntlet_door_kind(img: Image, x: int, y: int, scale: float) -> Optional[str]:
+    """What kind of door hangs below the TV number at (x, y), from its pixels (see HAUNTLET_LOCK_LIGHT_BOX); `scale`
+    is the picture's size against the one the boxes were measured at."""
+    def region(box: tuple[int, int, int, int]) -> Image:
+        left, top, right, bottom = box
+        return img[max(0, int(y + top * scale)):int(y + bottom * scale), max(0, int(x + left * scale)):int(x + right * scale)]
+    light = region(cfg.HAUNTLET_LOCK_LIGHT_BOX).astype(int)
+    if light.size and np.count_nonzero((light[..., 2] > 170) & (light[..., 1] < 90) & (light[..., 0] < 90)) >= cfg.HAUNTLET_LOCK_LIGHT_MIN:
+        return "locked"
+    door = region(cfg.HAUNTLET_DOOR_BOX)
+    if door.size == 0:
+        return None
+    brightness = door.mean(axis=2)
+    if np.count_nonzero(brightness <= cfg.HAUNTLET_DARK_LEVEL) >= cfg.HAUNTLET_DARK_FRACTION * brightness.size:
+        return "dark"
+    return "mystery" if brightness.mean() >= cfg.HAUNTLET_MYSTERY_BRIGHTNESS else None
+
+def find_hauntlet_doors(img: Image) -> list[HauntletDoor]:
+    """The three doors of the room in `img`, left to right, with their kinds - [] if there is no row of TVs."""
+    tvs = find_door_tvs(img)
+    if not tvs:
+        return []
+    scale = (tvs[2][0] - tvs[0][0]) / 2 / cfg.HAUNTLET_DOOR_SPACING
+    return [HauntletDoor(x, y, hauntlet_door_kind(img, x, y, scale)) for x, y in tvs]
 
 # ============================================================================
 # WORKFLOWS

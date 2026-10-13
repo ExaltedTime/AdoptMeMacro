@@ -10,6 +10,12 @@ import pytest
 HERE = os.path.join(os.path.dirname(__file__), "ghost_gallery")
 
 
+@pytest.fixture(autouse=True)
+def no_intro_wait(macro, monkeypatch):
+    """The game's intro camera is waited out before the camera is set up; the tests that don't look at that skip the wait."""
+    monkeypatch.setattr(macro.cfg, "GHOST_INTRO_WAIT", 0.0)
+
+
 def shot(name):
     return cv2.imread(os.path.join(HERE, f"{name}.png"))
 
@@ -302,3 +308,23 @@ def test_the_furniture_is_aimed_at_far_from_the_character(macro):
         x, y = macro.far_from_character(cfg.GHOST_FURNITURE_BOX, cfg.GHOST_FURNITURE_MIN_DISTANCE)
         assert left <= x <= right and top <= y <= bottom and ((x - cx) ** 2 + (y - cy) ** 2) ** .5 >= cfg.GHOST_FURNITURE_MIN_DISTANCE
     assert macro.far_from_character((cx - 5, cy - 5, cx + 5, cy + 5), 400) in ((cx - 5, cy - 5), (cx + 5, cy - 5), (cx - 5, cy + 5), (cx + 5, cy + 5))   # a box with nothing far enough
+
+
+def test_the_camera_is_set_up_only_after_the_games_intro_camera_has_run(macro, world, monkeypatch):
+    cfg = macro.cfg
+    monkeypatch.setattr(cfg, "GHOST_INTRO_WAIT", 6.0)
+    world.screens = [blank()]
+    start = world.clock.now
+    macro.play_ghost_gallery(start + 10, watch_started(macro))
+    assert len(world.zooms) == 1 and world.zooms[0] - start >= cfg.GHOST_INTRO_WAIT          # zoomed out after the intro, not during it
+    assert world.tilts and world.tilts[0] >= world.zooms[0]
+
+
+def test_what_is_cyan_at_the_bottom_of_the_screen_is_not_a_ghost(macro):
+    """A pet (or a costume) in the ghosts' own cyan sat there in the macro-played run, and was aimed at for the whole run."""
+    screen = blank()
+    cyan = cv2.cvtColor(np.full((200, 300, 3), (90, 125, 252), np.uint8), cv2.COLOR_HSV2BGR)
+    screen[880:1080, 1500:1800] = cyan
+    assert macro.find_ghost_blobs(screen) == []
+    screen[300:500, 700:1000] = cyan                                                          # the same blob higher up is one
+    assert len(macro.find_ghost_blobs(screen)) == 1

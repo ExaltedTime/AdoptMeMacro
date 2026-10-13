@@ -7,7 +7,8 @@ import pytest
 
 import magic_numbers as cfg
 
-ENTRY_KEYS = {"teleport_pos", "steps", "helicopter", "max_wait", "final_click", "prompt_pos"}
+ENTRY_KEYS = {"teleport_pos", "steps", "helicopter", "max_wait", "final_click", "prompt_pos",
+              "enter_by_white", "enter_wait", "inside_steps"}
 NEEDS = sorted(cfg.TELEPORT_WALK_NEEDS)
 
 
@@ -26,6 +27,9 @@ def test_a_teleport_walk_entry_is_well_formed(name):
         assert key in cfg.MOVE_KEYS and isinstance(seconds, (int, float)) and seconds > 0
     assert isinstance(entry.get("helicopter", False), bool)
     assert entry.get("max_wait", 1) > 0
+    assert entry.get("enter_wait", 1) > 0
+    for key, seconds in entry.get("inside_steps", ()):
+        assert key in cfg.MOVE_KEYS and seconds > 0
     for key in ("final_click", "prompt_pos"):
         assert key not in entry or on_screen(entry[key])
     if "final_click" in entry:
@@ -50,7 +54,14 @@ def test_the_handler_carries_out_the_real_entry(macro, monkeypatch, name):
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
     monkeypatch.setattr(macro, "teleport_to", lambda pos: teleports.append(pos))
     monkeypatch.setattr(macro, "equip_favorite_vehicle", lambda: None)
-    monkeypatch.setattr(macro, "hold_key", lambda key, duration: held.append((key, duration)))
+
+    def hold(key, duration, poll=None):
+        held.append((key, duration))
+        if poll:
+            poll()
+    monkeypatch.setattr(macro, "hold_key", hold)
+    monkeypatch.setattr(macro, "detect_white_screen", lambda img: True)        # the way in is a white screen
+    monkeypatch.setattr(macro, "wait_until_screen_clear", lambda max_wait: None)
     monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
     monkeypatch.setattr(macro, "detect_sick_dialog", lambda img: True)
     monkeypatch.setattr(macro, "grab_screen", lambda: None)

@@ -51,7 +51,7 @@ def macro(tmp_path, monkeypatch):
     things that would touch the game (clicks, keys, sleeping) replaced by recorders."""
     cfg = main.cfg
     for name, value in (("RUN_LOG_PATH", tmp_path / "run_log.txt"), ("RUN_LOGS_DIR", tmp_path / "runs"), ("STATUS_PATH", tmp_path / "status.json"),
-                        ("OUTPUT_LOG_PATH", tmp_path / "output.log"), ("FAILURE_DIR", tmp_path / "failures"),
+                        ("OUTPUT_LOG_PATH", tmp_path / "output.log"), ("FAILURE_DIR", tmp_path / "failures"), ("GAME_CONFIG_PATH", tmp_path / ".config"),
                         ("REPORTS_DIR", tmp_path / "reports")):
         monkeypatch.setattr(cfg, name, str(value))
     monkeypatch.setattr(cfg, "MINIGAME_CAPTURE", False)      # (the tests of the recording switch it on)

@@ -141,14 +141,45 @@ def test_a_stop_ends_the_sequence(macro, monkeypatch):
     assert calls == ["n0"]
 
 
-def test_the_default_sequence_is_every_debug_handler(macro, monkeypatch):
+def test_the_default_sequence_is_every_teleport_handler(macro, monkeypatch):
+    assert set(macro.TELEPORT_HANDLERS) == set(macro.cfg.TELEPORT_WALK_NEEDS) and len(macro.TELEPORT_HANDLERS) >= 4     # (no button need is in it)
     seen = []
     monkeypatch.setattr(macro, "respawn_character", lambda: None)
     monkeypatch.setattr(macro, "check_focus", lambda: None)
-    fake = {name: type("H", (), {"handle": lambda self, name=name: seen.append(name) or True}) for name in macro.DEBUG_HANDLERS}
-    monkeypatch.setattr(macro, "DEBUG_HANDLERS", fake)
+    fake = {name: type("H", (), {"handle": lambda self, name=name: seen.append(name) or True}) for name in macro.TELEPORT_HANDLERS}
+    monkeypatch.setattr(macro, "TELEPORT_HANDLERS", fake)
     macro.run_all_need_handlers()
-    assert seen == list(fake) and len(seen) >= 10
+    assert seen == list(fake)
+
+
+def test_a_need_is_on_unless_its_switch_says_otherwise_and_the_switch_is_kept(macro, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "ENABLED_NEEDS", {"catch", "sick"})
+    assert macro.need_is_enabled("catch") and not macro.need_is_enabled("pet")                # ENABLED_NEEDS is where the switches start
+    macro.AdoptMeGUI.set_need_enabled(None, "catch", False)
+    macro.AdoptMeGUI.set_need_enabled(None, "pet", True)
+    assert not macro.need_is_enabled("catch") and macro.need_is_enabled("pet") and macro.need_is_enabled("sick")
+    assert macro.enabled_needs() == {"pet", "sick"}
+    assert macro.load_game_config()["needs_enabled"] == {"catch": False, "pet": True}          # persisted, not only remembered
+    macro.reset_game_config()
+    assert macro.need_is_enabled("catch") and not macro.need_is_enabled("pet")                # a reset puts them back
+
+
+def test_a_need_switched_off_gets_no_handler_and_one_switched_on_does(macro, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "ENABLED_NEEDS", {"catch"})
+    assert macro.get_need_handler("catch") is not None and macro.get_need_handler("pet") is None
+    macro.AdoptMeGUI.set_need_enabled(None, "catch", False)
+    macro.AdoptMeGUI.set_need_enabled(None, "pet", True)
+    assert macro.get_need_handler("catch") is None and macro.get_need_handler("pet") is not None
+
+
+def test_stuck_needs_are_only_counted_for_the_needs_that_are_on(macro, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "ENABLED_NEEDS", {"catch", "pet"})
+    macro.AdoptMeGUI.set_need_enabled(None, "pet", False)
+    monkeypatch.setattr(macro, "log_failure", lambda *a, **k: None)
+    for _ in range(macro.cfg.NEED_STUCK_CHECKS):
+        macro.state.attempted_last = {"catch", "pet"}
+        macro.record_detection(["catch", "pet"])
+    assert macro.state.disabled_needs == {"catch"}                                             # the one switched off is not acted on, so not disabled either
 
 
 BRIGHT = (240, 250, 255)

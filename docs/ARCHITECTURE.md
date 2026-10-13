@@ -81,7 +81,7 @@ every second instead of a line per check.
 5. The list is then worked through in order until one need is resolved. For
    each `need_name`, `get_need_handler(need_name)` looks it up in
    `NEED_HANDLER_CLASSES` and returns an instance, or `None` if that need
-   isn't in `ENABLED_NEEDS` or was disabled as stuck (see
+   is switched off (`need_is_enabled()`) or was disabled as stuck (see
    [Stuck needs](#stuck-needs)) - a `None` result is printed and skipped
    without doing anything. Every need is handled the same way from here: calling
    `.handle()` on whatever handler came back (see
@@ -402,18 +402,21 @@ factory: one dedicated class per need with real logic, plus
 via `partial()` for the needs that only differ by a name/config
 (`BUTTON_NAMES` and `TELEPORT_WALK_NEEDS` respectively).
 
-Which needs actually run automatically is decided by one set,
-`ENABLED_NEEDS` (`magic_numbers.py`, the first thing defined in that
-file). A detected need that isn't in it is logged and skipped, not
-resolved. Currently enabled: `hungry`, `thirsty`, `dirty`, `potty`,
+Which needs actually run automatically is decided by a switch per need, the one next to its
+Test button on the GUI's Debug tab (see below), kept in the game config (`needs_enabled`, see
+[Persisted game config](#persisted-game-config)). A switch starts **on**, unless the need is missing from the set
+`ENABLED_NEEDS` (`magic_numbers.py`, the first thing defined in that file), which only decides where the
+switches start: `need_is_enabled()` is the answer, `enabled_needs()` the set of them. A detected need that is off is
+logged and skipped, not resolved. Enabled in `ENABLED_NEEDS`: `hungry`, `thirsty`, `dirty`, `potty`,
 `sleepy`, `catch`, `pet`, `ride`, `walk`, `choose`, plus the
 teleport-walk needs `cafe`, `salon`, `sick`, `pizza`, `school`, `beach`,
 `camping`, `bored` (called out with their own inline comment in the set
 literal, since they leave the map and run considerably longer than
 everything else).
-The GUI's **Debug** tab has a **Needs** subtab with a button per handler that
-runs it directly regardless of `ENABLED_NEEDS`, and a button that runs every
-handler once, one after another (`run_all_need_handlers()`: each with the
+The GUI's **Debug** tab has a **Needs** subtab with, for each handler, a switch (whether the macro acts on the
+need; usable while a run goes on, like the other config switches) and a small **Test** button that
+runs the handler directly whether or not it is switched on, and a button that runs every
+*teleport* handler once, one after another (`TELEPORT_HANDLERS`, `run_all_need_handlers()`: each with the
 in-task checks on, the character respawned after each, a stop ends the
 whole sequence, and a summary of how each went printed at the end).
 
@@ -448,8 +451,10 @@ rather than a flat sleep after the fact.
 | `pet` | `PetNeedHandler`: `focus_pet()` (see below, with `PET_FOCUS_CLICK_DURATION`), click the screen centre, move to `PET_SWIPE_START_OFFSET` above it, then hold the mouse down and swipe once down to `PET_SWIPE_END_OFFSET` below it over `PET_SWIPE_DURATION`, releasing the button in a `finally`. Same as `catch` - always the full fixed duration. |
 | `choose` | `ChooseNeedHandler`: `focus_pet()` (see below), find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. It doesn't wait for the icon to clear (it's gone at once; the next check confirms). |
 | `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then `equip_favorite_vehicle()` (backpack → vehicles → first vehicle → equip → close backpack), hold `r` (`KEY_HELICOPTER`) for `RIDE_R_HOLD_DURATION`, then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT`, ending early the moment "ride" is confirmed cleared (see below). |
-| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`: after pressing `e` and waiting `SICK_CONFIRM_WAIT` the handler looks for the doctor's dialog, `detect_sick_dialog()`. Recognised: it clicks Yes. Not recognised and the pet view is not open: it logs `sick: dialog not recognised after e (pet focused: False) - clicking Yes anyway` and clicks Yes all the same, and the wait for the icon says whether it worked (in run 2 the recognition failed on 27 of 27 real attempts while the plain click had worked in run 1, so it is not trusted to fail the need). Not recognised and the pet view *is* open - the prompt is then a hand button `e` doesn't press: it logs `sick: no dialog after e (pet focused: True) - clicking the prompt`, backs out of the pet view (`dismiss_stray_windows()`), clicks the prompt on screen (`prompt_pos`, `SICK_PROMPT_POS`) and looks once more. Only if the dialog still isn't up has the need failed: the character respawns and the handler returns False at once, with no wait for the icon to clear, and `process_needs()` logs the failure), `helicopter` (see below) and `max_wait` (how long to wait for the need to clear afterwards; default `NEED_GONE_MAX_WAIT`, 75s). `sick` waits `SICK_PRE_E_WAIT` after its last hold before pressing `e`. Which table is used depends on `HALLOWEEN` - see below. |
+| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`: after pressing `e` and waiting `SICK_CONFIRM_WAIT` the handler looks for the doctor's dialog, `detect_sick_dialog()`. Recognised: it clicks Yes. Not recognised and the pet view is not open: it logs `sick: dialog not recognised after e (pet focused: False) - clicking Yes anyway` and clicks Yes all the same, and the wait for the icon says whether it worked (in run 2 the recognition failed on 27 of 27 real attempts while the plain click had worked in run 1, so it is not trusted to fail the need). Not recognised and the pet view *is* open - the prompt is then a hand button `e` doesn't press: it logs `sick: no dialog after e (pet focused: True) - clicking the prompt`, backs out of the pet view (`dismiss_stray_windows()`), clicks the prompt on screen (`prompt_pos`, `SICK_PROMPT_POS`) and looks once more. Only if the dialog still isn't up has the need failed: the character respawns and the handler returns False at once, with no wait for the icon to clear, and `process_needs()` logs the failure), `helicopter` (see below) and `max_wait` (how long to wait for the need to clear afterwards; default `NEED_GONE_MAX_WAIT`, 75s). `sick` also sets `enter_by_white` (see **Getting in by the white screen** below). `sick` waits `SICK_PRE_E_WAIT` after its last hold before pressing `e`. Which table is used depends on `HALLOWEEN` - see below. |
 | `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")` - up to `NEED_GONE_MAX_WAIT`, same early-exit as `ride` above. |
+
+**Getting in by the white screen.** The walk to the hospital doesn't always end indoors, and going in shows as a white screen (`detect_white_screen()`), so an entry with `enter_by_white` checks for it instead of trusting the timings. After the teleport the handler first waits (up to `TELEPORT_ARRIVE_MAX`, `wait_until_screen_clear()`) for the teleport's own white screen to pass, then holds each step with `hold_key(..., poll=...)`, which calls the poll every `WATCH_POLL_INTERVAL` seconds and records any white screen seen. If one was seen the walk worked and the handler goes on to the desk as before. If not, `_find_the_way_in()` zigzags until one is, for at most the entry's `enter_wait` seconds: forward for `ENTER_SEARCH_FORWARD`, then sideways (left and right alternately, a longer stretch each time, capped at `ENTER_SEARCH_SIDE_MAX`, starting at `ENTER_SEARCH_SIDE`) and a jump. After a late entry it waits for the white to clear (`ENTER_CLEAR_MAX`) and walks the entry's `inside_steps`, which the early entry would have covered. If it never gets in the need fails like a missing dialog: a run event is logged, the character respawns and the handler returns False with no dialog and no waiting.
 
 **Helicopter.** A teleport-walk entry can fly instead of walk. `HELICOPTER_REQUIRED`
 (`magic_numbers.py`, default `False`) is the default for entries that don't
@@ -688,7 +693,7 @@ compares each check with the needs the *previous pass attempted*
 need's streak reaches `NEED_STUCK_CHECKS` - it's supposed to be getting
 resolved, yet it never goes away - it's added to `state.disabled_needs` and
 `get_need_handler()` returns `None` for it from then on, same as a need that
-isn't in `ENABLED_NEEDS`. A single check without it, even one that detects
+is switched off. A single check without it, even one that detects
 nothing at all, breaks the streak.
 
 `state.disabled_needs` lasts for the life of the process only - it isn't saved
@@ -758,7 +763,7 @@ detected the character is respawned every 4 minutes and the game rejoined at
 
 None of `lure_collect()`, `set_new_lure()`, `tree_collect()` or
 `setup_game()` are need handlers - they're plain functions, not
-registered anywhere in `NEED_HANDLER_CLASSES` or `ENABLED_NEEDS`.
+registered anywhere in `NEED_HANDLER_CLASSES` or switched on.
 `side_quest()` runs `lure_collect()`/`tree_collect()` automatically - see
 [Persisted game config](#persisted-game-config). `setup_game()` is *not*
 part of any cycle or loop: it only runs when you press the GUI's **Setup**
@@ -988,6 +993,8 @@ actually on disk (so an old config missing a newer key still works), and
   workflow runs.
 - **`resume_on_focus_loss`** - the **Resume after focus loss** checkbox (default
   off); see [Stopping & focus safety](#stopping--focus-safety).
+- **`needs_enabled`** - `{need: on or off}`, the switches next to the Test buttons on the Debug tab's Needs subtab. A need that isn't in it
+  follows `ENABLED_NEEDS`, so by default they are all on; **Reset Config** puts them back.
 - **`record_next_run`** - the **Record the next run (low quality video)**
   checkbox on the Debug tab's Other subtab (default off); see [Recording a run](#recording-a-run). Cleared, and
   the checkbox unticked, when the run that it was for starts.
@@ -1235,9 +1242,17 @@ Hotel": one doorway straight ahead, no TVs, the timer already showing; in both c
 doors that is still numbered 1), and any other room without TVs for `HAUNTLET_DOORS_TIMEOUT` is treated the same way: a single
 doorway ahead, walked to by holding forward only (no strafe) until a row of TVs is on screen (`hauntlet_walk(until_doors=True)`) or the
 number changes, after which the room is looked at at once. For a room other than 1, `no doors found in room N` is
-logged once per run as a failure, which keeps a screenshot of what the TVs were not found in. Once a door was chosen the room is left alone for
-`HAUNTLET_ROOM_TIMEOUT` seconds (the walk takes up to `HAUNTLET_WALK_MAX`); a room whose number didn't change by then is chosen from
-again, which is the retry for a walk that got stuck.
+logged once per run as a failure, which keeps a screenshot of what the TVs were not found in. After a walk the room is left alone for
+`HAUNTLET_RETRY_WAIT` seconds and then chosen from again if its number hasn't changed - the retry for a walk that got stuck.
+
+**Getting stuck.** The room timer runs out after a while and the run is over, so a stuck player has to do something else, quickly. A walk that ended with the
+number unchanged counts in `HauntletRun.stuck`; the next one (`hauntlet_walk()`) steps back first (`HAUNTLET_BACK_KEY`, `HAUNTLET_BACKUP_DURATION`), avoids the door that
+got the player stuck when there is another (`choose_hauntlet_door(avoid=...)`), and **wiggles** while it holds forward: every `HAUNTLET_WIGGLE_PERIOD` seconds a short
+step sideways (a random way, `HAUNTLET_WIGGLE_DURATION`) and a jump, to get off whatever it is caught on. A walk straight ahead (a hall, or doors that weren't found) wiggles
+the same way. When the doors can't be found at all - the camera zoomed in too far, turned away (room 8 of a macro-played run was seen from an angle, and the macro held W for 25 s against
+a wall until the timer ran out), or a TV hidden - the camera is dragged round with the right button (`rotate_camera()`, `HAUNTLET_CAMERA_DRAG`) up to `HAUNTLET_SEARCH_TURNS` times, a look
+after each, before walking ahead. A TV showing a "1" (the player stands before that door) is a thin stroke, much smaller than the "0"s of the others, hence the low end of
+`HAUNTLET_TV_AREA`; the real run's row was missed for 25 s because of one.
 
 `hauntlet_choose()` reads the hearts and the items off the same screenshot (new items are saved, at most
 `HAUNTLET_LEARN_LIMIT` per play, so a misreading can't fill the folder), chooses the door, uses the items the choice calls for, and logs the lot:
@@ -1246,7 +1261,7 @@ again, which is the retry for a walk that got stuck.
 *The door* (`choose_hauntlet_door()`) is a random one, with two exceptions: a locked door is only a choice when the **grey key** (`HAUNTLET_ITEM_KEY`; the gold key is not it)
 is held, and the door the phone's arrow is over is left alone (both only while there is any other door to take). *The items* (`hauntlet_items_for()`), each only if held and in
 this order: the grey key for a locked door; a **cyan potion** (a heart that lasts the room) for a boarded one; the **red potion** (it refills the hearts) when the red hearts are down to
-`HAUNTLET_LOW_HEARTS` or fewer; a **heart potion** (one more heart) whenever there is one. *The phone* is used first, with a chance of `HAUNTLET_PHONE_CHANCE` at each choice: it puts a
+`HAUNTLET_LOW_HEARTS` or fewer; a **heart potion** (one more heart) whenever there is one. *The phone* is used first, with a chance of `HAUNTLET_PHONE_CHANCE` at each choice (`HAUNTLET_PHONE_CHANCE_LOW` when the hearts are low - it is then that knowing where the ghost is matters most): it puts a
 red arrow - a big red triangle with a ghost on it, `HAUNTLET_ARROW_*` - over the TV of the door with a ghost behind it, which then isn't chosen. `find_ghost_door()` finds the arrow (it
 takes a moment to show, so it is looked for `HAUNTLET_ARROW_LOOKS` times) and says which door it belongs to; over the captured runs it fired on 9 frames, all of the hand-played run (the one that used the phone), and where the doors were
 found (6 of them) always within a few percent of a door spacing of a door's TV; it fired on none of the ~700 frames of the macro-played runs, which used no phone. `hauntlet_use_item()` clicks an item's slot, as the capture shows a human doing, and waits
@@ -1280,7 +1295,8 @@ the character while the camera followed it.
 
 `find_ghost_blobs()` finds the ghosts and the boss as the connected pieces of their translucent cyan (`GHOST_COLOR`, OpenCV HSV (85, 140, 250)
 under the human's cursor), at least `GHOST_MIN_AREA` px (ghosts 880-7200 px in the run, the boss 9500-41000), biggest first, leaving out the
-HUD and the character's own glow (`GHOST_IGNORE_BOXES`) and, in the boss phase, the boss's health bar (its crest and its ghost icons are the
+HUD, the character's own glow and the bottom of the screen (`GHOST_IGNORE_BOXES`: a player's pet, in the macro-played run a cyan one - the same cyan as the ghosts to a few units of hue and brightness, so it can't be told apart by colour -
+was aimed at for 20 s of a run, the camera being close, and a cyan costume was taken for a ghost for much longer) and, in the boss phase, the boss's health bar (its crest and its ghost icons are the
 same cyan). `ghost_boss_bar_visible()` is the boss phase: 13,000-17,000 gold pixels in `GHOST_BOSS_BAR_BOX` against none (at most 230) before it, right on
 every frame of the run but the ones at the very start and end of the boss's bar. `choose_ghost_target()` picks where to aim: the biggest blob
 in the boss phase, else the ghost already being followed (one within `GHOST_STICK` px of where it was, since they move and aiming at another one at each look
@@ -1295,8 +1311,9 @@ is dim enough then to fall under `GHOST_COLOR`'s brightness, so `find_ghost_blob
 (nearest the character). Replaying the run, the three phases come out at 110.4-115.8 s, 127.2-133.5 s and 139.8-147.1 s of the capture, with the boss
 phase before, between and after them, as in the frames.
 
-`play_ghost_gallery()` waits until the overlay (TIME LEFT, the score) has been seen - the game starts well before `MINIGAME_START_WAIT` would be over - and
-**sets up the view**: `zoom_out()` (`KEY_ZOOM_OUT` held `MINIGAME_ZOOM_OUT_DURATION` seconds; in a macro-played run the camera was right behind the character, whose
+`play_ghost_gallery()` waits until the overlay (TIME LEFT, the score) has been seen - the game starts well before `MINIGAME_START_WAIT` would be over - and then for
+`GHOST_INTRO_WAIT` more, while the game's own intro camera (a look at the ceiling) runs: a zoom made during it is undone when the play camera takes over, as it was in both macro-played runs.
+Then it **sets up the view**: `zoom_out()` (`KEY_ZOOM_OUT` held `MINIGAME_ZOOM_OUT_DURATION` seconds; in a macro-played run the camera was right behind the character, whose
 cyan hoodie filled the screen and was taken for a ghost, so that the beam was held on the character for the whole run) and `tilt_camera_down()` (the right button held while the mouse is
 dragged down `GHOST_START_TILT` px, for a view from above). Then, every `GHOST_LOOK_INTERVAL`, it looks and works out the phase (before the boss, the boss can be hurt, the boss is shielded),
 moves the mouse to the target with `pydirectinput.moveTo()` (not `hover_move()`: its three settling pauses are too slow for tracking) and holds the left button down while there is one.
@@ -1310,7 +1327,7 @@ The buttons and the walking key are always let go, also when the macro is stoppe
 `send_macro_window_to_back()`) for the whole of both minigames, as it covers part of the screen.
 **Not yet checked in the game:** that `pydirectinput.moveRel(..., relative=True)` with the right button held turns Roblox's camera the way a hand does, the size of the drags and of
 the start's tilt, where the furniture is (the box is a guess), and the walking's and jumping's use; nor whether the character's own colours (a cyan costume) are kept out of the ghost finder
-once the camera is out (`GHOST_IGNORE_BOXES` is the character's place in a human's zoomed-out run). **What it does not do:** dodge, react to being knocked down, or choose between ghosts
+once the camera is out (`GHOST_IGNORE_BOXES` has the character's place in a human's zoomed-out run). **What it does not do:** dodge, react to being knocked down, or choose between ghosts
 by anything but distance (the human often picked the second or third nearest); it can't tell furniture from floor.
 
 ### Recording a run
@@ -1492,7 +1509,7 @@ clicks instead of making them. They cover:
 - `test_ghost_gallery.py` - ghost and boss finding against crops of a human's run, the aim and the player with a fake clock and mouse;
 - `test_hauntlet_2_play.py` - the timer and doors against crops of that run, then the room tracking, the choices (door, item), the walk and the whole loop with a fake clock and keyboard;
 - `test_features.py` - the daily money reset, the run-every-need sequence, the win screen and the like;
-- `test_config.py` - the real need tables in `magic_numbers.py`, without pinning any value: every entry is well formed (known keys, on-screen positions, movement keys, a `final_click` has its `prompt_pos`), has a handler, and the handler carries out exactly what the entry says (run over whichever needs exist, so `HALLOWEEN` off just drops `sick`). The handler tests elsewhere use made-up entries; this is what keeps the real ones honest;
+- `test_config.py` - the real need tables in `magic_numbers.py`, without pinning any value: every entry is well formed (known keys, on-screen positions, movement keys, a `final_click` has its `prompt_pos`, the `enter_*` keys are sane), has a handler, and the handler carries out exactly what the entry says (run over whichever needs exist, so `HALLOWEEN` off just drops `sick`). The handler tests elsewhere use made-up entries; this is what keeps the real ones honest;
 - `test_report.py` - the run-report parser against the exact log wording the
   macro writes (a round trip through `log_run_event()`), the chart itself,
   and the constant check.

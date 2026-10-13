@@ -95,7 +95,7 @@ def test_it_aims_at_the_ghost_follows_it_and_moves_on_to_furniture_when_it_is_go
     assert all(m[1:] == big for m in moves[:5])                                            # follows it every look
     left, top, right, bottom = cfg.GHOST_FURNITURE_BOX
     assert all(left <= m[1] <= right and top <= m[2] <= bottom for m in moves[5:]) and len(moves) > 5      # then the furniture
-    assert world.mouse.count(("down",)) == 1 and ("up",) not in world.mouse[:-1]            # the beam is never let go of, only moved around
+    assert world.mouse.count(("down",)) == 1 and ("up",) not in world.mouse[:-1]            # the beam is not let go of in a short while, only moved around
 
 
 def test_in_the_boss_phase_it_holds_on_the_boss(macro, world):
@@ -209,7 +209,7 @@ def test_in_the_boss_phase_with_nothing_to_aim_at_it_does_not_hold_the_beam_on_f
     macro.play_ghost_gallery(world.clock.now + cfg.GHOST_CAMERA_PERIOD * 2.5, watch_started(macro))
     assert ("down",) in world.mouse and world.mouse.count(("down",)) == 1                  # held on the boss while it was there...
     assert left_held_on(world)[3:] == []                                                   # ...and not on anything once it is not
-    assert ("up",) not in world.mouse[:-1]                                                 # the beam is never let go of
+    assert ("up",) not in world.mouse[:-1]                                                 # the beam is not let go of in a short while
 
 
 def test_it_waits_for_the_overlay_before_acting(macro, world, monkeypatch):
@@ -305,7 +305,7 @@ def test_it_walks_about_a_step_at_a_time_without_stopping_the_aiming(macro, worl
     assert held == 0
     for (kind, _, at), (kind2, _, at2) in zip(steps[::2], steps[1::2]):
         assert cfg.GHOST_MOVE_STEP_MIN - 0.3 <= at2 - at <= cfg.GHOST_MOVE_STEP_MAX + 0.3 + (cfg.GHOST_FURNITURE_PROBES + 1) * cfg.GHOST_OUTLINE_WAIT      # (a step ends at the next look, which can be after a search for furniture)
-    assert world.mouse.count(("down",)) == 1 and len([m for m in world.mouse if m[0] == "move"]) > 20     # it kept aiming meanwhile
+    assert world.mouse.count(("down",)) >= 1 and len([m for m in world.mouse if m[0] == "move"]) > 20       # it kept aiming meanwhile
 
 
 def test_the_furniture_is_aimed_at_far_from_the_character(macro):
@@ -428,3 +428,12 @@ def test_it_stands_still_while_the_ghost_is_near_enough_and_never_wanders_while_
     world.screens = [shot("ghosts_50")]                                               # a ghost near the character
     macro.play_ghost_gallery(world.clock.now + cfg.GHOST_MOVE_PERIOD * 3.5, watch_started(macro))
     assert not [k for k in world.keys if k[0] == "down" and k[1] in cfg.MOVE_KEYS][1:]    # (after the start's walk)
+
+
+def test_the_beam_is_let_go_of_and_pressed_again_every_regrab_period(macro, world):
+    cfg = macro.cfg
+    world.screens = [shot("ghosts_50")]
+    start = world.clock.now
+    macro.play_ghost_gallery(start + cfg.GHOST_REGRAB_PERIOD * 2.5, watch_started(macro))
+    beam = [(e, i) for i, e in enumerate(world.mouse) if e in (("down",), ("up",))]
+    assert [e for e, _ in beam[:5]] == [("down",), ("up",), ("down",), ("up",), ("down",)]     # held, let go and held again, twice

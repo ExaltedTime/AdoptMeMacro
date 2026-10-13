@@ -597,7 +597,7 @@ GAME_CONFIG_LOCK = threading.Lock()
 
 def _read_game_config() -> dict[str, Any]:
     """load_game_config() without taking the lock (for callers that hold it)."""
-    defaults = {
+    defaults: dict[str, Any] = {
         "money_collected": 0,
         "lure_timer": time.time(),  # due immediately on a fresh config
         "tree_timer": time.time(),  # likewise
@@ -605,6 +605,7 @@ def _read_game_config() -> dict[str, Any]:
         "side_quest_enabled": True, # whether side_quest() is allowed to run at all
         "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
         "record_next_run": False,   # record the next run as a low quality video; cleared when that run starts
+        "needs_enabled": {},        # {need: whether it is acted on}, the Debug tab's switches; a need not in it follows ENABLED_NEEDS (see need_is_enabled())
         **{f"{name}_enabled": False for name in cfg.MINIGAME_LABELS},  # which Halloween minigames get played (see minigame_popup())
         "private_server_link": "",  # used by leave_and_rejoin(); kept here, not in the source, since it's a join key
     }
@@ -1881,7 +1882,7 @@ class TeleportWalkNeedHandler(NeedHandler):
         return detect_sick_dialog(grab_screen())
 
 # Handler factory (class, or partial of one) for each need.
-# get_need_handler() uses this plus ENABLED_NEEDS (magic_numbers.py) to
+# get_need_handler() uses this plus the enabled needs (need_is_enabled()) to
 # decide what to do with a detected need.
 NEED_HANDLER_CLASSES: dict[str, Callable[[], NeedHandler]] = {
     "catch": CatchNeedHandler,
@@ -1893,14 +1894,25 @@ NEED_HANDLER_CLASSES: dict[str, Callable[[], NeedHandler]] = {
     **{name: partial(TeleportWalkNeedHandler, name) for name in cfg.TELEPORT_WALK_NEEDS},
 }
 
-# Every handler the GUI's Debug tab can run on its own.
+# Every handler the GUI's Debug tab can run on its own, and the teleport ones it can run all of in turn.
 DEBUG_HANDLERS = NEED_HANDLER_CLASSES
+TELEPORT_HANDLERS = {name: handler for name, handler in NEED_HANDLER_CLASSES.items() if name in cfg.TELEPORT_WALK_NEEDS}
+
+def need_is_enabled(need_name: str) -> bool:
+    """Whether the macro acts on `need_name`: the Debug tab's switch for it (the game config's needs_enabled), which is
+    on unless the need is missing from ENABLED_NEEDS (magic_numbers.py) - that is only the starting position."""
+    return bool(load_game_config()["needs_enabled"].get(need_name, need_name in cfg.ENABLED_NEEDS))
+
+def enabled_needs() -> set[str]:
+    """Every need the macro acts on at the moment (need_is_enabled()), for the needs it knows and any ENABLED_NEEDS names."""
+    flags = load_game_config()["needs_enabled"]
+    return {name for name in cfg.ENABLED_NEEDS if flags.get(name, True)} | {name for name, on in flags.items() if on}
 
 def get_need_handler(need_name: str) -> Optional[NeedHandler]:
     """Return the handler for a detected need, or None if it's not
-    currently enabled (see ENABLED_NEEDS), was disabled for this run (see
+    currently enabled (see need_is_enabled()), was disabled for this run (see
     record_detection()), or the macro doesn't know it."""
-    if need_name not in cfg.ENABLED_NEEDS or need_name in state.disabled_needs:
+    if not need_is_enabled(need_name) or need_name in state.disabled_needs:
         return None
     handler_cls = NEED_HANDLER_CLASSES.get(need_name)
     return handler_cls() if handler_cls else None
@@ -1916,7 +1928,7 @@ def record_detection(detected: list[str]) -> None:
         else:
             state.attempt_streaks.pop(need_name, None)
     state.attempted_last = set()
-    stuck = {n for n, count in state.attempt_streaks.items() if count >= cfg.NEED_STUCK_CHECKS} & (cfg.ENABLED_NEEDS - state.disabled_needs)
+    stuck = {n for n, count in state.attempt_streaks.items() if count >= cfg.NEED_STUCK_CHECKS} & (enabled_needs() - state.disabled_needs)
     for need_name in sorted(stuck):
         state.disabled_needs.add(need_name)
         print(f"[!] {need_name} still there after {cfg.NEED_STUCK_CHECKS} attempts in a row - disabling it for this run")
@@ -4353,11 +4365,11 @@ def write_run_report(run: Union[int, str]) -> Optional[str]:
     return path
 
 def run_all_need_handlers(handlers: Optional[dict[str, Callable[[], NeedHandler]]] = None) -> dict[str, str]:
-    """Run every need handler once (the Debug tab's "test every need"), respawning after
+    """Run need handlers once each (the Debug tab's "test every teleport handler": TELEPORT_HANDLERS, or any given), respawning after
     each, minigame popups declined. Returns {need: "done" | "failed" | "interrupted by ..."}.
     See docs/ARCHITECTURE.md#gui-internals.
     """
-    handlers = DEBUG_HANDLERS if handlers is None else handlers
+    handlers = TELEPORT_HANDLERS if handlers is None else handlers
     results: dict[str, str] = {}
     print(f"\n[TEST] Running all {len(handlers)} need handlers, one after another...")
     for i, (name, handler_cls) in enumerate(handlers.items(), 1):
@@ -4780,24 +4792,36 @@ class AdoptMeGUI:
         self.build_other_tab(other_tab)
 
     def build_needs_tab(self, parent: Any) -> None:
-        """Fill the Needs subtab: a button that runs every need handler in turn,
-        then a two-column grid of [TEST] buttons, one per entry in
-        DEBUG_HANDLERS."""
+        """Fill the Needs subtab: a button that runs every teleport handler in turn, then a two-column grid with a switch
+        (whether the macro acts on that need, kept in the game config, on unless ENABLED_NEEDS leaves it out) and a small [Test]
+        button for each entry in DEBUG_HANDLERS."""
         for col in range(2):
             parent.grid_columnconfigure(col, weight=1, uniform="debug")
-        btn_all = tk.Button(parent, text="Test every need, one after another", command=lambda: self.run_async(run_all_need_handlers),
+        btn_all = tk.Button(parent, text="Test every teleport handler, one after another", command=lambda: self.run_async(run_all_need_handlers),
                             font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"), bg=cfg.GUI_LOOP_COLOR, fg=self.fg, cursor="hand2")
         btn_all.grid(row=0, column=0, columnspan=2, sticky=tk.EW, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
         self.action_buttons.append(btn_all)
-        tk.Label(parent, text="Or run one need handler on its own", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"),
+        tk.Label(parent, text="Switch a need off to leave it alone, or test its handler on its own", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"),
                  bg=self.bg, fg=self.accent).grid(row=1, column=0, columnspan=2, sticky=tk.W,
                                                    padx=cfg.GUI_ROW_SPACING, pady=(cfg.GUI_ROW_SPACING, cfg.GUI_WIDGET_SPACING))
+        self.need_vars: dict[str, tk.BooleanVar] = {}
         for i, (name, handler_cls) in enumerate(DEBUG_HANDLERS.items()):
-            btn = tk.Button(parent, text=name.capitalize(),
-                            command=lambda n=name, c=handler_cls: self.test_handler(n, c),  # type: ignore[misc]
-                            font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
-            btn.grid(row=2 + i // 2, column=i % 2, sticky=tk.EW, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+            cell = tk.Frame(parent, bg=self.bg)
+            cell.grid(row=2 + i // 2, column=i % 2, sticky=tk.EW, padx=cfg.GUI_WIDGET_SPACING)
+            var = tk.BooleanVar(value=need_is_enabled(name))
+            self.need_vars[name] = var
+            tk.Checkbutton(cell, text=name.capitalize(), variable=var, command=lambda n=name, v=var: self.set_need_enabled(n, v.get()),  # type: ignore[misc]
+                           font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.fg, selectcolor=self.bg,
+                           activebackground=self.bg, activeforeground=self.fg, anchor=tk.W, cursor="hand2").pack(side=tk.LEFT)
+            btn = tk.Button(cell, text="Test", command=lambda n=name, c=handler_cls: self.test_handler(n, c),  # type: ignore[misc]
+                            font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=cfg.GUI_TEST_COLOR, fg=self.fg, cursor="hand2", padx=cfg.GUI_ROW_SPACING, pady=0)
+            btn.pack(side=tk.RIGHT, pady=cfg.GUI_LABEL_PADDING)
             self.action_buttons.append(btn)
+
+    def set_need_enabled(self, name: str, value: bool) -> None:
+        """Persist a need's switch (usable while a run goes on, like the other switches: update_game_config() is locked)."""
+        update_game_config(lambda c: c.setdefault("needs_enabled", {}).update({name: value}))
+        print(f"[!] {name} need {'on' if value else 'off'}")
 
     def build_other_tab(self, parent: Any) -> None:
         """Fill the Other subtab: record the next run, refresh the debug

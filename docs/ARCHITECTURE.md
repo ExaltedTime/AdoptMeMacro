@@ -81,7 +81,7 @@ every second instead of a line per check.
 5. The list is then worked through in order until one need is resolved. For
    each `need_name`, `get_need_handler(need_name)` looks it up in
    `NEED_HANDLER_CLASSES` and returns an instance, or `None` if that need
-   isn't in `ENABLED_NEEDS` or was disabled as stuck (see
+   is switched off (`need_is_enabled()`) or was disabled as stuck (see
    [Stuck needs](#stuck-needs)) - a `None` result is printed and skipped
    without doing anything. Every need is handled the same way from here: calling
    `.handle()` on whatever handler came back (see
@@ -402,18 +402,21 @@ factory: one dedicated class per need with real logic, plus
 via `partial()` for the needs that only differ by a name/config
 (`BUTTON_NAMES` and `TELEPORT_WALK_NEEDS` respectively).
 
-Which needs actually run automatically is decided by one set,
-`ENABLED_NEEDS` (`magic_numbers.py`, the first thing defined in that
-file). A detected need that isn't in it is logged and skipped, not
-resolved. Currently enabled: `hungry`, `thirsty`, `dirty`, `potty`,
+Which needs actually run automatically is decided by a switch per need, the one next to its
+Test button on the GUI's Debug tab (see below), kept in the game config (`needs_enabled`, see
+[Persisted game config](#persisted-game-config)). A switch starts **on**, unless the need is missing from the set
+`ENABLED_NEEDS` (`magic_numbers.py`, the first thing defined in that file), which only decides where the
+switches start: `need_is_enabled()` is the answer, `enabled_needs()` the set of them. A detected need that is off is
+logged and skipped, not resolved. Enabled in `ENABLED_NEEDS`: `hungry`, `thirsty`, `dirty`, `potty`,
 `sleepy`, `catch`, `pet`, `ride`, `walk`, `choose`, plus the
 teleport-walk needs `cafe`, `salon`, `sick`, `pizza`, `school`, `beach`,
 `camping`, `bored` (called out with their own inline comment in the set
 literal, since they leave the map and run considerably longer than
 everything else).
-The GUI's **Debug** tab has a **Needs** subtab with a button per handler that
-runs it directly regardless of `ENABLED_NEEDS`, and a button that runs every
-handler once, one after another (`run_all_need_handlers()`: each with the
+The GUI's **Debug** tab has a **Needs** subtab with, for each handler, a switch (whether the macro acts on the
+need; usable while a run goes on, like the other config switches) and a small **Test** button that
+runs the handler directly whether or not it is switched on, and a button that runs every
+*teleport* handler once, one after another (`TELEPORT_HANDLERS`, `run_all_need_handlers()`: each with the
 in-task checks on, the character respawned after each, a stop ends the
 whole sequence, and a summary of how each went printed at the end).
 
@@ -688,7 +691,7 @@ compares each check with the needs the *previous pass attempted*
 need's streak reaches `NEED_STUCK_CHECKS` - it's supposed to be getting
 resolved, yet it never goes away - it's added to `state.disabled_needs` and
 `get_need_handler()` returns `None` for it from then on, same as a need that
-isn't in `ENABLED_NEEDS`. A single check without it, even one that detects
+is switched off. A single check without it, even one that detects
 nothing at all, breaks the streak.
 
 `state.disabled_needs` lasts for the life of the process only - it isn't saved
@@ -758,7 +761,7 @@ detected the character is respawned every 4 minutes and the game rejoined at
 
 None of `lure_collect()`, `set_new_lure()`, `tree_collect()` or
 `setup_game()` are need handlers - they're plain functions, not
-registered anywhere in `NEED_HANDLER_CLASSES` or `ENABLED_NEEDS`.
+registered anywhere in `NEED_HANDLER_CLASSES` or switched on.
 `side_quest()` runs `lure_collect()`/`tree_collect()` automatically - see
 [Persisted game config](#persisted-game-config). `setup_game()` is *not*
 part of any cycle or loop: it only runs when you press the GUI's **Setup**
@@ -988,6 +991,8 @@ actually on disk (so an old config missing a newer key still works), and
   workflow runs.
 - **`resume_on_focus_loss`** - the **Resume after focus loss** checkbox (default
   off); see [Stopping & focus safety](#stopping--focus-safety).
+- **`needs_enabled`** - `{need: on or off}`, the switches next to the Test buttons on the Debug tab's Needs subtab. A need that isn't in it
+  follows `ENABLED_NEEDS`, so by default they are all on; **Reset Config** puts them back.
 - **`record_next_run`** - the **Record the next run (low quality video)**
   checkbox on the Debug tab's Other subtab (default off); see [Recording a run](#recording-a-run). Cleared, and
   the checkbox unticked, when the run that it was for starts.

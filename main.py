@@ -328,6 +328,10 @@ class State:
     # been logged for the current stretch with no need resolved.
     last_minigame_popup_check: float = 0.0
     quiet_reported: int = 0
+    # The need whose end wait (wait_until_need_gone(), walk_alternating() with a need) is running, and when a minigame popup
+    # that is being held off for it was first seen (see minigame_popup()).
+    end_wait_need: Optional[str] = None
+    popup_held_since: Optional[float] = None
 
     def snapshot(self) -> dict[str, Any]:
         """The state as a JSON-friendly dict (the GUI object left out), for
@@ -858,6 +862,15 @@ def _need_cleared(need_name: str) -> bool:
             wait_interruptible(cfg.NEED_GONE_FLICKER_RECHECK_DELAY)
     return True
 
+@contextlib.contextmanager
+def end_wait(need_name: Optional[str]) -> Iterator[None]:
+    """Mark `need_name`'s end wait as running (state.end_wait_need), so that a minigame popup waits for it - see minigame_popup()."""
+    state.end_wait_need = need_name
+    try:
+        yield
+    finally:
+        state.end_wait_need = None
+
 def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAIT, poll_interval: float = cfg.NEED_GONE_POLL_INTERVAL) -> None:
     """Wait up to `max_wait` for `need_name` to clear, polling every `poll_interval`. A
     timeout is logged as a failure and sets state.need_cleared False.
@@ -866,17 +879,18 @@ def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAI
     print(f"[debug] waiting up to {max_wait}s for {need_name} to clear...")
     state.need_cleared = True
     deadline = time.time() + max_wait
-    while True:
-        remaining = deadline - time.time()
-        if remaining <= 0:
-            print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
-            log_failure(f"{need_name} still showing after {max_wait}s")
-            state.need_cleared = False
-            return
-        wait_interruptible(min(poll_interval, remaining))
-        if _need_cleared(need_name):
-            print(f"[debug] {need_name} cleared")
-            return
+    with end_wait(need_name):
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
+                log_failure(f"{need_name} still showing after {max_wait}s")
+                state.need_cleared = False
+                return
+            wait_interruptible(min(poll_interval, remaining))
+            if _need_cleared(need_name):
+                print(f"[debug] {need_name} cleared")
+                return
 
 def _watch_need_gone(need_name: str, cleared_event: threading.Event, stop_event: threading.Event, answers: Optional[list] = None) -> None:
     """Watcher-thread body for walk_alternating(): sets `cleared_event` when the need is
@@ -1223,6 +1237,7 @@ def walk_alternating(direction_pair: tuple[str, str], total_duration: float, ste
         direction_idx = 0
         elapsed = 0.0
         start_time = time.time()
+        state.end_wait_need = need_name
 
         while elapsed < total_duration and not cleared_event.is_set():
             direction = direction_pair[direction_idx % 2]
@@ -1233,6 +1248,7 @@ def walk_alternating(direction_pair: tuple[str, str], total_duration: float, ste
             direction_idx += 1
             elapsed = time.time() - start_time
     finally:
+        state.end_wait_need = None
         stop_event.set()
         if watcher is not None:
             watcher.join(timeout=cfg.NEED_WATCH_JOIN_TIMEOUT)
@@ -2477,6 +2493,7 @@ class HauntletRun:
         self.walked_at: Optional[float] = None        # when the last walk in this room ended
         self.stuck = 0                                # walks in a row in this room that didn't change the room number
         self.last_index: Optional[int] = None         # the door of the last of them
+        self.picked: Optional[int] = None             # the door whose circle the player has stepped into: that is the choice made, for good
         self.turns = 0                                # times the camera was turned to find the doors, in this room
         self.rooms = 0                                # numbers seen
         self.tvs: Optional[list[tuple[int, int]]] = None   # of the last look: None if the timer was hidden
@@ -2494,7 +2511,7 @@ class HauntletRun:
         room = read_hauntlet_room(img)
         if room is not None and room != self.room:
             self.room, self.since, self.walked_at, self.rooms = room, now, None, self.rooms + 1
-            self.stuck, self.last_index, self.turns = 0, None, 0
+            self.stuck, self.last_index, self.turns, self.picked = 0, None, 0, None
             self.tvs, self.empty_looks = None, 0
             print(f"[debug] Hauntlet 2: room {room}")
         if self.room is None:
@@ -2540,6 +2557,36 @@ def hauntlet_items_for(door: HauntletDoor, hearts: Optional[HauntletHearts], ite
     wanted.append(cfg.HAUNTLET_ITEM_HEART)
     return [name for name in wanted if name in held]
 
+def find_door_circles(img: Image) -> list[tuple[int, int, int, int]]:
+    """The purple circles on the floor in front of a room's doors - stepping into one picks that door - as (x, y, width, height)
+    of each one's middle, left to right: the ring-shaped pieces of HAUNTLET_CIRCLE_HSV of about the right size (HAUNTLET_CIRCLE_*), which
+    leaves out the purple badges and labels. One the player stands on is mostly hidden, so it can be missing."""
+    top, bottom = cfg.HAUNTLET_CIRCLE_BAND
+    mask = cv2.inRange(cv2.cvtColor(img[top:bottom], cv2.COLOR_BGR2HSV), cfg.HAUNTLET_CIRCLE_HSV[0], cfg.HAUNTLET_CIRCLE_HSV[1])
+    count, _, stats, _ = cv2.connectedComponentsWithStats(cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8)))
+    found = []
+    for i in range(1, count):
+        x, y, w, h, area = (int(v) for v in stats[i])
+        y += top
+        if (cfg.HAUNTLET_CIRCLE_WIDTH[0] <= w <= cfg.HAUNTLET_CIRCLE_WIDTH[1] and cfg.HAUNTLET_CIRCLE_HEIGHT[0] <= h <= cfg.HAUNTLET_CIRCLE_HEIGHT[1]
+                and cfg.HAUNTLET_CIRCLE_MIN_AREA <= area < cfg.HAUNTLET_CIRCLE_FILL * w * h):
+            found.append((x + w // 2, y + h // 2, w, h))
+    return sorted(found)
+
+def player_in_circle(img: Image, circles: list[tuple[int, int, int, int]]) -> bool:
+    """Whether the player stands in one of the three circles - and so has picked that door, and is locked in place for a few moments:
+    two circles are seen, the third being hidden under the player, whose place (where the hearts are, else mid-screen) is where
+    the third one would be (the same distance from its neighbour as the other two are from each other, HAUNTLET_IN_CIRCLE of it)."""
+    if len(circles) != 2:
+        return False
+    hearts = read_hauntlet_hearts(img)
+    x = hearts.center_x if hearts else cfg.REFERENCE_CENTER_X
+    left, right = circles[0][0], circles[1][0]
+    gap = right - left
+    if left < x < right:                                   # between them: the middle one (they are two spacings apart)
+        return abs(x - (left + right) / 2) <= cfg.HAUNTLET_IN_CIRCLE * gap / 2
+    return abs(x - (left - gap if x < left else right + gap)) <= cfg.HAUNTLET_IN_CIRCLE * gap
+
 def hauntlet_strafe(img: Image, doors: list[HauntletDoor], index: int) -> tuple[Optional[str], float]:
     """The key to strafe with, and for how long, to reach door `index` from where the player stands in `img`: the
     distance to the door in door spacings (the TVs' spacing) times HAUNTLET_STRAFE_DURATION, or no strafe when that
@@ -2554,7 +2601,9 @@ def hauntlet_strafe(img: Image, doors: list[HauntletDoor], index: int) -> tuple[
             return None, 0.0
         return (cfg.HAUNTLET_LEFT_KEY if index == 0 else cfg.HAUNTLET_RIGHT_KEY), cfg.HAUNTLET_STRAFE_DURATION
     hearts = read_hauntlet_hearts(img)
-    distance = (doors[index].x - (hearts.center_x if hearts else cfg.REFERENCE_CENTER_X)) / spacing
+    circles = find_door_circles(img)
+    target = circles[index][0] if len(circles) == len(doors) == 3 else doors[index].x       # the circle in front of the door, where it can be seen: it is what is to be stepped in
+    distance = (target - (hearts.center_x if hearts else cfg.REFERENCE_CENTER_X)) / spacing
     if abs(distance) < cfg.HAUNTLET_STRAFE_MIN:
         return None, 0.0
     return (cfg.HAUNTLET_RIGHT_KEY if distance > 0 else cfg.HAUNTLET_LEFT_KEY), min(abs(distance), cfg.HAUNTLET_STRAFE_MAX) * cfg.HAUNTLET_STRAFE_DURATION
@@ -2573,6 +2622,9 @@ def hauntlet_use_item(name: str, watch: MinigameWatch) -> Optional[Image]:
 def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun, watch: MinigameWatch) -> tuple[int, Image]:
     """Choose the door and use the items it calls for, logging the lot. With a chance of HAUNTLET_PHONE_CHANCE the phone is used first, and
     the door its red arrow shows is not gone through. Returns the door's index and the latest screenshot."""
+    if run.picked is not None and run.picked < len(doors):
+        print(f"[debug] Hauntlet 2: room {run.room}, the door is picked already (its circle was stepped in): going to the same one")
+        return run.picked, img
     hearts = read_hauntlet_hearts(img)
     items = read_hauntlet_items(img, learn=len(run.learned) < cfg.HAUNTLET_LEARN_LIMIT)
     run.learned |= {item.name for item in items if item.name.startswith("unknown_")}
@@ -2662,6 +2714,7 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
         last_view: Optional[np.ndarray] = None
         still_since: Optional[float] = None
         tries, last_key = 0, None
+        locked_until, was_inside = 0.0, False
         while time.time() < started + cfg.HAUNTLET_WALK_MAX:
             img = minigame_look(watch)
             if detect_minigame_victory(img):
@@ -2676,8 +2729,19 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
             if until_doors and find_door_tvs(img):
                 arrived = True
                 break
-            view = hauntlet_view(img)
             now = time.time()
+            inside = player_in_circle(img, find_door_circles(img))
+            if inside and not was_inside:                                       # just stepped in: the door is picked and the player is held for a moment
+                locked_until = now + cfg.HAUNTLET_LOCK_WAIT
+                if run.picked is None and target_index is not None:
+                    run.picked = target_index
+                    print(f"[debug] Hauntlet 2: in the circle of door {target_index + 1} - picked")
+            was_inside = inside
+            if now < locked_until:
+                still_since, last_view = None, None
+                wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
+                continue
+            view = hauntlet_view(img)
             if last_view is not None and float(np.abs(view - last_view).mean()) < cfg.HAUNTLET_STILL_LEVEL:
                 still_since = now if still_since is None else still_since
             else:
@@ -2807,21 +2871,20 @@ def far_from_character(box: tuple[int, int, int, int], minimum: float) -> Point:
             return x, y
     return max(((left, top), (right, top), (left, bottom), (right, bottom)), key=lambda c: (c[0] - cx) ** 2 + (c[1] - cy) ** 2)
 
-def ghost_step_key(target: Optional[Point]) -> str:
-    """The key to walk a step with: towards `target` (W if it is above the character, S below, A/D left/right - along the axis
-    it is farther off on, if it is more than GHOST_TOWARD_MARGIN px off), else a random MOVE_KEYS key."""
-    if target is not None:
-        dx, dy = target[0] - cfg.GHOST_CHARACTER[0], target[1] - cfg.GHOST_CHARACTER[1]
-        if max(abs(dx), abs(dy)) > cfg.GHOST_TOWARD_MARGIN:
-            if abs(dx) > abs(dy):
-                return cfg.HAUNTLET_RIGHT_KEY if dx > 0 else cfg.HAUNTLET_LEFT_KEY
-            return cfg.HAUNTLET_BACK_KEY if dy > 0 else "w"
-    return random.choice(cfg.MOVE_KEYS)
+def ghost_chase_key(target: Point) -> Optional[str]:
+    """The key to walk towards `target` with: W if it is above the character (GHOST_CHARACTER), S below, A/D left/right - along the
+    axis it is farther off on - or None when it is no more than GHOST_TOWARD_MARGIN px off on either: near enough for the beam."""
+    dx, dy = target[0] - cfg.GHOST_CHARACTER[0], target[1] - cfg.GHOST_CHARACTER[1]
+    if max(abs(dx), abs(dy)) <= cfg.GHOST_TOWARD_MARGIN:
+        return None
+    if abs(dx) > abs(dy):
+        return cfg.HAUNTLET_RIGHT_KEY if dx > 0 else cfg.HAUNTLET_LEFT_KEY
+    return cfg.HAUNTLET_BACK_KEY if dy > 0 else "w"
 
-def rotate_camera(drag: tuple[int, int] = cfg.GHOST_CAMERA_DRAG, tilt: int = cfg.GHOST_CAMERA_TILT) -> None:
-    """Turn the camera: hold the right mouse button and drag the mouse sideways (a random way, `drag` = least and most px, and
+def rotate_camera(drag: tuple[int, int] = cfg.GHOST_CAMERA_DRAG, tilt: int = cfg.GHOST_CAMERA_TILT, direction: Optional[int] = None) -> None:
+    """Turn the camera: hold the right mouse button and drag the mouse sideways (`direction` -1 or 1, else a random way; `drag` = least and most px, and
     up to `tilt` px up or down too) over GHOST_CAMERA_DRAG_DURATION seconds, in GHOST_CAMERA_DRAG_STEPS moves, as Roblox wants a drag."""
-    dx = random.choice((-1, 1)) * random.randint(*drag)
+    dx = (direction or random.choice((-1, 1))) * random.randint(*drag)
     dy = random.randint(-tilt, tilt)
     start_camera_drag()
     try:
@@ -2833,8 +2896,8 @@ def rotate_camera(drag: tuple[int, int] = cfg.GHOST_CAMERA_DRAG, tilt: int = cfg
 
 def furniture_outlined(before: Image, after: Image, point: Point) -> bool:
     """Whether the mouse, moved to `point` between the screenshots `before` and `after`, is over a piece of furniture the beam can
-    be held on, which gets a white outline when hovered: at least GHOST_OUTLINE_MIN pixels within GHOST_OUTLINE_RADIUS px of `point`
-    have turned white (every channel at least GHOST_OUTLINE_WHITE) that weren't, or weren't beside a white pixel, before."""
+    be held on, which is highlighted (a pale outline) near the mouse: at least GHOST_OUTLINE_MIN pixels within GHOST_OUTLINE_RADIUS px of `point`
+    have turned pale (every channel at least GHOST_OUTLINE_WHITE) that weren't, or weren't beside a pale pixel, before."""
     x, y = point
     r = cfg.GHOST_OUTLINE_RADIUS
     top, left = max(0, y - r), max(0, x - r)
@@ -2881,6 +2944,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     held = False
     moving: Optional[str] = None                     # the key being held to walk, and until when
     chasing: Optional[str] = None                    # the key held to get to what is aimed at (a `moving` that has no end)
+    turn: Optional[int] = None                       # the way the camera is being turned to find the boss (-1 or 1)
     move_until = 0.0
     next_move = time.time() + cfg.GHOST_MOVE_PERIOD
     phase = "ghosts"
@@ -2925,36 +2989,36 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 aim(target)
             elif phase == "ghosts":                                         # nothing to be seen before the boss: try the furniture
                 if furniture is None or now >= furniture_until:
-                    let_go()                                                # (the beam would be what turns white while the places are tried)
-                    furniture = find_furniture(watch)
+                    furniture = find_furniture(watch)                       # (the beam stays down all the while: the mouse is just moved around)
                     furniture_until = time.time() + cfg.GHOST_FURNITURE_PERIOD
                 aim(furniture)
-            else:
-                let_go()
-            camera_period = cfg.GHOST_CAMERA_PERIOD if phase == "ghosts" else cfg.GHOST_BOSS_CAMERA_PERIOD
-            if target is None and now - max(last_turn, last_seen) >= camera_period:
-                rotate_camera()                                             # (in the boss phase quickly: the boss is somewhere in the dark)
+            if target is not None:
+                turn = None                                                 # the next search for the boss turns a way of its own
+            elif phase != "ghosts":                                         # the boss, or the ghosts that shield it, out of sight: turn the camera until they are
+                turn = turn or random.choice((-1, 1))
+                rotate_camera(cfg.GHOST_BOSS_TURN_DRAG, 0, turn)
                 last_turn = time.time()
-            chase = None                                                    # a key held for as long as it takes to get near what is aimed at
-            if target is not None and (target[0] - cfg.GHOST_CHARACTER[0]) ** 2 + (target[1] - cfg.GHOST_CHARACTER[1]) ** 2 > cfg.GHOST_CHASE_DISTANCE ** 2:
-                chase = ghost_step_key(target)
-            elif target is None and phase != "ghosts":
-                chase = "w"                                                 # the boss fight is in the middle of the room: forward, turning the camera as it goes
-            if chase is not None or chasing is not None:
-                if chase != chasing:
-                    stop_walking()
-                    chasing = chase
-                    if chase is not None:
-                        moving = chase
-                        pydirectinput.keyDown(chase)
-                move_until = now
-            elif moving is not None and now >= move_until:         # walking about, a step at a time, without stopping the aiming
+            elif now - max(last_turn, last_seen) >= cfg.GHOST_CAMERA_PERIOD:
+                rotate_camera()
+                last_turn = time.time()
+            chase = ghost_chase_key(target) if target is not None else None   # always towards the ghost or the boss, until it is near
+            if chase != chasing:
                 stop_walking()
-                next_move = now + cfg.GHOST_MOVE_PERIOD
-            elif moving is None and now >= next_move:
-                moving = ghost_step_key(target)
-                pydirectinput.keyDown(moving)
-                move_until = now + random.uniform(cfg.GHOST_MOVE_STEP_MIN, cfg.GHOST_MOVE_STEP_MAX)
+                chasing = chase
+                if chase is not None:
+                    moving = chase
+                    pydirectinput.keyDown(chase)
+                move_until = now
+            if chasing is None and target is None and phase == "ghosts":     # nothing in sight: walking about, a step at a time, without stopping the aiming
+                if moving is not None and now >= move_until:
+                    stop_walking()
+                    next_move = now + cfg.GHOST_MOVE_PERIOD
+                elif moving is None and now >= next_move:
+                    moving = random.choice(cfg.MOVE_KEYS)
+                    pydirectinput.keyDown(moving)
+                    move_until = now + random.uniform(cfg.GHOST_MOVE_STEP_MIN, cfg.GHOST_MOVE_STEP_MAX)
+            elif chasing is None:
+                stop_walking()
             if now >= next_jump:
                 pydirectinput.press(cfg.KEY_JUMP)
                 next_jump = now + random.uniform(cfg.GHOST_JUMP_MIN, cfg.GHOST_JUMP_MAX)
@@ -3066,13 +3130,21 @@ def close_minigame_win_screen(abandon: bool = True) -> bool:
 
 def minigame_popup(play: bool = True) -> Optional[str]:
     """Halloween only: play a popup's minigame if it is switched on, else dismiss it.
-    Returns "played", "dismissed" or None. See docs/ARCHITECTURE.md#need-handlers.
+    Returns "played", "dismissed", "waiting" (a playable popup is held off while a need is in its end wait, at most MINIGAME_POPUP_END_WAIT
+    seconds) or None. See docs/ARCHITECTURE.md#need-handlers.
     """
     img = grab_screen()
     if not detect_minigame_popup(img):
+        state.popup_held_since = None
         return None
     name = identify_minigame(img)
     if name is not None and load_game_config().get(f"{name}_enabled", False):
+        if play and state.end_wait_need is not None:
+            # A need is in its end wait: give it the time to clear (and count as resolved) before the minigame abandons it.
+            state.popup_held_since = state.popup_held_since or time.time()
+            if time.time() - state.popup_held_since < cfg.MINIGAME_POPUP_END_WAIT:
+                return "waiting"
+        state.popup_held_since = None
         if play:
             print(f"[debug] minigame popup detected: playing {name}")
             play_minigame(name)
@@ -3105,6 +3177,8 @@ def unscrew(in_task: bool = False, play_minigames: bool = True) -> Optional[str]
         if play_minigames:
             return "played"    # back in the world somewhere unknown: the task is abandoned like after a minigame
     played = minigame_popup(play=play_minigames) if cfg.HALLOWEEN else None
+    if played == "waiting":
+        return None                    # the popup is up for a few seconds more (its green Yes would be taken for a paycheck's button)
     paycheck = detect_paycheck() if not backpack_open else False
     if in_task and play_minigames and played != "played" and (paycheck or (closed and cfg.STRAY_WINDOWS[closed].get("abort_task"))):
         return "aborted"   # (not setup, which can't be abandoned halfway - that is `play_minigames` False)
@@ -3350,6 +3424,7 @@ class InputCapture:
     def stop(self) -> str:
         """Stop, close the files and say what was recorded."""
         self.stop_event.set()
+        self.shot_now.set()                             # (the frame thread is waiting out CAPTURE_FRAME_INTERVAL: let it see the stop)
         for thread in self._threads:
             thread.join(timeout=5.0)
         self._keep_within_budget()                      # (the events grew since the last frame was saved)
@@ -3809,7 +3884,7 @@ def hauntlet_timer_visible(img: Image) -> bool:
 @dataclass
 class HauntletDoor:
     """A door of a Hauntlet 2 room: where its TV's number is on screen (`x`, `y`) and its `kind` - "locked", "mystery"
-    (the "???" door), "dark", "boarded" or "plain"; None for a door that couldn't be looked at (or a fork's doorway,
+    (the "???" door), "shadow" (smoke with glowing eyes), "dark", "boarded" or "plain"; None for a door that couldn't be looked at (or a fork's doorway,
     which isn't looked for)."""
     x: int
     y: int
@@ -3841,6 +3916,24 @@ def find_door_tvs(img: Image) -> list[tuple[int, int]]:
             return [(int(first[0]), int(first[1])), (int((first[0] + last[0]) / 2), int((first[1] + last[1]) / 2)), (int(last[0]), int(last[1]))]
     return []
 
+def hauntlet_shadow_eyes(door: Image) -> bool:
+    """Whether the glowing eyes of a shadow door are in `door`: a small piece of near-white (HAUNTLET_SHADOW_WHITE, HAUNTLET_SHADOW_AREA px)
+    in the dark smoke - the ring around it no brighter than HAUNTLET_SHADOW_RING on average. (A door's screws, lights and the
+    white of the lock do not sit in the dark.)"""
+    if door.size == 0:
+        return False
+    white = (door.min(axis=2) >= cfg.HAUNTLET_SHADOW_WHITE).astype(np.uint8)
+    gray = door.mean(axis=2)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(white)
+    for i in range(1, count):
+        if not cfg.HAUNTLET_SHADOW_AREA[0] <= stats[i, cv2.CC_STAT_AREA] <= cfg.HAUNTLET_SHADOW_AREA[1]:
+            continue
+        blob = (labels == i).astype(np.uint8)
+        ring = cv2.dilate(blob, np.ones((15, 15), np.uint8)) - cv2.dilate(blob, np.ones((3, 3), np.uint8))
+        if ring.any() and gray[ring > 0].mean() <= cfg.HAUNTLET_SHADOW_RING:
+            return True
+    return False
+
 def hauntlet_door_kind(img: Image, x: int, y: int, scale: float) -> Optional[str]:
     """What kind of door hangs below the TV number at (x, y), from its pixels (see HAUNTLET_LOCK_LIGHT_BOX); `scale`
     is the picture's size against the one the boxes were measured at. None if the door is off the screen."""
@@ -3850,6 +3943,8 @@ def hauntlet_door_kind(img: Image, x: int, y: int, scale: float) -> Optional[str
     light = region(cfg.HAUNTLET_LOCK_LIGHT_BOX).astype(int)
     if light.size and np.count_nonzero((light[..., 2] >= cfg.HAUNTLET_LOCK_LIGHT_RED) & (light[..., 1] <= cfg.HAUNTLET_LOCK_LIGHT_OTHER) & (light[..., 0] <= cfg.HAUNTLET_LOCK_LIGHT_OTHER)) >= cfg.HAUNTLET_LOCK_LIGHT_MIN:
         return "locked"
+    if hauntlet_shadow_eyes(region(cfg.HAUNTLET_SHADOW_BOX)):
+        return "shadow"
     door = region(cfg.HAUNTLET_DOOR_BOX)
     if door.size == 0:
         return None

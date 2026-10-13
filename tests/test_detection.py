@@ -195,7 +195,7 @@ def reference(macro, name):
     return crop
 
 
-@pytest.mark.parametrize("name", ["trading_hub", "star_rewards", "respawn_confirm", "character_menu", "cant_spawn_vehicle"])
+@pytest.mark.parametrize("name", ["trading_hub", "star_rewards", "respawn_confirm", "character_menu", "cant_spawn_vehicle", "profile"])
 def test_stray_windows_are_recognised_and_closed(macro, monkeypatch, name):
     config = macro.cfg.STRAY_WINDOWS[name]
     screen = put(blank(), reference(macro, name), config["box"])
@@ -359,3 +359,18 @@ def test_the_threshold_decides_and_a_stray_window_uses_the_shared_one(macro, mon
 def test_a_name_with_no_crop_file_is_never_found(macro, monkeypatch):
     monkeypatch.setitem(macro.cfg.POPUP_TEMPLATES, "no_such_crop", {"box": (0, 0, 100, 100), "threshold": 0.5})
     assert macro.popup_found(blank(), "no_such_crop") is None
+
+
+def test_the_only_pets_message_is_found_by_its_letters_over_any_background(macro):
+    crop = reference(macro, "only_pets")
+    letters = crop.min(axis=2) >= macro.cfg.ONLY_PETS_WHITE
+    box = macro.cfg.ONLY_PETS_BOX
+    assert macro.only_pets_message_visible(put(blank(), crop, box))
+    noisy = np.random.default_rng(3).integers(0, 200, BLACK, dtype=np.uint8)                  # a busy world behind the text
+    top, left = box[1] + 20, box[0] + 40
+    patch = noisy[top:top + crop.shape[0], left:left + crop.shape[1]]
+    patch[letters] = 255
+    assert macro.only_pets_message_visible(noisy)
+    assert not macro.only_pets_message_visible(blank())
+    assert not macro.only_pets_message_visible(np.random.default_rng(4).integers(0, 255, BLACK, dtype=np.uint8))
+    assert not macro.only_pets_message_visible(np.full(BLACK, 255, np.uint8))                 # nor is a white screen

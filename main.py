@@ -1115,20 +1115,46 @@ def refresh_button_mapping() -> bool:
     print("\n[!] BUTTON MAPPING REFRESHED\n")
     return True
 
+def only_pets_message_visible(img: Image) -> bool:
+    """True if the game's "Only Pets, Babies, and Dolls can use this." is on screen in `img`: the white of its letters matches the same
+    of the crop (ONLY_PETS_*), which doesn't depend on what the world behind it looks like."""
+    crop = load_templates(cfg.STRAY_WINDOW_DIR).get("only_pets")
+    left, top, right, bottom = cfg.ONLY_PETS_BOX
+    if crop is None:
+        return False
+    band = (img[top:bottom, left:right].min(axis=2) >= cfg.ONLY_PETS_WHITE).astype(np.float32)
+    letters = (crop.min(axis=2) >= cfg.ONLY_PETS_WHITE).astype(np.float32)
+    if letters.shape[0] > band.shape[0] or letters.shape[1] > band.shape[1] or not letters.any() or not band.any():
+        return False
+    return float(cv2.minMaxLoc(cv2.matchTemplate(band, letters, cv2.TM_CCOEFF_NORMED))[1]) >= cfg.ONLY_PETS_THRESHOLD
+
+def button_click_refused() -> bool:
+    """Look for the "Only Pets, Babies, and Dolls can use this." message for BUTTON_REJECT_LOOK seconds after a need button was clicked."""
+    end = time.time() + cfg.BUTTON_REJECT_LOOK
+    while time.time() < end:
+        if only_pets_message_visible(grab_screen()):
+            return True
+        wait_interruptible(cfg.WATCH_POLL_INTERVAL)
+    return False
+
 def click_need_button(need_name: str) -> bool:
-    """Click the button mapped to `need_name`, then wait for its icon to clear. Returns
-    False if no button was mapped or clicked (the need must not count as resolved).
-    See docs/ARCHITECTURE.md#need-handlers.
+    """Click the button mapped to `need_name` - again if the game answers "Only Pets, Babies, and Dolls can use this.", up to
+    BUTTON_CLICK_TRIES clicks - then wait for its icon to clear. Returns False if no button was mapped or clicked (the need must
+    not count as resolved). See docs/ARCHITECTURE.md#need-handlers.
     """
     if need_name not in state.button_positions:
         print(f"[!] WARNING: no button mapped for '{need_name}'")
         return False
     button_x, button_y = state.button_positions[need_name]
-    print(f"[!] CLICKING: {need_name}")
-    if not click_button(button_x, button_y, need_name):
-        return False
-    wait_until_need_gone(need_name)
-    return True
+    for attempt in range(cfg.BUTTON_CLICK_TRIES):
+        print(f"[!] CLICKING: {need_name}")
+        if not click_button(button_x, button_y, need_name):
+            return False
+        if not button_click_refused():
+            wait_until_need_gone(need_name)
+            return True
+        log_run_event(f"{need_name}: the game said only pets can use it (click {attempt + 1})")
+    return False
 
 # ============================================================================
 # MOVEMENT

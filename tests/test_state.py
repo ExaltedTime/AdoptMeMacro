@@ -1229,3 +1229,22 @@ def test_a_hotkey_acts_on_a_new_press_only_when_its_conditions_hold(macro, monke
     assert fires(True, False, False, False, True)
     focused[0] = False
     assert not fires(True, False, False, False, True) and fires(True, False, False, False, False)             # M needs Roblox, P doesn't
+
+
+def test_a_button_the_game_refuses_is_clicked_again_until_it_takes(macro, world, monkeypatch):
+    waited, refusals = [], [2]
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "grab_screen", lambda: None)
+    monkeypatch.setattr(macro, "only_pets_message_visible", lambda img: refusals[0] > 0 and (refusals.__setitem__(0, refusals[0] - 1) or True))
+    monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, **kw: waited.append(name))
+    macro.state.button_positions["potty"] = (100, 200)
+    assert macro.click_need_button("potty") is True                                    # refused twice, then taken
+    assert macro.clicks.count((100, 200)) == 3 and waited == ["potty"]
+    del macro.clicks[:]
+    refusals[0] = 10 ** 6                                                              # always refused: given up, not waited for
+    waited.clear()
+    assert macro.click_need_button("potty") is False
+    assert macro.clicks.count((100, 200)) == macro.cfg.BUTTON_CLICK_TRIES and waited == []
+    del macro.clicks[:]
+    refusals[0] = 0                                                                    # not refused: clicked once
+    assert macro.click_need_button("potty") is True and macro.clicks.count((100, 200)) == 1

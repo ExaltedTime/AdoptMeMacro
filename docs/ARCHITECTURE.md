@@ -446,7 +446,7 @@ rather than a flat sleep after the fact.
 
 | Need | How it's handled |
 |---|---|
-| `hungry` / `thirsty` / `dirty` / `potty` / `sleepy` | `ButtonNeedHandler`: walk to the action buttons (`walk_to_buttons()`), refresh the button mapping (`refresh_button_mapping()`), click the matching one (`click_need_button()`), which then calls `wait_until_need_gone()` for that need name. |
+| `hungry` / `thirsty` / `dirty` / `potty` / `sleepy` | `ButtonNeedHandler`: walk to the action buttons (`walk_to_buttons()`), refresh the button mapping (`refresh_button_mapping()`), click the matching one (`click_need_button()`), which then calls `wait_until_need_gone()` for that need name. A click can be refused - the game answers "Only Pets, Babies, and Dolls can use this." even when all five buttons were found - and for `BUTTON_REJECT_LOOK` seconds after each click `only_pets_message_visible()` looks for that text (the white of its letters against `ref/popups/only_pets.png`, `ONLY_PETS_*`, so what is behind it doesn't matter). If it is there the button is clicked again, up to `BUTTON_CLICK_TRIES` clicks in all (a run event each time); if the last one is refused too the handler returns False without waiting for the icon. |
 | `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → hold zoom-in → throw the toy by clicking empty space `CATCH_THROW_COUNT` times, `CATCH_EMOTE_DELAY` after each → unequip. A fixed sequence: it doesn't wait for the icon (the next check sees whether it cleared). |
 | `pet` | `PetNeedHandler`: `focus_pet()` (see below, with `PET_FOCUS_CLICK_DURATION`), click the screen centre, move to `PET_SWIPE_START_OFFSET` above it, then hold the mouse down and swipe once down to `PET_SWIPE_END_OFFSET` below it over `PET_SWIPE_DURATION`, releasing the button in a `finally`. Same as `catch` - always the full fixed duration. |
 | `choose` | `ChooseNeedHandler`: `focus_pet()` (see below), find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. It doesn't wait for the icon to clear (it's gone at once; the next check confirms). |
@@ -525,6 +525,8 @@ the camera on the pet with a BACK button; `close_pos` is that button). Only
 `only_when_unwanted`: `dismiss_stray_windows()` skips it while
 `wanting_pet_focus()` is active (those two handlers), and clicks BACK in every
 other case - including mid-task, e.g. a throw click that focused the pet.
+
+`profile` is the player's own profile page (`ref/popups/profile.png`, the toolbar of Stickers / Preview / paint / save; `close_pos` is its red X), which a stray click on the character or the character menu's Profile opens.
 
 `cant_spawn_vehicle` is the "You can't spawn a vehicle here." popup
 (`ref/popups/cant_spawn_vehicle.png`; `close_pos` is its Okay button). It is

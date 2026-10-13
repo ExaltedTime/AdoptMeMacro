@@ -108,6 +108,9 @@ STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     # doesn't allow it. "close_pos" is its Okay button; "abort_task" abandons the need that was running (it's
     # tried again from scratch on the next check) - see unscrew().
     "cant_spawn_vehicle": {"box": (760, 420, 1160, 630), "close_pos": (962, 657), "abort_task": True},
+    # The player's own profile page (Stickers / Preview / paint / save, with its red X): a click on a player or on the character
+    # menu's Profile opens it. The crop is the toolbar; "close_pos" is the X.
+    "profile": {"box": (480, 170, 1560, 360), "close_pos": (1462, 262)},
 }
 
 # Other things recognised by a crop in STRAY_WINDOW_DIR (file name = the name here) found within "box"
@@ -126,6 +129,15 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
 # The sick need's own "Ask Doctor Heart to heal your family?" Yes/No dialog (POPUP_TEMPLATES["sick_dialog"]) has the
 # same Yes green + No red as a minigame popup; it is the sick handler's to answer (SICK_FINAL_CLICK_POS is its Yes),
 # so detect_minigame_popup() ignores it.
+# "Only Pets, Babies, and Dolls can use this." - the game's answer to a need button clicked while the pet is too far from it (or
+# otherwise not taken). The text is found by the white of its letters (>= ONLY_PETS_WHITE in every channel) matched against the same of
+# the crop ref/popups/only_pets.png, whatever is behind it: a score of at least ONLY_PETS_THRESHOLD within ONLY_PETS_BOX. A need
+# button is clicked again, up to BUTTON_CLICK_TRIES clicks in all; after each, the message is looked for for BUTTON_REJECT_LOOK seconds.
+ONLY_PETS_BOX = (600, 830, 1320, 930)
+ONLY_PETS_WHITE = 235
+ONLY_PETS_THRESHOLD = 0.6
+BUTTON_CLICK_TRIES = 3
+BUTTON_REJECT_LOOK = 1.5
 STRAY_OKAY_BOX = (800, 637, 1120, 680)
 STRAY_OKAY_MIN_PIXELS = 5000      # the button is ~11000 exact-color px in that box
 STRAY_OKAY_POS = (962, 657)

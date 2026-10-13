@@ -1192,13 +1192,17 @@ look at a few frames in a row.
 while the player passes through a door, which is also when the screen still shows the *last* room's doors. `find_hauntlet_doors()`
 finds the three doors of a room from the TVs above them: each TV shows its number (the players standing before that door)
 in a light cyan, `(206, 255, 255)`, that no other pixel of the game has in that quantity; `find_door_tvs()` takes the pieces
-of `HAUNTLET_TV_AREA` px below `HAUNTLET_TV_MIN_Y` and wants three of them in a row (the same height within
+of `HAUNTLET_TV_AREA` px (except those in `HAUNTLET_TV_HUD_BOX`, where the room panel and timer glow) and wants three of them in a row (the same height within
 `HAUNTLET_TV_ROW_TOLERANCE`, evenly spaced within `HAUNTLET_TV_SPACING_TOLERANCE`), else `[]` - a fork's hall has no TVs, and neither do
-the close-ups. The spacing between TVs (330-410 px as the camera zooms) is the picture's scale, so the boxes under each
+the close-ups. **With the camera close** - which is how it looks once the macro stands still in a room - the middle TV is above the top of
+the screen or behind the room panel, and only the outer two show; two TVs `HAUNTLET_TV_PAIR_GAP` apart (about 900 px) and centred on the
+screen (`HAUNTLET_TV_PAIR_OFF_CENTER`; the player stands in front of the middle door) are taken for the outer two, the middle one halfway between.
+Two neighbours with the third off screen are 350-780 px apart but not centred, so they don't pass. The spacing between TVs (330-410 px as the camera zooms) is the picture's scale, so the boxes under each
 TV (`HAUNTLET_LOCK_LIGHT_BOX`, `HAUNTLET_DOOR_BOX`, measured at a spacing of `HAUNTLET_DOOR_SPACING`) are scaled with it.
 `HauntletDoor(x, y, kind)` gives each door's `kind` from its pixels (`hauntlet_door_kind()`), the first that fits:
 
-- `locked` - the padlock's red light above the door: 40-99 red pixels, none on other doors;
+- `locked` - the padlock's red light above the door: 40-99 pure red pixels (`HAUNTLET_LOCK_LIGHT_RED`: (255, 37, 37)), none on other doors. The
+  dark red outline of the player's hearts, which can be under the door, is (204, 68, 54) and doesn't count;
 - `dark` - over 40% near-black pixels (44-74% on the doors that look so, at most 37% on the others);
 - `mystery` - the pale grey "???" door, brightness 180-203 where every other door is under 164;
 - `boarded` or `plain` - by the planks: the share of the door's pixels on a strong, near-horizontal edge
@@ -1243,7 +1247,10 @@ use with `choose_hauntlet_item()`, and logs the lot: `room 12, 3 hearts (1 lost)
 the items, any of them, is used - `hauntlet_use_item()` clicks its slot, as the capture shows a human doing, and waits `HAUNTLET_ITEM_WAIT`, before the
 walk starts); `choose_hauntlet_door(doors, hearts, items)` and `choose_hauntlet_item(items, hearts)` are where the risk-based logic goes. Whether
 an item worked is not looked at. `hauntlet_strafe()` works out how far to go sideways and `hauntlet_walk()` then holds `HAUNTLET_2_FORWARD_KEY` - plus
-`HAUNTLET_LEFT_KEY` or `HAUNTLET_RIGHT_KEY` for the strafe - until the number changes or `HAUNTLET_WALK_MAX` seconds. The
+`HAUNTLET_LEFT_KEY` or `HAUNTLET_RIGHT_KEY` for the strafe - until the number changes (or `HAUNTLET_WALK_MAX` seconds), and then `HAUNTLET_WALK_PAST_DURATION` longer. **The number changes while the
+player is still in the doorway** (the camera close on the door, its TV filling the screen, the next room's doors out of sight); a human keeps walking
+1.0-2.0 s more (median 1.4 s in the capture) and a macro that let go at once stood there for the rest of the run - which is how the
+macro's own captures showed it. The
 strafe is the distance from the player to the door's TV in *door spacings* (the distance between neighbouring TVs, which
 also takes the camera's zoom out of it) times `HAUNTLET_STRAFE_DURATION` seconds per spacing - no strafe under `HAUNTLET_STRAFE_MIN`
 spacings, never more than `HAUNTLET_STRAFE_MAX`. The player's place is measured, not assumed, because where a room is entered may

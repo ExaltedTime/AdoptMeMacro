@@ -2514,7 +2514,8 @@ def hauntlet_use_item(item: HauntletItem) -> None:
 
 def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, watch: MinigameWatch, until_doors: bool = False) -> bool:
     """Walk to a door: hold forward, with `direction` (a strafe key, or None) held for the first `duration` seconds,
-    until the room number changes (at most HAUNTLET_WALK_MAX seconds) - or, with `until_doors`, until a row of TVs is
+    until the room number changes (at most HAUNTLET_WALK_MAX seconds) and then HAUNTLET_WALK_PAST_DURATION longer, as
+    the number changes with the player still in the doorway - or, with `until_doors`, until a row of TVs is
     on screen (a hall's doorway leads into a room whose number is the same). True if the victory screen showed."""
     run.chosen_at = started = time.time()
     pydirectinput.keyDown(cfg.HAUNTLET_2_FORWARD_KEY)
@@ -2530,7 +2531,10 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
             if detect_minigame_victory(img):
                 return True
             room = read_hauntlet_room(img)
-            if (room is not None and room != run.room) or watch.problem or (until_doors and find_door_tvs(img)):
+            if room is not None and room != run.room:
+                wait_interruptible(cfg.HAUNTLET_WALK_PAST_DURATION)             # the number changes in the doorway: on into the room
+                break
+            if watch.problem or (until_doors and find_door_tvs(img)):
                 break
             wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
     finally:
@@ -3413,11 +3417,15 @@ class HauntletDoor:
     kind: Optional[str]
 
 def find_door_tvs(img: Image) -> list[tuple[int, int]]:
-    """The centre of every TV number (HAUNTLET_TV_*) in `img`, left to right: the three above a room's doors, in
-    the row they make - [] when there isn't one (a fork's hall, a close-up, a transition)."""
+    """The centre of the three TV numbers (HAUNTLET_TV_*) in `img`, left to right: the three above a room's doors, in
+    the row they make - [] when there isn't one (a fork's hall, a close-up, a transition). With the camera close the
+    middle TV can be off the top of the screen or behind the room panel: two TVs far enough apart to be the outer ones
+    (HAUNTLET_TV_PAIR_GAP) and centred on the screen (the player stands in front of the middle door) give the middle one
+    halfway between."""
     low, high = cfg.HAUNTLET_TV_GLOW
     mask = cv2.inRange(img, (low[2], low[1], low[0]), (high[2], high[1], high[0]))   # BGR
-    mask[:cfg.HAUNTLET_TV_MIN_Y] = 0
+    left, top, right, bottom = cfg.HAUNTLET_TV_HUD_BOX
+    mask[top:bottom, left:right] = 0
     count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
     found = sorted((float(centres[i][0]), float(centres[i][1])) for i in range(1, count)
                    if cfg.HAUNTLET_TV_AREA[0] <= stats[i, cv2.CC_STAT_AREA] <= cfg.HAUNTLET_TV_AREA[1])
@@ -3428,6 +3436,11 @@ def find_door_tvs(img: Image) -> list[tuple[int, int]]:
                 and all(cfg.HAUNTLET_TV_SPACING[0] <= gap <= cfg.HAUNTLET_TV_SPACING[1] for gap in gaps)
                 and abs(gaps[0] - gaps[1]) <= cfg.HAUNTLET_TV_SPACING_TOLERANCE * max(gaps)):
             return [(int(x), int(y)) for x, y in (first, middle, last)]
+    for first, last in zip(found, found[1:]):
+        if (abs(first[1] - last[1]) <= cfg.HAUNTLET_TV_ROW_TOLERANCE
+                and cfg.HAUNTLET_TV_PAIR_GAP[0] <= last[0] - first[0] <= cfg.HAUNTLET_TV_PAIR_GAP[1]
+                and abs((first[0] + last[0]) / 2 - cfg.REFERENCE_CENTER_X) <= cfg.HAUNTLET_TV_PAIR_OFF_CENTER):
+            return [(int(first[0]), int(first[1])), (int((first[0] + last[0]) / 2), int((first[1] + last[1]) / 2)), (int(last[0]), int(last[1]))]
     return []
 
 def hauntlet_door_kind(img: Image, x: int, y: int, scale: float) -> Optional[str]:
@@ -3437,7 +3450,7 @@ def hauntlet_door_kind(img: Image, x: int, y: int, scale: float) -> Optional[str
         left, top, right, bottom = box
         return img[max(0, int(y + top * scale)):int(y + bottom * scale), max(0, int(x + left * scale)):int(x + right * scale)]
     light = region(cfg.HAUNTLET_LOCK_LIGHT_BOX).astype(int)
-    if light.size and np.count_nonzero((light[..., 2] > 170) & (light[..., 1] < 90) & (light[..., 0] < 90)) >= cfg.HAUNTLET_LOCK_LIGHT_MIN:
+    if light.size and np.count_nonzero((light[..., 2] >= cfg.HAUNTLET_LOCK_LIGHT_RED) & (light[..., 1] <= cfg.HAUNTLET_LOCK_LIGHT_OTHER) & (light[..., 0] <= cfg.HAUNTLET_LOCK_LIGHT_OTHER)) >= cfg.HAUNTLET_LOCK_LIGHT_MIN:
         return "locked"
     door = region(cfg.HAUNTLET_DOOR_BOX)
     if door.size == 0:

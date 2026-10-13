@@ -265,7 +265,9 @@ HAUNTLET_TIMER_WHITE_LEVEL = 215
 HAUNTLET_TIMER_MIN_WHITE = 500
 HAUNTLET_TV_GLOW = ((150, 248, 248), (225, 255, 255))   # (low, high) red, green, blue of the number's light
 HAUNTLET_TV_AREA = (150, 600)                # px of one such number
-HAUNTLET_TV_MIN_Y = 150                      # nothing above this is a TV (the room panel's glow)
+HAUNTLET_TV_HUD_BOX = (700, 0, 1220, 150)      # left, top, right, bottom: the room panel and timer; their glow is no TV
+HAUNTLET_TV_PAIR_GAP = (560, 1000)           # px between two TVs that are the outer two of three (900 with the camera close)
+HAUNTLET_TV_PAIR_OFF_CENTER = 150            # px: and their middle is this close to the middle of the screen (neighbours with the third off screen are not)
 HAUNTLET_TV_SPACING = (200, 500)             # px between neighbouring TVs
 HAUNTLET_TV_ROW_TOLERANCE = 15               # px: the TVs of a row are this level...
 HAUNTLET_TV_SPACING_TOLERANCE = 0.25         # ...and these spacings this close
@@ -279,6 +281,8 @@ HAUNTLET_DOOR_SPACING = 360
 # 0.11-0.24 on boarded ones (median 0.18); the threshold is the best one found on the doors of 25 rooms, 94% right on
 # rooms left out of the search, and wrong mostly on the third layer's spiked doors and on boarded doors half hidden by the player.
 HAUNTLET_LOCK_LIGHT_BOX = (-60, 20, 60, 70)
+HAUNTLET_LOCK_LIGHT_RED = 225                # the light is pure red, (255, 37, 37); the player's hearts, which can be under the door, have dark red outlines (204, 68, 54)
+HAUNTLET_LOCK_LIGHT_OTHER = 70
 HAUNTLET_LOCK_LIGHT_MIN = 25
 HAUNTLET_DOOR_BOX = (-45, 35, 45, 130)
 HAUNTLET_MYSTERY_BRIGHTNESS = 172
@@ -298,7 +302,8 @@ HAUNTLET_PLANK_FRACTION = 0.103
 # door: HAUNTLET_STRAFE_DURATION seconds per door spacing (the distance between neighbouring doors) of distance, measured
 # from the player's hearts to the door's TV, no strafe under HAUNTLET_STRAFE_MIN spacings and never more than
 # HAUNTLET_STRAFE_MAX (a human's runs, from the middle: left door 1.0-1.1 s, right 0.9-1.3 s) - until the room number
-# changes, at most HAUNTLET_WALK_MAX seconds (a human's room: W held 3-4.8 s). If the number still hasn't changed
+# changes, at most HAUNTLET_WALK_MAX seconds (a human's room: W held 3-4.8 s), and then HAUNTLET_WALK_PAST_DURATION longer: the
+# number changes with the player still in the doorway, the camera close on the door, and the next room's doors can't be seen from there. If the number still hasn't changed
 # HAUNTLET_ROOM_TIMEOUT seconds after, a door is chosen again.
 # A room whose number is a multiple of HAUNTLET_FORK_EVERY (10 and 20 were seen) is a fork: no TVs, two doorways. A
 # room without a row of TVs is a single doorway ahead - at once for room 1, the entrance hall (its doorway leads into a room
@@ -309,6 +314,7 @@ HAUNTLET_STRAFE_DURATION = 1.1
 HAUNTLET_STRAFE_MIN = 0.15
 HAUNTLET_STRAFE_MAX = 2.5
 HAUNTLET_WALK_MAX = 6.0
+HAUNTLET_WALK_PAST_DURATION = 1.5            # more of W after the number changed (a human's: 1.0-2.0 s, median 1.4)
 HAUNTLET_LOOK_INTERVAL = 0.35
 HAUNTLET_ROOM_SETTLE = 2.0
 HAUNTLET_TV_STABLE = 4

@@ -61,6 +61,56 @@ def test_a_forks_hall_and_a_blank_screen_have_no_doors(macro):
     assert macro.find_hauntlet_doors(frame(macro)) == []
 
 
+def blob(screen, x, y):
+    """A TV number's light (an 18 px square of the glow colour) centred at (x, y)."""
+    screen[y - 9:y + 9, x - 9:x + 9] = (255, 255, 206)
+
+
+def test_the_outer_two_tvs_give_the_middle_one_when_the_camera_is_close(macro):
+    """Real frame of room 1: the middle TV is above the top of the screen, and the outer two are above y=150."""
+    screen = cv2.imread(os.path.join(HERE, "doors", "room1_close.png"))
+    tvs = macro.find_door_tvs(screen)
+    assert len(tvs) == 3
+    for (x, y), (want_x, want_y) in zip(tvs, [(501, 100), (960, 100), (1419, 100)]):
+        assert abs(x - want_x) <= 3 and abs(y - want_y) <= 3
+    assert len(macro.find_hauntlet_doors(screen)) == 3
+
+
+def test_two_tvs_are_the_outer_ones_only_when_far_apart_and_centred(macro):
+    screen = np.zeros((1080, 1920, 3), np.uint8)
+    blob(screen, 570, 300), blob(screen, 1350, 300)                                   # 780 apart, centred
+    assert [x for x, _ in macro.find_door_tvs(screen)] == pytest.approx([570, 960, 1350], abs=1)
+    screen = np.zeros((1080, 1920, 3), np.uint8)
+    blob(screen, 160, 300), blob(screen, 938, 300)                                    # as far apart, but two neighbours with the third off screen
+    assert macro.find_door_tvs(screen) == []
+    screen = np.zeros((1080, 1920, 3), np.uint8)
+    blob(screen, 780, 300), blob(screen, 1140, 300)                                   # 360 apart: neighbours, not the outer two
+    assert macro.find_door_tvs(screen) == []
+    screen = np.zeros((1080, 1920, 3), np.uint8)
+    blob(screen, 570, 300), blob(screen, 1350, 340)                                   # not level
+    assert macro.find_door_tvs(screen) == []
+
+
+def test_the_glow_of_the_room_panel_is_no_tv_but_a_tv_beside_it_high_up_is(macro):
+    screen = np.zeros((1080, 1920, 3), np.uint8)
+    blob(screen, 950, 100)                                                            # inside the room panel and timer
+    assert macro.find_door_tvs(screen) == []
+    blob(screen, 500, 100), blob(screen, 1420, 100)
+    assert [x for x, _ in macro.find_door_tvs(screen)] == pytest.approx([500, 960, 1420], abs=1)      # (the one in the panel is not counted either way)
+
+
+def test_the_players_hearts_under_a_door_are_not_a_lock_light(macro):
+    cfg = macro.cfg
+    screen = frame(macro, 16)                                                         # three plain doors
+    x, y = macro.find_door_tvs(screen)[1]
+    left, top, right, bottom = cfg.HAUNTLET_LOCK_LIGHT_BOX
+    spot = (slice(y + int((top + 10) * 1.0), y + int((top + 10) * 1.0) + 12), slice(x - 6, x + 6))
+    screen[spot] = (54, 68, 204)                                                      # a heart's dark red outline (BGR)
+    assert macro.find_hauntlet_doors(screen)[1].kind == "plain"
+    screen[spot] = (37, 37, 255)                                                      # the lock's light, pure red (BGR)
+    assert macro.find_hauntlet_doors(screen)[1].kind == "locked"
+
+
 def test_two_tvs_are_not_a_room(macro):
     screen = frame(macro, 97)
     first = macro.find_door_tvs(screen)[0]
@@ -212,7 +262,8 @@ def test_a_walk_holds_forward_and_the_strafe_key_for_the_strafe_then_stops_when_
     assert macro.hauntlet_walk(cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_STRAFE_DURATION, run, watch_of(macro)) is False
     assert [(kind, key) for kind, key, _ in world.keys] == [("down", "w"), ("down", cfg.HAUNTLET_LEFT_KEY), ("up", cfg.HAUNTLET_LEFT_KEY), ("up", "w")]
     assert world.keys[2][2] - start == pytest.approx(cfg.HAUNTLET_STRAFE_DURATION)
-    assert world.looks == 4 and world.keys[3][2] - start < cfg.HAUNTLET_WALK_MAX     # it stopped for the new room, not the time
+    assert world.looks == 4                                                          # it stopped for the new room, not the time...
+    assert world.keys[3][2] - start == pytest.approx(cfg.HAUNTLET_STRAFE_DURATION + 3 * cfg.HAUNTLET_LOOK_INTERVAL + cfg.HAUNTLET_WALK_PAST_DURATION)   # ...and walked on past the doorway
     assert run.chosen_at == start
 
 

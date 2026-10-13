@@ -586,7 +586,7 @@ TELEPORT_WALK_NEEDS_HALLOWEEN: dict[str, dict[str, Any]] = {
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 20.0),), helicopter=True),
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 3), ("a", 10))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("s", 20),), helicopter=True),
-    "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 4.0), ("w", 0.8)),
+    "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 4.0), ("w", 1.2)),
                     final_click=SICK_FINAL_CLICK_POS, prompt_pos=SICK_PROMPT_POS),
 }
 

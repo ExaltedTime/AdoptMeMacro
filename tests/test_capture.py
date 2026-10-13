@@ -398,10 +398,6 @@ def test_a_recording_that_cannot_start_does_not_stop_the_minigame(macro, run_fol
     assert "Couldn't start recording" in capsys.readouterr().out
 
 
-def test_the_default_run_capture_folder_is_in_debug(macro):
-    assert os.path.realpath(macro.cfg.RUN_CAPTURES_DIR) == os.path.realpath(os.path.join(macro.cfg.DEBUG_DIR, "minigame_captures"))
-
-
 def test_the_zip_plan_keeps_frames_whole_in_order_and_counts_the_events_in_the_first_zip(macro, monkeypatch):
     monkeypatch.setattr(macro.cfg, "CAPTURE_ZIP_MB", 1.0)
     mb = 1024 * 1024

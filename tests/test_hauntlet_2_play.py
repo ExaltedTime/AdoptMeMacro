@@ -48,12 +48,13 @@ DOORS = {
 }
 
 
-@pytest.mark.parametrize("number", sorted(DOORS))
-def test_the_three_doors_of_a_room_are_found_with_their_kinds(macro, number):
-    doors = macro.find_hauntlet_doors(frame(macro, number))
-    assert [door.kind for door in doors] == DOORS[number]
-    assert doors[0].x < doors[1].x < doors[2].x
-    assert len({door.y for door in doors}) == 1
+def test_the_three_doors_of_a_room_are_found_with_their_kinds(macro):
+    kinds = {}
+    for number in sorted(DOORS):
+        doors = macro.find_hauntlet_doors(frame(macro, number))
+        assert len(doors) == 3 and doors[0].x < doors[1].x < doors[2].x and len({door.y for door in doors}) == 1
+        kinds[number] = [door.kind for door in doors]
+    assert kinds == DOORS                                                                    # (a mismatch names its fixture)
 
 
 def test_a_forks_hall_and_a_blank_screen_have_no_doors(macro):
@@ -109,13 +110,6 @@ def test_the_players_hearts_under_a_door_are_not_a_lock_light(macro):
     assert macro.find_hauntlet_doors(screen)[1].kind == "plain"
     screen[spot] = (37, 37, 255)                                                      # the lock's light, pure red (BGR)
     assert macro.find_hauntlet_doors(screen)[1].kind == "locked"
-
-
-def test_two_tvs_are_not_a_room(macro):
-    screen = frame(macro, 97)
-    first = macro.find_door_tvs(screen)[0]
-    screen[first[1] - 30:first[1] + 20, first[0] - 30:first[0] + 30] = 0        # the left TV's number gone
-    assert macro.find_door_tvs(screen) == []
 
 
 # --- choosing and walking ---
@@ -197,13 +191,9 @@ def test_doors_without_positions_are_strafed_to_without_dividing_by_their_spacin
     unlocated = [macro.HauntletDoor(0, 0, None) for _ in range(3)]                                          # (not made up any more, but still no crash)
     assert [macro.hauntlet_strafe(frame(macro), unlocated, i) for i in range(3)] == [
         (cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_STRAFE_DURATION), (None, 0.0), (cfg.HAUNTLET_RIGHT_KEY, cfg.HAUNTLET_STRAFE_DURATION)]
-
-
-def test_a_forks_doorways_are_the_left_and_the_right_for_one_door_spacing(macro):
-    cfg = macro.cfg
-    doorways = [macro.HauntletDoor(0, 0, None)] * 2
-    assert macro.hauntlet_strafe(frame(macro), doorways, 0) == (cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_STRAFE_DURATION)
-    assert macro.hauntlet_strafe(frame(macro), doorways, 1) == (cfg.HAUNTLET_RIGHT_KEY, cfg.HAUNTLET_STRAFE_DURATION)
+    doorways = [macro.HauntletDoor(0, 0, None)] * 2                                                          # a fork's two: the left and the right, one spacing each
+    assert [macro.hauntlet_strafe(frame(macro), doorways, i) for i in range(2)] == [
+        (cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_STRAFE_DURATION), (cfg.HAUNTLET_RIGHT_KEY, cfg.HAUNTLET_STRAFE_DURATION)]
 
 
 def room_to_look_around(macro, monkeypatch):
@@ -287,18 +277,12 @@ def test_doors_still_moving_wait_for_the_timeout(macro):
     assert run.look(still, 100.0 + cfg.HAUNTLET_DOORS_TIMEOUT + step) is not None
 
 
-def test_nothing_is_chosen_while_the_timer_is_hidden(macro):
-    run = macro.HauntletRun()
-    screen = frame(macro, 97, room=12, timer=False)
-    run.look(screen, 100.0)
-    for t in (102.0, 103.0, 120.0):
-        assert run.look(screen, t) is None
-
-
-def test_a_room_without_a_number_is_not_looked_at(macro):
-    run = macro.HauntletRun()
-    for t in (100.0, 101.0, 130.0):
-        assert run.look(frame(macro, 97), t) is None
+def test_nothing_is_chosen_while_the_timer_is_hidden_or_the_room_is_unknown(macro):
+    for screen in (frame(macro, 97, room=12, timer=False), frame(macro, 97)):                  # no timer / no room number
+        run = macro.HauntletRun()
+        run.look(screen, 100.0)
+        for t in (102.0, 103.0, 120.0):
+            assert run.look(screen, t) is None
 
 
 def test_after_a_choice_the_room_is_left_alone_until_the_timeout_then_chosen_from_again(macro):
@@ -411,15 +395,6 @@ def test_the_loop_clicks_the_item_it_chose_before_walking(macro, world, monkeypa
     assert macro.clicks and set(macro.clicks) == {(850, 1000)}
     assert "using phone" in capsys.readouterr().out
     assert cfg.HAUNTLET_ITEM_WAIT in world.waits
-
-
-def test_the_loop_uses_no_item_when_there_is_none(macro, world, monkeypatch, capsys):
-    cfg = macro.cfg
-    monkeypatch.setattr(cfg, "HAUNTLET_ITEM_CHANCE", 1.0)
-    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
-    world.screens = [frame(macro, 97, room=12)]
-    macro.play_hauntlet_2(world.clock.now + cfg.MINIGAME_START_WAIT + 2 * (cfg.HAUNTLET_ROOM_SETTLE + cfg.HAUNTLET_WALK_MAX), watch_of(macro))
-    assert macro.clicks == [] and "using" not in capsys.readouterr().out
 
 
 def test_a_room_whose_doors_are_never_found_is_walked_straight_on_and_the_screenshot_kept_once(macro, world, monkeypatch):

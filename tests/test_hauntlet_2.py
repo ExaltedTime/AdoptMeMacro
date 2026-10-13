@@ -21,9 +21,10 @@ def panel(name):
     return screen_with(cv2.imread(os.path.join(HERE, "room_panels", name)), PANEL_AT)
 
 
-@pytest.mark.parametrize("path", sorted(glob.glob(os.path.join(HERE, "room_panels", "[0-9]*.png"))), ids=os.path.basename)
-def test_every_room_of_the_real_run_is_read(macro, path):
-    assert macro.read_hauntlet_room(panel(os.path.basename(path))) == int(os.path.basename(path)[:2])
+def test_every_room_of_the_real_run_is_read(macro):
+    names = [os.path.basename(path) for path in sorted(glob.glob(os.path.join(HERE, "room_panels", "[0-9]*.png")))]
+    assert len(names) == 29
+    assert {name: macro.read_hauntlet_room(panel(name)) for name in names} == {name: int(name[:2]) for name in names}   # (a mismatch names its room)
 
 
 @pytest.mark.parametrize("name", ["none_transition.png", "none_lobby.png"])
@@ -77,11 +78,13 @@ def bar(number):
     return screen_with(cv2.imread(os.path.join(HERE, "item_bars", f"{number:03d}.png")), BAR_AT)
 
 
-@pytest.mark.parametrize("number", sorted(BARS))
-def test_the_items_and_counts_in_the_slots_are_read(macro, number):
-    items = macro.read_hauntlet_items(bar(number))
-    assert [(item.name, item.count) for item in items] == BARS[number]
-    assert [item.pos[0] for item in items] == sorted(item.pos[0] for item in items)         # left to right
+def test_the_items_and_counts_in_the_slots_are_read(macro):
+    read = {}
+    for number in sorted(BARS):
+        items = macro.read_hauntlet_items(bar(number))
+        assert [item.pos[0] for item in items] == sorted(item.pos[0] for item in items)     # left to right
+        read[number] = [(item.name, item.count) for item in items]
+    assert read == BARS                                                                     # (a mismatch names its frame)
 
 
 def test_slot_positions_are_where_the_slots_are(macro):
@@ -124,19 +127,15 @@ def test_a_badge_that_cannot_be_read_gives_no_count_not_a_guess(macro):
 
 # --- the hearts ---
 
-def hearts_fixtures():
-    found = []
+def test_the_hearts_are_counted_red_and_black(macro):
+    read, expected = {}, {}
     for path in sorted(glob.glob(os.path.join(HERE, "hearts", "*.png"))):
-        parts = os.path.basename(path)[:-4].split("_")            # <frame>_<left>_<top>_<red>_<black>  or  <frame>_<left>_<top>_none
-        expected = None if parts[3] == "none" else (int(parts[3]), int(parts[4]))
-        found.append(pytest.param(path, (int(parts[1]), int(parts[2])), expected, id=os.path.basename(path)))
-    return found
-
-
-@pytest.mark.parametrize("path,at,expected", hearts_fixtures())
-def test_the_hearts_are_counted_red_and_black(macro, path, at, expected):
-    hearts = macro.read_hauntlet_hearts(screen_with(cv2.imread(path), at))
-    assert (None if hearts is None else (hearts.red, hearts.black)) == expected
+        name = os.path.basename(path)
+        parts = name[:-4].split("_")                              # <frame>_<left>_<top>_<red>_<black>  or  <frame>_<left>_<top>_none
+        expected[name] = None if parts[3] == "none" else (int(parts[3]), int(parts[4]))
+        hearts = macro.read_hauntlet_hearts(screen_with(cv2.imread(path), (int(parts[1]), int(parts[2]))))
+        read[name] = None if hearts is None else (hearts.red, hearts.black)
+    assert len(read) >= 10 and read == expected                                              # (a mismatch names its frame)
 
 
 def test_no_pink_heart_on_a_blank_screen_reads_as_no_hearts(macro):

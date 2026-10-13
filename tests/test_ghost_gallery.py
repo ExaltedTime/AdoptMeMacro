@@ -26,11 +26,8 @@ def test_the_ghosts_in_the_hall_are_found_biggest_first(macro):
     assert abs(x - 1047) <= 5 and abs(y - 471) <= 5 and area > 5000                   # the ghost the human held the beam on
     assert [b[2] for b in blobs] == sorted((b[2] for b in blobs), reverse=True)
     assert all(b[2] >= macro.cfg.GHOST_MIN_AREA for b in blobs)
-
-
-def test_several_ghosts_at_once_are_all_found(macro):
-    blobs = macro.find_ghost_blobs(shot("ghosts_66"))
-    near = lambda x, y: any(abs(bx - x) <= 8 and abs(by - y) <= 8 for bx, by, _ in blobs)
+    several = macro.find_ghost_blobs(shot("ghosts_66"))                                       # four ghosts at once
+    near = lambda x, y: any(abs(bx - x) <= 8 and abs(by - y) <= 8 for bx, by, _ in several)
     assert near(450, 290) and near(1018, 388) and near(1184, 778) and near(1137, 334)
 
 
@@ -169,14 +166,10 @@ def test_the_boss_is_shielded_while_its_bar_shows_ghost_icons_not_health(macro):
     assert not macro.ghost_boss_shielded(shot("boss_100")) and not macro.ghost_boss_shielded(shot("boss_118"))
     for name in ("shield_129", "shield_141"):
         assert macro.ghost_boss_bar_visible(shot(name)) and macro.ghost_boss_shielded(shot(name))
-
-
-def test_while_it_is_shielded_the_small_ghosts_are_the_target_not_the_dim_boss(macro):
     cx, cy = macro.cfg.GHOST_CHARACTER
     blobs = macro.find_ghost_blobs(shot("shield_129"), boss=True)
     assert len(blobs) == 3 and max(b[2] for b in blobs) < 2000                                  # only small ghosts: the dim boss is not cyan enough
-    target = macro.choose_ghost_target(blobs, False, None)
-    assert target == min(((x, y) for x, y, _ in blobs), key=lambda p: (p[0] - cx) ** 2 + (p[1] - cy) ** 2)
+    assert macro.choose_ghost_target(blobs, False, None) == min(((x, y) for x, y, _ in blobs), key=lambda p: (p[0] - cx) ** 2 + (p[1] - cy) ** 2)
 
 
 def test_the_player_aims_at_the_small_ghosts_while_shielded_and_at_the_boss_otherwise(macro, world):

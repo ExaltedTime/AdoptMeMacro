@@ -106,14 +106,15 @@ def test_in_the_boss_phase_it_holds_on_the_boss(macro, world):
 
 
 def left_held_on(world):
-    """The places the beam was held on: the mouse moves made while the left button was down."""
+    """The places the beam was held on: the mouse moves made while the left button was down (but not the one to the middle of the
+    screen that a camera drag, the right button going down, starts with)."""
     places, down = [], False
-    for event in world.mouse:
+    for i, event in enumerate(world.mouse):
         if event == ("down",):
             down = True
         elif event == ("up",):
             down = False
-        elif event[0] == "move" and down:
+        elif event[0] == "move" and down and world.mouse[i + 1:i + 2] != [("down", "right")]:
             places.append(event[1:])
     return places
 
@@ -145,6 +146,9 @@ def test_the_camera_is_turned_by_dragging_with_the_right_button_when_there_is_no
         elif event[0] == "rel" and current is not None:
             current.append(event[1:])
     assert len(drags) >= 2 and current is None                                                 # turned more than once, and every time let go
+    centre = ("move", cfg.REFERENCE_CENTER_X, cfg.REFERENCE_CENTER_Y)
+    downs = [i for i, event in enumerate(world.mouse) if event == ("down", "right")]
+    assert all(world.mouse[i - 1] == centre for i in downs)                                    # each drag starts in the middle, far from the window's border
     for steps in drags:
         assert len(steps) == cfg.GHOST_CAMERA_DRAG_STEPS
         total_x = sum(dx for dx, _ in steps)
@@ -280,7 +284,7 @@ def test_zooming_out_holds_the_zoom_out_key_and_the_tilt_drags_down_with_the_rig
     assert [(kind, key) for kind, key, _ in world.keys] == [("down", cfg.KEY_ZOOM_OUT), ("up", cfg.KEY_ZOOM_OUT)]
     assert world.keys[1][2] - world.keys[0][2] == pytest.approx(cfg.MINIGAME_ZOOM_OUT_DURATION)
     world.real_tilt()
-    assert world.mouse[0] == ("down", "right") and world.mouse[-1] == ("up", "right")
+    assert world.mouse[:2] == [("move", cfg.REFERENCE_CENTER_X, cfg.REFERENCE_CENTER_Y), ("down", "right")] and world.mouse[-1] == ("up", "right")
     drags = [e for e in world.mouse if e[0] == "rel"]
     assert len(drags) == cfg.GHOST_CAMERA_DRAG_STEPS and all(dx == 0 and dy > 0 for _, dx, dy in drags)       # straight down
     assert sum(dy for _, _, dy in drags) == pytest.approx(cfg.GHOST_START_TILT, abs=cfg.GHOST_CAMERA_DRAG_STEPS)

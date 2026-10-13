@@ -66,6 +66,11 @@ def hotkey_down(key: str) -> bool:
     window has the focus (Windows)."""
     return bool(ctypes.windll.user32.GetAsyncKeyState(ord(key.upper())) & 0x8000)  # type: ignore[attr-defined]  # Windows only
 
+def hotkey_fires(down: bool, was_down: bool, only_while_running: bool, running: bool, only_in_roblox: bool) -> bool:
+    """Whether a hotkey seen `down` (and not `was_down` at the last look) is to act: not while it is just being held, not when it is
+    one for a run that isn't going (`only_while_running`), and not when it is for Roblox's window only (`only_in_roblox`) and another is focused."""
+    return down and not was_down and (running or not only_while_running) and (not only_in_roblox or is_roblox_focused())
+
 def check_stop() -> None:
     """Raise StopRequested if [STOP] was pressed - the one checkpoint that doesn't
     require Roblox focus (see run_full_cycle()).
@@ -2801,10 +2806,17 @@ def choose_ghost_target(blobs: list[tuple[int, int, int]], boss: bool, previous:
     cx, cy = cfg.GHOST_CHARACTER
     return min(blobs, key=lambda b: (b[0] - cx) ** 2 + (b[1] - cy) ** 2)[:2]
 
+def start_camera_drag() -> None:
+    """Move the mouse to the middle of the screen and press the right button there. The drag that follows moves the cursor by
+    hundreds of px, and a right button released over the window's border or title bar opens its menu and takes the focus from
+    the game - which is where the cursor was left by whatever had been aimed at before."""
+    pydirectinput.moveTo(*to_screen(cfg.REFERENCE_CENTER_X, cfg.REFERENCE_CENTER_Y))
+    pydirectinput.mouseDown(button="right")
+
 def tilt_camera_down() -> None:
     """Drag the mouse down with the right button held, GHOST_START_TILT px: the camera rises behind the character, for a view
     from above, over GHOST_CAMERA_DRAG_DURATION seconds in GHOST_CAMERA_DRAG_STEPS moves."""
-    pydirectinput.mouseDown(button="right")
+    start_camera_drag()
     try:
         for _ in range(cfg.GHOST_CAMERA_DRAG_STEPS):
             pydirectinput.moveRel(0, cfg.GHOST_START_TILT // cfg.GHOST_CAMERA_DRAG_STEPS, relative=True)
@@ -2838,7 +2850,7 @@ def rotate_camera(drag: tuple[int, int] = cfg.GHOST_CAMERA_DRAG, tilt: int = cfg
     up to `tilt` px up or down too) over GHOST_CAMERA_DRAG_DURATION seconds, in GHOST_CAMERA_DRAG_STEPS moves, as Roblox wants a drag."""
     dx = random.choice((-1, 1)) * random.randint(*drag)
     dy = random.randint(-tilt, tilt)
-    pydirectinput.mouseDown(button="right")
+    start_camera_drag()
     try:
         for _ in range(cfg.GHOST_CAMERA_DRAG_STEPS):
             pydirectinput.moveRel(dx // cfg.GHOST_CAMERA_DRAG_STEPS, dy // cfg.GHOST_CAMERA_DRAG_STEPS, relative=True)
@@ -2949,6 +2961,37 @@ def click_nice_until_gone() -> bool:
     log_failure("minigame win screen would not close")
     return False
 
+def screen_changed(before: Image, after: Image) -> bool:
+    """Whether the view is a different one: the mean grey-level difference of the two (shrunk) screens is over MINIGAME_TELEPORT_CHANGE."""
+    small = [cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), (80, 45), interpolation=cv2.INTER_AREA).astype(np.int16) for img in (before, after)]
+    return bool(np.abs(small[0] - small[1]).mean() > cfg.MINIGAME_TELEPORT_CHANGE)
+
+def minigame_teleported(before: Image) -> bool:
+    """Wait up to MINIGAME_TELEPORT_WAIT seconds for the character to be teleported after the popup's Yes: the white screen of a
+    teleport (detect_white_screen()) or a view changed from `before` (the screen as it was at the click; screen_changed())."""
+    end = time.time() + cfg.MINIGAME_TELEPORT_WAIT
+    while time.time() < end:
+        wait_interruptible(cfg.MINIGAME_TELEPORT_POLL)
+        img = grab_screen()
+        if detect_white_screen(img) or screen_changed(before, img):
+            return True
+    return False
+
+def accept_minigame_popup() -> bool:
+    """Click the popup's Yes and check that it teleported the character (minigame_teleported()). If not and the popup is still
+    up, the click didn't take: click again, up to MINIGAME_YES_TRIES clicks in all. False if it never did, or the popup is gone
+    without a teleport (it was gone before the click, or the click was lost). See docs/ARCHITECTURE.md#need-handlers."""
+    for attempt in range(cfg.MINIGAME_YES_TRIES):
+        before = grab_screen()
+        hover_click(*cfg.MINIGAME_POPUP_YES_POS)
+        if minigame_teleported(before):
+            return True
+        if not detect_minigame_popup(grab_screen()):
+            print("[debug] the minigame popup is gone and nothing teleported")
+            return False
+        print(f"[debug] the popup is still up after click {attempt + 1}")
+    return False
+
 def play_minigame(name: str) -> bool:
     """Take the popup's Yes, play `name` until its victory screen, click NICE!, respawn. Gives
     up (a logged failure) if the overlay shows it over or never started, or after
@@ -2960,7 +3003,11 @@ def play_minigame(name: str) -> bool:
     # The handler this interrupted may be holding a key or the mouse button
     # down (hold_key(), the pet swipe); that must not carry into the minigame.
     release_all_inputs()
-    hover_click(*cfg.MINIGAME_POPUP_YES_POS)
+    if not accept_minigame_popup():
+        log_failure(f"{label} could not be started (the popup's Yes did not teleport the character)")
+        state.last_detection = time.time()
+        respawn_character()
+        return False
     started = time.time()
     watch = MinigameWatch(name)
     capture = start_run_capture(name)
@@ -4616,17 +4663,18 @@ class AdoptMeGUI:
         self.root.destroy()
 
     def watch_stop_hotkey(self) -> None:
-        """Start a thread that watches the hotkeys in any window: STOP_HOTKEY stops the macro, CAPTURE_HOTKEY starts or
-        stops an input capture. See docs/ARCHITECTURE.md#gui-internals."""
-        hotkeys = [(cfg.STOP_HOTKEY, self.stop_by_hotkey, True), (cfg.CAPTURE_HOTKEY, self.capture_by_hotkey, False)]   # (key, action, only while a run is going)
+        """Start a thread that watches the hotkeys: STOP_HOTKEY stops the macro (in any window), CAPTURE_HOTKEY starts or
+        stops an input capture (only while Roblox is focused). See docs/ARCHITECTURE.md#gui-internals."""
+        hotkeys = [(cfg.STOP_HOTKEY, self.stop_by_hotkey, True, False),
+                   (cfg.CAPTURE_HOTKEY, self.capture_by_hotkey, False, True)]   # (key, action, only while a run is going, only while Roblox is focused)
 
         def watch():
             was_down = [False] * len(hotkeys)
             while True:
                 try:
-                    for i, (key, action, only_while_running) in enumerate(hotkeys):
+                    for i, (key, action, only_while_running, only_in_roblox) in enumerate(hotkeys):
                         down = hotkey_down(key)
-                        if down and not was_down[i] and (self.is_running or not only_while_running):
+                        if hotkey_fires(down, was_down[i], only_while_running, self.is_running, only_in_roblox):
                             self.root.after(0, action)
                         was_down[i] = down
                 except (RuntimeError, tk.TclError):

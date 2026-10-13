@@ -2,6 +2,7 @@
 import json
 import os
 import threading
+import types
 import time
 
 import pytest
@@ -1157,6 +1158,7 @@ def test_the_real_white_transition_is_white_and_no_other_real_screenshot_is(macr
 def test_a_failed_minigame_does_not_count_as_progress_but_a_won_one_does(macro, monkeypatch):
     stalled = time.time() - 100
     monkeypatch.setattr(macro, "release_all_inputs", lambda: None)
+    monkeypatch.setattr(macro, "accept_minigame_popup", lambda: True)
     monkeypatch.setattr(macro, "hover_click", lambda *a, **k: None)
     monkeypatch.setattr(macro, "respawn_character", lambda: None)
     monkeypatch.setattr(macro, "click_nice_until_gone", lambda: True)
@@ -1167,3 +1169,63 @@ def test_a_failed_minigame_does_not_count_as_progress_but_a_won_one_does(macro, 
         assert macro.play_minigame("ghost_gallery") is won
         assert (macro.state.last_progress == stalled) is (not won)
         assert time.time() - macro.state.last_detection < 5                            # needs couldn't be seen meanwhile either way
+
+
+@pytest.fixture
+def popup_world(macro, world, monkeypatch):
+    """A screen that follows the clicks on the popup's Yes: `popup_world.after(n_clicks)` -> what the screen shows after that many
+    ('dark' = the same as before, 'white', 'other' = a different view); `.popup_up` says whether the popup is still on screen."""
+    import numpy as np
+    shown = {"dark": np.full((1080, 1920, 3), 30, np.uint8), "white": np.full((1080, 1920, 3), 255, np.uint8),
+             "other": np.full((1080, 1920, 3), 200, np.uint8)}
+    scene = types.SimpleNamespace(after=lambda clicks: "dark", popup_up=lambda clicks: True)
+    monkeypatch.setattr(macro, "grab_screen", lambda: shown[scene.after(len(macro.clicks))])
+    monkeypatch.setattr(macro, "detect_minigame_popup", lambda img: scene.popup_up(len(macro.clicks)))
+    return scene
+
+
+def test_a_yes_that_teleports_is_clicked_once(macro, popup_world, world):
+    popup_world.after = lambda clicks: "white" if clicks else "dark"
+    assert macro.accept_minigame_popup() is True and len(macro.clicks) == 1
+    del macro.clicks[:]
+    popup_world.after = lambda clicks: "other" if clicks else "dark"                     # a teleport whose white screen was missed
+    assert macro.accept_minigame_popup() is True and len(macro.clicks) == 1
+
+
+def test_a_yes_that_did_not_take_is_clicked_again_while_the_popup_is_up(macro, popup_world, world):
+    popup_world.after = lambda clicks: "white" if clicks >= 2 else "dark"
+    assert macro.accept_minigame_popup() is True and len(macro.clicks) == 2
+    del macro.clicks[:]
+    popup_world.after = lambda clicks: "dark"                                              # never does
+    assert macro.accept_minigame_popup() is False and len(macro.clicks) == macro.cfg.MINIGAME_YES_TRIES
+
+
+def test_a_popup_that_is_gone_with_no_teleport_is_a_failed_start_at_once(macro, popup_world, world):
+    popup_world.popup_up = lambda clicks: False
+    start = world.clock.now
+    assert macro.accept_minigame_popup() is False and len(macro.clicks) == 1
+    assert world.clock.now - start < macro.cfg.MINIGAME_TELEPORT_WAIT + 2                  # one wait, not a minigame's start wait
+
+
+def test_a_minigame_whose_popup_did_not_teleport_is_not_played_but_logged(macro, monkeypatch):
+    events = []
+    monkeypatch.setattr(macro, "accept_minigame_popup", lambda: False)
+    monkeypatch.setattr(macro, "release_all_inputs", lambda: None)
+    monkeypatch.setattr(macro, "respawn_character", lambda: events.append("respawn"))
+    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: events.append(reason))
+    monkeypatch.setattr(macro, "start_run_capture", lambda label: events.append("capture"))
+    monkeypatch.setitem(macro.MINIGAME_PLAYERS, "ghost_gallery", lambda deadline, watch: events.append("played"))
+    assert macro.play_minigame("ghost_gallery") is False
+    assert len(events) == 2 and "could not be started" in events[0] and events[1] == "respawn"       # no capture, no play
+
+
+def test_a_hotkey_acts_on_a_new_press_only_when_its_conditions_hold(macro, monkeypatch):
+    focused = [True]
+    monkeypatch.setattr(macro, "is_roblox_focused", lambda: focused[0])
+    fires = macro.hotkey_fires
+    assert fires(True, False, False, False, False)
+    assert not fires(True, True, False, False, False) and not fires(False, False, False, False, False)      # held, or not pressed
+    assert not fires(True, False, True, False, False) and fires(True, False, True, True, False)               # a stop key needs a run
+    assert fires(True, False, False, False, True)
+    focused[0] = False
+    assert not fires(True, False, False, False, True) and fires(True, False, False, False, False)             # M needs Roblox, P doesn't

@@ -635,8 +635,12 @@ Each minigame has a switch in the game config (`hauntlet_2_enabled`,
 Options tab). `minigame_popup()`:
 - **switched off, or not recognised** - clicks `MINIGAME_POPUP_DONT_SHOW_POS`
   ("Do not show again this session") and `MINIGAME_POPUP_NO_POS`;
-- **switched on** - `play_minigame()` clicks Yes (`MINIGAME_POPUP_YES_POS`)
-  and plays it, as below. Minigames are time-sensitive, so this also happens
+- **switched on** - `play_minigame()` clicks Yes (`MINIGAME_POPUP_YES_POS`) with `accept_minigame_popup()`
+  and plays it, as below. The click is checked: within `MINIGAME_TELEPORT_WAIT` seconds (looking every `MINIGAME_TELEPORT_POLL`) there
+  must be the white screen of a teleport or a view that has changed (`screen_changed()`: the shrunk screen differs from the one at the click by
+  more than `MINIGAME_TELEPORT_CHANGE` grey levels). If not and the popup is still up (`detect_minigame_popup()`) the click didn't take and Yes is clicked
+  again, up to `MINIGAME_YES_TRIES` clicks; if the popup is gone and nothing teleported the start has failed at once - a logged failure and a respawn,
+  no capture and no wait for a game that isn't there (run 6: Hauntlet 2's Yes clicked, the character still in the house 114 s later). Minigames are time-sensitive, so this also happens
   when the popup turns up while a handler is waiting in
   a handler's waits (see [Per-cycle checks while a task
   runs](#need-handlers)): the minigame is played right
@@ -1070,11 +1074,11 @@ knowing if you're modifying it:
   (which is only safe from its own thread): it queues `func`, waits until it
   has run or `timeout` seconds pass (`None` = as long as it takes, for a
   dialog such as the new-need name prompt) and returns what it returned.
-- **`watch_stop_hotkey()`** starts a thread that watches two hotkeys in any
-  window (holding one doesn't retrigger): `STOP_HOTKEY` stops a running macro (it
+- **`watch_stop_hotkey()`** starts a thread that watches two hotkeys (holding one doesn't retrigger; `hotkey_fires()` decides):
+  `STOP_HOTKEY` stops a running macro, in any window (it
   does nothing while nothing runs), so you can take over the computer without
   reaching for the GUI, and `CAPTURE_HOTKEY` starts or stops an
-  [input capture](#input-capture). The action is handed to Tk's thread.
+  [input capture](#input-capture), only while Roblox is the focused window. The action is handed to Tk's thread.
 - **`add_config_checkbox(key)`** makes a checkbox for a persisted switch. It is
   deliberately not in `action_buttons`: the switches stay usable while a
   workflow runs, which is safe because `update_game_config()` is locked.
@@ -1090,7 +1094,7 @@ knowing if you're modifying it:
 
 ### Input capture
 
-Press `CAPTURE_HOTKEY` (`m`) in any window to start recording and again to stop. It is for working out
+Press `CAPTURE_HOTKEY` (`m`) while Roblox is the focused window to start recording and again to stop. It is for working out
 how something is played by hand - the Hauntlet 2 rooms, say - and gives the macro's author lossless
 frames and the inputs that went with them. It is separate from **Record the next run** (a low-quality
 video of a macro run): it works whether or not the macro is running, and the macro's own key presses
@@ -1123,7 +1127,7 @@ is recompressed. For a zip that already exists (a capture zipped by hand, say) `
 - `info.json` - when it started and stopped, the screen and Roblox window sizes, the frame (and skipped-frame) and event
   counts and why it stopped.
 
-**Minigame runs are recorded automatically.** `play_minigame()` starts a capture of its own after taking the popup's Yes
+**Minigame runs are recorded automatically.** `play_minigame()` starts a capture of its own after the teleport that the popup's Yes brought
 (`start_run_capture()`) and stops it when the run is over, whichever way it ends - won, left, timed out or stopped
 (`finish_run_capture()`, which also writes `outcome` into `info.json` and zips the capture as above). It is the same recorder, so it
 has the macro's own key presses and clicks and the frames on the same clock, but in `debug/minigame_captures/`
@@ -1320,7 +1324,7 @@ moves the mouse to the target with `pydirectinput.moveTo()` (not `hover_move()`:
 **With nothing to aim at** (the boss phase's case is below): before the boss it holds the beam on a random place in `GHOST_FURNITURE_BOX` at least `GHOST_FURNITURE_MIN_DISTANCE` px from the
 character (`far_from_character()`; the ghosts hide in the furniture, and holding the beam on it is how to get them out - no furniture is looked for, the place is just random and changes
 every `GHOST_FURNITURE_PERIOD`) and in the boss phase it lets go and doesn't aim at anything. Either way, with nothing to aim at for `GHOST_CAMERA_PERIOD` seconds it **turns the camera**
-(`rotate_camera()`): the right button held while the mouse is dragged sideways `GHOST_CAMERA_DRAG` px, a random way (and a little up or down, `GHOST_CAMERA_TILT`), in
+(`rotate_camera()`; like `tilt_camera_down()` it first moves the mouse to the middle of the screen, as the drag moves the cursor by hundreds of px and a right button released over the window's border or title bar opens its menu and takes the game's focus): the right button held while the mouse is dragged sideways `GHOST_CAMERA_DRAG` px, a random way (and a little up or down, `GHOST_CAMERA_TILT`), in
 `GHOST_CAMERA_DRAG_STEPS` moves over `GHOST_CAMERA_DRAG_DURATION` seconds, so as to find some. **It walks**: first forward for `GHOST_START_FORWARD` seconds, out of where the game puts the player and into the middle of the hall; then every `GHOST_MOVE_PERIOD` seconds a key is held for `GHOST_MOVE_STEP_MIN`-`GHOST_MOVE_STEP_MAX` seconds, one at a time, the aiming going on meanwhile - towards the ghost being aimed at (`ghost_step_key()`: `w` if it is above the character, `s` below, `a`/`d` to a side, along the axis it is farther off on, if that is more than `GHOST_TOWARD_MARGIN` px), a random `MOVE_KEYS` key if none is in sight or it is close. Every `GHOST_JUMP_MIN`-`GHOST_JUMP_MAX` seconds it **jumps** (`KEY_JUMP`).
 The buttons and the walking key are always let go, also when the macro is stopped. The macro's own window is out of the way (sent to the back, see
 `send_macro_window_to_back()`) for the whole of both minigames, as it covers part of the screen.

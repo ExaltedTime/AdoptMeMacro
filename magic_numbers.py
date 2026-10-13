@@ -566,10 +566,6 @@ HELICOPTER_HOLD_DURATION = 4.0     # then hold KEY_HELICOPTER this long
 # (key, seconds) holds to perform in order, optionally a `final_click`
 # position to click after the last hold (with a `prompt_pos`: the prompt button to click if pressing 'e' brought up no dialog), optionally `helicopter` (above) and optionally
 # `max_wait` (how long to wait for the need to clear afterwards; default NEED_GONE_MAX_WAIT).
-# `enter_by_white` (sick: the hospital): the walk ends by going indoors, which shows as a white screen - watched for while the steps
-# are held (every WATCH_POLL_INTERVAL seconds, once the teleport's own white screen has cleared, TELEPORT_ARRIVE_MAX at most). If
-# none was seen when the steps are over, the way in is looked for for `enter_wait` seconds (a zigzag forward - ENTER_SEARCH_*) and,
-# once in, `inside_steps` are walked (what the steps do indoors on a normal run, which a late entry missed).
 TELEPORT_WALK_NEEDS_NORMAL: dict[str, dict[str, Any]] = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),)),
@@ -579,8 +575,7 @@ TELEPORT_WALK_NEEDS_NORMAL: dict[str, dict[str, Any]] = {
     "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 3.0), ("a", 7.2), ("s", 4.0))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 0.1), ("d", 3.0), ("s", 2.2), ("d", 15.0), ("w",20.0))),
     "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 3.0), ("w", 0.8)),
-                    final_click=SICK_FINAL_CLICK_POS, prompt_pos=SICK_PROMPT_POS,
-                    enter_by_white=True, enter_wait=20.0, inside_steps=(("w", 1.0),), max_wait=20.0),
+                    final_click=SICK_FINAL_CLICK_POS, prompt_pos=SICK_PROMPT_POS),
 }
 
 # Used instead of the entry of the same name above while HALLOWEEN is on (Halloween
@@ -591,9 +586,8 @@ TELEPORT_WALK_NEEDS_HALLOWEEN: dict[str, dict[str, Any]] = {
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 20.0),), helicopter=True),
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 3), ("a", 10))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("s", 20),), helicopter=True),
-    "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 3.0), ("w", 0.8)),
-                    final_click=SICK_FINAL_CLICK_POS, prompt_pos=SICK_PROMPT_POS,
-                    enter_by_white=True, enter_wait=20.0, inside_steps=(("w", 1.0),), max_wait=20.0),
+    "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 4.0), ("w", 0.8)),
+                    final_click=SICK_FINAL_CLICK_POS, prompt_pos=SICK_PROMPT_POS),
 }
 
 # The set actually used everywhere else (TeleportWalkNeedHandler and the
@@ -601,22 +595,7 @@ TELEPORT_WALK_NEEDS_HALLOWEEN: dict[str, dict[str, Any]] = {
 TELEPORT_WALK_NEEDS: dict[str, dict[str, Any]] = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN \
     else TELEPORT_WALK_NEEDS_NORMAL
 
-WATCH_POLL_INTERVAL = 0.2           # how often the screen is looked at while a key is held for a walk that watches for the white screen of going indoors
-TELEPORT_ARRIVE_MAX = 8.0           # at most this long is waited for the teleport's white screen to clear before such a walk
-ENTER_SEARCH_FORWARD = 0.6          # looking for the way in: forward this long, then sideways (alternating) ENTER_SEARCH_SIDE seconds more each time...
-ENTER_SEARCH_SIDE = 0.35
-ENTER_SEARCH_SIDE_MAX = 2.0         # ...up to this long
-ENTER_DOOR_STEP = 0.4               # looking for the way in, with the door in sight: walk towards it in steps this long (W, or A/D if it is more than ENTER_DOOR_MARGIN px off to a side)
-ENTER_DOOR_MARGIN = 120
-# The hospital's door, as find_door_light() sees it: the white light of its open doorway (WHITE_SCREEN_LEVEL) with the pale yellow panes of
-# the doors beside it, in a screen that leaves out the HUD, the character and the bottom (DOOR_IGNORE_BOXES: the pet, its tags, the backpack
-# button) and the macro's own window.
-DOOR_IGNORE_BOXES = ((0, 0, 1920, 90), (840, 330, 1080, 900), (0, 940, 1920, 1080), (1540, 100, 1920, 800))
-DOOR_MIN_AREA = 2500                # px of white light
-DOOR_YELLOW = ((20, 40, 235), (34, 140, 255))      # HSV of the panes
-DOOR_YELLOW_MIN = 1500              # px of them on screen
-DOOR_YELLOW_REACH = 61              # px: the panes are within this of the light
-ENTER_CLEAR_MAX = 6.0               # once in, at most this long is waited for the white screen to clear
+WATCH_POLL_INTERVAL = 0.2           # how often the screen is looked at while waiting for the game's "Only Pets..." answer to a need button click
 DISABLED_NEEDS_REJOIN_THRESHOLD = 4  # this many needs disabled for the run (see NEED_STUCK_CHECKS) means something is
                                      # badly wrong: rejoin the game, run setup, and give every need a fresh chance
 NEED_STUCK_CHECKS = 5            # an enabled need still on screen after this many attempts in a row is

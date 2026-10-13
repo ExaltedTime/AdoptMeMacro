@@ -1181,50 +1181,15 @@ def respawn_character() -> None:
     wait_interruptible(cfg.RESPAWN_WAIT)
     print("[debug] respawn complete")
 
-def hold_key(key: str, duration: float, poll: Optional[Callable[[], Any]] = None) -> None:
+def hold_key(key: str, duration: float) -> None:
     """Hold `key` down for `duration` seconds (interruptibly). Always
     releases the key, even if StopRequested/FocusLost fires mid-hold -
-    otherwise it would stay stuck held down in the game. With `poll`, it is called every WATCH_POLL_INTERVAL
-    seconds meanwhile (the hold goes on whatever it returns)."""
+    otherwise it would stay stuck held down in the game."""
     pydirectinput.keyDown(key)
     try:
-        if poll is None:
-            wait_interruptible(duration)
-            return
-        end = time.time() + duration
-        while time.time() < end:
-            wait_interruptible(min(cfg.WATCH_POLL_INTERVAL, max(0.0, end - time.time())))
-            poll()
+        wait_interruptible(duration)
     finally:
         pydirectinput.keyUp(key)
-
-def find_door_light(img: Image) -> Optional[Point]:
-    """Where the hospital's open door is on screen in `img`: the middle of the biggest patch of white light (at least DOOR_MIN_AREA px, not in
-    DOOR_IGNORE_BOXES) that has the doors' yellow panes (DOOR_YELLOW, at least DOOR_YELLOW_MIN px of them) within DOOR_YELLOW_REACH px; None
-    if there is none. Shop windows of the plaza look like it from afar; it is for the last steps."""
-    white = (img.min(axis=2) >= cfg.WHITE_SCREEN_LEVEL).astype(np.uint8)
-    panes = cv2.inRange(cv2.cvtColor(img, cv2.COLOR_BGR2HSV), cfg.DOOR_YELLOW[0], cfg.DOOR_YELLOW[1])
-    for left, top, right, bottom in cfg.DOOR_IGNORE_BOXES:
-        white[top:bottom, left:right] = 0
-        panes[top:bottom, left:right] = 0
-    if np.count_nonzero(panes) < cfg.DOOR_YELLOW_MIN:
-        return None
-    closed = cv2.morphologyEx(white, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
-    near = cv2.dilate(panes, np.ones((cfg.DOOR_YELLOW_REACH, cfg.DOOR_YELLOW_REACH), np.uint8)) > 0
-    count, labels, stats, centres = cv2.connectedComponentsWithStats(closed)
-    best: Optional[tuple[int, Point]] = None
-    for i in range(1, count):
-        area = int(stats[i, cv2.CC_STAT_AREA])
-        if area >= cfg.DOOR_MIN_AREA and np.count_nonzero((labels == i) & near) > 0.2 * area and (best is None or area > best[0]):
-            best = (area, (int(centres[i][0]), int(centres[i][1])))
-    return best[1] if best else None
-
-def wait_until_screen_clear(max_wait: float) -> None:
-    """Wait (at most `max_wait` seconds) for the screen to stop being the white of a teleport or of going indoors
-    (detect_white_screen())."""
-    end = time.time() + max_wait
-    while time.time() < end and detect_white_screen(grab_screen()):
-        wait_interruptible(cfg.WATCH_POLL_INTERVAL)
 
 def walk_to_buttons() -> None:
     """Walk forward from the respawn spot to where the action buttons are."""
@@ -1896,30 +1861,11 @@ class TeleportWalkNeedHandler(NeedHandler):
             print(f"[debug] holding {cfg.KEY_HELICOPTER} for {cfg.HELICOPTER_HOLD_DURATION}s...")
             hold_key(cfg.KEY_HELICOPTER, cfg.HELICOPTER_HOLD_DURATION)
 
-        watch: Optional[Callable[[], None]] = None
-        entered: list[float] = []                       # when the white screen of going indoors was seen (enter_by_white)
-        if self.config.get("enter_by_white"):
-            wait_until_screen_clear(cfg.TELEPORT_ARRIVE_MAX)       # the teleport's own white screen is not the one to look for
-            watch = lambda: entered.append(time.time()) if detect_white_screen(grab_screen()) else None   # noqa: E731
-
         for i, (key, duration) in enumerate(self.config["steps"]):
             if i:
                 wait_interruptible(cfg.TELEPORT_WALK_STEP_GAP)
             print(f"[debug] holding {key} for {duration}s...")
-            hold_key(key, duration, poll=watch) if watch else hold_key(key, duration)
-
-        if watch and not entered:
-            if not self._find_the_way_in(watch, entered):
-                print(f"[debug] never got in for the {self.name} need - it failed")
-                shot = save_failure_report(f"{self.name} did not get in")       # where the character stands, before the respawn
-                log_run_event(f"{self.name}: did not get in within {self.config.get('enter_wait', cfg.NEED_GONE_MAX_WAIT):g}s"
-                              + (f" (screenshot: failures/{shot})" if shot else ""))
-                respawn_character()
-                return False
-            wait_until_screen_clear(cfg.ENTER_CLEAR_MAX)
-            for key, duration in self.config.get("inside_steps", ()):          # the walk the late entry skipped
-                print(f"[debug] holding {key} for {duration}s inside...")
-                hold_key(key, duration)
+            hold_key(key, duration)
 
         if helicopter:
             print("[debug] arrived, pressing space...")
@@ -1939,45 +1885,6 @@ class TeleportWalkNeedHandler(NeedHandler):
 
         print(f"[!] {self.name.capitalize()} complete!")
         return True
-
-    def _step_towards_the_door(self, watch: Callable[[], None]) -> bool:
-        """Look for the door (find_door_light()) and, if it is in sight, walk a step towards it: W, or A / D if it is more than
-        ENTER_DOOR_MARGIN px to the left / right of the character. Whether it was in sight."""
-        door = find_door_light(grab_screen())
-        if door is None:
-            return False
-        dx = door[0] - cfg.GHOST_CHARACTER[0]
-        key = "w" if abs(dx) <= cfg.ENTER_DOOR_MARGIN else (cfg.HAUNTLET_RIGHT_KEY if dx > 0 else cfg.HAUNTLET_LEFT_KEY)
-        print(f"[debug] the door is at {door} - stepping {key}")
-        hold_key(key, cfg.ENTER_DOOR_STEP, poll=watch)
-        return True
-
-    def _find_the_way_in(self, watch: Callable[[], None], entered: list[float]) -> bool:
-        """The walk didn't end indoors (no white screen was seen, which is what going in looks like): zigzag forward until one
-        is, at most the entry's enter_wait seconds - forward ENTER_SEARCH_FORWARD seconds, then sideways, a way that alternates,
-        for ENTER_SEARCH_SIDE seconds more each time (up to ENTER_SEARCH_SIDE_MAX), and a jump. Whether it got in."""
-        wait = self.config.get("enter_wait", cfg.NEED_GONE_MAX_WAIT)
-        print(f"[debug] no white screen after the walk - not in the {self.name} building; looking for the way in ({wait:g}s)...")
-        log_run_event(f"{self.name}: not inside after the walk - looking for the way in")
-        deadline = time.time() + wait
-        sweep = 0
-        while time.time() < deadline:
-            if self._step_towards_the_door(watch):
-                if entered:
-                    break
-                continue
-            hold_key("w", cfg.ENTER_SEARCH_FORWARD, poll=watch)
-            if entered:
-                break
-            side = cfg.HAUNTLET_LEFT_KEY if sweep % 2 == 0 else cfg.HAUNTLET_RIGHT_KEY
-            hold_key(side, min(cfg.ENTER_SEARCH_SIDE * (sweep + 1), cfg.ENTER_SEARCH_SIDE_MAX), poll=watch)
-            pydirectinput.press(cfg.KEY_JUMP)
-            if entered:
-                break
-            sweep += 1
-        if entered:
-            print(f"[debug] got in after looking for {wait - (deadline - time.time()):.1f}s")
-        return bool(entered)
 
     def _open_dialog(self) -> bool:
         """Press 'e' and wait for the need's dialog (sick); if it isn't recognised and the pet

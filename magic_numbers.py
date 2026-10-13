@@ -255,15 +255,14 @@ GHOST_START_TILT = 200                       # px of mouse drag down, right butt
 GHOST_MOVE_PERIOD = 4.0                      # the character walks a step (a random MOVE_KEY held GHOST_MOVE_STEP_MIN-MAX seconds) this often
 GHOST_MOVE_STEP_MIN = 0.4
 GHOST_MOVE_STEP_MAX = 1.2
-GHOST_CHASE_DISTANCE = 220                   # px: what is aimed at, farther than this from the character, is walked towards, the key held until it is nearer (the beam is short: a human's cursor stayed within about 150 px of the character)
-GHOST_BOSS_CAMERA_PERIOD = 1.2               # in the boss phase, with nothing in sight, the camera is turned this often (GHOST_CAMERA_PERIOD before it), and the character walks forward
+GHOST_BOSS_TURN_DRAG = (150, 250)             # in the boss phase, with nothing in sight, the camera is turned (one way, until something is) by this many px of drag at a time
 GHOST_FURNITURE_PROBES = 6                   # places tried in GHOST_FURNITURE_BOX for one that gets the white outline of furniture that can be hovered...
 GHOST_OUTLINE_RADIUS = 160                   # ...looking within this many px of the mouse...
-GHOST_OUTLINE_WHITE = 245                    # ...for newly pure white pixels (all channels at least this)...
+GHOST_OUTLINE_WHITE = 190                    # ...for newly pale pixels (all channels at least this: the outline measured 190-230, in a 1920x1080 screenshot)...
 GHOST_OUTLINE_MIN = 150                      # ...at least this many
 GHOST_OUTLINE_WAIT = 0.12                    # seconds after moving the mouse, before looking
 GHOST_START_FORWARD = 3.0                    # seconds of W after the camera is set up: out of the doorway and into the middle of the hall
-GHOST_TOWARD_MARGIN = 150                    # px: a ghost this far from the character (GHOST_CHARACTER) on an axis is walked towards along it
+GHOST_TOWARD_MARGIN = 130                    # px: a ghost or the boss farther than this from the character (GHOST_CHARACTER) on an axis is walked towards along it, the key held until it is nearer
 GHOST_JUMP_MIN = 3.0
 GHOST_JUMP_MAX = 7.0
 
@@ -562,7 +561,7 @@ SICK_CONFIRM_WAIT = 7.0           # wait after pressing 'e' and before the sick 
 TELEPORT_PETS_TAB_POS = (817, 713)       # nursery: pets tab
 TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
 SICK_FINAL_CLICK_POS = (1045, 660)       # click after the sick need's walk
-SICK_PROMPT_POS = (957, 708)             # the doctor's prompt button (an E; a hand button when the pet is focused), clicked if e brought up no dialog
+SICK_PROMPT_POS = (963, 488)             # the doctor's prompt button (an E; a hand button when the pet is focused): below Doctor Heart, over the player's head. Clicked if e brought up no dialog
 
 # Whether a teleport-walk need flies by helicopter by default; an entry can
 # override it with `helicopter=True/False`. Only the Halloween bored, beach

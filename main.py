@@ -2807,21 +2807,20 @@ def far_from_character(box: tuple[int, int, int, int], minimum: float) -> Point:
             return x, y
     return max(((left, top), (right, top), (left, bottom), (right, bottom)), key=lambda c: (c[0] - cx) ** 2 + (c[1] - cy) ** 2)
 
-def ghost_step_key(target: Optional[Point]) -> str:
-    """The key to walk a step with: towards `target` (W if it is above the character, S below, A/D left/right - along the axis
-    it is farther off on, if it is more than GHOST_TOWARD_MARGIN px off), else a random MOVE_KEYS key."""
-    if target is not None:
-        dx, dy = target[0] - cfg.GHOST_CHARACTER[0], target[1] - cfg.GHOST_CHARACTER[1]
-        if max(abs(dx), abs(dy)) > cfg.GHOST_TOWARD_MARGIN:
-            if abs(dx) > abs(dy):
-                return cfg.HAUNTLET_RIGHT_KEY if dx > 0 else cfg.HAUNTLET_LEFT_KEY
-            return cfg.HAUNTLET_BACK_KEY if dy > 0 else "w"
-    return random.choice(cfg.MOVE_KEYS)
+def ghost_chase_key(target: Point) -> Optional[str]:
+    """The key to walk towards `target` with: W if it is above the character (GHOST_CHARACTER), S below, A/D left/right - along the
+    axis it is farther off on - or None when it is no more than GHOST_TOWARD_MARGIN px off on either: near enough for the beam."""
+    dx, dy = target[0] - cfg.GHOST_CHARACTER[0], target[1] - cfg.GHOST_CHARACTER[1]
+    if max(abs(dx), abs(dy)) <= cfg.GHOST_TOWARD_MARGIN:
+        return None
+    if abs(dx) > abs(dy):
+        return cfg.HAUNTLET_RIGHT_KEY if dx > 0 else cfg.HAUNTLET_LEFT_KEY
+    return cfg.HAUNTLET_BACK_KEY if dy > 0 else "w"
 
-def rotate_camera(drag: tuple[int, int] = cfg.GHOST_CAMERA_DRAG, tilt: int = cfg.GHOST_CAMERA_TILT) -> None:
-    """Turn the camera: hold the right mouse button and drag the mouse sideways (a random way, `drag` = least and most px, and
+def rotate_camera(drag: tuple[int, int] = cfg.GHOST_CAMERA_DRAG, tilt: int = cfg.GHOST_CAMERA_TILT, direction: Optional[int] = None) -> None:
+    """Turn the camera: hold the right mouse button and drag the mouse sideways (`direction` -1 or 1, else a random way; `drag` = least and most px, and
     up to `tilt` px up or down too) over GHOST_CAMERA_DRAG_DURATION seconds, in GHOST_CAMERA_DRAG_STEPS moves, as Roblox wants a drag."""
-    dx = random.choice((-1, 1)) * random.randint(*drag)
+    dx = (direction or random.choice((-1, 1))) * random.randint(*drag)
     dy = random.randint(-tilt, tilt)
     start_camera_drag()
     try:
@@ -2833,8 +2832,8 @@ def rotate_camera(drag: tuple[int, int] = cfg.GHOST_CAMERA_DRAG, tilt: int = cfg
 
 def furniture_outlined(before: Image, after: Image, point: Point) -> bool:
     """Whether the mouse, moved to `point` between the screenshots `before` and `after`, is over a piece of furniture the beam can
-    be held on, which gets a white outline when hovered: at least GHOST_OUTLINE_MIN pixels within GHOST_OUTLINE_RADIUS px of `point`
-    have turned white (every channel at least GHOST_OUTLINE_WHITE) that weren't, or weren't beside a white pixel, before."""
+    be held on, which is highlighted (a pale outline) near the mouse: at least GHOST_OUTLINE_MIN pixels within GHOST_OUTLINE_RADIUS px of `point`
+    have turned pale (every channel at least GHOST_OUTLINE_WHITE) that weren't, or weren't beside a pale pixel, before."""
     x, y = point
     r = cfg.GHOST_OUTLINE_RADIUS
     top, left = max(0, y - r), max(0, x - r)
@@ -2881,6 +2880,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     held = False
     moving: Optional[str] = None                     # the key being held to walk, and until when
     chasing: Optional[str] = None                    # the key held to get to what is aimed at (a `moving` that has no end)
+    turn: Optional[int] = None                       # the way the camera is being turned to find the boss (-1 or 1)
     move_until = 0.0
     next_move = time.time() + cfg.GHOST_MOVE_PERIOD
     phase = "ghosts"
@@ -2925,36 +2925,36 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 aim(target)
             elif phase == "ghosts":                                         # nothing to be seen before the boss: try the furniture
                 if furniture is None or now >= furniture_until:
-                    let_go()                                                # (the beam would be what turns white while the places are tried)
-                    furniture = find_furniture(watch)
+                    furniture = find_furniture(watch)                       # (the beam stays down all the while: the mouse is just moved around)
                     furniture_until = time.time() + cfg.GHOST_FURNITURE_PERIOD
                 aim(furniture)
-            else:
-                let_go()
-            camera_period = cfg.GHOST_CAMERA_PERIOD if phase == "ghosts" else cfg.GHOST_BOSS_CAMERA_PERIOD
-            if target is None and now - max(last_turn, last_seen) >= camera_period:
-                rotate_camera()                                             # (in the boss phase quickly: the boss is somewhere in the dark)
+            if target is not None:
+                turn = None                                                 # the next search for the boss turns a way of its own
+            elif phase != "ghosts":                                         # the boss, or the ghosts that shield it, out of sight: turn the camera until they are
+                turn = turn or random.choice((-1, 1))
+                rotate_camera(cfg.GHOST_BOSS_TURN_DRAG, 0, turn)
                 last_turn = time.time()
-            chase = None                                                    # a key held for as long as it takes to get near what is aimed at
-            if target is not None and (target[0] - cfg.GHOST_CHARACTER[0]) ** 2 + (target[1] - cfg.GHOST_CHARACTER[1]) ** 2 > cfg.GHOST_CHASE_DISTANCE ** 2:
-                chase = ghost_step_key(target)
-            elif target is None and phase != "ghosts":
-                chase = "w"                                                 # the boss fight is in the middle of the room: forward, turning the camera as it goes
-            if chase is not None or chasing is not None:
-                if chase != chasing:
-                    stop_walking()
-                    chasing = chase
-                    if chase is not None:
-                        moving = chase
-                        pydirectinput.keyDown(chase)
-                move_until = now
-            elif moving is not None and now >= move_until:         # walking about, a step at a time, without stopping the aiming
+            elif now - max(last_turn, last_seen) >= cfg.GHOST_CAMERA_PERIOD:
+                rotate_camera()
+                last_turn = time.time()
+            chase = ghost_chase_key(target) if target is not None else None   # always towards the ghost or the boss, until it is near
+            if chase != chasing:
                 stop_walking()
-                next_move = now + cfg.GHOST_MOVE_PERIOD
-            elif moving is None and now >= next_move:
-                moving = ghost_step_key(target)
-                pydirectinput.keyDown(moving)
-                move_until = now + random.uniform(cfg.GHOST_MOVE_STEP_MIN, cfg.GHOST_MOVE_STEP_MAX)
+                chasing = chase
+                if chase is not None:
+                    moving = chase
+                    pydirectinput.keyDown(chase)
+                move_until = now
+            if chasing is None and target is None and phase == "ghosts":     # nothing in sight: walking about, a step at a time, without stopping the aiming
+                if moving is not None and now >= move_until:
+                    stop_walking()
+                    next_move = now + cfg.GHOST_MOVE_PERIOD
+                elif moving is None and now >= next_move:
+                    moving = random.choice(cfg.MOVE_KEYS)
+                    pydirectinput.keyDown(moving)
+                    move_until = now + random.uniform(cfg.GHOST_MOVE_STEP_MIN, cfg.GHOST_MOVE_STEP_MAX)
+            elif chasing is None:
+                stop_walking()
             if now >= next_jump:
                 pydirectinput.press(cfg.KEY_JUMP)
                 next_jump = now + random.uniform(cfg.GHOST_JUMP_MIN, cfg.GHOST_JUMP_MAX)

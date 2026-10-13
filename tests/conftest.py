@@ -81,7 +81,7 @@ class Clock:
 @pytest.fixture
 def world(macro, monkeypatch):
     """Fake time, keyboard and mouse for the minigame players: `world.keys` lists ("down"/"up", key, time), `world.mouse` lists
-    ("move", x, y) / ("down",) / ("up",), `world.screens` is what the next looks see (a list, the last one staying, or a
+    ("move", x, y) / ("down",) / ("up",) (for the right button ("down", "right") ...) / ("rel", dx, dy), `world.screens` is what the next looks see (a list, the last one staying, or a
     function of the world), `world.waits` the waits."""
     clock = Clock()
     world = types.SimpleNamespace(clock=clock, keys=[], mouse=[], waits=[], screens=[], looks=0)
@@ -104,7 +104,9 @@ def world(macro, monkeypatch):
     monkeypatch.setattr(macro.pydirectinput, "keyDown", lambda key: world.keys.append(("down", key, clock.now)), raising=False)
     monkeypatch.setattr(macro.pydirectinput, "keyUp", lambda key: world.keys.append(("up", key, clock.now)), raising=False)
     monkeypatch.setattr(macro.pydirectinput, "moveTo", lambda x, y, **kw: world.mouse.append(("move", x, y)), raising=False)
-    monkeypatch.setattr(macro.pydirectinput, "mouseDown", lambda *a, **k: world.mouse.append(("down",)), raising=False)
-    monkeypatch.setattr(macro.pydirectinput, "mouseUp", lambda *a, **k: world.mouse.append(("up",)), raising=False)
+    monkeypatch.setattr(macro.pydirectinput, "mouseDown", lambda *a, button="left", **k: world.mouse.append(("down",) if button == "left" else ("down", button)), raising=False)
+    monkeypatch.setattr(macro.pydirectinput, "mouseUp", lambda *a, button="left", **k: world.mouse.append(("up",) if button == "left" else ("up", button)), raising=False)
+    monkeypatch.setattr(macro.pydirectinput, "moveRel", lambda dx, dy, **k: world.mouse.append(("rel", dx, dy)), raising=False)
+    monkeypatch.setattr(macro.pydirectinput, "press", lambda key, **k: world.keys.append(("press", key, clock.now)), raising=False)
     monkeypatch.setattr(macro, "to_screen", lambda x, y: (x, y))
     return world

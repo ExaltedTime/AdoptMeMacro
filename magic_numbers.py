@@ -216,8 +216,24 @@ GHOST_BOSS_BAR_MIN = 3000
 GHOST_BOSS_BAR_IGNORE = (680, 150, 1240, 275)  # the bar itself, in the boss phase: its crest and its ghost icons are the same cyan
 GHOST_LOOK_INTERVAL = 0.12
 GHOST_START_LOOK_INTERVAL = 0.5              # while waiting for the game to begin
-GHOST_SEARCH_AFTER = 2.0                     # seconds without a ghost in sight, then a step in a random direction...
-GHOST_SEARCH_STEP = 0.4                      # ...this long
+# The boss can't be hurt while its bar shows two or three ghost icons instead of its health: the bar's cyan fill (BGR (255, 222, 0),
+# 500-20000 px in GHOST_BOSS_BAR_BOX) is gone then (0 px), the boss is dim - too dim for GHOST_COLOR, so only the small ghosts that fly in
+# are found - and it is those the beam goes on (a human's run: three such phases, 6-7 s each).
+GHOST_BOSS_FILL = ((86, 230, 230), (96, 255, 255))
+GHOST_BOSS_FILL_MIN = 200
+# Before the boss, with no ghost in sight, the beam is held on a random place in GHOST_FURNITURE_BOX (ghosts hide in the furniture; a new
+# place every GHOST_FURNITURE_PERIOD seconds) and the camera is turned every GHOST_CAMERA_PERIOD seconds with nothing to aim at: the right
+# button held while the mouse is dragged GHOST_CAMERA_DRAG px (a random way, and up to GHOST_CAMERA_TILT px up or down). The character jumps
+# every GHOST_JUMP_MIN-GHOST_JUMP_MAX seconds.
+GHOST_FURNITURE_BOX = (560, 250, 1360, 760)
+GHOST_FURNITURE_PERIOD = 1.0
+GHOST_CAMERA_PERIOD = 3.0
+GHOST_CAMERA_DRAG = (150, 450)
+GHOST_CAMERA_TILT = 60
+GHOST_CAMERA_DRAG_DURATION = 0.3
+GHOST_CAMERA_DRAG_STEPS = 6
+GHOST_JUMP_MIN = 3.0
+GHOST_JUMP_MAX = 7.0
 
 # Hauntlet 2, read from the screen (see the HAUNTLET 2 READER section of main.py).
 # The ROOM panel's number: white digits on a dark panel, always in the same place, at most HAUNTLET_ROOM_MAX_DIGITS long.

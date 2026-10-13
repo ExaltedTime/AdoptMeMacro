@@ -2596,10 +2596,19 @@ def ghost_boss_bar_visible(img: Image) -> bool:
     gold = cv2.inRange(cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV), low, high)
     return int(np.count_nonzero(gold)) >= cfg.GHOST_BOSS_BAR_MIN
 
+def ghost_boss_shielded(img: Image) -> bool:
+    """Whether the boss, its bar being up, can't be hurt now: the bar shows two or three ghost icons instead of its
+    cyan health (no GHOST_BOSS_FILL pixels), the boss itself is dim and small ghosts fly in - they are what is
+    to be caught then. (The bar's health is down to a sliver at the very end, but not nothing.)"""
+    left, top, right, bottom = cfg.GHOST_BOSS_BAR_BOX
+    low, high = cfg.GHOST_BOSS_FILL
+    fill = cv2.inRange(cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV), low, high)
+    return int(np.count_nonzero(fill)) < cfg.GHOST_BOSS_FILL_MIN
+
 def choose_ghost_target(blobs: list[tuple[int, int, int]], boss: bool, previous: Optional[Point]) -> Optional[Point]:
-    """Where to aim, from `blobs` (find_ghost_blobs()): in the boss phase the biggest one (the boss), else the one that
-    is still the one aimed at (`previous`, if a ghost is within GHOST_STICK px of it - they move, and aiming at another
-    each look would lose them all), else the one nearest the character (GHOST_CHARACTER). None if there are none."""
+    """Where to aim, from `blobs` (find_ghost_blobs()): when the boss can be hurt (`boss`) the biggest one (the boss), else the
+    one that is still the one aimed at (`previous`, if a ghost is within GHOST_STICK px of it - they move, and aiming at
+    another each look would lose them all), else the one nearest the character (GHOST_CHARACTER). None if there are none."""
     if not blobs:
         return None
     if boss:
@@ -2611,11 +2620,26 @@ def choose_ghost_target(blobs: list[tuple[int, int, int]], boss: bool, previous:
     cx, cy = cfg.GHOST_CHARACTER
     return min(blobs, key=lambda b: (b[0] - cx) ** 2 + (b[1] - cy) ** 2)[:2]
 
+def rotate_camera() -> None:
+    """Turn the camera: hold the right mouse button and drag the mouse sideways (a random way, GHOST_CAMERA_DRAG px, a little up
+    or down too) over GHOST_CAMERA_DRAG_DURATION seconds, in GHOST_CAMERA_DRAG_STEPS moves, as Roblox wants a drag."""
+    dx = random.choice((-1, 1)) * random.randint(*cfg.GHOST_CAMERA_DRAG)
+    dy = random.randint(-cfg.GHOST_CAMERA_TILT, cfg.GHOST_CAMERA_TILT)
+    pydirectinput.mouseDown(button="right")
+    try:
+        for _ in range(cfg.GHOST_CAMERA_DRAG_STEPS):
+            pydirectinput.moveRel(dx // cfg.GHOST_CAMERA_DRAG_STEPS, dy // cfg.GHOST_CAMERA_DRAG_STEPS, relative=True)
+            wait_interruptible(cfg.GHOST_CAMERA_DRAG_DURATION / cfg.GHOST_CAMERA_DRAG_STEPS)
+    finally:
+        pydirectinput.mouseUp(button="right")
+
 def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
-    """Ghost Gallery: once its overlay shows (or the start wait is over), look at the screen every GHOST_LOOK_INTERVAL, aim the mouse at a ghost
-    (choose_ghost_target()) and hold the button down on it - on the boss, in the boss phase - until the victory screen
-    shows or the overlay says it's over. With no ghost in sight for GHOST_SEARCH_AFTER seconds, walk about a little.
-    True if won before `deadline`. See docs/ARCHITECTURE.md#playing-ghost-gallery.
+    """Ghost Gallery: once its overlay shows (or the start wait is over), look at the screen every GHOST_LOOK_INTERVAL,
+    aim the mouse at a ghost (choose_ghost_target()) and hold the button down on it, until the victory screen shows or the
+    overlay says it's over. In the boss phase it is the boss, but while the boss's bar shows ghost icons it can't be hurt
+    (ghost_boss_shielded()) and the small ghosts are aimed at instead. With no ghost in sight, before the boss phase the beam
+    is held on random furniture (ghosts hide there), and the camera is turned every GHOST_CAMERA_PERIOD to find some;
+    it jumps now and then. True if won before `deadline`. See docs/ARCHITECTURE.md#playing-ghost-gallery.
     """
     print(f"[debug] Ghost Gallery: waiting for it to start (at most {cfg.MINIGAME_START_WAIT:g}s)...")
     waited_until = time.time() + cfg.MINIGAME_START_WAIT
@@ -2624,36 +2648,57 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     watch.start_wait_over()
     target: Optional[Point] = None
     held = False
-    last_seen = time.time()
-    was_boss = False
+    phase = "ghosts"
+    furniture: Optional[Point] = None
+    furniture_until = 0.0
+    last_turn = last_seen = time.time()
+    next_jump = time.time() + random.uniform(cfg.GHOST_JUMP_MIN, cfg.GHOST_JUMP_MAX)
+
+    def aim(point: Point) -> None:
+        nonlocal held
+        pydirectinput.moveTo(*to_screen(*point))
+        if not held:
+            pydirectinput.mouseDown()
+            held = True
+
+    def let_go() -> None:
+        nonlocal held
+        if held:
+            pydirectinput.mouseUp()
+            held = False
+
     try:
         while time.time() < deadline and not watch.problem:
             img = minigame_look(watch)
             if detect_minigame_victory(img):
                 return True
-            boss = ghost_boss_bar_visible(img)
-            if boss != was_boss:
-                print("[debug] Ghost Gallery: the boss is here" if boss else "[debug] Ghost Gallery: the boss phase is over")
-                was_boss = boss
-            target = choose_ghost_target(find_ghost_blobs(img, boss), boss, target)
+            bar = ghost_boss_bar_visible(img)
+            now_phase = ("shielded" if ghost_boss_shielded(img) else "boss") if bar else "ghosts"
+            if now_phase != phase:
+                print(f"[debug] Ghost Gallery: {dict(ghosts='the boss phase is over', boss='the boss can be hurt', shielded='the boss is shielded: after the small ghosts')[now_phase]}")
+                phase = now_phase
+            target = choose_ghost_target(find_ghost_blobs(img, bar), phase == "boss", target)
+            now = time.time()
             if target is not None:
-                last_seen = time.time()
-                pydirectinput.moveTo(*to_screen(*target))
-                if not held:
-                    pydirectinput.mouseDown()
-                    held = True
+                last_seen = now
+                aim(target)
+            elif phase == "ghosts":                                         # nothing to be seen before the boss: try the furniture
+                if furniture is None or now >= furniture_until:
+                    left, top, right, bottom = cfg.GHOST_FURNITURE_BOX
+                    furniture = (random.randint(left, right), random.randint(top, bottom))
+                    furniture_until = now + cfg.GHOST_FURNITURE_PERIOD
+                aim(furniture)
             else:
-                if held:
-                    pydirectinput.mouseUp()
-                    held = False
-                if time.time() - last_seen >= cfg.GHOST_SEARCH_AFTER:
-                    key = random.choice(cfg.MOVE_KEYS)
-                    hold_key(key, cfg.GHOST_SEARCH_STEP)
-                    last_seen = time.time()
+                let_go()
+            if target is None and now - max(last_turn, last_seen) >= cfg.GHOST_CAMERA_PERIOD:
+                rotate_camera()
+                last_turn = time.time()
+            if now >= next_jump:
+                pydirectinput.press(cfg.KEY_JUMP)
+                next_jump = now + random.uniform(cfg.GHOST_JUMP_MIN, cfg.GHOST_JUMP_MAX)
             wait_interruptible(cfg.GHOST_LOOK_INTERVAL)
     finally:
-        if held:
-            pydirectinput.mouseUp()
+        let_go()
     return False
 
 MINIGAME_PLAYERS = {"hauntlet_2": play_hauntlet_2, "ghost_gallery": play_ghost_gallery}

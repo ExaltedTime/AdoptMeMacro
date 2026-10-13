@@ -1281,14 +1281,26 @@ in the boss phase, else the ghost already being followed (one within `GHOST_STIC
 would lose them all), else the nearest the character (`GHOST_CHARACTER`). Against the human's own play, its choice was within 150 px of
 where the human held the beam in 69 of 80 frames outside the boss phase and the boss was where the human held it in 12 of 13.
 
+**The boss's shield.** The boss can't always be hurt: in three phases of the run (6-7 s each, at 1:10, 0:37 and 0:25 before the end, a few seconds after
+each other) its bar shows two or three round ghost icons instead of its cyan health, the boss itself goes dim, and small ghosts fly in; catching them is
+what gets the boss back. `ghost_boss_shielded()` is the bar's cyan fill (`GHOST_BOSS_FILL`, BGR (255, 222, 0)) being gone: 500-20000 pixels of it in `GHOST_BOSS_BAR_BOX` when the
+boss can be hurt, 0 in the icon phases (a sliver, 470-2000, in the last seconds of the boss's life, which is why the limit, `GHOST_BOSS_FILL_MIN`, is 200). The boss
+is dim enough then to fall under `GHOST_COLOR`'s brightness, so `find_ghost_blobs()` finds only the small ghosts, and they are aimed at like any ghosts
+(nearest the character). Replaying the run, the three phases come out at 110.4-115.8 s, 127.2-133.5 s and 139.8-147.1 s of the capture, with the boss
+phase before, between and after them, as in the frames.
+
 `play_ghost_gallery()` waits until the overlay (TIME LEFT, the score) has been seen - the game starts about 25 s after the popup's Yes, not 50 - then, every
-`GHOST_LOOK_INTERVAL`, looks, moves the mouse to the target with `pydirectinput.moveTo()` (not `hover_move()`: its three settling pauses are too slow for
-tracking) and holds the left button down while there is one; it lets go when nothing is in sight, and after `GHOST_SEARCH_AFTER` seconds of that takes
-a `GHOST_SEARCH_STEP`-second step in a random direction. The button is always let go, also when the macro is stopped.
-**What it does not do (yet):** the boss has phases in which its bar shows two or three ghost icons instead of its health, and small ghosts
-fly in (the human held the beam on those); the player then aims at the boss anyway. It doesn't dodge, doesn't react to
-being knocked down, and doesn't choose between ghosts by anything but distance (the human often picked the second or third nearest).
-None of it has run in the game yet.
+`GHOST_LOOK_INTERVAL`, looks and works out the phase (before the boss, the boss can be hurt, the boss is shielded), moves the mouse to the target with `pydirectinput.moveTo()` (not
+`hover_move()`: its three settling pauses are too slow for tracking) and holds the left button down while there is one. **With nothing to aim at** (the boss phase's case is below):
+before the boss it holds the beam on a random place in `GHOST_FURNITURE_BOX` - the ghosts hide in the furniture, and holding the beam on it is how to get them out; no furniture is
+looked for, the place is just random and changes every `GHOST_FURNITURE_PERIOD` - and in the boss phase it lets go and doesn't aim at anything. Either way, with nothing to aim at for
+`GHOST_CAMERA_PERIOD` seconds it **turns the camera** (`rotate_camera()`): the right button held while the mouse is dragged sideways `GHOST_CAMERA_DRAG` px, a random way (and a little up or
+down, `GHOST_CAMERA_TILT`), in `GHOST_CAMERA_DRAG_STEPS` moves over `GHOST_CAMERA_DRAG_DURATION` seconds, so as to find some. Every `GHOST_JUMP_MIN`-`GHOST_JUMP_MAX`
+seconds it **jumps** (`KEY_JUMP`). The buttons are always let go, also when the macro is stopped.
+**Not yet checked in the game:** that `pydirectinput.moveRel(..., relative=True)` with the right button held turns Roblox's camera the way a hand does, the size of the drag, where the
+furniture is (the box is a guess around the character), and the jump's use. **What it does not do:** dodge, react to being knocked down, or choose between ghosts
+by anything but distance (the human often picked the second or third nearest); it can't tell furniture from floor, and doesn't try to "get the best view" by anything
+smarter than turning when it sees nothing.
 
 ### Recording a run
 
@@ -1333,7 +1345,7 @@ exact values and rationale):
 | Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
 | Hauntlet 2 reader | `HAUNTLET_ROOM_BOX`, `HAUNTLET_DIGIT_*`, `HAUNTLET_ROOM_MAX_DIGITS`, `HAUNTLET_SLOT_*`, `HAUNTLET_ITEM_*`, `HAUNTLET_BADGE_*`, `HAUNTLET_COUNT_*`, `HAUNTLET_NOT_ITEMS`, `HAUNTLET_HEART_*`, `HAUNTLET_*_DIR` |
-| Ghost Gallery play | `GHOST_COLOR`, `GHOST_CLOSE`, `GHOST_MIN_AREA`, `GHOST_IGNORE_BOXES`, `GHOST_CHARACTER`, `GHOST_STICK`, `GHOST_BOSS_BAR_*`, `GHOST_LOOK_INTERVAL`, `GHOST_START_LOOK_INTERVAL`, `GHOST_SEARCH_*` |
+| Ghost Gallery play | `GHOST_COLOR`, `GHOST_CLOSE`, `GHOST_MIN_AREA`, `GHOST_IGNORE_BOXES`, `GHOST_CHARACTER`, `GHOST_STICK`, `GHOST_BOSS_BAR_*`, `GHOST_BOSS_FILL*`, `GHOST_LOOK_INTERVAL`, `GHOST_START_LOOK_INTERVAL`, `GHOST_FURNITURE_*`, `GHOST_CAMERA_*`, `GHOST_JUMP_*` |
 | Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_DARK_*`, `HAUNTLET_PLANK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_*`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_ITEM_CHANCE`, `HAUNTLET_ITEM_WAIT`, `HAUNTLET_KEY_ITEMS`, `HAUNTLET_LEARN_LIMIT` |
 | Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `MINIGAME_CAPTURE`, `RUN_CAPTURES_DIR`, `RUN_CAPTURE_ZIPS`, `MAX_RUN_CAPTURES`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |

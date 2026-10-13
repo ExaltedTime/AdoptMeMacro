@@ -78,18 +78,18 @@ def watch_started(macro, started=True):
     return types.SimpleNamespace(problem=None, last_seen=1.0 if started else None, start_wait_over=lambda: None)
 
 
-def test_it_aims_at_the_ghost_holds_the_button_and_lets_go_when_it_is_gone(macro, world, monkeypatch):
+def test_it_aims_at_the_ghost_follows_it_and_moves_on_to_furniture_when_it_is_gone(macro, world):
+    cfg = macro.cfg
     ghost = shot("ghosts_50")
     big = macro.find_ghost_blobs(ghost)[0][:2]
     world.screens = [ghost] * 5 + [blank()]
-    ups = []
-    monkeypatch.setattr(macro.pydirectinput, "mouseUp", lambda *a, **k: ups.append(world.looks), raising=False)
     macro.play_ghost_gallery(world.clock.now + 4, watch_started(macro))
-    assert ups[0] <= 7 < world.looks                                                       # let go at once when it was gone, not only at the end
     assert world.mouse[:2] == [("move", *big), ("down",)]                                  # aimed first, then held
-    assert world.mouse.count(("down",)) == 1                                              # held through, once
     moves = [m for m in world.mouse if m[0] == "move"]
-    assert len(moves) >= 5 and all(m[1:] == big for m in moves[:5])                         # follows it every look
+    assert all(m[1:] == big for m in moves[:5])                                            # follows it every look
+    left, top, right, bottom = cfg.GHOST_FURNITURE_BOX
+    assert all(left <= m[1] <= right and top <= m[2] <= bottom for m in moves[5:]) and len(moves) > 5      # then the furniture
+    assert world.mouse.count(("down",)) == 1                                               # without letting go in between
 
 
 def test_in_the_boss_phase_it_holds_on_the_boss(macro, world):
@@ -100,16 +100,109 @@ def test_in_the_boss_phase_it_holds_on_the_boss(macro, world):
     assert world.mouse[0] == ("move", x, y) and ("down",) in world.mouse
 
 
-def test_without_a_ghost_it_walks_about_after_a_while_and_not_before(macro, world):
+def left_held_on(world):
+    """The places the beam was held on: the mouse moves made while the left button was down."""
+    places, down = [], False
+    for event in world.mouse:
+        if event == ("down",):
+            down = True
+        elif event == ("up",):
+            down = False
+        elif event[0] == "move" and down:
+            places.append(event[1:])
+    return places
+
+
+def test_before_the_boss_with_no_ghost_in_sight_the_beam_is_held_on_random_furniture(macro, world):
     cfg = macro.cfg
     world.screens = [blank()]
-    macro.play_ghost_gallery(world.clock.now + cfg.GHOST_SEARCH_AFTER * 0.8, watch_started(macro))
-    assert world.keys == [] and world.mouse == []
-    world.keys.clear()
-    macro.play_ghost_gallery(world.clock.now + cfg.GHOST_SEARCH_AFTER * 2.5, watch_started(macro))
-    keys = [key for kind, key, _ in world.keys if kind == "down"]
-    assert keys and set(keys) <= set(cfg.MOVE_KEYS)
-    assert [k for k, _, _ in world.keys].count("down") == [k for k, _, _ in world.keys].count("up")
+    macro.play_ghost_gallery(world.clock.now + cfg.GHOST_FURNITURE_PERIOD * 5.5, watch_started(macro))
+    places = left_held_on(world)
+    left, top, right, bottom = cfg.GHOST_FURNITURE_BOX
+    assert places and all(left <= x <= right and top <= y <= bottom for x, y in places)
+    assert len(set(places)) >= 3                                                               # somewhere else every GHOST_FURNITURE_PERIOD
+    assert world.mouse.count(("down",)) == 1                                                   # the button stays down meanwhile
+
+
+def test_the_camera_is_turned_by_dragging_with_the_right_button_when_there_is_nothing_to_aim_at(macro, world):
+    cfg = macro.cfg
+    world.screens = [blank()]
+    macro.play_ghost_gallery(world.clock.now + cfg.GHOST_CAMERA_PERIOD * 2.5, watch_started(macro))
+    drags, current = [], None
+    for event in world.mouse:
+        if event == ("down", "right"):
+            current = []
+        elif event == ("up", "right"):
+            drags.append(current)
+            current = None
+        elif event[0] == "rel" and current is not None:
+            current.append(event[1:])
+    assert len(drags) >= 2 and current is None                                                 # turned more than once, and every time let go
+    for steps in drags:
+        assert len(steps) == cfg.GHOST_CAMERA_DRAG_STEPS
+        total_x = sum(dx for dx, _ in steps)
+        assert cfg.GHOST_CAMERA_DRAG[0] - cfg.GHOST_CAMERA_DRAG_STEPS <= abs(total_x) <= cfg.GHOST_CAMERA_DRAG[1]
+        assert abs(sum(dy for _, dy in steps)) <= cfg.GHOST_CAMERA_TILT
+
+
+def test_the_camera_is_left_alone_while_there_is_a_ghost(macro, world):
+    cfg = macro.cfg
+    world.screens = [shot("ghosts_50")]
+    macro.play_ghost_gallery(world.clock.now + cfg.GHOST_CAMERA_PERIOD * 3, watch_started(macro))
+    assert ("down", "right") not in world.mouse
+
+
+def test_it_jumps_every_so_often(macro, world):
+    cfg = macro.cfg
+    world.screens = [shot("ghosts_50")]
+    start = world.clock.now
+    macro.play_ghost_gallery(start + cfg.GHOST_JUMP_MAX * 4.5, watch_started(macro))
+    jumps = [at for kind, key, at in world.keys if kind == "press" and key == cfg.KEY_JUMP]
+    assert 3 <= len(jumps) <= 10
+    gaps = np.diff([start] + jumps)
+    assert gaps.min() >= cfg.GHOST_JUMP_MIN - 0.5 and gaps.max() <= cfg.GHOST_JUMP_MAX + 0.5
+
+
+# --- the boss's shield ---
+
+def test_the_boss_is_shielded_while_its_bar_shows_ghost_icons_not_health(macro):
+    assert not macro.ghost_boss_shielded(shot("boss_100")) and not macro.ghost_boss_shielded(shot("boss_118"))
+    for name in ("shield_129", "shield_141"):
+        assert macro.ghost_boss_bar_visible(shot(name)) and macro.ghost_boss_shielded(shot(name))
+
+
+def test_while_it_is_shielded_the_small_ghosts_are_the_target_not_the_dim_boss(macro):
+    cx, cy = macro.cfg.GHOST_CHARACTER
+    blobs = macro.find_ghost_blobs(shot("shield_129"), boss=True)
+    assert len(blobs) == 3 and max(b[2] for b in blobs) < 2000                                  # only small ghosts: the dim boss is not cyan enough
+    target = macro.choose_ghost_target(blobs, False, None)
+    assert target == min(((x, y) for x, y, _ in blobs), key=lambda p: (p[0] - cx) ** 2 + (p[1] - cy) ** 2)
+
+
+def test_the_player_aims_at_the_small_ghosts_while_shielded_and_at_the_boss_otherwise(macro, world):
+    shielded = shot("shield_129")
+    want = macro.choose_ghost_target(macro.find_ghost_blobs(shielded, boss=True), False, None)
+    world.screens = [shielded]
+    macro.play_ghost_gallery(world.clock.now + 1, watch_started(macro))
+    assert world.mouse[0] == ("move", *want)
+    world.mouse.clear()
+    boss = shot("boss_100")
+    world.screens = [boss]
+    macro.play_ghost_gallery(world.clock.now + 1, watch_started(macro))
+    assert world.mouse[0] == ("move", *macro.find_ghost_blobs(boss, boss=True)[0][:2])
+
+
+def test_in_the_boss_phase_with_nothing_to_aim_at_it_does_not_hold_the_beam_on_furniture(macro, world):
+    cfg = macro.cfg
+    bar_only = np.zeros((1080, 1920, 3), np.uint8)
+    boss = shot("boss_100")
+    left, top, right, bottom = cfg.GHOST_BOSS_BAR_BOX
+    bar_only[top:270, left:right] = boss[top:270, left:right]                                # the bar, and no boss, no ghost
+    world.screens = [boss] * 3 + [bar_only]
+    macro.play_ghost_gallery(world.clock.now + cfg.GHOST_CAMERA_PERIOD * 2.5, watch_started(macro))
+    assert ("down",) in world.mouse and world.mouse.count(("down",)) == 1                  # held on the boss while it was there...
+    assert left_held_on(world)[3:] == []                                                   # ...and not on anything once it is not
+    assert ("up",) in world.mouse[:world.mouse.index(("down", "right"))]                   # let go before turning the camera to look for it
 
 
 def test_it_waits_for_the_overlay_before_acting(macro, world, monkeypatch):

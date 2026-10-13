@@ -171,9 +171,13 @@ an extra walk from wherever the previous need left the character standing.
   runs them during a task; and `side_quest()`.
 - **RUN RECORDING** - `RunRecorder` and `start_recording_if_requested()`. See
   [Recording a run](#recording-a-run).
-- **INPUT CAPTURE** - `InputCapture`, `toggle_input_capture()`, `zip_capture()` and the key / mouse
+- **INPUT CAPTURE** - `InputCapture`, `toggle_input_capture()`, `start_run_capture()`, `zip_capture()` and the key / mouse
   readers (`pressed_inputs()`, `cursor_position()`, `to_reference()`). See
   [Input capture](#input-capture).
+- **HAUNTLET 2 READER** - `read_hauntlet_room()`, `read_hauntlet_items()`, `read_hauntlet_hearts()`,
+  `hauntlet_timer_visible()`, `find_hauntlet_doors()` and their pictures. See [Reading Hauntlet 2](#reading-hauntlet-2).
+  (What is done with it - `HauntletRun`, `hauntlet_strafe()`, `hauntlet_walk()`, `play_hauntlet_2()` - is with the other minigame code under
+  NEED HANDLERS; see [Playing Hauntlet 2](#playing-hauntlet-2).)
 - **WORKFLOWS** - `run_full_cycle()` and `run_workflow_loop()` (plus
   `ResourceMonitor`, `check_quiet()` and `respawn_if_no_detection()`, which run
   inside the loop). See [The workflow lifecycle](#the-workflow-lifecycle) above.
@@ -652,14 +656,15 @@ LEFT / GHOST GALLERY / Score banner), recognised by a crop in
 `ref/overlays/<minigame>.png` within its box in `MINIGAME_OVERLAYS`
 (`detect_minigame_overlay()`, at least `MINIGAME_OVERLAY_THRESHOLD`). A
 `MinigameWatch` made by `play_minigame()` is fed every screenshot the player
-takes (`minigame_won()`, `minigame_wait()`): once the overlay has been seen,
+takes (`minigame_look()`, `minigame_won()`, `minigame_wait()`): once the overlay has been seen,
 losing it for `MINIGAME_OVERLAY_LOST_TIMEOUT` (10 s) means the minigame was left
 (game over without the victory screen, kicked out) and it stops there; never
 seeing it within `MINIGAME_OVERLAY_START_GRACE` (60 s) of the start wait means it
 never started. Either is a logged failure with that reason, instead of waiting
 out `MINIGAME_MAX_DURATION` (600 s).
-- `play_hauntlet_2()` waits `MINIGAME_START_WAIT` (50 s), then holds
-  `HAUNTLET_2_FORWARD_KEY` until victory or until the overlay says it's over.
+- `play_hauntlet_2()` waits `MINIGAME_START_WAIT` (50 s), then goes through the rooms - reads the screen, picks a door
+  and walks to it, room after room - until victory or until the overlay says it's over. See
+  [Playing Hauntlet 2](#playing-hauntlet-2).
 - `play_ghost_gallery()` waits `MINIGAME_START_WAIT`, then holds the mouse
   in `GHOST_GALLERY_HOLD`-second holds (`GHOST_GALLERY_HOLD_GAP` apart) while
   running in random `MOVE_KEYS` directions with a jump, each for a random time
@@ -1112,6 +1117,21 @@ is recompressed. For a zip that already exists (a capture zipped by hand, say) `
 - `info.json` - when it started and stopped, the screen and Roblox window sizes, the frame (and skipped-frame) and event
   counts and why it stopped.
 
+**Minigame runs are recorded automatically.** `play_minigame()` starts a capture of its own after taking the popup's Yes
+(`start_run_capture()`) and stops it when the run is over, whichever way it ends - won, left, timed out or stopped
+(`finish_run_capture()`, which also writes `outcome` into `info.json` and zips the capture as above). It is the same recorder, so it
+has the macro's own key presses and clicks and the frames on the same clock, but in `debug/minigame_captures/`
+(`RUN_CAPTURES_DIR`, the newest `MAX_RUN_CAPTURES` kept, named `<minigame>_<date>_<time>`) so the hotkey's captures and these
+never delete each other, and with a **size budget**: the frames and events of a run are kept within `RUN_CAPTURE_MB` (24, a little under
+the zip limit, so a run is one zip to hand over). A lossless frame is 1-3 MB, so that is only some 10-20 frames; to make them
+cover the whole run (a Hauntlet 2 run can last minutes), whenever the budget is passed `InputCapture._keep_within_budget()` deletes
+every other saved frame - never the newest, and the first stays - and from then on saves frames twice as far apart.
+The events of the deleted frames stay in `events.jsonl`, followed by a `frame_dropped` line naming the file, so
+a reader can tell; `info.json` has `frames_dropped` and `budget_mb`. Switch it off with `MINIGAME_CAPTURE`; it isn't started while the
+hotkey's capture is running (two recorders would only get in each other's way), and a capture that can't be started or finished is a
+message, never a reason not to play. If more frames per run are wanted the choice is a bigger budget (more zips to send) or lossy
+frames (which would no longer be the exact pixels the readers are tuned on).
+
 Keys and mouse buttons are read by polling `GetAsyncKeyState` every `CAPTURE_POLL_INTERVAL` (10 ms) -
 the same call as the stop hotkey, so no extra package is needed - and the position with `GetCursorPos`.
 The cost of polling is that **the mouse wheel isn't seen** (no async state to read) and a key pressed
@@ -1120,6 +1140,114 @@ when less than `CAPTURE_MIN_FREE_MB` of disk is free - a frame is roughly 1-3 MB
 press of the hotkey then tidies it up and starts a new one. Screenshots and input are written from two
 threads of the capture's own; the hotkey is watched by the GUI's hotkey thread (with the stop hotkey) and
 acted on in Tk's thread, so typing an `m` into the private server link box starts a capture too.
+
+### Reading Hauntlet 2
+
+`read_hauntlet_room()` (the HAUNTLET 2 READER section of `main.py`) returns the number on the ROOM panel
+at the top of the screen, or `None` when it can't be read. It only reads: nothing here decides or presses a key.
+The panel is flat UI that never moves or scales, so the digits are matched exactly: the white pixels
+(`HAUNTLET_DIGIT_WHITE_LEVEL`) inside `HAUNTLET_ROOM_BOX` are split into connected pieces, each piece is cut
+out, shrunk to `HAUNTLET_DIGIT_SIZE` and compared with the saved digit pictures in `ref/hauntlet/digits/`
+(`0.png` ... `9.png`, cut from a real run) by mean difference. The best must be under
+`HAUNTLET_DIGIT_MAX_DIFF` (20); on a 256-frame run (rooms 1-29, three layers of the hotel) every readable frame
+matched at 0.0 and the two most alike digits are 43.7 apart. No panel (the white transition, the lobby, a
+door close-up that hides it), no digit pieces, more than `HAUNTLET_ROOM_MAX_DIGITS`, or a piece that matches
+none of the digits all give `None` rather than a guess. `tests/test_hauntlet.py` runs a crop of each of the 29
+rooms (`tests/hauntlet2/room_panels/`) back through the reader.
+
+**Items.** `read_hauntlet_items()` returns the item slots along the bottom of the screen, left to right, as
+`HauntletItem(name, count, pos)`. The slots are round white-ringed icons about 115 px apart, found as circles in
+`HAUNTLET_SLOT_BAND` (`find_item_slots()`, Hough, radius `HAUNTLET_SLOT_RADIUS`; a slot that has just changed is a
+little bigger). Each slot's `HAUNTLET_ITEM_CROP`-px square is matched by correlation, as a grey picture so the slot's
+bright blue or dim teal background matters little, against the pictures in `ref/hauntlet/items/<name>/` (a folder per
+item, several pictures each - bright, dim, slightly enlarged). The best must reach `HAUNTLET_ITEM_MATCH` (0.75) or the
+item is `unknown`. They were cut from the 382 slots of a 256-frame run: `phone`, `key`, `gold_key`, `cyan_potion`,
+`heart_potion`, `red_potion`, plus `backpack` (the lobby's button, which sits where a slot would and is left out,
+`HAUNTLET_NOT_ITEMS`); every slot of that run is read as the item it is (60 ms a frame). The wand was not in it, so
+it has no pictures yet. **Learning:** with `learn=True` an unknown slot is saved as `ref/hauntlet/items/unknown_<n>/1.png`
+(`learn_hauntlet_item()`) and is known from then on; renaming the folder to what it is names it. The count is the number
+on the purple "x2" badge at a slot's top left (`read_item_count()`): the badge is the purple piece of the right size
+(`HAUNTLET_BADGE_*`), its white pieces are the "x" and the digits, each compared with the glyphs in
+`ref/hauntlet/counts/` (`x`, `1`, `2` - the only counts in the run, so no other digit is known yet: a glyph that
+matches none gives `None`, not a guess).
+
+**Hearts.** `read_hauntlet_hearts()` returns `HauntletHearts(red, black, width, pos)` for the row above the player's head.
+Hearts are pink with a black outline and become solid black when lost. The pink ones are found by colour and shape
+(`pink_heart_pieces()`; nothing above `HAUNTLET_HEART_MIN_Y`, which keeps the room panel's pink spot out), the row nearest
+the middle of the screen is the player's, and the row is then followed outward one `HAUNTLET_HEART_PITCH` x a heart's
+width at a time: a cell with a heart-shaped piece or mostly pink is red, a cell that is nearly all pure black (every
+channel at most `HAUNTLET_HEART_BLACK_LEVEL` - a doorway or the player's clothes are not that black) is black, anything
+else ends the row. A row shorter than `HAUNTLET_HEART_MIN` or longer than `HAUNTLET_HEART_MAX` isn't taken for hearts
+(`None`). Across the 256 frames of the run the counts go 3/0, 2/1, 3/1 (a red heart picked up), 2/2, 1/3, 4/0 (a heart potion),
+3/1, 2/2, 1/3 and no frame is wrong in between except where it gives `None`. What it does **not** do: find a row of
+*only* black hearts (nothing pink to find it by - the run's last frames), see the cyan temporary heart (it ends the row),
+or read a frame where the row is hidden (a door close-up, a transition) or where something pink sits next to it (one frame
+in the run, a pink door, was declined as too long). One frame can still be wrong or missing, so whatever acts on the hearts should
+look at a few frames in a row.
+
+**The timer and the doors.** `hauntlet_timer_visible()` says whether the timer ("00:2x", left of the ROOM panel) is shown:
+950-1190 white pixels in `HAUNTLET_TIMER_BOX` when it is, none when it isn't - it is hidden in a room's first moments and
+while the player passes through a door, which is also when the screen still shows the *last* room's doors. `find_hauntlet_doors()`
+finds the three doors of a room from the TVs above them: each TV shows its number (the players standing before that door)
+in a light cyan, `(206, 255, 255)`, that no other pixel of the game has in that quantity; `find_door_tvs()` takes the pieces
+of `HAUNTLET_TV_AREA` px below `HAUNTLET_TV_MIN_Y` and wants three of them in a row (the same height within
+`HAUNTLET_TV_ROW_TOLERANCE`, evenly spaced within `HAUNTLET_TV_SPACING_TOLERANCE`), else `[]` - a fork's hall has no TVs, and neither do
+the close-ups. The spacing between TVs (330-410 px as the camera zooms) is the picture's scale, so the boxes under each
+TV (`HAUNTLET_LOCK_LIGHT_BOX`, `HAUNTLET_DOOR_BOX`, measured at a spacing of `HAUNTLET_DOOR_SPACING`) are scaled with it.
+`HauntletDoor(x, y, kind)` gives each door's `kind` from its pixels (`hauntlet_door_kind()`), the first that fits:
+
+- `locked` - the padlock's red light above the door: 40-99 red pixels, none on other doors;
+- `dark` - over 40% near-black pixels (44-74% on the doors that look so, at most 37% on the others);
+- `mystery` - the pale grey "???" door, brightness 180-203 where every other door is under 164;
+- `boarded` or `plain` - by the planks: the share of the door's pixels on a strong, near-horizontal edge
+  (`HAUNTLET_PLANK_*`: the grey picture smoothed, Sobel, edge directions within 35 degrees of horizontal). Plain doors
+  are 0.03-0.13 (median 0.06), boarded ones 0.11-0.24 (median 0.18); the threshold, 0.103, is the best one over the
+  doors of 25 rooms (the first and second layers separate best, the third a little worse), and picked in turn without one
+  room of them it still gets 94% of that room's doors right. It was found by trying measures one after another - blob counts
+  for the nails, edge density, edge directions, colour - and this was the one that held across the three layers' lighting.
+
+All of it is judged against what was seen in one captured run, by eye: of all three doors of those 25 rooms, 63 of 75 come out as
+labelled (`boarded` / `plain` from the planks are the least sure part: 3 of 22 plain doors read boarded; and
+the third layer's spiked doors, 3 of them, come out `boarded`, there being no kind for them yet). The misses: dark doors with
+fewer black pixels than the rule wants (4 of 10 read as boarded or plain), and a lock whose light is cut off by the shear of a side door
+(2 of 14). It also can't see which door has the ghost behind it. The kinds are for the decision logic to use as far as they go.
+
+### Playing Hauntlet 2
+
+`play_hauntlet_2()` (after `MINIGAME_START_WAIT`) takes a screenshot every `HAUNTLET_LOOK_INTERVAL` and hands it to a
+`HauntletRun`, which keeps the room number and when it changed (`read_hauntlet_room()`) and says through `look()` when it is time
+to choose, returning the doors to choose from. The number changes as the player passes through a door, while the last
+room's doors are still on screen (open, the camera following the player), so the doors are only trusted when
+
+- `HAUNTLET_ROOM_SETTLE` seconds have gone by since the number changed,
+- the timer shows (`hauntlet_timer_visible()`), and
+- the row of TVs is where it was on the look before, within `HAUNTLET_TV_STABLE` px - the camera has stopped (it zooms
+  and pans at the start of a room; the macro stands still, so it does) - or `HAUNTLET_DOORS_TIMEOUT` has gone by.
+
+A room whose number is a multiple of `HAUNTLET_FORK_EVERY` (10 and 20 in the run - it is an assumption that 30, 40 and so on
+are forks too) with no row of TVs on two looks in a row is a fork: two doorways. Any other room without TVs for
+`HAUNTLET_DOORS_TIMEOUT` is walked as if it had three doors. Once a door was chosen the room is left alone for
+`HAUNTLET_ROOM_TIMEOUT` seconds (the walk takes up to `HAUNTLET_WALK_MAX`); a room whose number didn't change by then is chosen from
+again, which is the retry for a walk that got stuck.
+
+`hauntlet_choose()` reads the hearts and the items off the same screenshot (new items are saved, at most
+`HAUNTLET_LEARN_LIMIT` per play, so a misreading can't fill the folder), picks a door with `choose_hauntlet_door()` and an item to
+use with `choose_hauntlet_item()`, and logs the lot: `room 12, 3 hearts (1 lost), items: phone x1, key x1, doors: -, -, locked, going middle`. **The choices are random for now**
+(a locked door is only taken when a key is held, or when all are locked; with a chance of `HAUNTLET_ITEM_CHANCE` at each choice one of
+the items, any of them, is used - `hauntlet_use_item()` clicks its slot, as the capture shows a human doing, and waits `HAUNTLET_ITEM_WAIT`, before the
+walk starts); `choose_hauntlet_door(doors, hearts, items)` and `choose_hauntlet_item(items, hearts)` are where the risk-based logic goes. Whether
+an item worked is not looked at. `hauntlet_strafe()` works out how far to go sideways and `hauntlet_walk()` then holds `HAUNTLET_2_FORWARD_KEY` - plus
+`HAUNTLET_LEFT_KEY` or `HAUNTLET_RIGHT_KEY` for the strafe - until the number changes or `HAUNTLET_WALK_MAX` seconds. The
+strafe is the distance from the player to the door's TV in *door spacings* (the distance between neighbouring TVs, which
+also takes the camera's zoom out of it) times `HAUNTLET_STRAFE_DURATION` seconds per spacing - no strafe under `HAUNTLET_STRAFE_MIN`
+spacings, never more than `HAUNTLET_STRAFE_MAX`. The player's place is measured, not assumed, because where a room is entered may
+depend on the door it came through (a player who came in at the left door has further to go to the right one): it is the middle of the
+row of hearts above the head (`HauntletHearts.center_x`), and where the hearts aren't seen, in front of the middle door. A fork's
+two doorways aren't located, so each is the left or the right key for one spacing. The seconds per spacing are from a human's run (the
+capture's keys against its room numbers, from the middle: left door 1.0-1.1 s, right 0.9-1.3 s; W held 3-4.8 s in all); that a key held by the macro
+carries the character as far as one pressed by hand is **not yet checked in the game**, and neither is the strafe in a fork's hall
+(its doorways were seen at other distances in rooms 10 and 20) - both are the first things to tune. The keys are always released,
+also when the macro is stopped. When the run ends, `got as far as room N` goes in the run log.
 
 ### Recording a run
 
@@ -1163,7 +1291,9 @@ exact values and rationale):
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
 | Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
-| Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
+| Hauntlet 2 reader | `HAUNTLET_ROOM_BOX`, `HAUNTLET_DIGIT_*`, `HAUNTLET_ROOM_MAX_DIGITS`, `HAUNTLET_SLOT_*`, `HAUNTLET_ITEM_*`, `HAUNTLET_BADGE_*`, `HAUNTLET_COUNT_*`, `HAUNTLET_NOT_ITEMS`, `HAUNTLET_HEART_*`, `HAUNTLET_*_DIR` |
+| Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_DARK_*`, `HAUNTLET_PLANK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_*`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_ITEM_CHANCE`, `HAUNTLET_ITEM_WAIT`, `HAUNTLET_KEY_ITEMS`, `HAUNTLET_LEARN_LIMIT` |
+| Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `MINIGAME_CAPTURE`, `RUN_CAPTURES_DIR`, `RUN_CAPTURE_MB`, `MAX_RUN_CAPTURES`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
@@ -1292,7 +1422,9 @@ clicks instead of making them. They cover:
   popups and stray windows against the real crops in `ref/` (including that every `POPUP_TEMPLATES` entry has a crop that fits its box);
 - `test_icon_screenshots.py` - every real screenshot in `tests/icon_detection/<folder>/` (the need bar over dark, bright, busy and white scenes) run through the circle search and the matching; each must be listed in `EXPECTED` with the needs on its bar, so a screenshot added without a label fails;
 - `test_loop.py` - the whole workflow loop run for a moment with the game stubbed out (idle respawns, the resource monitor starting and stopping, the report being written);
-- `test_capture.py` - the input capture against a made-up keyboard, mouse and screen (events, both coordinate systems, click frames, skipping unchanged frames, the summary, the zips, stopping by itself, the hotkey toggle and pruning);
+- `test_capture.py` - the input capture against a made-up keyboard, mouse and screen (events, both coordinate systems, click frames, skipping unchanged frames, the summary, the zips, stopping by itself, the hotkey toggle and pruning, and the automatic recording of minigame runs: the frame budget, its thinning, the outcome, the zip);
+- `test_hauntlet.py` - reading the Hauntlet 2 screen against crops of a real run;
+- `test_hauntlet_play.py` - the timer and doors against crops of that run, then the room tracking, the choices (door, item), the walk and the whole loop with a fake clock and keyboard;
 - `test_features.py` - the daily money reset, the run-every-need sequence, the win screen and the like;
 - `test_config.py` - the real need tables in `magic_numbers.py`, without pinning any value: every entry is well formed (known keys, on-screen positions, movement keys, a `final_click` has its `prompt_pos`), has a handler, and the handler carries out exactly what the entry says (run over whichever needs exist, so `HALLOWEEN` off just drops `sick`). The handler tests elsewhere use made-up entries; this is what keeps the real ones honest;
 - `test_report.py` - the run-report parser against the exact log wording the

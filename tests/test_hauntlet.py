@@ -1,0 +1,170 @@
+"""Reading the Hauntlet 2 screen. The fixtures are crops of a real 29-room run (tests/hauntlet2/), pasted back at
+the place they were taken from on an otherwise blank screen."""
+import glob
+import os
+
+import cv2
+import numpy as np
+import pytest
+
+HERE = os.path.join(os.path.dirname(__file__), "hauntlet2")
+PANEL_AT = (1060, 60)                      # where the room panel crops were cut from (left, top)
+
+
+def screen_with(crop, at):
+    screen = np.zeros((1080, 1920, 3), np.uint8)
+    screen[at[1]:at[1] + crop.shape[0], at[0]:at[0] + crop.shape[1]] = crop
+    return screen
+
+
+def panel(name):
+    return screen_with(cv2.imread(os.path.join(HERE, "room_panels", name)), PANEL_AT)
+
+
+@pytest.mark.parametrize("path", sorted(glob.glob(os.path.join(HERE, "room_panels", "[0-9]*.png"))), ids=os.path.basename)
+def test_every_room_of_the_real_run_is_read(macro, path):
+    assert macro.read_hauntlet_room(panel(os.path.basename(path))) == int(os.path.basename(path)[:2])
+
+
+@pytest.mark.parametrize("name", ["none_transition.png", "none_lobby.png"])
+def test_a_screen_without_the_panel_reads_as_no_room(macro, name):
+    assert macro.read_hauntlet_room(panel(name)) is None
+
+
+def test_a_blank_screen_and_a_missing_digit_folder_read_as_no_room(macro, monkeypatch):
+    assert macro.read_hauntlet_room(np.zeros((1080, 1920, 3), np.uint8)) is None
+    monkeypatch.setattr(macro.cfg, "HAUNTLET_DIGIT_DIR", os.path.join(HERE, "no_such_folder"))
+    assert macro.read_hauntlet_room(panel("07.png")) is None
+
+
+def test_the_saved_digits_are_all_there_and_distinct(macro):
+    digits = macro.digit_templates()
+    assert sorted(digits) == list(range(10))
+    for a in digits:
+        for b in digits:
+            if a < b:
+                assert np.abs(digits[a].astype(int) - digits[b].astype(int)).mean() > 2 * macro.cfg.HAUNTLET_DIGIT_MAX_DIFF   # no digit can match two
+
+
+def test_a_digit_that_matches_none_of_them_is_not_guessed(macro):
+    screen = panel("07.png")
+    left, top, right, bottom = macro.cfg.HAUNTLET_ROOM_BOX
+    screen[top:bottom, left:right] = 0
+    screen[top + 4:top + 24, left + 30:left + 44] = 255                          # a solid white block where a digit goes
+    assert macro.read_hauntlet_room(screen) is None
+
+
+# --- the item slots ---
+
+BAR_AT = (640, 930)
+# what is in each slot of the fixture frames, left to right, as (item, count) - read off the pictures by eye
+BARS = {
+    16: [("phone", 1), ("key", 1), ("cyan_potion", 1), ("heart_potion", 1)],
+    29: [("phone", 1), ("key", 1), ("cyan_potion", 2), ("heart_potion", 1)],         # the cyan potion has just been picked up again (+1)
+    50: [("key", 1), ("cyan_potion", 1), ("heart_potion", 1)],
+    63: [("phone", 1), ("key", 1), ("heart_potion", 1)],
+    80: [("cyan_potion", 1)],
+    100: [("red_potion", 1)],
+    175: [("phone", 1), ("gold_key", 1)],
+    205: [("key", 2), ("gold_key", 1)],
+    230: [("gold_key", 1)],
+    5: [],                                                                           # the lobby: only the backpack button
+    141: [],                                                                         # a white transition
+}
+
+
+def bar(number):
+    return screen_with(cv2.imread(os.path.join(HERE, "item_bars", f"{number:03d}.png")), BAR_AT)
+
+
+@pytest.mark.parametrize("number", sorted(BARS))
+def test_the_items_and_counts_in_the_slots_are_read(macro, number):
+    items = macro.read_hauntlet_items(bar(number))
+    assert [(item.name, item.count) for item in items] == BARS[number]
+    assert [item.pos[0] for item in items] == sorted(item.pos[0] for item in items)         # left to right
+
+
+def test_slot_positions_are_where_the_slots_are(macro):
+    items = macro.read_hauntlet_items(bar(16))
+    assert [item.pos[0] for item in items] == pytest.approx([788, 903, 1018, 1133], abs=3)
+    assert all(abs(item.pos[1] - 1012) <= 3 for item in items)
+
+
+def test_an_item_that_is_not_saved_is_unknown_and_learned_when_asked(macro, monkeypatch, tmp_path):
+    import shutil
+    items_dir = tmp_path / "items"
+    shutil.copytree(macro.cfg.HAUNTLET_ITEM_DIR, items_dir)
+    shutil.rmtree(items_dir / "phone")                                               # forget the phone
+    monkeypatch.setattr(macro.cfg, "HAUNTLET_ITEM_DIR", str(items_dir))
+    assert [i.name for i in macro.read_hauntlet_items(bar(63))] == ["unknown", "key", "heart_potion"]
+    assert not any(n.startswith("unknown") for n in os.listdir(items_dir))              # looking doesn't save anything
+    learned = macro.read_hauntlet_items(bar(63), learn=True)
+    assert [i.name for i in learned] == ["unknown_1", "key", "heart_potion"] and learned[0].count == 1
+    assert os.path.isfile(items_dir / "unknown_1" / "1.png")
+    assert [i.name for i in macro.read_hauntlet_items(bar(63))] == ["unknown_1", "key", "heart_potion"]    # known now
+    (items_dir / "unknown_1").rename(items_dir / "phone")                            # naming it is renaming the folder
+    assert [i.name for i in macro.read_hauntlet_items(bar(63))] == ["phone", "key", "heart_potion"]
+
+
+def test_each_unknown_item_gets_the_next_number(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "HAUNTLET_ITEM_DIR", str(tmp_path / "items"))              # nothing saved: all unknown
+    names = [i.name for i in macro.read_hauntlet_items(bar(50), learn=True)]
+    assert names == ["unknown_1", "unknown_2", "unknown_3"]
+    assert sorted(os.listdir(tmp_path / "items")) == names
+
+
+def test_a_badge_that_cannot_be_read_gives_no_count_not_a_guess(macro):
+    screen = bar(16)
+    x, y = macro.find_item_slots(screen)[0][:2]
+    left, top, right, bottom = macro.cfg.HAUNTLET_BADGE_BOX
+    screen[y + top:y + bottom, x + left:x + right] = 0                                         # wipe the badge
+    assert macro.read_item_count(screen, x, y) is None
+    assert macro.read_item_count(np.zeros((1080, 1920, 3), np.uint8), 10, 10) is None
+
+
+# --- the hearts ---
+
+def hearts_fixtures():
+    found = []
+    for path in sorted(glob.glob(os.path.join(HERE, "hearts", "*.png"))):
+        parts = os.path.basename(path)[:-4].split("_")            # <frame>_<left>_<top>_<red>_<black>  or  <frame>_<left>_<top>_none
+        expected = None if parts[3] == "none" else (int(parts[3]), int(parts[4]))
+        found.append(pytest.param(path, (int(parts[1]), int(parts[2])), expected, id=os.path.basename(path)))
+    return found
+
+
+@pytest.mark.parametrize("path,at,expected", hearts_fixtures())
+def test_the_hearts_are_counted_red_and_black(macro, path, at, expected):
+    hearts = macro.read_hauntlet_hearts(screen_with(cv2.imread(path), at))
+    assert (None if hearts is None else (hearts.red, hearts.black)) == expected
+
+
+def test_no_pink_heart_on_a_blank_screen_reads_as_no_hearts(macro):
+    assert macro.read_hauntlet_hearts(np.zeros((1080, 1920, 3), np.uint8)) is None
+
+
+def test_a_row_of_only_black_hearts_is_not_found_by_this_reader(macro):
+    """Nothing pink to find it by - documented, not guessed."""
+    screen = np.full((1080, 1920, 3), 120, np.uint8)
+    for k in range(4):
+        screen[400:440, 880 + k * 52:880 + k * 52 + 40] = 0
+    assert macro.read_hauntlet_hearts(screen) is None
+
+
+def test_the_row_is_the_one_nearest_the_middle_of_the_screen(macro):
+    """A second row of hearts (another player's) off to one side is not the player's."""
+    path = [p for p in glob.glob(os.path.join(HERE, "hearts", "014_*.png"))][0]
+    crop = cv2.imread(path)
+    screen = np.zeros((1080, 1920, 3), np.uint8)
+    left, top = (int(v) for v in os.path.basename(path)[:-4].split("_")[1:3])
+    screen[top:top + crop.shape[0], left:left + crop.shape[1]] = crop
+    other = crop.copy()
+    screen[top:top + crop.shape[0], left - 600:left - 600 + crop.shape[1]] = other[:, :]
+    hearts = macro.read_hauntlet_hearts(screen)
+    assert (hearts.red, hearts.black) == (3, 0) and abs(hearts.pos[0] - left) < 120
+
+
+def test_a_lone_pink_thing_is_not_a_row(macro):
+    screen = np.zeros((1080, 1920, 3), np.uint8)
+    screen[400:440, 900:940] = (130, 120, 250)                     # pink-ish square, nothing around it
+    assert macro.read_hauntlet_hearts(screen) is None

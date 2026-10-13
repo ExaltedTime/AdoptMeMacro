@@ -141,6 +141,9 @@ MINIGAME_TEMPLATE_DIR = os.path.join(SCRIPT_DIR, "ref", "halloween")
 STRAY_WINDOW_DIR = os.path.join(SCRIPT_DIR, "ref", "popups")
 MINIGAME_OVERLAY_DIR = os.path.join(SCRIPT_DIR, "ref", "overlays")
 NEEDS_DIR = os.path.join(SCRIPT_DIR, "ref", "needs")      # the learned need icons - the one folder in ref/ the macro also writes to (see prompt_rename_need())
+HAUNTLET_DIGIT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet", "digits")   # 0.png ... 9.png: the digits of the ROOM panel, see read_hauntlet_room()
+HAUNTLET_ITEM_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet", "items")      # a folder per item (phone/, key/, ...) of pictures of its slot; see read_hauntlet_items()
+HAUNTLET_COUNT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet", "counts")    # x/, 1/, 2/: the glyphs of an item's "x2" badge
 DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
 # debug/ holds two subfolders - images/ for every png (the debug_*.png views, failures/, reports/) and logs/ for
 # every text and json file - plus the game config, which stays in debug/ itself so "Refresh debug" (which
@@ -190,7 +193,132 @@ CAPTURE_MOVE_INTERVAL = 0.03             # the mouse position is written at most
 CAPTURE_MAX_MINUTES = 15                 # a capture stops by itself after this long...
 CAPTURE_MIN_FREE_MB = 3000               # ...or when less than this much disk is free
 MAX_CAPTURES = 5                         # oldest captures are deleted beyond this many
+# Every minigame played is recorded the same way, automatically (MINIGAME_CAPTURE; not while a capture of the hotkey's is
+# running), into a folder of RUN_CAPTURES_DIR, the newest MAX_RUN_CAPTURES kept. A lossless frame is 1-3 MB, so the frames of a run are
+# kept within RUN_CAPTURE_MB (with the events) by thinning them out evenly (see InputCapture), a little under CAPTURE_ZIP_MB so
+# that a run is one zip.
+MINIGAME_CAPTURE = True
+RUN_CAPTURES_DIR = os.path.join(DEBUG_DIR, "minigame_captures")
+RUN_CAPTURE_MB = 24
+MAX_RUN_CAPTURES = 10
 CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into zips of at most this size (chat attachments are limited to 30 MB)
+
+# Hauntlet 2, read from the screen (see the HAUNTLET 2 READER section of main.py).
+# The ROOM panel's number: white digits on a dark panel, always in the same place, at most HAUNTLET_ROOM_MAX_DIGITS long.
+# Each digit is cut out, shrunk to HAUNTLET_DIGIT_SIZE and compared with the saved ones; the mean difference (0-255) of the
+# best must be under HAUNTLET_DIGIT_MAX_DIFF. The panel is flat UI, so a digit matches its saved picture exactly (0.0 on
+# every frame of a 256-frame run) and the two most alike saved digits are 43.7 apart: under half of that, the best
+# match can't be mistaken for another digit.
+HAUNTLET_ROOM_BOX = (1086, 84, 1170, 116)    # left, top, right, bottom
+HAUNTLET_DIGIT_WHITE_LEVEL = 200             # a pixel is part of a digit when all its channels are at least this
+HAUNTLET_DIGIT_MIN_AREA = 25                 # px: smaller white specks are not digits
+HAUNTLET_DIGIT_SIZE = (14, 20)
+HAUNTLET_DIGIT_MAX_DIFF = 20
+HAUNTLET_ROOM_MAX_DIGITS = 3
+
+# The item slots along the bottom of the Hauntlet 2 screen: round white-ringed icons, about HAUNTLET_SLOT_PITCH apart,
+# centred on the screen, up to four. They are found as circles within HAUNTLET_SLOT_BAND (top, bottom). A slot's picture is
+# the HAUNTLET_ITEM_CROP px square around its centre, matched by correlation (0-1) with the pictures of each saved item;
+# the best must reach HAUNTLET_ITEM_MATCH or the item is unknown (and saved as unknown_<n> to be named - see
+# read_hauntlet_items()). These names are not items and are left out of the list.
+HAUNTLET_SLOT_BAND = (930, 1080)
+HAUNTLET_SLOT_RADIUS = (44, 58)
+HAUNTLET_SLOT_MIN_DISTANCE = 80
+HAUNTLET_ITEM_CROP = 60
+HAUNTLET_ITEM_MATCH = 0.75
+HAUNTLET_NOT_ITEMS = {"backpack"}          # the lobby's backpack button sits where the first slot would
+# The "x2" badge on a slot: purple, at the slot's top left. The "x" and each digit are white pieces on it, cut out, shrunk
+# to HAUNTLET_COUNT_SIZE and compared with the saved glyphs (mean difference, 0-255, under HAUNTLET_COUNT_MAX_DIFF).
+HAUNTLET_BADGE_BOX = (-62, -60, 12, -18)    # left, top, right, bottom, relative to the slot's centre
+HAUNTLET_BADGE_WIDTH = (40, 70)              # px: the badge is a purple piece this wide and tall; a bigger or smaller
+HAUNTLET_BADGE_HEIGHT = (16, 30)             # one is background of the same colour, not the badge
+HAUNTLET_COUNT_MIN_HEIGHT = 6                # px: a flatter white piece is a bit of the slot's ring, not a glyph
+HAUNTLET_COUNT_SIZE = (10, 14)
+HAUNTLET_COUNT_MAX_DIFF = 22
+
+# The hearts above the player's head: a row of heart icons, pink with a black outline, or solid black once lost. Found by
+# their pink (HSV, two ranges because red wraps round 0): pieces of the right shape and size, none higher up the screen
+# than HAUNTLET_HEART_MIN_Y (the room panel); the row nearest the middle of the screen is the player's. The row is then
+# followed along its line, one HAUNTLET_HEART_PITCH x a heart's width at a time: a cell with a pink heart is red, one
+# that is nearly all pure black (every channel at most HAUNTLET_HEART_BLACK_LEVEL) is black, anything else ends the row.
+HAUNTLET_HEART_PINK = (((0, 70, 190), (12, 175, 255)), ((168, 70, 190), (180, 175, 255)))
+HAUNTLET_HEART_MIN_WIDTH = 15
+HAUNTLET_HEART_MIN_Y = 110
+HAUNTLET_HEART_MIN_FILL = 0.45             # a heart piece fills this much of its bounding box (a bar or a ring doesn't)
+HAUNTLET_HEART_ASPECT = (0.8, 1.25)        # width / height of a heart piece
+HAUNTLET_HEART_PITCH = 1.3
+HAUNTLET_HEART_BLACK_LEVEL = 6
+HAUNTLET_HEART_BLACK_FRACTION = 0.55
+HAUNTLET_HEART_MAX_EACH_SIDE = 4
+HAUNTLET_HEART_PINK_FRACTION = 0.35           # a cell this pink is a heart even where no heart-shaped piece was found
+HAUNTLET_HEART_MIN = 2                     # a row shorter than this isn't one (every row seen had 3 or 4 hearts, lost ones included)
+HAUNTLET_HEART_MAX = 5                     # a row longer than this isn't a row of hearts (4 were seen at most)
+
+# The doors of a Hauntlet 2 room: each has a TV above it, its screen a light-cyan number (206, 255, 255 - the glow
+# saturates the green and blue channels). A room is a row of three such numbers (the same height, evenly spaced);
+# the TV spacing is the picture's scale (the camera zooms in and out), so the boxes below are in px at a spacing of
+# HAUNTLET_DOOR_SPACING and scaled to the spacing seen. The fork rooms have no TVs, just two doorways with signs.
+# The timer (white digits, top left of the ROOM panel) is hidden in a room's first moments and while the player passes
+# through a door: 950-1190 white pixels when shown, 0 when not - and a frame without the timer may still show the
+# last room's doors, so a room is only looked at while the timer shows.
+HAUNTLET_TIMER_BOX = (730, 55, 865, 122)     # left, top, right, bottom
+HAUNTLET_TIMER_WHITE_LEVEL = 215
+HAUNTLET_TIMER_MIN_WHITE = 500
+HAUNTLET_TV_GLOW = ((150, 248, 248), (225, 255, 255))   # (low, high) red, green, blue of the number's light
+HAUNTLET_TV_AREA = (150, 600)                # px of one such number
+HAUNTLET_TV_MIN_Y = 150                      # nothing above this is a TV (the room panel's glow)
+HAUNTLET_TV_SPACING = (200, 500)             # px between neighbouring TVs
+HAUNTLET_TV_ROW_TOLERANCE = 15               # px: the TVs of a row are this level...
+HAUNTLET_TV_SPACING_TOLERANCE = 0.25         # ...and these spacings this close
+HAUNTLET_DOOR_SPACING = 360
+# What a door looks like, from the pixels below its TV, boxes (left, top, right, bottom) relative to the TV's number.
+# Told apart so far, from the 29 rooms of one captured run: a locked door (a red light above it, 40-99 pixels of it where
+# every other door has none), a "???" door (pale grey, mean brightness 180-203 where the others are at most 163), a
+# dark door (more than 40% of it near black, 44-74% where no other door has more than 37%), and of the rest a boarded
+# door from a plain one by its planks: the share of the door's pixels on a strong, near-horizontal edge (the planks'
+# edges; a plain door's edges are mostly the vertical frame and panel). It is 0.03-0.13 on plain doors (median 0.06) and
+# 0.11-0.24 on boarded ones (median 0.18); the threshold is the best one found on the doors of 25 rooms, 94% right on
+# rooms left out of the search, and wrong mostly on the third layer's spiked doors and on boarded doors half hidden by the player.
+HAUNTLET_LOCK_LIGHT_BOX = (-60, 20, 60, 70)
+HAUNTLET_LOCK_LIGHT_MIN = 25
+HAUNTLET_DOOR_BOX = (-45, 35, 45, 130)
+HAUNTLET_MYSTERY_BRIGHTNESS = 172
+HAUNTLET_DARK_LEVEL = 55
+HAUNTLET_DARK_FRACTION = 0.4
+HAUNTLET_PLANK_BOX = (-55, 35, 55, 140)
+HAUNTLET_PLANK_BLUR = 1.2                    # px: the picture's grain is smoothed out before looking for edges
+HAUNTLET_PLANK_EDGE = 20                     # Sobel strength (of the 0-255 grey picture) from which a pixel is on an edge
+HAUNTLET_PLANK_ANGLE = 35                    # degrees: an edge this close to horizontal is a plank's
+HAUNTLET_PLANK_FRACTION = 0.103
+
+# Playing Hauntlet 2: after the start wait the screen is read every HAUNTLET_LOOK_INTERVAL seconds. The room number
+# changes as the player passes through a door, while the last room's doors are still on screen (open, the camera
+# following the player), so a room is only looked at HAUNTLET_ROOM_SETTLE seconds after its number changed, with the
+# timer showing and the row of TVs still where it was on the look before (within HAUNTLET_TV_STABLE px: the camera
+# has stopped). Then a door is chosen and walked to - W held, with A or D held to bring the player in front of the
+# door: HAUNTLET_STRAFE_DURATION seconds per door spacing (the distance between neighbouring doors) of distance, measured
+# from the player's hearts to the door's TV, no strafe under HAUNTLET_STRAFE_MIN spacings and never more than
+# HAUNTLET_STRAFE_MAX (a human's runs, from the middle: left door 1.0-1.1 s, right 0.9-1.3 s) - until the room number
+# changes, at most HAUNTLET_WALK_MAX seconds (a human's room: W held 3-4.8 s). If the number still hasn't changed
+# HAUNTLET_ROOM_TIMEOUT seconds after, a door is chosen again.
+# A room whose number is a multiple of HAUNTLET_FORK_EVERY (10 and 20 were seen) is a fork: no TVs, two doorways. A
+# room without a row of TVs HAUNTLET_DOORS_TIMEOUT seconds after its number changed is walked as if it had three doors.
+HAUNTLET_LEFT_KEY = "a"
+HAUNTLET_RIGHT_KEY = "d"
+HAUNTLET_STRAFE_DURATION = 1.1
+HAUNTLET_STRAFE_MIN = 0.15
+HAUNTLET_STRAFE_MAX = 2.5
+HAUNTLET_WALK_MAX = 6.0
+HAUNTLET_LOOK_INTERVAL = 0.35
+HAUNTLET_ROOM_SETTLE = 2.0
+HAUNTLET_TV_STABLE = 4
+HAUNTLET_ROOM_TIMEOUT = 15.0
+HAUNTLET_FORK_EVERY = 10
+HAUNTLET_DOORS_TIMEOUT = 8.0
+HAUNTLET_ITEM_CHANCE = 0.35                  # the chance, at each choice of a door, that an item (picked at random) is used too
+HAUNTLET_ITEM_WAIT = 0.6                     # seconds after clicking an item
+HAUNTLET_KEY_ITEMS = ("key", "gold_key")  # items that open a locked door
+HAUNTLET_LEARN_LIMIT = 4                     # new item pictures saved in one play (unknown_<n> folders); more is a misreading
 
 # ============================================================================
 # SCREEN / INPUT SETUP

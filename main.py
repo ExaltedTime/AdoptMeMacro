@@ -2393,14 +2393,16 @@ def minigame_popup_checks() -> None:
     if not dismiss_stray_windows():
         detect_paycheck()
 
-def minigame_won(watch: MinigameWatch) -> bool:
-    """Run the popup checks if they're due, then look at a fresh screenshot:
-    True on the victory screen (detect_minigame_victory()); either way `watch`
-    is told what the screenshot shows."""
+def minigame_look(watch: MinigameWatch) -> Image:
+    """Run the popup checks if they're due, then take a fresh screenshot, which `watch` is told about."""
     minigame_popup_checks()
     img = grab_screen()
     watch.update(img)
-    return detect_minigame_victory(img)
+    return img
+
+def minigame_won(watch: MinigameWatch) -> bool:
+    """minigame_look(), then True if it shows the victory screen (detect_minigame_victory())."""
+    return detect_minigame_victory(minigame_look(watch))
 
 def minigame_wait(duration: float, watch: MinigameWatch) -> None:
     """wait_interruptible(), with the popup checks every
@@ -2414,21 +2416,149 @@ def minigame_wait(duration: float, watch: MinigameWatch) -> None:
         if watch.problem:
             return
 
+class HauntletRun:
+    """What play_hauntlet_2() knows about the room it is in: its number, when that changed, and the TVs of the last
+    look. look() says when the doors can be chosen from. See docs/ARCHITECTURE.md#playing-hauntlet-2."""
+
+    def __init__(self) -> None:
+        self.room: Optional[int] = None
+        self.since = 0.0                              # when the number changed
+        self.chosen_at: Optional[float] = None        # when a door was last chosen, in this room
+        self.rooms = 0                                # numbers seen
+        self.tvs: Optional[list[tuple[int, int]]] = None   # of the last look: None if the timer was hidden
+        self.empty_looks = 0                          # looks in a row at a room without TVs
+        self.learned: set[str] = set()                # unknown items seen (and saved) so far
+
+    @property
+    def fork(self) -> bool:
+        """Whether this room's number is one of the forks (HAUNTLET_FORK_EVERY)."""
+        return self.room is not None and self.room > 0 and self.room % cfg.HAUNTLET_FORK_EVERY == 0
+
+    def look(self, img: Image, now: float) -> Optional[list[HauntletDoor]]:
+        """Take in a screenshot. The doors to choose from - three, or a fork's two - if it is time to, else None."""
+        room = read_hauntlet_room(img)
+        if room is not None and room != self.room:
+            self.room, self.since, self.chosen_at, self.rooms = room, now, None, self.rooms + 1
+            self.tvs, self.empty_looks = None, 0
+            print(f"[debug] hauntlet 2: room {room}")
+        if self.room is None:
+            return None
+        age = now - self.since
+        before, self.tvs = self.tvs, (find_door_tvs(img) if hauntlet_timer_visible(img) else None)
+        if self.tvs is None or age < cfg.HAUNTLET_ROOM_SETTLE or (self.chosen_at is not None and now < self.chosen_at + cfg.HAUNTLET_ROOM_TIMEOUT):
+            self.empty_looks = 0
+            return None
+        if self.tvs:
+            self.empty_looks = 0
+            steady = before is not None and len(before) == len(self.tvs) and all(
+                abs(a - b) <= cfg.HAUNTLET_TV_STABLE for old, new in zip(before, self.tvs) for a, b in zip(old, new))
+            return find_hauntlet_doors(img) if steady or age >= cfg.HAUNTLET_DOORS_TIMEOUT else None
+        self.empty_looks += 1
+        if self.fork and self.empty_looks >= 2:
+            return [HauntletDoor(0, 0, None), HauntletDoor(0, 0, None)]       # two doorways, not located
+        if age >= cfg.HAUNTLET_DOORS_TIMEOUT:
+            return [HauntletDoor(0, 0, None) for _ in range(3)]
+        return None
+
+def choose_hauntlet_door(doors: list[HauntletDoor], hearts: Optional[HauntletHearts], items: list[HauntletItem]) -> int:
+    """The index in `doors` (left to right) of the door to go through. A random one so far - `hearts` and `items` are
+    here for the decision logic to come - but a locked door only when a key is held (or every door is locked)."""
+    has_key = any(item.name in cfg.HAUNTLET_KEY_ITEMS for item in items)
+    options = [i for i, door in enumerate(doors) if door.kind != "locked" or has_key]
+    return random.choice(options or list(range(len(doors))))
+
+def choose_hauntlet_item(items: list[HauntletItem], hearts: Optional[HauntletHearts]) -> Optional[HauntletItem]:
+    """The item to use now, or None. Random so far - with a chance of HAUNTLET_ITEM_CHANCE one of the `items` is used, any
+    of them - `hearts` is here for the decision logic to come."""
+    return random.choice(items) if items and random.random() < cfg.HAUNTLET_ITEM_CHANCE else None
+
+def hauntlet_strafe(img: Image, doors: list[HauntletDoor], index: int) -> tuple[Optional[str], float]:
+    """The key to strafe with, and for how long, to reach door `index` from where the player stands in `img`: the
+    distance to the door in door spacings (the TVs' spacing) times HAUNTLET_STRAFE_DURATION, or no strafe when that
+    is under HAUNTLET_STRAFE_MIN spacings. Where the player starts a room can depend on the door it came through, so
+    it is measured (the hearts above the head); not seen, it is taken to be in front of the middle door. A fork's two
+    doorways aren't located: the left key or the right one for one spacing."""
+    if len(doors) != 3:
+        return (cfg.HAUNTLET_LEFT_KEY if index == 0 else cfg.HAUNTLET_RIGHT_KEY), cfg.HAUNTLET_STRAFE_DURATION
+    spacing = (doors[2].x - doors[0].x) / 2
+    hearts = read_hauntlet_hearts(img)
+    distance = (doors[index].x - (hearts.center_x if hearts else doors[1].x)) / spacing
+    if abs(distance) < cfg.HAUNTLET_STRAFE_MIN:
+        return None, 0.0
+    return (cfg.HAUNTLET_RIGHT_KEY if distance > 0 else cfg.HAUNTLET_LEFT_KEY), min(abs(distance), cfg.HAUNTLET_STRAFE_MAX) * cfg.HAUNTLET_STRAFE_DURATION
+
+def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun) -> tuple[int, Optional[HauntletItem]]:
+    """Read the hearts and items off `img`, choose a door (choose_hauntlet_door()) and an item to use, if any
+    (choose_hauntlet_item()), and log the lot."""
+    hearts = read_hauntlet_hearts(img)
+    items = read_hauntlet_items(img, learn=len(run.learned) < cfg.HAUNTLET_LEARN_LIMIT)
+    run.learned |= {item.name for item in items if item.name.startswith("unknown_")}
+    index = choose_hauntlet_door(doors, hearts, items)
+    item = choose_hauntlet_item(items, hearts)
+    names = ("left", "right") if len(doors) == 2 else ("left", "middle", "right")
+    print(f"[debug] hauntlet 2: room {run.room}, "
+          + (f"{hearts.red} hearts ({hearts.black} lost)" if hearts else "hearts not seen")
+          + f", items: {', '.join(f'{item.name} x{item.count or 1}' for item in items) or 'none'}"
+          + f", doors: {', '.join(door.kind or '-' for door in doors)}, going {names[index]}"
+          + (f", using {item.name}" if item else ""))
+    return index, item
+
+def hauntlet_use_item(item: HauntletItem) -> None:
+    """Click `item`'s slot, then give the game HAUNTLET_ITEM_WAIT seconds to use it."""
+    hover_click(*item.pos)
+    wait_interruptible(cfg.HAUNTLET_ITEM_WAIT)
+
+def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, watch: MinigameWatch) -> bool:
+    """Walk to a door: hold forward, with `direction` (a strafe key, or None) held for the first `duration` seconds,
+    until the room number changes (at most HAUNTLET_WALK_MAX seconds). True if the victory screen showed."""
+    run.chosen_at = started = time.time()
+    pydirectinput.keyDown(cfg.HAUNTLET_2_FORWARD_KEY)
+    try:
+        if direction:
+            pydirectinput.keyDown(direction)
+            try:
+                wait_interruptible(duration)
+            finally:
+                pydirectinput.keyUp(direction)
+        while time.time() < started + cfg.HAUNTLET_WALK_MAX:
+            img = minigame_look(watch)
+            if detect_minigame_victory(img):
+                return True
+            room = read_hauntlet_room(img)
+            if (room is not None and room != run.room) or watch.problem:
+                break
+            wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
+    finally:
+        pydirectinput.keyUp(cfg.HAUNTLET_2_FORWARD_KEY)
+    return False
+
 def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
-    """Hauntlet 2: wait for it to start, hold forward until the victory screen shows or
-    the overlay says it's over. True if won before `deadline`. See docs/ARCHITECTURE.md#need-handlers.
+    """Hauntlet 2: wait for it to start, then room after room choose a door and walk to it (HauntletRun,
+    hauntlet_choose(), hauntlet_walk()) until the victory screen shows or the overlay says it's over. True if won
+    before `deadline`. See docs/ARCHITECTURE.md#playing-hauntlet-2.
     """
     print(f"[debug] hauntlet 2: waiting {cfg.MINIGAME_START_WAIT:g}s for it to start...")
     minigame_wait(cfg.MINIGAME_START_WAIT, watch)
     watch.start_wait_over()
-    pydirectinput.keyDown(cfg.HAUNTLET_2_FORWARD_KEY)
+    run = HauntletRun()
     try:
         while time.time() < deadline and not watch.problem:
-            wait_interruptible(cfg.MINIGAME_VICTORY_CHECK_INTERVAL)
-            if minigame_won(watch):
+            img = minigame_look(watch)
+            if detect_minigame_victory(img):
+                return True
+            doors = run.look(img, time.time())
+            if doors is None:
+                wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
+                continue
+            index, item = hauntlet_choose(img, doors, run)
+            if item:
+                hauntlet_use_item(item)
+            direction, duration = hauntlet_strafe(img, doors, index)
+            if hauntlet_walk(direction, duration, run, watch):
                 return True
     finally:
-        pydirectinput.keyUp(cfg.HAUNTLET_2_FORWARD_KEY)
+        if run.room is not None:
+            log_run_event(f"hauntlet 2: got as far as room {run.room}")
     return False
 
 def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
@@ -2487,10 +2617,14 @@ def play_minigame(name: str) -> bool:
     hover_click(*cfg.MINIGAME_POPUP_YES_POS)
     started = time.time()
     watch = MinigameWatch(name)
+    capture = start_run_capture(name)
+    outcome = "interrupted"
     try:
         won = MINIGAME_PLAYERS[name](started + cfg.MINIGAME_MAX_DURATION, watch)
+        outcome = "won" if won else (watch.problem or "did not reach the victory screen in time")
     finally:
         release_all_inputs()
+        finish_run_capture(capture, outcome)
     if won:
         log_run_event(f"minigame finished: {label} ({time.time() - started:.0f}s)")
         click_nice_until_gone()
@@ -2762,10 +2896,16 @@ class InputCapture:
     the start): key_down / key_up with the key, mouse_down / mouse_up with the button, move (rate limited), and a
     frame line for each screenshot. Mouse events carry the screen position (x, y) and the reference-space one
     (rx, ry). The capture hotkey itself is left out. It stops by itself after CAPTURE_MAX_MINUTES or when the disk
-    runs low (`stopped_because` says why). See docs/ARCHITECTURE.md#input-capture."""
+    runs low (`stopped_because` says why). With a `budget_mb` the capture is kept within that many MB however long it
+    runs (events included): when they pass it every other saved frame is deleted (the newest stays) and frames are then saved twice as
+    far apart, so what is left is spread evenly over the whole run. See docs/ARCHITECTURE.md#input-capture."""
 
-    def __init__(self, folder: str) -> None:
+    def __init__(self, folder: str, budget_mb: Optional[float] = None) -> None:
         self.folder = folder
+        self.budget_mb = budget_mb
+        self.dropped = 0
+        self._kept: list[tuple[str, int]] = []          # the frames on disk, oldest first, with their sizes
+        self._gap = cfg.CAPTURE_FRAME_INTERVAL if budget_mb else 0.0     # least seconds between two saved frames
         self.stop_event = threading.Event()
         self.shot_now = threading.Event()
         self.stopped_because: Optional[str] = None
@@ -2788,7 +2928,7 @@ class InputCapture:
         with open(os.path.join(self.folder, "info.json"), "w") as f:
             json.dump({"started": time.strftime("%Y-%m-%d %H:%M:%S"), "screen": list(pyautogui.size()),
                        "roblox_rect": [left, top, width, height], "reference": [cfg.REFERENCE_WIDTH, cfg.REFERENCE_HEIGHT],
-                       "frame_interval": cfg.CAPTURE_FRAME_INTERVAL}, f, indent=1)
+                       "frame_interval": cfg.CAPTURE_FRAME_INTERVAL, "budget_mb": self.budget_mb}, f, indent=1)
         self._file = open(os.path.join(self.folder, "events.jsonl"), "w", encoding="utf-8")
         self._threads = [threading.Thread(target=self._poll, daemon=True), threading.Thread(target=self._shots, daemon=True)]
         for thread in self._threads:
@@ -2805,12 +2945,14 @@ class InputCapture:
                 self._file = None
         seconds = time.time() - self.started
         size_mb = sum(os.path.getsize(os.path.join(self.folder, f)) for f in os.listdir(self.folder)) / (1024 * 1024)
-        summary = f"{self.frames} frames ({self.skipped} unchanged ones skipped), {self.events} events, {seconds:.0f}s, {size_mb:.0f} MB in {self.folder}"
+        summary = (f"{self.frames} frames ({self.skipped} unchanged ones skipped"
+                   + (f", {self.dropped} thinned out to stay within {self.budget_mb:g} MB" if self.dropped else "")
+                   + f"), {self.events} events, {seconds:.0f}s, {size_mb:.0f} MB in {self.folder}")
         try:
             with open(os.path.join(self.folder, "info.json")) as f:
                 info = json.load(f)
             info.update(stopped=time.strftime("%Y-%m-%d %H:%M:%S"), seconds=round(seconds, 1), frames=self.frames, frames_skipped=self.skipped,
-                        events=self.events, stopped_because=self.stopped_because or "hotkey")
+                        frames_dropped=self.dropped, events=self.events, stopped_because=self.stopped_because or "hotkey")
             with open(os.path.join(self.folder, "info.json"), "w") as f:
                 json.dump(info, f, indent=1)
         except (OSError, ValueError):
@@ -2876,13 +3018,16 @@ class InputCapture:
                 seconds = time.time() - self.started
                 screen = grab_screen()
                 small = cv2.resize(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY), (320, 180), interpolation=cv2.INTER_AREA)
-                if (clicked or last_small is None or seconds - last_saved >= cfg.CAPTURE_MAX_SKIP
+                if seconds - last_saved >= self._gap and (
+                        clicked or last_small is None or seconds - last_saved >= max(cfg.CAPTURE_MAX_SKIP, self._gap)
                         or np.count_nonzero(cv2.absdiff(small, last_small) > cfg.CAPTURE_CHANGE_LEVEL) / small.size >= cfg.CAPTURE_CHANGE_FRACTION):
                     name = f"frame_{self.frames + 1:06d}_{seconds:.3f}.png"
                     if cv2.imwrite(os.path.join(self.folder, name), screen, [cv2.IMWRITE_PNG_COMPRESSION, 1]):
                         self.frames += 1
                         self._emit("frame", file=name)
                         last_small, last_saved = small, seconds
+                        self._kept.append((name, os.path.getsize(os.path.join(self.folder, name))))
+                        self._keep_within_budget()
                 else:
                     self.skipped += 1
             except Exception as error:
@@ -2890,6 +3035,26 @@ class InputCapture:
             self.shot_now.wait(cfg.CAPTURE_FRAME_INTERVAL)
             if self.shot_now.is_set():
                 self.stop_event.wait(0.02)      # let the click land on screen before looking
+
+    def _keep_within_budget(self) -> None:
+        """Over the budget (the frames and the events together): delete every other saved frame, never the newest, and save
+        frames twice as far apart from now on."""
+        events = os.path.join(self.folder, "events.jsonl")
+        while self.budget_mb and len(self._kept) > 1 and (
+                sum(size for _, size in self._kept) + (os.path.getsize(events) if os.path.exists(events) else 0) > self.budget_mb * 1024 * 1024):
+            keep = [frame for i, frame in enumerate(self._kept) if i % 2 == 0 or i == len(self._kept) - 1]
+            if len(keep) == len(self._kept):            # two frames, and the second is the newest: the older one goes
+                keep = keep[1:]
+            for name, _ in self._kept:
+                if (name, _) not in keep:
+                    try:
+                        os.remove(os.path.join(self.folder, name))
+                    except OSError:
+                        pass
+                    self._emit("frame_dropped", file=name)
+                    self.dropped += 1
+            self._kept = keep
+            self._gap *= 2
 
     def _give_up(self, reason: str) -> None:
         self.stopped_because = reason
@@ -2935,6 +3100,45 @@ def zip_capture_in_background(folder: str) -> threading.Thread:
     thread.start()
     return thread
 
+def make_room_for_capture(directory: str, limit: int) -> None:
+    """Create `directory` and delete its oldest folders, so that one more makes `limit`."""
+    os.makedirs(directory, exist_ok=True)
+    folders = sorted((os.path.join(directory, f) for f in os.listdir(directory)), key=os.path.getmtime)
+    for old in folders[:max(0, len(folders) - (limit - 1))]:
+        shutil.rmtree(old, ignore_errors=True)
+
+def start_run_capture(label: str) -> Optional[InputCapture]:
+    """Start recording a minigame run (when MINIGAME_CAPTURE is on, and the hotkey's capture isn't running): a folder
+    in RUN_CAPTURES_DIR, its frames kept within RUN_CAPTURE_MB. None if there is no capture. A capture that can't be
+    started is only a message: the minigame is played all the same."""
+    if not cfg.MINIGAME_CAPTURE or (state.capture is not None and state.capture.running):
+        return None
+    try:
+        make_room_for_capture(cfg.RUN_CAPTURES_DIR, cfg.MAX_RUN_CAPTURES)
+        capture = InputCapture(os.path.join(cfg.RUN_CAPTURES_DIR, f"{label}_{time.strftime('%Y%m%d_%H%M%S')}"), budget_mb=cfg.RUN_CAPTURE_MB)
+        capture.start()
+    except Exception as error:
+        print(f"[!] Couldn't start recording the minigame: {error}")
+        return None
+    print(f"[debug] recording the minigame: {capture.folder}")
+    return capture
+
+def finish_run_capture(capture: Optional[InputCapture], outcome: str) -> None:
+    """Stop a run capture (if there is one), note how the run ended in its info.json, and zip it for sending."""
+    if capture is None:
+        return
+    try:
+        print(f"[debug] minigame recording stopped: {capture.stop()}")
+        path = os.path.join(capture.folder, "info.json")
+        with open(path) as f:
+            info = json.load(f)
+        info["outcome"] = outcome
+        with open(path, "w") as f:
+            json.dump(info, f, indent=1)
+        zip_capture_in_background(capture.folder)
+    except Exception as error:
+        print(f"[!] Couldn't finish recording the minigame: {error}")
+
 def toggle_input_capture() -> Optional[InputCapture]:
     """Start a capture (a fresh folder in CAPTURES_DIR, the oldest beyond MAX_CAPTURES deleted) or, if one is
     running, stop it - what the capture hotkey does. Returns the capture that is running now, or None."""
@@ -2946,15 +3150,299 @@ def toggle_input_capture() -> Optional[InputCapture]:
         zip_capture_in_background(current.folder)
         if was_running:
             return None            # (one that had stopped by itself is only tidied up here: this press starts a new one)
-    os.makedirs(cfg.CAPTURES_DIR, exist_ok=True)
-    folders = sorted((os.path.join(cfg.CAPTURES_DIR, f) for f in os.listdir(cfg.CAPTURES_DIR)), key=os.path.getmtime)
-    for old in folders[:max(0, len(folders) - (cfg.MAX_CAPTURES - 1))]:
-        shutil.rmtree(old, ignore_errors=True)
+    make_room_for_capture(cfg.CAPTURES_DIR, cfg.MAX_CAPTURES)
     capture = InputCapture(os.path.join(cfg.CAPTURES_DIR, "capture_" + time.strftime("%Y%m%d_%H%M%S")))
     capture.start()
     state.capture = capture
     print(f"[!] Capture started (press {cfg.CAPTURE_HOTKEY.upper()} again to stop): {capture.folder}")
     return capture
+
+# ============================================================================
+# HAUNTLET 2 READER
+# ============================================================================
+# What the Hauntlet 2 screen says, as plain values - no decisions and no input here. The room number first; see
+# docs/ARCHITECTURE.md#reading-hauntlet-2.
+
+def room_digit(mask: Image) -> Image:
+    """A digit's white pixels (`mask`, cropped to its bounding box), shrunk to HAUNTLET_DIGIT_SIZE, 0-255."""
+    return cv2.resize(mask * 255, cfg.HAUNTLET_DIGIT_SIZE, interpolation=cv2.INTER_AREA)
+
+@lru_cache(maxsize=None)
+def _digit_templates(directory: str, modified: float) -> dict[int, Image]:
+    found = {int(os.path.splitext(f)[0]): cv2.imread(os.path.join(directory, f), cv2.IMREAD_GRAYSCALE)
+             for f in os.listdir(directory) if f.endswith(".png") and os.path.splitext(f)[0].isdigit()}
+    return {digit: picture for digit, picture in found.items() if picture is not None}
+
+def digit_templates() -> dict[int, Image]:
+    """{digit: picture} for the saved room digits (HAUNTLET_DIGIT_DIR), re-read when the folder changes."""
+    directory = cfg.HAUNTLET_DIGIT_DIR
+    return _digit_templates(directory, os.path.getmtime(directory)) if os.path.isdir(directory) else {}
+
+def read_hauntlet_room(img: Image) -> Optional[int]:
+    """The room number on the ROOM panel of `img`, or None when it isn't readable (no panel - a transition, a
+    close-up of a door - or a digit that matches none of the saved ones)."""
+    left, top, right, bottom = cfg.HAUNTLET_ROOM_BOX
+    mask = (img[top:bottom, left:right].min(axis=2) >= cfg.HAUNTLET_DIGIT_WHITE_LEVEL).astype(np.uint8)
+    count, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    boxes = sorted((int(stats[i, 0]), int(stats[i, 1]), int(stats[i, 2]), int(stats[i, 3]))
+                   for i in range(1, count) if stats[i, cv2.CC_STAT_AREA] >= cfg.HAUNTLET_DIGIT_MIN_AREA)
+    templates = digit_templates()
+    if not 1 <= len(boxes) <= cfg.HAUNTLET_ROOM_MAX_DIGITS or not templates:
+        return None
+    number = 0
+    for x, y, w, h in boxes:
+        picture = room_digit(mask[y:y + h, x:x + w])
+        diffs = {digit: float(np.abs(picture.astype(int) - template.astype(int)).mean()) for digit, template in templates.items()}
+        digit = min(diffs, key=lambda d: diffs[d])
+        if diffs[digit] > cfg.HAUNTLET_DIGIT_MAX_DIFF:
+            return None
+        number = number * 10 + digit
+    return number
+
+@dataclass
+class HauntletItem:
+    """An item slot on the Hauntlet 2 screen: its `name` (a folder of HAUNTLET_ITEM_DIR, or unknown_<n>), the `count`
+    on its badge (None if the badge couldn't be read), and the slot's centre `pos`."""
+    name: str
+    count: Optional[int]
+    pos: Point
+
+def find_item_slots(img: Image) -> list[tuple[int, int, int]]:
+    """(x, y, radius) of every item slot along the bottom of `img`, left to right."""
+    top, bottom = cfg.HAUNTLET_SLOT_BAND
+    gray = cv2.medianBlur(cv2.cvtColor(img[top:bottom], cv2.COLOR_BGR2GRAY), 5)
+    circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, dp=1, minDist=cfg.HAUNTLET_SLOT_MIN_DISTANCE, param1=100, param2=30,
+                               minRadius=cfg.HAUNTLET_SLOT_RADIUS[0], maxRadius=cfg.HAUNTLET_SLOT_RADIUS[1])
+    return [] if circles is None else sorted((int(x), int(y) + top, int(r)) for x, y, r in circles[0])
+
+def _folder_stamp(directory: str) -> tuple[tuple[str, str, float], ...]:
+    """What is in a folder of folders and when each file changed - different when a file is added, changed, removed or
+    its folder renamed."""
+    return tuple(sorted((root, f, os.path.getmtime(os.path.join(root, f))) for root, _, files in os.walk(directory) for f in files))
+
+@lru_cache(maxsize=8)
+def _picture_folders(directory: str, stamp: tuple[tuple[str, str, float], ...], gray: bool) -> dict[str, list[Image]]:
+    found: dict[str, list[Image]] = {}
+    for name in sorted(os.listdir(directory)):
+        folder = os.path.join(directory, name)
+        if os.path.isdir(folder):
+            pictures = [cv2.imread(os.path.join(folder, f), cv2.IMREAD_GRAYSCALE if gray else cv2.IMREAD_COLOR)
+                        for f in sorted(os.listdir(folder)) if f.endswith(".png")]
+            found[name] = [p for p in pictures if p is not None]
+    return found
+
+def picture_folders(directory: str, gray: bool = True) -> dict[str, list[Image]]:
+    """{folder name: its pictures} for a folder of folders of .png files (the items, the badge glyphs), re-read when
+    anything in it changes; {} if it doesn't exist."""
+    return _picture_folders(directory, _folder_stamp(directory), gray) if os.path.isdir(directory) else {}
+
+def identify_item(crop: Image) -> tuple[Optional[str], float]:
+    """(name, score) of the saved item `crop` (the square around a slot's centre) matches best, name None if the best
+    score is under HAUNTLET_ITEM_MATCH. Compared as grey pictures: the slot's blue or dim teal background doesn't matter much."""
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    best_name, best = None, -1.0
+    for name, pictures in picture_folders(cfg.HAUNTLET_ITEM_DIR).items():
+        for picture in pictures:
+            if picture.shape == gray.shape:
+                score = float(cv2.matchTemplate(gray, picture, cv2.TM_CCOEFF_NORMED)[0][0])
+                if score > best:
+                    best_name, best = name, score
+    return (best_name if best >= cfg.HAUNTLET_ITEM_MATCH else None), best
+
+def learn_hauntlet_item(crop: Image) -> str:
+    """Save `crop` as a new item, unknown_<n>/1.png in HAUNTLET_ITEM_DIR, to be renamed (the folder) to what it is.
+    Returns the name."""
+    os.makedirs(cfg.HAUNTLET_ITEM_DIR, exist_ok=True)
+    taken = {int(n[len("unknown_"):]) for n in os.listdir(cfg.HAUNTLET_ITEM_DIR) if n.startswith("unknown_") and n[len("unknown_"):].isdigit()}
+    name = f"unknown_{max(taken, default=0) + 1}"
+    os.makedirs(os.path.join(cfg.HAUNTLET_ITEM_DIR, name))
+    cv2.imwrite(os.path.join(cfg.HAUNTLET_ITEM_DIR, name, "1.png"), crop if crop.ndim == 2 else cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY))
+    print(f"[!] New Hauntlet item saved as {name} in {cfg.HAUNTLET_ITEM_DIR} - rename the folder to what it is")
+    return name
+
+def read_item_count(img: Image, x: int, y: int) -> Optional[int]:
+    """The number on the "x2" badge of the slot centred at (x, y), or None if it can't be read (no badge, or a glyph
+    that matches none of the saved ones)."""
+    left, top, right, bottom = cfg.HAUNTLET_BADGE_BOX
+    region = img[max(0, y + top):y + bottom, max(0, x + left):x + right]
+    if region.size == 0:
+        return None
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    purple = cv2.morphologyEx(cv2.inRange(hsv, (125, 100, 120), (150, 255, 255)), cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(purple, connectivity=8)
+    if count < 2:
+        return None
+    shaped = [i for i in range(1, count) if cfg.HAUNTLET_BADGE_WIDTH[0] <= stats[i, cv2.CC_STAT_WIDTH] <= cfg.HAUNTLET_BADGE_WIDTH[1]
+              and cfg.HAUNTLET_BADGE_HEIGHT[0] <= stats[i, cv2.CC_STAT_HEIGHT] <= cfg.HAUNTLET_BADGE_HEIGHT[1]
+              and stats[i, cv2.CC_STAT_AREA] >= 300]
+    if not shaped:
+        return None
+    badge = max(shaped, key=lambda i: stats[i, cv2.CC_STAT_AREA])
+    bx, by, bw, bh, area = (int(v) for v in stats[badge])
+    white = ((region[by:by + bh, bx:bx + bw].min(axis=2) >= 225) & (labels[by:by + bh, bx:bx + bw] == badge)).astype(np.uint8)
+    pieces_count, _, piece_stats, _ = cv2.connectedComponentsWithStats(white, connectivity=8)
+    pieces = sorted((int(piece_stats[i, 0]), int(piece_stats[i, 1]), int(piece_stats[i, 2]), int(piece_stats[i, 3]))
+                    for i in range(1, pieces_count) if piece_stats[i, cv2.CC_STAT_AREA] >= 6 and piece_stats[i, cv2.CC_STAT_HEIGHT] >= cfg.HAUNTLET_COUNT_MIN_HEIGHT)
+    glyphs = picture_folders(cfg.HAUNTLET_COUNT_DIR)
+    if len(pieces) < 2 or "x" not in glyphs:
+        return None
+    text = ""
+    for px, py, pw, ph in pieces:
+        picture = cv2.resize(white[py:py + ph, px:px + pw] * 255, cfg.HAUNTLET_COUNT_SIZE, interpolation=cv2.INTER_AREA).astype(int)
+        diffs = {name: min(float(np.abs(picture - g.astype(int)).mean()) for g in pictures) for name, pictures in glyphs.items() if pictures}
+        name = min(diffs, key=lambda n: diffs[n])
+        if diffs[name] > cfg.HAUNTLET_COUNT_MAX_DIFF:
+            return None
+        text += name
+    return int(text[1:]) if text.startswith("x") and text[1:].isdigit() else None
+
+def read_hauntlet_items(img: Image, learn: bool = False) -> list[HauntletItem]:
+    """The items in the slots along the bottom of `img`, left to right: each one's name, count and position. An item
+    that matches none of the saved ones is named "unknown" - or, with `learn`, saved with learn_hauntlet_item() and
+    named after the folder it got. Names in HAUNTLET_NOT_ITEMS (the lobby's backpack button) are left out."""
+    items = []
+    for x, y, radius in find_item_slots(img):
+        half = cfg.HAUNTLET_ITEM_CROP // 2
+        crop = img[y - half:y + half, x - half:x + half]
+        if crop.shape[:2] != (cfg.HAUNTLET_ITEM_CROP, cfg.HAUNTLET_ITEM_CROP):
+            continue
+        name, _ = identify_item(crop)
+        if name is None:
+            name = learn_hauntlet_item(crop) if learn else "unknown"
+        if name not in cfg.HAUNTLET_NOT_ITEMS:
+            items.append(HauntletItem(name, read_item_count(img, x, y), (x, y)))
+    return items
+
+@dataclass
+class HauntletHearts:
+    """The player's hearts: how many are `red` (left) and `black` (lost), one heart's `width` in px, and the row's
+    top-left `pos`."""
+    red: int
+    black: int
+    width: int
+    pos: Point
+
+    @property
+    def center_x(self) -> float:
+        """The middle of the row, in px - above the player's head, so where the player stands."""
+        return self.pos[0] + ((self.red + self.black - 1) * cfg.HAUNTLET_HEART_PITCH + 1) * self.width / 2
+
+def pink_heart_pieces(img: Image) -> list[tuple[int, int, int, int]]:
+    """(x, y, w, h) of every heart-shaped pink piece of `img` (HAUNTLET_HEART_*), nothing above HAUNTLET_HEART_MIN_Y."""
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    mask = cv2.bitwise_or(cv2.inRange(hsv, *cfg.HAUNTLET_HEART_PINK[0]), cv2.inRange(hsv, *cfg.HAUNTLET_HEART_PINK[1]))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    count, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    pieces = []
+    for i in range(1, count):
+        x, y, w, h, area = (int(v) for v in stats[i])
+        if (y >= cfg.HAUNTLET_HEART_MIN_Y and w >= cfg.HAUNTLET_HEART_MIN_WIDTH and area >= 150
+                and cfg.HAUNTLET_HEART_ASPECT[0] <= w / h <= cfg.HAUNTLET_HEART_ASPECT[1] and area / (w * h) >= cfg.HAUNTLET_HEART_MIN_FILL):
+            pieces.append((x, y, w, h))
+    return pieces
+
+def read_hauntlet_hearts(img: Image) -> Optional[HauntletHearts]:
+    """The player's hearts in `img`, or None when there are none to see (a close-up of a door, a transition, the lobby,
+    or all of them lost - a row of nothing but black hearts has no pink one to find it by). One frame can be wrong, a
+    heart hidden or a stray pink thing taken for one: a caller that acts on it should see the same on a few frames."""
+    pieces = pink_heart_pieces(img)
+    if not pieces:
+        return None
+    ax, ay, aw, ah = min(pieces, key=lambda p: abs(p[0] + p[2] / 2 - cfg.REFERENCE_CENTER_X))
+    pitch = cfg.HAUNTLET_HEART_PITCH * aw
+    black = img.max(axis=2) <= cfg.HAUNTLET_HEART_BLACK_LEVEL
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    pink = cv2.bitwise_or(cv2.inRange(hsv, *cfg.HAUNTLET_HEART_PINK[0]), cv2.inRange(hsv, *cfg.HAUNTLET_HEART_PINK[1])) > 0
+
+    def kind(step: int) -> Optional[str]:
+        centre = ax + aw / 2 + step * pitch
+        if any(abs(px + pw / 2 - centre) <= pitch / 2 and abs(py - ay) <= 0.4 * ah for px, py, pw, ph in pieces):
+            return "red"
+        columns = slice(max(0, int(centre - aw / 2)), int(centre + aw / 2))
+        if pink[ay:ay + ah, columns].mean() >= cfg.HAUNTLET_HEART_PINK_FRACTION:       # a heart the piece search missed (two touching, or part hidden)
+            return "red"
+        cell = black[ay:ay + ah, columns]
+        return "black" if cell.size and cell.mean() >= cfg.HAUNTLET_HEART_BLACK_FRACTION else None
+
+    row = {0: "red"}
+    for direction in (1, -1):
+        for n in range(1, cfg.HAUNTLET_HEART_MAX_EACH_SIDE + 1):
+            found = kind(direction * n)
+            if found is None:
+                break
+            row[direction * n] = found
+    kinds = list(row.values())
+    if not cfg.HAUNTLET_HEART_MIN <= len(kinds) <= cfg.HAUNTLET_HEART_MAX:
+        return None                     # not a row of hearts: one pink thing alone, or something pink next to the row counted too
+    return HauntletHearts(kinds.count("red"), kinds.count("black"), aw, (int(ax + min(row) * pitch), ay))
+
+def hauntlet_timer_visible(img: Image) -> bool:
+    """Whether the room's timer is shown (HAUNTLET_TIMER_*): it is hidden in a room's first moments and while the
+    player passes through a door, when the screen still shows the last room."""
+    left, top, right, bottom = cfg.HAUNTLET_TIMER_BOX
+    white = img[top:bottom, left:right].min(axis=2) >= cfg.HAUNTLET_TIMER_WHITE_LEVEL
+    return int(np.count_nonzero(white)) >= cfg.HAUNTLET_TIMER_MIN_WHITE
+
+@dataclass
+class HauntletDoor:
+    """A door of a Hauntlet 2 room: where its TV's number is on screen (`x`, `y`) and its `kind` - "locked", "mystery"
+    (the "???" door), "dark", "boarded" or "plain"; None for a door that couldn't be looked at (or a fork's doorway,
+    which isn't looked for)."""
+    x: int
+    y: int
+    kind: Optional[str]
+
+def find_door_tvs(img: Image) -> list[tuple[int, int]]:
+    """The centre of every TV number (HAUNTLET_TV_*) in `img`, left to right: the three above a room's doors, in
+    the row they make - [] when there isn't one (a fork's hall, a close-up, a transition)."""
+    low, high = cfg.HAUNTLET_TV_GLOW
+    mask = cv2.inRange(img, (low[2], low[1], low[0]), (high[2], high[1], high[0]))   # BGR
+    mask[:cfg.HAUNTLET_TV_MIN_Y] = 0
+    count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    found = sorted((float(centres[i][0]), float(centres[i][1])) for i in range(1, count)
+                   if cfg.HAUNTLET_TV_AREA[0] <= stats[i, cv2.CC_STAT_AREA] <= cfg.HAUNTLET_TV_AREA[1])
+    for i in range(len(found) - 2):
+        first, middle, last = found[i:i + 3]
+        gaps = (middle[0] - first[0], last[0] - middle[0])
+        if (abs(first[1] - middle[1]) <= cfg.HAUNTLET_TV_ROW_TOLERANCE and abs(middle[1] - last[1]) <= cfg.HAUNTLET_TV_ROW_TOLERANCE
+                and all(cfg.HAUNTLET_TV_SPACING[0] <= gap <= cfg.HAUNTLET_TV_SPACING[1] for gap in gaps)
+                and abs(gaps[0] - gaps[1]) <= cfg.HAUNTLET_TV_SPACING_TOLERANCE * max(gaps)):
+            return [(int(x), int(y)) for x, y in (first, middle, last)]
+    return []
+
+def hauntlet_door_kind(img: Image, x: int, y: int, scale: float) -> Optional[str]:
+    """What kind of door hangs below the TV number at (x, y), from its pixels (see HAUNTLET_LOCK_LIGHT_BOX); `scale`
+    is the picture's size against the one the boxes were measured at. None if the door is off the screen."""
+    def region(box: tuple[int, int, int, int]) -> Image:
+        left, top, right, bottom = box
+        return img[max(0, int(y + top * scale)):int(y + bottom * scale), max(0, int(x + left * scale)):int(x + right * scale)]
+    light = region(cfg.HAUNTLET_LOCK_LIGHT_BOX).astype(int)
+    if light.size and np.count_nonzero((light[..., 2] > 170) & (light[..., 1] < 90) & (light[..., 0] < 90)) >= cfg.HAUNTLET_LOCK_LIGHT_MIN:
+        return "locked"
+    door = region(cfg.HAUNTLET_DOOR_BOX)
+    if door.size == 0:
+        return None
+    brightness = door.mean(axis=2)
+    if np.count_nonzero(brightness <= cfg.HAUNTLET_DARK_LEVEL) >= cfg.HAUNTLET_DARK_FRACTION * brightness.size:
+        return "dark"
+    if brightness.mean() >= cfg.HAUNTLET_MYSTERY_BRIGHTNESS:
+        return "mystery"
+    planks = region(cfg.HAUNTLET_PLANK_BOX)
+    if min(planks.shape[:2]) < 3:
+        return None
+    grey = cv2.GaussianBlur(cv2.cvtColor(planks, cv2.COLOR_BGR2GRAY).astype(np.float32), (0, 0), cfg.HAUNTLET_PLANK_BLUR)
+    dx, dy = cv2.Sobel(grey, cv2.CV_32F, 1, 0), cv2.Sobel(grey, cv2.CV_32F, 0, 1)
+    angle = np.degrees(np.arctan2(dy, dx)) % 180                # an edge's direction is square to its gradient: 90 is a horizontal edge
+    on_plank_edge = (np.hypot(dx, dy) > cfg.HAUNTLET_PLANK_EDGE) & (np.abs(angle - 90) < cfg.HAUNTLET_PLANK_ANGLE)
+    return "boarded" if np.count_nonzero(on_plank_edge) >= cfg.HAUNTLET_PLANK_FRACTION * on_plank_edge.size else "plain"
+
+def find_hauntlet_doors(img: Image) -> list[HauntletDoor]:
+    """The three doors of the room in `img`, left to right, with their kinds - [] if there is no row of TVs."""
+    tvs = find_door_tvs(img)
+    if not tvs:
+        return []
+    scale = (tvs[2][0] - tvs[0][0]) / 2 / cfg.HAUNTLET_DOOR_SPACING
+    return [HauntletDoor(x, y, hauntlet_door_kind(img, x, y, scale)) for x, y in tvs]
 
 # ============================================================================
 # WORKFLOWS

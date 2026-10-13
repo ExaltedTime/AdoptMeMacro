@@ -2769,10 +2769,15 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
     hauntlet_choose(), hauntlet_walk()) until the victory screen shows or the overlay says it's over. True if won
     before `deadline`. See docs/ARCHITECTURE.md#playing-hauntlet-2.
     """
-    print(f"[debug] Hauntlet 2: waiting {cfg.MINIGAME_START_WAIT:g}s for it to start...")
-    minigame_wait(cfg.MINIGAME_START_WAIT, watch)
+    print(f"[debug] Hauntlet 2: waiting for it to start (at most {cfg.MINIGAME_START_WAIT:g}s)...")
+    waited_until = time.time() + cfg.MINIGAME_START_WAIT
+    while time.time() < waited_until and watch.last_seen is None:       # its overlay (the room panel) shows when the game has begun - the lobby's countdown varies
+        minigame_wait(cfg.HAUNTLET_START_LOOK_INTERVAL, watch)
     watch.start_wait_over()
     zoom_out()
+    if cfg.HAUNTLET_START_FORWARD > 0:
+        wait_interruptible(cfg.HAUNTLET_START_DELAY)                   # the doors of the entrance hall open after a moment...
+        hold_key(cfg.HAUNTLET_2_FORWARD_KEY, cfg.HAUNTLET_START_FORWARD)    # ...and the way out is a step or two ahead
     run = HauntletRun()
     try:
         while time.time() < deadline and not watch.problem:

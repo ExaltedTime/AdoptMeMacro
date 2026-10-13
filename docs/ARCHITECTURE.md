@@ -675,7 +675,7 @@ losing it for `MINIGAME_OVERLAY_LOST_TIMEOUT` means the minigame was left
 seeing it within `MINIGAME_OVERLAY_START_GRACE` of the start wait means it
 never started. Either is a logged failure with that reason, instead of waiting
 out `MINIGAME_MAX_DURATION`.
-- `play_hauntlet_2()` waits `MINIGAME_START_WAIT`, then goes through the rooms - reads the screen, picks a door
+- `play_hauntlet_2()` waits until the game's overlay shows (at most `MINIGAME_START_WAIT`: the lobby's countdown varies, and a fixed wait of 50 s let the first room's timer run out in one run, the macro still waiting), then goes through the rooms - reads the screen, picks a door
   and walks to it, room after room - until victory or until the overlay says it's over. See
   [Playing Hauntlet 2](#playing-hauntlet-2).
 - `play_ghost_gallery()` waits until the game's overlay shows (at most `MINIGAME_START_WAIT`), then finds the ghosts on screen, aims the
@@ -1234,8 +1234,8 @@ fewer black pixels than the rule wants (4 of 10 read as boarded or plain), and a
 
 ### Playing Hauntlet 2
 
-`play_hauntlet_2()` (after `MINIGAME_START_WAIT`, and a `zoom_out()` - `KEY_ZOOM_OUT` held `MINIGAME_ZOOM_OUT_DURATION` seconds: with the camera close the TVs are cut off by the top of the
-screen and the doors can't be found; again before each walk into a room whose doors weren't found) takes a screenshot every `HAUNTLET_LOOK_INTERVAL` and hands it to a
+`play_hauntlet_2()` (once the overlay has shown - `MINIGAME_START_WAIT` at most - and a `zoom_out()` - `KEY_ZOOM_OUT` held `MINIGAME_ZOOM_OUT_DURATION` seconds: with the camera close the TVs are cut off by the top of the
+screen and the doors can't be found; again before each walk into a room whose doors weren't found; then, after `HAUNTLET_START_DELAY` seconds for the entrance hall's doors to open, a first step forward of `HAUNTLET_START_FORWARD`, none if that is 0) takes a screenshot every `HAUNTLET_LOOK_INTERVAL` and hands it to a
 `HauntletRun`, which keeps the room number and when it changed (`read_hauntlet_room()`) and says through `look()` when it is time
 to choose, returning the doors to choose from. The number changes as the player passes through a door, while the last
 room's doors are still on screen (open, the camera following the player), so the doors are only trusted when
@@ -1386,7 +1386,7 @@ exact values and rationale):
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
 | Hauntlet 2 reader | `HAUNTLET_ROOM_BOX`, `HAUNTLET_DIGIT_*`, `HAUNTLET_ROOM_MAX_DIGITS`, `HAUNTLET_SLOT_*`, `HAUNTLET_ITEM_*`, `HAUNTLET_BADGE_*`, `HAUNTLET_COUNT_*`, `HAUNTLET_NOT_ITEMS`, `HAUNTLET_HEART_*`, `HAUNTLET_*_DIR` |
 | Ghost Gallery play | `GHOST_COLOR`, `GHOST_CLOSE`, `GHOST_MIN_AREA`, `GHOST_IGNORE_BOXES`, `GHOST_CHARACTER`, `GHOST_STICK`, `GHOST_BOSS_BAR_*`, `GHOST_BOSS_FILL*`, `GHOST_LOOK_INTERVAL`, `GHOST_START_LOOK_INTERVAL`, `GHOST_FURNITURE_*`, `GHOST_CAMERA_*`, `GHOST_START_TILT`, `GHOST_MOVE_*`, `GHOST_START_FORWARD`, `GHOST_TOWARD_MARGIN`, `GHOST_BOSS_TURN_DRAG`, `GHOST_OUTLINE_*`, `GHOST_JUMP_*`, `KEY_ZOOM_OUT`, `MINIGAME_ZOOM_OUT_DURATION` |
-| Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_SHADOW_*`, `HAUNTLET_CIRCLE_*`, `HAUNTLET_IN_CIRCLE`, `HAUNTLET_LOCK_WAIT`, `HAUNTLET_STILL_*`, `HAUNTLET_UNSTICK_*`, `HAUNTLET_DARK_*`, `HAUNTLET_PLANK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_*`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_ITEM_*`, `HAUNTLET_LOW_HEARTS`, `HAUNTLET_PHONE_CHANCE`, `HAUNTLET_ARROW_*`, `HAUNTLET_LEARN_LIMIT` |
+| Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_SHADOW_*`, `HAUNTLET_CIRCLE_*`, `HAUNTLET_IN_CIRCLE`, `HAUNTLET_LOCK_WAIT`, `HAUNTLET_STILL_*`, `HAUNTLET_UNSTICK_*`, `HAUNTLET_START_*`, `HAUNTLET_DARK_*`, `HAUNTLET_PLANK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_*`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_ITEM_*`, `HAUNTLET_LOW_HEARTS`, `HAUNTLET_PHONE_CHANCE`, `HAUNTLET_ARROW_*`, `HAUNTLET_LEARN_LIMIT` |
 | Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `MINIGAME_CAPTURE`, `RUN_CAPTURES_DIR`, `RUN_CAPTURE_ZIPS`, `MAX_RUN_CAPTURES`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |

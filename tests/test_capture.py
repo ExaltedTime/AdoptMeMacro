@@ -304,13 +304,13 @@ def test_a_capture_with_a_budget_thins_its_frames_out_evenly_and_keeps_the_first
     monkeypatch.setattr(macro, "grab_screen", lambda: rng.integers(0, 256, (90, 160, 3), dtype=np.uint8))   # always different, never compressible
     monkeypatch.setattr(macro.cfg, "CAPTURE_FRAME_INTERVAL", 0.01)
     folder = capture["folder"]
-    budget_mb = 0.25                                                          # about six frames
-    recorder = macro.InputCapture(folder, budget_mb=budget_mb)
+    monkeypatch.setattr(macro.cfg, "CAPTURE_ZIP_MB", 0.15)                  # about three frames to a zip
+    recorder = macro.InputCapture(folder, max_zips=2)
     recorder.start()
     assert wait_for(lambda: recorder.frames >= 12 and recorder.dropped >= 3, seconds=20)
     recorder.stop()
     on_disk = sorted(f for f in os.listdir(folder) if f.endswith(".png"))
-    assert sum(os.path.getsize(os.path.join(folder, f)) for f in on_disk) <= budget_mb * 1024 * 1024
+    assert len(macro.zip_capture(folder)) <= 2                                # what is left fits the zips it was given
     assert on_disk[0].startswith("frame_000001_")                              # the start of the run is still there
     assert on_disk[-1].startswith(f"frame_{recorder.frames:06d}_")             # and the newest frame
     events = events_of(folder)
@@ -318,14 +318,15 @@ def test_a_capture_with_a_budget_thins_its_frames_out_evenly_and_keeps_the_first
     assert len(dropped) == recorder.dropped and dropped.isdisjoint(on_disk)
     assert {e["file"] for e in events if e["type"] == "frame"} == set(on_disk) | dropped
     info = json.load(open(os.path.join(folder, "info.json")))
-    assert info["frames_dropped"] == recorder.dropped and info["budget_mb"] == budget_mb
+    assert info["frames_dropped"] == recorder.dropped and info["max_zips"] == 2
 
 
 def test_frames_are_spread_over_the_run_not_all_at_its_start_or_end(macro, capture, monkeypatch):
     rng = np.random.default_rng(2)
     monkeypatch.setattr(macro, "grab_screen", lambda: rng.integers(0, 256, (90, 160, 3), dtype=np.uint8))
     monkeypatch.setattr(macro.cfg, "CAPTURE_FRAME_INTERVAL", 0.01)
-    recorder = macro.InputCapture(capture["folder"], budget_mb=0.25)
+    monkeypatch.setattr(macro.cfg, "CAPTURE_ZIP_MB", 0.15)
+    recorder = macro.InputCapture(capture["folder"], max_zips=2)
     recorder.start()
     assert wait_for(lambda: recorder.frames >= 12 and recorder.dropped >= 3, seconds=20)
     recorder.stop()
@@ -355,12 +356,13 @@ def run_folder(macro, capture, monkeypatch, tmp_path):
 
 def test_a_minigame_run_is_recorded_with_a_budget_and_finished_with_its_outcome_and_a_zip(macro, run_folder):
     recorder = macro.start_run_capture("hauntlet_2")
-    assert recorder is not None and recorder.budget_mb == macro.cfg.RUN_CAPTURE_MB and recorder.running
+    assert recorder is not None and recorder.max_zips == macro.cfg.RUN_CAPTURE_ZIPS and recorder.running
     assert os.path.dirname(recorder.folder) == macro.cfg.RUN_CAPTURES_DIR and os.path.basename(recorder.folder).startswith("hauntlet_2_")
     assert wait_for(lambda: recorder.frames >= 1)
     macro.finish_run_capture(recorder, "won")
     assert not recorder.running
-    assert json.load(open(os.path.join(recorder.folder, "info.json")))["outcome"] == "won"
+    info = json.load(open(os.path.join(recorder.folder, "info.json")))
+    assert info["outcome"] == "won" and info["stopped_because"] == "the minigame ended"
     assert wait_for(lambda: os.path.isdir(os.path.join(recorder.folder, "zips")) and os.listdir(os.path.join(recorder.folder, "zips")))
 
 
@@ -396,9 +398,18 @@ def test_a_recording_that_cannot_start_does_not_stop_the_minigame(macro, run_fol
     assert "Couldn't start recording" in capsys.readouterr().out
 
 
-def test_the_default_run_capture_folder_is_in_debug_and_the_budget_leaves_room_for_the_zip_limit(macro):
+def test_the_default_run_capture_folder_is_in_debug(macro):
     assert os.path.realpath(macro.cfg.RUN_CAPTURES_DIR) == os.path.realpath(os.path.join(macro.cfg.DEBUG_DIR, "minigame_captures"))
-    assert macro.cfg.RUN_CAPTURE_MB <= macro.cfg.CAPTURE_ZIP_MB                # a run fits one zip
+
+
+def test_the_zip_plan_keeps_frames_whole_in_order_and_counts_the_events_in_the_first_zip(macro, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "CAPTURE_ZIP_MB", 1.0)
+    mb = 1024 * 1024
+    plan = macro.plan_zip_parts([int(0.4 * mb)] * 7, head=int(0.3 * mb))
+    assert [p for part in plan for p in part] == list(range(7))             # every frame once, in order
+    assert plan == [[0], [1, 2], [3, 4], [5, 6]]                            # 0.3 + 0.4 in the first (a second frame would pass 1.0), 0.8 in each next
+    assert macro.plan_zip_parts([int(1.5 * mb)] * 2) == [[0], [1]]          # a frame over the limit still gets a zip of its own
+    assert macro.plan_zip_parts([]) == [[]]
 
 
 @pytest.mark.parametrize("result, outcome", [(True, "won"), (False, "did not reach the victory screen in time"), ("raises", "interrupted")])
@@ -423,3 +434,24 @@ def test_play_minigame_records_the_run_and_says_how_it_ended(macro, monkeypatch,
     else:
         assert macro.play_minigame("ghost_gallery") is result
     assert started == ["ghost_gallery"] and finished == [("the capture", outcome)]
+
+
+def test_stopping_checks_the_zips_once_more_because_the_events_grew_after_the_last_frame(macro, tmp_path, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "CAPTURE_ZIP_MB", 0.05)                        # ~52 KB
+    folder = str(tmp_path / "capture_z")
+    os.makedirs(folder)
+    recorder = macro.InputCapture(folder, max_zips=1)
+    for n in range(1, 6):                                                          # five 8 KB frames: with 1 KB of events they fit one zip
+        name = f"frame_{n:06d}_{n}.000.png"
+        open(os.path.join(folder, name), "wb").write(b"x" * 8000)
+        recorder._kept.append((name, 8000))
+    with open(os.path.join(folder, "events.jsonl"), "w") as f:
+        f.write("x" * 1000)
+    recorder._keep_within_budget()
+    assert recorder.dropped == 0
+    with open(os.path.join(folder, "events.jsonl"), "a") as f:                     # the events go on after the last frame was saved
+        f.write("x" * 30000)
+    recorder.stop()
+    kept = sorted(f for f in os.listdir(folder) if f.endswith(".png"))
+    assert recorder.dropped > 0 and kept[0].startswith("frame_000001_") and kept[-1].startswith("frame_000005_")
+    assert len(macro.zip_capture(folder)) == 1

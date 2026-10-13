@@ -141,9 +141,9 @@ MINIGAME_TEMPLATE_DIR = os.path.join(SCRIPT_DIR, "ref", "halloween")
 STRAY_WINDOW_DIR = os.path.join(SCRIPT_DIR, "ref", "popups")
 MINIGAME_OVERLAY_DIR = os.path.join(SCRIPT_DIR, "ref", "overlays")
 NEEDS_DIR = os.path.join(SCRIPT_DIR, "ref", "needs")      # the learned need icons - the one folder in ref/ the macro also writes to (see prompt_rename_need())
-HAUNTLET_DIGIT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet", "digits")   # 0.png ... 9.png: the digits of the ROOM panel, see read_hauntlet_room()
-HAUNTLET_ITEM_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet", "items")      # a folder per item (phone/, key/, ...) of pictures of its slot; see read_hauntlet_items()
-HAUNTLET_COUNT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet", "counts")    # x/, 1/, 2/: the glyphs of an item's "x2" badge
+HAUNTLET_DIGIT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "digits")   # 0.png ... 9.png: the digits of the ROOM panel, see read_hauntlet_room()
+HAUNTLET_ITEM_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "items")      # a folder per item (phone/, key/, ...) of pictures of its slot; see read_hauntlet_items()
+HAUNTLET_COUNT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "counts")    # x/, 1/, 2/: the glyphs of an item's "x2" badge
 DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
 # debug/ holds two subfolders - images/ for every png (the debug_*.png views, failures/, reports/) and logs/ for
 # every text and json file - plus the game config, which stays in debug/ itself so "Refresh debug" (which
@@ -194,13 +194,12 @@ CAPTURE_MAX_MINUTES = 15                 # a capture stops by itself after this 
 CAPTURE_MIN_FREE_MB = 3000               # ...or when less than this much disk is free
 MAX_CAPTURES = 5                         # oldest captures are deleted beyond this many
 # Every minigame played is recorded the same way, automatically (MINIGAME_CAPTURE; not while a capture of the hotkey's is
-# running), into a folder of RUN_CAPTURES_DIR, the newest MAX_RUN_CAPTURES kept. A lossless frame is 1-3 MB, so the frames of a run are
-# kept within RUN_CAPTURE_MB (with the events) by thinning them out evenly (see InputCapture), a little under CAPTURE_ZIP_MB so
-# that a run is one zip.
+# running), into a folder of RUN_CAPTURES_DIR, the newest MAX_RUN_CAPTURES kept. A lossless frame is 1-3 MB, so a run
+# is kept to RUN_CAPTURE_ZIPS zips of CAPTURE_ZIP_MB by thinning its frames out evenly (see InputCapture).
 MINIGAME_CAPTURE = True
 RUN_CAPTURES_DIR = os.path.join(DEBUG_DIR, "minigame_captures")
-RUN_CAPTURE_MB = 24
-MAX_RUN_CAPTURES = 10
+RUN_CAPTURE_ZIPS = 5
+MAX_RUN_CAPTURES = 5
 CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into zips of at most this size (chat attachments are limited to 30 MB)
 
 # Hauntlet 2, read from the screen (see the HAUNTLET 2 READER section of main.py).
@@ -302,7 +301,8 @@ HAUNTLET_PLANK_FRACTION = 0.103
 # changes, at most HAUNTLET_WALK_MAX seconds (a human's room: W held 3-4.8 s). If the number still hasn't changed
 # HAUNTLET_ROOM_TIMEOUT seconds after, a door is chosen again.
 # A room whose number is a multiple of HAUNTLET_FORK_EVERY (10 and 20 were seen) is a fork: no TVs, two doorways. A
-# room without a row of TVs HAUNTLET_DOORS_TIMEOUT seconds after its number changed is walked as if it had three doors.
+# room without a row of TVs is a single doorway ahead - at once for room 1, the entrance hall (its doorway leads into a room
+# with three doors that is still room 1), else HAUNTLET_DOORS_TIMEOUT seconds after its number changed - and is walked straight on.
 HAUNTLET_LEFT_KEY = "a"
 HAUNTLET_RIGHT_KEY = "d"
 HAUNTLET_STRAFE_DURATION = 1.1

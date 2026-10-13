@@ -328,6 +328,10 @@ class State:
     # been logged for the current stretch with no need resolved.
     last_minigame_popup_check: float = 0.0
     quiet_reported: int = 0
+    # The need whose end wait (wait_until_need_gone(), walk_alternating() with a need) is running, and when a minigame popup
+    # that is being held off for it was first seen (see minigame_popup()).
+    end_wait_need: Optional[str] = None
+    popup_held_since: Optional[float] = None
 
     def snapshot(self) -> dict[str, Any]:
         """The state as a JSON-friendly dict (the GUI object left out), for
@@ -858,6 +862,15 @@ def _need_cleared(need_name: str) -> bool:
             wait_interruptible(cfg.NEED_GONE_FLICKER_RECHECK_DELAY)
     return True
 
+@contextlib.contextmanager
+def end_wait(need_name: Optional[str]) -> Iterator[None]:
+    """Mark `need_name`'s end wait as running (state.end_wait_need), so that a minigame popup waits for it - see minigame_popup()."""
+    state.end_wait_need = need_name
+    try:
+        yield
+    finally:
+        state.end_wait_need = None
+
 def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAIT, poll_interval: float = cfg.NEED_GONE_POLL_INTERVAL) -> None:
     """Wait up to `max_wait` for `need_name` to clear, polling every `poll_interval`. A
     timeout is logged as a failure and sets state.need_cleared False.
@@ -866,17 +879,18 @@ def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAI
     print(f"[debug] waiting up to {max_wait}s for {need_name} to clear...")
     state.need_cleared = True
     deadline = time.time() + max_wait
-    while True:
-        remaining = deadline - time.time()
-        if remaining <= 0:
-            print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
-            log_failure(f"{need_name} still showing after {max_wait}s")
-            state.need_cleared = False
-            return
-        wait_interruptible(min(poll_interval, remaining))
-        if _need_cleared(need_name):
-            print(f"[debug] {need_name} cleared")
-            return
+    with end_wait(need_name):
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
+                log_failure(f"{need_name} still showing after {max_wait}s")
+                state.need_cleared = False
+                return
+            wait_interruptible(min(poll_interval, remaining))
+            if _need_cleared(need_name):
+                print(f"[debug] {need_name} cleared")
+                return
 
 def _watch_need_gone(need_name: str, cleared_event: threading.Event, stop_event: threading.Event, answers: Optional[list] = None) -> None:
     """Watcher-thread body for walk_alternating(): sets `cleared_event` when the need is
@@ -1223,6 +1237,7 @@ def walk_alternating(direction_pair: tuple[str, str], total_duration: float, ste
         direction_idx = 0
         elapsed = 0.0
         start_time = time.time()
+        state.end_wait_need = need_name
 
         while elapsed < total_duration and not cleared_event.is_set():
             direction = direction_pair[direction_idx % 2]
@@ -1233,6 +1248,7 @@ def walk_alternating(direction_pair: tuple[str, str], total_duration: float, ste
             direction_idx += 1
             elapsed = time.time() - start_time
     finally:
+        state.end_wait_need = None
         stop_event.set()
         if watcher is not None:
             watcher.join(timeout=cfg.NEED_WATCH_JOIN_TIMEOUT)
@@ -3066,13 +3082,21 @@ def close_minigame_win_screen(abandon: bool = True) -> bool:
 
 def minigame_popup(play: bool = True) -> Optional[str]:
     """Halloween only: play a popup's minigame if it is switched on, else dismiss it.
-    Returns "played", "dismissed" or None. See docs/ARCHITECTURE.md#need-handlers.
+    Returns "played", "dismissed", "waiting" (a playable popup is held off while a need is in its end wait, at most MINIGAME_POPUP_END_WAIT
+    seconds) or None. See docs/ARCHITECTURE.md#need-handlers.
     """
     img = grab_screen()
     if not detect_minigame_popup(img):
+        state.popup_held_since = None
         return None
     name = identify_minigame(img)
     if name is not None and load_game_config().get(f"{name}_enabled", False):
+        if play and state.end_wait_need is not None:
+            # A need is in its end wait: give it the time to clear (and count as resolved) before the minigame abandons it.
+            state.popup_held_since = state.popup_held_since or time.time()
+            if time.time() - state.popup_held_since < cfg.MINIGAME_POPUP_END_WAIT:
+                return "waiting"
+        state.popup_held_since = None
         if play:
             print(f"[debug] minigame popup detected: playing {name}")
             play_minigame(name)
@@ -3105,6 +3129,8 @@ def unscrew(in_task: bool = False, play_minigames: bool = True) -> Optional[str]
         if play_minigames:
             return "played"    # back in the world somewhere unknown: the task is abandoned like after a minigame
     played = minigame_popup(play=play_minigames) if cfg.HALLOWEEN else None
+    if played == "waiting":
+        return None                    # the popup is up for a few seconds more (its green Yes would be taken for a paycheck's button)
     paycheck = detect_paycheck() if not backpack_open else False
     if in_task and play_minigames and played != "played" and (paycheck or (closed and cfg.STRAY_WINDOWS[closed].get("abort_task"))):
         return "aborted"   # (not setup, which can't be abandoned halfway - that is `play_minigames` False)
@@ -3350,6 +3376,7 @@ class InputCapture:
     def stop(self) -> str:
         """Stop, close the files and say what was recorded."""
         self.stop_event.set()
+        self.shot_now.set()                             # (the frame thread is waiting out CAPTURE_FRAME_INTERVAL: let it see the stop)
         for thread in self._threads:
             thread.join(timeout=5.0)
         self._keep_within_budget()                      # (the events grew since the last frame was saved)

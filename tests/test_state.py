@@ -1068,8 +1068,8 @@ def popup_world(macro, world, monkeypatch):
     """A screen that follows the clicks on the popup's Yes: `popup_world.after(n_clicks)` -> what the screen shows after that many
     ('dark' = the same as before, 'white', 'other' = a different view); `.popup_up` says whether the popup is still on screen."""
     import numpy as np
-    shown = {"dark": np.full((1080, 1920, 3), 30, np.uint8), "white": np.full((1080, 1920, 3), 255, np.uint8),
-             "other": np.full((1080, 1920, 3), 200, np.uint8)}
+    shown = {"dark": np.full((108, 192, 3), 30, np.uint8), "white": np.full((108, 192, 3), 255, np.uint8),     # (small: it is looked at hundreds of times)
+             "other": np.full((108, 192, 3), 200, np.uint8)}
     scene = types.SimpleNamespace(after=lambda clicks: "dark", popup_up=lambda clicks: True)
     monkeypatch.setattr(macro, "grab_screen", lambda: shown[scene.after(len(macro.clicks))])
     monkeypatch.setattr(macro, "detect_minigame_popup", lambda img: scene.popup_up(len(macro.clicks)))
@@ -1140,3 +1140,36 @@ def test_a_button_the_game_refuses_is_clicked_again_until_it_takes(macro, world,
     del macro.clicks[:]
     refusals[0] = 0                                                                    # not refused: clicked once
     assert macro.click_need_button("potty") is True and macro.clicks.count((100, 200)) == 1
+
+
+def test_a_minigame_popup_waits_for_a_need_in_its_end_wait_but_not_for_ever(macro, world, monkeypatch):
+    played = []
+    monkeypatch.setattr(macro, "grab_screen", lambda: None)
+    monkeypatch.setattr(macro, "detect_minigame_popup", lambda img: True)
+    monkeypatch.setattr(macro, "identify_minigame", lambda img: "ghost_gallery")
+    monkeypatch.setattr(macro, "load_game_config", lambda: {"ghost_gallery_enabled": True})
+    monkeypatch.setattr(macro, "play_minigame", lambda name: played.append(name))
+    assert macro.minigame_popup() == "played" and played == ["ghost_gallery"]            # no need waiting: at once
+    played.clear()
+    with macro.end_wait("sick"):
+        assert macro.minigame_popup() == "waiting" and not played                        # held off while it waits...
+        world.clock.now += macro.cfg.MINIGAME_POPUP_END_WAIT - 1
+        assert macro.minigame_popup() == "waiting" and not played
+        world.clock.now += 2                                                             # ...but only so long
+        assert macro.minigame_popup() == "played" and played == ["ghost_gallery"]
+    assert macro.state.end_wait_need is None and macro.state.popup_held_since is None
+
+
+def test_the_end_wait_is_marked_while_a_need_is_waited_for_and_a_held_popup_is_not_taken_for_a_paycheck(macro, monkeypatch):
+    seen = []
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: seen.append(macro.state.end_wait_need))
+    monkeypatch.setattr(macro, "_need_cleared", lambda name: True)
+    macro.wait_until_need_gone("potty")
+    assert seen == ["potty"] and macro.state.end_wait_need is None
+    checked = []
+    for name in ("rejoin_game", "close_backpack_if_stuck", "dismiss_stray_windows", "close_minigame_win_screen"):
+        monkeypatch.setattr(macro, name, lambda *a, **k: False)
+    monkeypatch.setattr(macro, "minigame_popup", lambda play=True: "waiting")
+    monkeypatch.setattr(macro, "detect_paycheck", lambda: checked.append(1) or True)
+    monkeypatch.setattr(macro.cfg, "HALLOWEEN", True)
+    assert macro.unscrew(in_task=True) is None and checked == []                         # the paycheck check, which clicks, is skipped

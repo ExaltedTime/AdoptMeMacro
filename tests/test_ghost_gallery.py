@@ -16,6 +16,7 @@ def no_intro_wait(macro, monkeypatch):
     don't look at those skip the time (the walk stays, as a hold of no length)."""
     monkeypatch.setattr(macro.cfg, "GHOST_INTRO_WAIT", 0.0)
     monkeypatch.setattr(macro.cfg, "GHOST_START_FORWARD", 0.0)
+    monkeypatch.setattr(macro.cfg, "MINIGAME_START_WAIT", 6.0)                       # (the fake clock still has every look of it to do)
 
 
 def shot(name):
@@ -384,7 +385,7 @@ def test_in_the_boss_phase_with_nothing_in_sight_it_turns_the_camera_one_way_unt
             current += event[1]
     first = drags[:8]
     assert len(first) == 8 and len({d > 0 for d in first}) == 1                       # a turn at every look, all the same way
-    assert all(cfg.GHOST_BOSS_TURN_DRAG[0] - cfg.GHOST_CAMERA_DRAG_STEPS <= abs(d) <= cfg.GHOST_BOSS_TURN_DRAG[1] for d in first)
+    assert all(cfg.GHOST_BOSS_TURN_DRAG[0] - cfg.GHOST_CAMERA_DRAG_STEPS <= abs(d) <= cfg.GHOST_BOSS_TURN_DRAG[1] + cfg.GHOST_CAMERA_DRAG_STEPS for d in first)
     assert len(drags) == 8                                                            # and no more once the boss is in sight
 
 

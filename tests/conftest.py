@@ -85,7 +85,7 @@ def world(macro, monkeypatch):
     function of the world), `world.waits` the waits, `world.zooms` / `world.tilts` when the camera was zoomed out / tilted down."""
     clock = Clock()
     world = types.SimpleNamespace(clock=clock, keys=[], mouse=[], waits=[], screens=[], looks=0, zooms=[], tilts=[], real_zoom_out=macro.zoom_out, real_tilt=macro.tilt_camera_down)
-    monkeypatch.setattr(macro, "time", types.SimpleNamespace(**{**vars(macro.time), "time": clock}))
+    monkeypatch.setattr(macro, "time", types.SimpleNamespace(**{**vars(macro.time), "time": clock, "sleep": lambda duration: setattr(clock, "now", clock.now + duration)}))
 
     def wait(duration):
         world.waits.append(duration)

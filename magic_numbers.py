@@ -360,9 +360,27 @@ HAUNTLET_TV_STABLE = 4
 HAUNTLET_ROOM_TIMEOUT = 15.0
 HAUNTLET_FORK_EVERY = 10
 HAUNTLET_DOORS_TIMEOUT = 8.0
-HAUNTLET_ITEM_CHANCE = 0.35                  # the chance, at each choice of a door, that an item (picked at random) is used too
+# The items (their folder names in HAUNTLET_ITEM_DIR) and what each is for: the grey key opens a locked door; a cyan potion makes a heart
+# that lasts one room, for a boarded door; the red potion refills the hearts, used when only HAUNTLET_LOW_HEARTS or fewer are left; a
+# heart potion adds one and is used whenever there is one; the phone, used with a chance of HAUNTLET_PHONE_CHANCE at each choice
+# of a door, puts a red arrow over the door with a ghost behind it - a big red triangle (HAUNTLET_ARROW_RED, HSV; the area, width and
+# height in px it was seen with, in HAUNTLET_ARROW_BOX = left, top, right, bottom), over the TV of its door, no more than
+# HAUNTLET_ARROW_MAX_OFFSET door spacings off its middle - which is then not gone through. The arrow is looked for HAUNTLET_ARROW_LOOKS times.
+HAUNTLET_ITEM_KEY = "key"
+HAUNTLET_ITEM_BOARDED = "cyan_potion"
+HAUNTLET_ITEM_REFILL = "red_potion"
+HAUNTLET_ITEM_HEART = "heart_potion"
+HAUNTLET_ITEM_PHONE = "phone"
+HAUNTLET_LOW_HEARTS = 1
+HAUNTLET_PHONE_CHANCE = 0.35
 HAUNTLET_ITEM_WAIT = 0.6                     # seconds after clicking an item
-HAUNTLET_KEY_ITEMS = ("key", "gold_key")  # items that open a locked door
+HAUNTLET_ARROW_RED = (((0, 200, 170), (8, 255, 255)), ((172, 200, 170), (180, 255, 255)))
+HAUNTLET_ARROW_BOX = (0, 90, 1780, 640)
+HAUNTLET_ARROW_AREA = (2200, 6000)
+HAUNTLET_ARROW_WIDTH = (100, 150)
+HAUNTLET_ARROW_HEIGHT = (45, 125)
+HAUNTLET_ARROW_MAX_OFFSET = 0.5
+HAUNTLET_ARROW_LOOKS = 4
 HAUNTLET_LEARN_LIMIT = 4                     # new item pictures saved in one play (unknown_<n> folders); more is a misreading
 
 # ============================================================================

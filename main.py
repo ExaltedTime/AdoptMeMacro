@@ -2468,17 +2468,28 @@ class HauntletRun:
             return [HauntletDoor(0, 0, None)]                                  # one doorway, straight ahead
         return None
 
-def choose_hauntlet_door(doors: list[HauntletDoor], hearts: Optional[HauntletHearts], items: list[HauntletItem]) -> int:
-    """The index in `doors` (left to right) of the door to go through. A random one so far - `hearts` and `items` are
-    here for the decision logic to come - but a locked door only when a key is held (or every door is locked)."""
-    has_key = any(item.name in cfg.HAUNTLET_KEY_ITEMS for item in items)
-    options = [i for i, door in enumerate(doors) if door.kind != "locked" or has_key]
-    return random.choice(options or list(range(len(doors))))
+def choose_hauntlet_door(doors: list[HauntletDoor], hearts: Optional[HauntletHearts], items: list[HauntletItem], avoid: Optional[int] = None) -> int:
+    """The index in `doors` (left to right) of the door to go through: a random one, but not the one the phone's arrow is
+    over (`avoid`: a ghost is behind it) and a locked one only when the grey key is held - unless that leaves
+    nothing, then any. (`hearts` is here for the decision logic to come.)"""
+    has_key = any(item.name == cfg.HAUNTLET_ITEM_KEY for item in items)
+    options = [i for i, door in enumerate(doors) if i != avoid and (door.kind != "locked" or has_key)]
+    return random.choice(options or [i for i in range(len(doors)) if i != avoid] or list(range(len(doors))))
 
-def choose_hauntlet_item(items: list[HauntletItem], hearts: Optional[HauntletHearts]) -> Optional[HauntletItem]:
-    """The item to use now, or None. Random so far - with a chance of HAUNTLET_ITEM_CHANCE one of the `items` is used, any
-    of them - `hearts` is here for the decision logic to come."""
-    return random.choice(items) if items and random.random() < cfg.HAUNTLET_ITEM_CHANCE else None
+def hauntlet_items_for(door: HauntletDoor, hearts: Optional[HauntletHearts], items: list[HauntletItem]) -> list[str]:
+    """The items (names) to use before going through `door`, in the order to use them: the grey key for a locked door, a cyan potion
+    (a heart that lasts the room) for a boarded one, the red potion when the hearts are down to HAUNTLET_LOW_HEARTS or fewer, and a
+    heart potion whenever there is one. Only those held."""
+    held = {item.name for item in items}
+    wanted = []
+    if door.kind == "locked":
+        wanted.append(cfg.HAUNTLET_ITEM_KEY)
+    if door.kind == "boarded":
+        wanted.append(cfg.HAUNTLET_ITEM_BOARDED)
+    if hearts is not None and hearts.red <= cfg.HAUNTLET_LOW_HEARTS:
+        wanted.append(cfg.HAUNTLET_ITEM_REFILL)
+    wanted.append(cfg.HAUNTLET_ITEM_HEART)
+    return [name for name in wanted if name in held]
 
 def hauntlet_strafe(img: Image, doors: list[HauntletDoor], index: int) -> tuple[Optional[str], float]:
     """The key to strafe with, and for how long, to reach door `index` from where the player stands in `img`: the
@@ -2498,26 +2509,51 @@ def hauntlet_strafe(img: Image, doors: list[HauntletDoor], index: int) -> tuple[
         return None, 0.0
     return (cfg.HAUNTLET_RIGHT_KEY if distance > 0 else cfg.HAUNTLET_LEFT_KEY), min(abs(distance), cfg.HAUNTLET_STRAFE_MAX) * cfg.HAUNTLET_STRAFE_DURATION
 
-def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun) -> tuple[int, Optional[HauntletItem]]:
-    """Read the hearts and items off `img`, choose a door (choose_hauntlet_door()) and an item to use, if any
-    (choose_hauntlet_item()), and log the lot."""
+def hauntlet_use_item(name: str, watch: MinigameWatch) -> Optional[Image]:
+    """Click the slot of the item called `name` and give the game HAUNTLET_ITEM_WAIT seconds to use it. The slots move together
+    when an item is used up, so the slot is looked for on a fresh screenshot each time. The screenshot taken after the click,
+    or None if the item isn't there."""
+    item = next((i for i in read_hauntlet_items(minigame_look(watch)) if i.name == name), None)
+    if item is None:
+        return None
+    hover_click(*item.pos)
+    wait_interruptible(cfg.HAUNTLET_ITEM_WAIT)
+    return minigame_look(watch)
+
+def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun, watch: MinigameWatch) -> tuple[int, Image]:
+    """Choose the door and use the items it calls for, logging the lot. With a chance of HAUNTLET_PHONE_CHANCE the phone is used first, and
+    the door its red arrow shows is not gone through. Returns the door's index and the latest screenshot."""
     hearts = read_hauntlet_hearts(img)
     items = read_hauntlet_items(img, learn=len(run.learned) < cfg.HAUNTLET_LEARN_LIMIT)
     run.learned |= {item.name for item in items if item.name.startswith("unknown_")}
-    index = choose_hauntlet_door(doors, hearts, items)
-    item = choose_hauntlet_item(items, hearts)
     names = {1: ("ahead",), 2: ("left", "right"), 3: ("left", "middle", "right")}[len(doors)]
+    ghost: Optional[int] = None
+    used: list[str] = []
+    if any(item.name == cfg.HAUNTLET_ITEM_PHONE for item in items) and random.random() < cfg.HAUNTLET_PHONE_CHANCE:
+        shown = hauntlet_use_item(cfg.HAUNTLET_ITEM_PHONE, watch)
+        if shown is not None:
+            used.append(cfg.HAUNTLET_ITEM_PHONE)
+            img = shown
+            for _ in range(cfg.HAUNTLET_ARROW_LOOKS):                           # the arrow takes a moment to show
+                ghost = find_ghost_door(img, doors)
+                if ghost is not None:
+                    break
+                wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
+                img = minigame_look(watch)
+            items = read_hauntlet_items(img)
+    index = choose_hauntlet_door(doors, hearts, items, avoid=ghost)
+    for name in hauntlet_items_for(doors[index], hearts, items):
+        shown = hauntlet_use_item(name, watch)
+        if shown is not None:
+            used.append(name)
+            img = shown
     print(f"[debug] Hauntlet 2: room {run.room}, "
           + (f"{hearts.red} hearts ({hearts.black} lost)" if hearts else "hearts not seen")
           + f", items: {', '.join(f'{item.name} x{item.count or 1}' for item in items) or 'none'}"
-          + f", doors: {', '.join(door.kind or '-' for door in doors)}, going {names[index]}"
-          + (f", using {item.name}" if item else ""))
-    return index, item
-
-def hauntlet_use_item(item: HauntletItem) -> None:
-    """Click `item`'s slot, then give the game HAUNTLET_ITEM_WAIT seconds to use it."""
-    hover_click(*item.pos)
-    wait_interruptible(cfg.HAUNTLET_ITEM_WAIT)
+          + f", doors: {', '.join(door.kind or '-' for door in doors)}"
+          + (f", ghost behind the {names[ghost]} one" if ghost is not None else "")
+          + f", going {names[index]}" + (f", used {', '.join(used)}" if used else ""))
+    return index, img
 
 def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, watch: MinigameWatch, until_doors: bool = False) -> bool:
     """Walk to a door: hold forward, with `direction` (a strafe key, or None) held for the first `duration` seconds,
@@ -2572,9 +2608,7 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
                 log_failure(f"Hauntlet 2: no doors found in room {run.room}")
             if len(doors) == 1 and run.room and run.room > 1:
                 zoom_out()                                                      # perhaps the camera is too close to see the TVs
-            index, item = hauntlet_choose(img, doors, run)
-            if item:
-                hauntlet_use_item(item)
+            index, img = hauntlet_choose(img, doors, run, watch)
             direction, duration = hauntlet_strafe(img, doors, index)
             if hauntlet_walk(direction, duration, run, watch, until_doors=len(doors) == 1):
                 return True
@@ -3618,6 +3652,28 @@ def hauntlet_door_kind(img: Image, x: int, y: int, scale: float) -> Optional[str
     angle = np.degrees(np.arctan2(dy, dx)) % 180                # an edge's direction is square to its gradient: 90 is a horizontal edge
     on_plank_edge = (np.hypot(dx, dy) > cfg.HAUNTLET_PLANK_EDGE) & (np.abs(angle - 90) < cfg.HAUNTLET_PLANK_ANGLE)
     return "boarded" if np.count_nonzero(on_plank_edge) >= cfg.HAUNTLET_PLANK_FRACTION * on_plank_edge.size else "plain"
+
+def find_ghost_door(img: Image, doors: list[HauntletDoor]) -> Optional[int]:
+    """The index of the door with the phone's red arrow over it (the ghost's door), or None: a big red triangle with a ghost on
+    it (HAUNTLET_ARROW_*) just above the TV of the door it points at. Doors that weren't located can't be told."""
+    if len(doors) != 3 or not doors[0].x:
+        return None
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    mask = cv2.bitwise_or(cv2.inRange(hsv, *cfg.HAUNTLET_ARROW_RED[0]), cv2.inRange(hsv, *cfg.HAUNTLET_ARROW_RED[1]))
+    left, top, right, bottom = cfg.HAUNTLET_ARROW_BOX
+    box = np.zeros_like(mask)
+    box[top:bottom, left:right] = mask[top:bottom, left:right]
+    box = cv2.morphologyEx(box, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+    count, _, stats, centres = cv2.connectedComponentsWithStats(box, connectivity=8)
+    spacing = (doors[2].x - doors[0].x) / 2
+    for i in range(1, count):
+        if (cfg.HAUNTLET_ARROW_AREA[0] <= stats[i, cv2.CC_STAT_AREA] <= cfg.HAUNTLET_ARROW_AREA[1]
+                and cfg.HAUNTLET_ARROW_WIDTH[0] <= stats[i, cv2.CC_STAT_WIDTH] <= cfg.HAUNTLET_ARROW_WIDTH[1]
+                and cfg.HAUNTLET_ARROW_HEIGHT[0] <= stats[i, cv2.CC_STAT_HEIGHT] <= cfg.HAUNTLET_ARROW_HEIGHT[1]):
+            nearest = min(range(3), key=lambda k: abs(doors[k].x - centres[i][0]))
+            if abs(doors[nearest].x - centres[i][0]) <= cfg.HAUNTLET_ARROW_MAX_OFFSET * spacing:
+                return nearest
+    return None
 
 def find_hauntlet_doors(img: Image) -> list[HauntletDoor]:
     """The three doors of the room in `img`, left to right, with their kinds - [] if there is no row of TVs."""

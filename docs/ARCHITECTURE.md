@@ -1240,12 +1240,18 @@ logged once per run as a failure, which keeps a screenshot of what the TVs were 
 again, which is the retry for a walk that got stuck.
 
 `hauntlet_choose()` reads the hearts and the items off the same screenshot (new items are saved, at most
-`HAUNTLET_LEARN_LIMIT` per play, so a misreading can't fill the folder), picks a door with `choose_hauntlet_door()` and an item to
-use with `choose_hauntlet_item()`, and logs the lot: `room 12, 3 hearts (1 lost), items: phone x1, key x1, doors: -, -, locked, going middle`. **The choices are random for now**
-(a locked door is only taken when a key is held, or when all are locked; with a chance of `HAUNTLET_ITEM_CHANCE` at each choice one of
-the items, any of them, is used - `hauntlet_use_item()` clicks its slot, as the capture shows a human doing, and waits `HAUNTLET_ITEM_WAIT`, before the
-walk starts); `choose_hauntlet_door(doors, hearts, items)` and `choose_hauntlet_item(items, hearts)` are where the risk-based logic goes. Whether
-an item worked is not looked at. `hauntlet_strafe()` works out how far to go sideways and `hauntlet_walk()` then holds `HAUNTLET_2_FORWARD_KEY` - plus
+`HAUNTLET_LEARN_LIMIT` per play, so a misreading can't fill the folder), chooses the door, uses the items the choice calls for, and logs the lot:
+`room 12, 3 hearts (1 lost), items: phone x1, key x1, doors: -, -, locked, going right, used key`.
+
+*The door* (`choose_hauntlet_door()`) is a random one, with two exceptions: a locked door is only a choice when the **grey key** (`HAUNTLET_ITEM_KEY`; the gold key is not it)
+is held, and the door the phone's arrow is over is left alone (both only while there is any other door to take). *The items* (`hauntlet_items_for()`), each only if held and in
+this order: the grey key for a locked door; a **cyan potion** (a heart that lasts the room) for a boarded one; the **red potion** (it refills the hearts) when the red hearts are down to
+`HAUNTLET_LOW_HEARTS` or fewer; a **heart potion** (one more heart) whenever there is one. *The phone* is used first, with a chance of `HAUNTLET_PHONE_CHANCE` at each choice: it puts a
+red arrow - a big red triangle with a ghost on it, `HAUNTLET_ARROW_*` - over the TV of the door with a ghost behind it, which then isn't chosen. `find_ghost_door()` finds the arrow (it
+takes a moment to show, so it is looked for `HAUNTLET_ARROW_LOOKS` times) and says which door it belongs to; over the captured runs it fired on 9 frames, all of the hand-played run (the one that used the phone), and where the doors were
+found (6 of them) always within a few percent of a door spacing of a door's TV; it fired on none of the ~700 frames of the macro-played runs, which used no phone. `hauntlet_use_item()` clicks an item's slot, as the capture shows a human doing, and waits
+`HAUNTLET_ITEM_WAIT`; the slots close up when an item is used up, so it looks for the slot on a fresh screenshot each time. The items are used before the walk starts. Whether an item
+worked is not looked at, and the gold key and the wand have no use yet. `hauntlet_strafe()` works out how far to go sideways and `hauntlet_walk()` then holds `HAUNTLET_2_FORWARD_KEY` - plus
 `HAUNTLET_LEFT_KEY` or `HAUNTLET_RIGHT_KEY` for the strafe - until the number changes (or `HAUNTLET_WALK_MAX` seconds), and then `HAUNTLET_WALK_PAST_DURATION` longer. **The number changes while the
 player is still in the doorway** (the camera close on the door, its TV filling the screen, the next room's doors out of sight); a human keeps walking
 1.0-2.0 s more (median 1.4 s in the capture) and a macro that let go at once stood there for the rest of the run - which is how the
@@ -1351,7 +1357,7 @@ exact values and rationale):
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
 | Hauntlet 2 reader | `HAUNTLET_ROOM_BOX`, `HAUNTLET_DIGIT_*`, `HAUNTLET_ROOM_MAX_DIGITS`, `HAUNTLET_SLOT_*`, `HAUNTLET_ITEM_*`, `HAUNTLET_BADGE_*`, `HAUNTLET_COUNT_*`, `HAUNTLET_NOT_ITEMS`, `HAUNTLET_HEART_*`, `HAUNTLET_*_DIR` |
 | Ghost Gallery play | `GHOST_COLOR`, `GHOST_CLOSE`, `GHOST_MIN_AREA`, `GHOST_IGNORE_BOXES`, `GHOST_CHARACTER`, `GHOST_STICK`, `GHOST_BOSS_BAR_*`, `GHOST_BOSS_FILL*`, `GHOST_LOOK_INTERVAL`, `GHOST_START_LOOK_INTERVAL`, `GHOST_FURNITURE_*`, `GHOST_CAMERA_*`, `GHOST_START_TILT`, `GHOST_MOVE_*`, `GHOST_JUMP_*`, `KEY_ZOOM_OUT`, `MINIGAME_ZOOM_OUT_DURATION` |
-| Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_DARK_*`, `HAUNTLET_PLANK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_*`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_ITEM_CHANCE`, `HAUNTLET_ITEM_WAIT`, `HAUNTLET_KEY_ITEMS`, `HAUNTLET_LEARN_LIMIT` |
+| Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_DARK_*`, `HAUNTLET_PLANK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_*`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_ITEM_*`, `HAUNTLET_LOW_HEARTS`, `HAUNTLET_PHONE_CHANCE`, `HAUNTLET_ARROW_*`, `HAUNTLET_LEARN_LIMIT` |
 | Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `MINIGAME_CAPTURE`, `RUN_CAPTURES_DIR`, `RUN_CAPTURE_ZIPS`, `MAX_RUN_CAPTURES`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |

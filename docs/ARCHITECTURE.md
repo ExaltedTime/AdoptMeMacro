@@ -1149,28 +1149,28 @@ acted on in Tk's thread, so typing an `m` into the private server link box start
 at the top of the screen, or `None` when it can't be read. It only reads: nothing here decides or presses a key.
 The panel is flat UI that never moves or scales, so the digits are matched exactly: the white pixels
 (`HAUNTLET_DIGIT_WHITE_LEVEL`) inside `HAUNTLET_ROOM_BOX` are split into connected pieces, each piece is cut
-out, shrunk to `HAUNTLET_DIGIT_SIZE` and compared with the saved digit pictures in `ref/hauntlet/digits/`
+out, shrunk to `HAUNTLET_DIGIT_SIZE` and compared with the saved digit pictures in `ref/hauntlet_2/digits/`
 (`0.png` ... `9.png`, cut from a real run) by mean difference. The best must be under
 `HAUNTLET_DIGIT_MAX_DIFF` (20); on a 256-frame run (rooms 1-29, three layers of the hotel) every readable frame
 matched at 0.0 and the two most alike digits are 43.7 apart. No panel (the white transition, the lobby, a
 door close-up that hides it), no digit pieces, more than `HAUNTLET_ROOM_MAX_DIGITS`, or a piece that matches
-none of the digits all give `None` rather than a guess. `tests/test_hauntlet.py` runs a crop of each of the 29
-rooms (`tests/hauntlet2/room_panels/`) back through the reader.
+none of the digits all give `None` rather than a guess. `tests/test_hauntlet_2.py` runs a crop of each of the 29
+rooms (`tests/hauntlet_2/room_panels/`) back through the reader.
 
 **Items.** `read_hauntlet_items()` returns the item slots along the bottom of the screen, left to right, as
 `HauntletItem(name, count, pos)`. The slots are round white-ringed icons about 115 px apart, found as circles in
 `HAUNTLET_SLOT_BAND` (`find_item_slots()`, Hough, radius `HAUNTLET_SLOT_RADIUS`; a slot that has just changed is a
 little bigger). Each slot's `HAUNTLET_ITEM_CROP`-px square is matched by correlation, as a grey picture so the slot's
-bright blue or dim teal background matters little, against the pictures in `ref/hauntlet/items/<name>/` (a folder per
+bright blue or dim teal background matters little, against the pictures in `ref/hauntlet_2/items/<name>/` (a folder per
 item, several pictures each - bright, dim, slightly enlarged). The best must reach `HAUNTLET_ITEM_MATCH` (0.75) or the
 item is `unknown`. They were cut from the 382 slots of a 256-frame run: `phone`, `key`, `gold_key`, `cyan_potion`,
 `heart_potion`, `red_potion`, plus `backpack` (the lobby's button, which sits where a slot would and is left out,
 `HAUNTLET_NOT_ITEMS`); every slot of that run is read as the item it is (60 ms a frame). The wand was not in it, so
-it has no pictures yet. **Learning:** with `learn=True` an unknown slot is saved as `ref/hauntlet/items/unknown_<n>/1.png`
+it has no pictures yet. **Learning:** with `learn=True` an unknown slot is saved as `ref/hauntlet_2/items/unknown_<n>/1.png`
 (`learn_hauntlet_item()`) and is known from then on; renaming the folder to what it is names it. The count is the number
 on the purple "x2" badge at a slot's top left (`read_item_count()`): the badge is the purple piece of the right size
 (`HAUNTLET_BADGE_*`), its white pieces are the "x" and the digits, each compared with the glyphs in
-`ref/hauntlet/counts/` (`x`, `1`, `2` - the only counts in the run, so no other digit is known yet: a glyph that
+`ref/hauntlet_2/counts/` (`x`, `1`, `2` - the only counts in the run, so no other digit is known yet: a glyph that
 matches none gives `None`, not a guess).
 
 **Hearts.** `read_hauntlet_hearts()` returns `HauntletHearts(red, black, width, pos)` for the row above the player's head.
@@ -1429,8 +1429,8 @@ clicks instead of making them. They cover:
 - `test_icon_screenshots.py` - every real screenshot in `tests/icon_detection/<folder>/` (the need bar over dark, bright, busy and white scenes) run through the circle search and the matching; each must be listed in `EXPECTED` with the needs on its bar, so a screenshot added without a label fails;
 - `test_loop.py` - the whole workflow loop run for a moment with the game stubbed out (idle respawns, the resource monitor starting and stopping, the report being written);
 - `test_capture.py` - the input capture against a made-up keyboard, mouse and screen (events, both coordinate systems, click frames, skipping unchanged frames, the summary, the zips, stopping by itself, the hotkey toggle and pruning, and the automatic recording of minigame runs: the frame budget, its thinning, the outcome, the zip);
-- `test_hauntlet.py` - reading the Hauntlet 2 screen against crops of a real run;
-- `test_hauntlet_play.py` - the timer and doors against crops of that run, then the room tracking, the choices (door, item), the walk and the whole loop with a fake clock and keyboard;
+- `test_hauntlet_2.py` - reading the Hauntlet 2 screen against crops of a real run;
+- `test_hauntlet_2_play.py` - the timer and doors against crops of that run, then the room tracking, the choices (door, item), the walk and the whole loop with a fake clock and keyboard;
 - `test_features.py` - the daily money reset, the run-every-need sequence, the win screen and the like;
 - `test_config.py` - the real need tables in `magic_numbers.py`, without pinning any value: every entry is well formed (known keys, on-screen positions, movement keys, a `final_click` has its `prompt_pos`), has a handler, and the handler carries out exactly what the entry says (run over whichever needs exist, so `HALLOWEEN` off just drops `sick`). The handler tests elsewhere use made-up entries; this is what keeps the real ones honest;
 - `test_report.py` - the run-report parser against the exact log wording the

@@ -1,5 +1,5 @@
 """Playing Hauntlet 2: finding the doors, the timer, choosing and walking to a door, and the loop that does it room
-after room. Frames are built from the fixtures of tests/hauntlet2/ (crops of a real run pasted on a blank screen);
+after room. Frames are built from the fixtures of tests/hauntlet_2/ (crops of a real run pasted on a blank screen);
 time and the keyboard are faked."""
 import os
 import types
@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import pytest
 
-HERE = os.path.join(os.path.dirname(__file__), "hauntlet2")
+HERE = os.path.join(os.path.dirname(__file__), "hauntlet_2")
 PANEL_AT = (1060, 60)
 
 

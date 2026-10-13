@@ -1,4 +1,4 @@
-"""Reading the Hauntlet 2 screen. The fixtures are crops of a real 29-room run (tests/hauntlet2/), pasted back at
+"""Reading the Hauntlet 2 screen. The fixtures are crops of a real 29-room run (tests/hauntlet_2/), pasted back at
 the place they were taken from on an otherwise blank screen."""
 import glob
 import os
@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import pytest
 
-HERE = os.path.join(os.path.dirname(__file__), "hauntlet2")
+HERE = os.path.join(os.path.dirname(__file__), "hauntlet_2")
 PANEL_AT = (1060, 60)                      # where the room panel crops were cut from (left, top)
 
 

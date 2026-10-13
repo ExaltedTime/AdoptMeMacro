@@ -141,9 +141,9 @@ MINIGAME_TEMPLATE_DIR = os.path.join(SCRIPT_DIR, "ref", "halloween")
 STRAY_WINDOW_DIR = os.path.join(SCRIPT_DIR, "ref", "popups")
 MINIGAME_OVERLAY_DIR = os.path.join(SCRIPT_DIR, "ref", "overlays")
 NEEDS_DIR = os.path.join(SCRIPT_DIR, "ref", "needs")      # the learned need icons - the one folder in ref/ the macro also writes to (see prompt_rename_need())
-HAUNTLET_DIGIT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet", "digits")   # 0.png ... 9.png: the digits of the ROOM panel, see read_hauntlet_room()
-HAUNTLET_ITEM_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet", "items")      # a folder per item (phone/, key/, ...) of pictures of its slot; see read_hauntlet_items()
-HAUNTLET_COUNT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet", "counts")    # x/, 1/, 2/: the glyphs of an item's "x2" badge
+HAUNTLET_DIGIT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "digits")   # 0.png ... 9.png: the digits of the ROOM panel, see read_hauntlet_room()
+HAUNTLET_ITEM_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "items")      # a folder per item (phone/, key/, ...) of pictures of its slot; see read_hauntlet_items()
+HAUNTLET_COUNT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "counts")    # x/, 1/, 2/: the glyphs of an item's "x2" badge
 DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
 # debug/ holds two subfolders - images/ for every png (the debug_*.png views, failures/, reports/) and logs/ for
 # every text and json file - plus the game config, which stays in debug/ itself so "Refresh debug" (which

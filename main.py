@@ -3277,7 +3277,7 @@ def learn_hauntlet_item(crop: Image) -> str:
     name = f"unknown_{max(taken, default=0) + 1}"
     os.makedirs(os.path.join(cfg.HAUNTLET_ITEM_DIR, name))
     cv2.imwrite(os.path.join(cfg.HAUNTLET_ITEM_DIR, name, "1.png"), crop if crop.ndim == 2 else cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY))
-    print(f"[!] New Hauntlet item saved as {name} in {cfg.HAUNTLET_ITEM_DIR} - rename the folder to what it is")
+    print(f"[!] New Hauntlet 2 item saved as {name} in {cfg.HAUNTLET_ITEM_DIR} - rename the folder to what it is")
     return name
 
 def read_item_count(img: Image, x: int, y: int) -> Optional[int]:

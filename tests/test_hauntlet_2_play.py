@@ -53,6 +53,7 @@ DOORS = {
     88: ["mystery", "dark", "dark"],                  # the second layer, white walls
     97: ["boarded", "boarded", "locked"],
     209: ["locked", "locked", "plain"],               # the third layer, blue walls
+    119: ["plain", "shadow", "boarded"],              # the middle door is a shadow door: dark smoke with glowing eyes over the boards (an angled room)
 }
 
 
@@ -666,3 +667,48 @@ def test_a_room_whose_doors_cannot_be_found_is_looked_around_for_before_walking_
     macro.play_hauntlet_2(world.clock.now + cfg.MINIGAME_START_WAIT + cfg.HAUNTLET_DOORS_TIMEOUT + 4 * cfg.HAUNTLET_WALK_MAX, watch_of(macro))
     assert turns() == 2                                                                    # it turned until it saw them, and no more
     assert any(e[0] == "down" and e[1] == "w" for e in world.keys)                        # and then went on to choose and walk
+
+
+# --- the circles in front of the doors ---
+
+def circles_screen(name):
+    return cv2.imread(os.path.join(HERE, "circles", f"{name}.png"))
+
+
+def test_the_circles_in_front_of_the_doors_are_found_and_one_hidden_under_the_player_means_it_stands_in_it(macro):
+    three = circles_screen("three")
+    found = macro.find_door_circles(three)
+    assert [x for x, _, _, _ in found] == pytest.approx([643, 963, 1293], abs=4) and macro.player_in_circle(three, found) is False
+    hidden = circles_screen("middle_hidden")
+    found = macro.find_door_circles(hidden)
+    assert [x for x, _, _, _ in found] == pytest.approx([681, 1253], abs=4)                  # the middle one is under the player...
+    assert macro.player_in_circle(hidden, found) is True                                     # ...who stands where it would be
+    assert macro.find_door_circles(frame(macro, 16, room=3)) == [] and macro.find_door_circles(np.zeros((1080, 1920, 3), np.uint8)) == []   # no badge or label is one
+    assert macro.player_in_circle(three, found[:1]) is False and macro.player_in_circle(three, []) is False
+
+
+def test_the_strafe_goes_to_the_circle_in_front_of_the_door_not_to_its_tv(macro):
+    cfg = macro.cfg
+    doors = [macro.HauntletDoor(x, 180, "plain") for x in (597, 960, 1322)]               # the TVs; the circles are at 643, 963 and 1293
+    key, seconds = macro.hauntlet_strafe(circles_screen("three"), doors, 2)
+    assert key == cfg.HAUNTLET_RIGHT_KEY and seconds == pytest.approx((1293 - 960) / 362 * cfg.HAUNTLET_STRAFE_DURATION, rel=0.03)
+
+
+def test_a_player_in_a_circle_is_held_so_it_is_not_unstuck_and_the_door_stays_picked_for_the_retry(macro, world, monkeypatch):
+    cfg = macro.cfg
+    monkeypatch.setattr(cfg, "HAUNTLET_WALK_MAX", cfg.HAUNTLET_LOCK_WAIT + 3)
+    run = macro.HauntletRun()
+    run.room = 5
+    world.screens = [circles_screen("middle_hidden")]                                       # standing in the middle circle, not moving
+    start = world.clock.now
+    macro.hauntlet_walk(None, 0.0, run, watch_of(macro), target_index=1)
+    sideways = [at for kind, key, at in world.keys if kind == "down" and key in (cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_RIGHT_KEY)]
+    assert run.picked == 1                                                                   # the door is picked
+    assert sideways and sideways[0] - start >= cfg.HAUNTLET_LOCK_WAIT                         # no step sideways while it is held
+    doors = macro.find_hauntlet_doors(frame(macro, 16))
+    used = []
+    monkeypatch.setattr(macro, "hauntlet_use_item", lambda name, watch: used.append(name))
+    index, _ = macro.hauntlet_choose(frame(macro, 16, room=5), doors, run, watch_of(macro))
+    assert index == 1 and used == []                                                          # the retry goes to the same door, with nothing more used
+    run.look(frame(macro, 16, room=6), world.clock.now)
+    assert run.picked is None                                                                 # a new room is a new choice

@@ -379,6 +379,7 @@ def indoors(macro, world, monkeypatch):
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
     monkeypatch.setattr(macro, "teleport_to", lambda pos: start.__setitem__(0, world.clock.now))
     monkeypatch.setattr(macro, "grab_screen", lambda: None)
+    monkeypatch.setattr(macro, "save_failure_report", lambda reason: (events.append("shot"), "x/screen.png")[1])
     monkeypatch.setattr(macro, "respawn_character", lambda: events.append("respawn"))
     monkeypatch.setattr(macro, "log_run_event", lambda text: events.append(text))
     monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=0, **kw: waited.append(max_wait))
@@ -419,7 +420,8 @@ def test_not_getting_in_makes_it_look_for_the_way_then_walk_on_inside(macro, ind
 def test_never_getting_in_fails_the_need_with_a_respawn(indoors, world):
     handler = indoors(white_at=None)
     assert handler.handle() is False
-    assert "respawn" in indoors.events and indoors.waited == []       # no dialog, no waiting for the need to clear
+    assert "respawn" in indoors.events and indoors.waited == []
+    assert indoors.events.index("shot") < indoors.events.index("respawn")      # the screenshot shows where it stood, not the respawn spot       # no dialog, no waiting for the need to clear
     assert world.clock.now - 1000.0 < 10.0 + 20.0                      # and it gave up at enter_wait (plus the steps), not later
 
 

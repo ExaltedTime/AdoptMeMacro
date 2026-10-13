@@ -1859,7 +1859,9 @@ class TeleportWalkNeedHandler(NeedHandler):
         if watch and not entered:
             if not self._find_the_way_in(watch, entered):
                 print(f"[debug] never got in for the {self.name} need - it failed")
-                log_run_event(f"{self.name}: did not get in within {self.config.get('enter_wait', cfg.NEED_GONE_MAX_WAIT):g}s")
+                shot = save_failure_report(f"{self.name} did not get in")       # where the character stands, before the respawn
+                log_run_event(f"{self.name}: did not get in within {self.config.get('enter_wait', cfg.NEED_GONE_MAX_WAIT):g}s"
+                              + (f" (screenshot: failures/{shot})" if shot else ""))
                 respawn_character()
                 return False
             wait_until_screen_clear(cfg.ENTER_CLEAR_MAX)

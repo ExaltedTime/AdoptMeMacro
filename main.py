@@ -2544,7 +2544,8 @@ def hauntlet_strafe(img: Image, doors: list[HauntletDoor], index: int) -> tuple[
     """The key to strafe with, and for how long, to reach door `index` from where the player stands in `img`: the
     distance to the door in door spacings (the TVs' spacing) times HAUNTLET_STRAFE_DURATION, or no strafe when that
     is under HAUNTLET_STRAFE_MIN spacings. Where the player starts a room can depend on the door it came through, so
-    it is measured (the hearts above the head); not seen, it is taken to be in front of the middle door. Doors that
+    it is measured (the hearts above the head); not seen, it is taken to be in the middle of the screen (the camera follows the player; the
+    middle door is not always in front of it - in a captured room 3 the player stood 350 px right of the middle door, hearts unread, and walked into the wall). Doors that
     aren't located have no distance to go: a fork's two doorways are the left key or the right one for one spacing, a
     single doorway ahead (an entrance hall) none."""
     spacing = (doors[2].x - doors[0].x) / 2 if len(doors) == 3 else 0
@@ -2553,7 +2554,7 @@ def hauntlet_strafe(img: Image, doors: list[HauntletDoor], index: int) -> tuple[
             return None, 0.0
         return (cfg.HAUNTLET_LEFT_KEY if index == 0 else cfg.HAUNTLET_RIGHT_KEY), cfg.HAUNTLET_STRAFE_DURATION
     hearts = read_hauntlet_hearts(img)
-    distance = (doors[index].x - (hearts.center_x if hearts else doors[1].x)) / spacing
+    distance = (doors[index].x - (hearts.center_x if hearts else cfg.REFERENCE_CENTER_X)) / spacing
     if abs(distance) < cfg.HAUNTLET_STRAFE_MIN:
         return None, 0.0
     return (cfg.HAUNTLET_RIGHT_KEY if distance > 0 else cfg.HAUNTLET_LEFT_KEY), min(abs(distance), cfg.HAUNTLET_STRAFE_MAX) * cfg.HAUNTLET_STRAFE_DURATION
@@ -2608,16 +2609,45 @@ def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun, wat
           + f", going {names[index]}" + (f", used {', '.join(used)}" if used else ""))
     return index, img
 
-def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, watch: MinigameWatch, until_doors: bool = False) -> bool:
+def hauntlet_view(img: Image) -> np.ndarray:
+    """`img` shrunk to a grey 96x54, without the room panel at the top and the item bar at the bottom: what the walk looks at to
+    tell whether anything is moving (the camera follows the player, so a player who moves makes the whole view move)."""
+    small = cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), (96, 54), interpolation=cv2.INTER_AREA).astype(np.int16)
+    small[:8] = 0
+    small[45:] = 0
+    return small
+
+def hauntlet_unstick(img: Image, target_index: Optional[int], tries: int, last_key: Optional[str]) -> str:
+    """Get off whatever the player is caught on while holding forward: a step sideways (the forward key stays held, so it slides
+    along) and a jump. The way is towards the door being walked to (its TV against where the player stands, HAUNTLET_UNSTICK_MARGIN
+    px or more off), the other way each time after that, and when the way isn't known a random one first; the step is
+    HAUNTLET_UNSTICK_STEP seconds longer for each try, up to HAUNTLET_UNSTICK_MAX. The key used."""
+    tvs = find_door_tvs(img)
+    key: Optional[str] = None
+    if last_key is not None:
+        key = cfg.HAUNTLET_RIGHT_KEY if last_key == cfg.HAUNTLET_LEFT_KEY else cfg.HAUNTLET_LEFT_KEY
+    elif target_index is not None and len(tvs) == 3:
+        hearts = read_hauntlet_hearts(img)
+        dx = tvs[target_index][0] - (hearts.center_x if hearts else cfg.REFERENCE_CENTER_X)
+        if abs(dx) >= cfg.HAUNTLET_UNSTICK_MARGIN:
+            key = cfg.HAUNTLET_RIGHT_KEY if dx > 0 else cfg.HAUNTLET_LEFT_KEY
+    if key is None:
+        key = random.choice((cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_RIGHT_KEY))
+    print(f"[debug] Hauntlet 2: not moving - a step {key}")
+    pydirectinput.press(cfg.KEY_JUMP)
+    hold_key(key, min(cfg.HAUNTLET_UNSTICK_STEP * (tries + 1), cfg.HAUNTLET_UNSTICK_MAX))
+    return key
+
+def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, watch: MinigameWatch, until_doors: bool = False,
+                  target_index: Optional[int] = None) -> bool:
     """Walk to a door: hold forward, with `direction` (a strafe key, or None) held for the first `duration` seconds,
     until the room number changes (at most HAUNTLET_WALK_MAX seconds) and then HAUNTLET_WALK_PAST_DURATION longer, as
     the number changes with the player still in the doorway - or, with `until_doors`, until a row of TVs is
-    on screen (a hall's doorway leads into a room whose number is the same). A walk that doesn't get anywhere counts in `run.stuck`;
-    the next one steps back first (HAUNTLET_BACKUP_DURATION) and, like a walk straight ahead, wiggles as it goes: every
-    HAUNTLET_WIGGLE_PERIOD seconds a short step sideways (a random way) and a jump, to get off whatever it is stuck on.
-    True if the victory screen showed."""
+    on screen (a hall's doorway leads into a room whose number is the same). The view is looked at every HAUNTLET_LOOK_INTERVAL
+    seconds: if it hasn't moved (hauntlet_view(), HAUNTLET_STILL_LEVEL) for HAUNTLET_STILL_AFTER seconds the player is caught
+    on something and hauntlet_unstick() steps sideways, towards door `target_index` of the three. A walk that doesn't get
+    anywhere counts in `run.stuck`; the next one steps back first (HAUNTLET_BACKUP_DURATION). True if the victory screen showed."""
     run.walked_at = started = time.time()
-    wiggle = run.stuck > 0 or until_doors
     if run.stuck > 0:
         hold_key(cfg.HAUNTLET_BACK_KEY, cfg.HAUNTLET_BACKUP_DURATION)
     arrived = False
@@ -2629,7 +2659,9 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
                 wait_interruptible(duration)
             finally:
                 pydirectinput.keyUp(direction)
-        next_wiggle = time.time() + cfg.HAUNTLET_WIGGLE_PERIOD
+        last_view: Optional[np.ndarray] = None
+        still_since: Optional[float] = None
+        tries, last_key = 0, None
         while time.time() < started + cfg.HAUNTLET_WALK_MAX:
             img = minigame_look(watch)
             if detect_minigame_victory(img):
@@ -2644,10 +2676,18 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
             if until_doors and find_door_tvs(img):
                 arrived = True
                 break
-            if wiggle and time.time() >= next_wiggle:
-                hold_key(random.choice((cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_RIGHT_KEY)), cfg.HAUNTLET_WIGGLE_DURATION)
-                pydirectinput.press(cfg.KEY_JUMP)
-                next_wiggle = time.time() + cfg.HAUNTLET_WIGGLE_PERIOD
+            view = hauntlet_view(img)
+            now = time.time()
+            if last_view is not None and float(np.abs(view - last_view).mean()) < cfg.HAUNTLET_STILL_LEVEL:
+                still_since = now if still_since is None else still_since
+            else:
+                still_since = None
+            last_view = view
+            if still_since is not None and now - still_since >= cfg.HAUNTLET_STILL_AFTER:
+                last_key = hauntlet_unstick(img, target_index, tries, last_key)
+                tries += 1
+                still_since, last_view = None, None
+                continue
             wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
     finally:
         pydirectinput.keyUp(cfg.HAUNTLET_2_FORWARD_KEY)
@@ -2685,7 +2725,7 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
                 continue
             index, img = hauntlet_choose(img, doors, run, watch)
             direction, duration = hauntlet_strafe(img, doors, index)
-            if hauntlet_walk(direction, duration, run, watch, until_doors=len(doors) == 1):
+            if hauntlet_walk(direction, duration, run, watch, until_doors=len(doors) == 1, target_index=index if len(doors) == 3 else None):
                 return True
             if len(doors) == 1:
                 run.walked_at = None                                            # whatever is past the doorway is looked at at once
@@ -2791,6 +2831,35 @@ def rotate_camera(drag: tuple[int, int] = cfg.GHOST_CAMERA_DRAG, tilt: int = cfg
     finally:
         pydirectinput.mouseUp(button="right")
 
+def furniture_outlined(before: Image, after: Image, point: Point) -> bool:
+    """Whether the mouse, moved to `point` between the screenshots `before` and `after`, is over a piece of furniture the beam can
+    be held on, which gets a white outline when hovered: at least GHOST_OUTLINE_MIN pixels within GHOST_OUTLINE_RADIUS px of `point`
+    have turned white (every channel at least GHOST_OUTLINE_WHITE) that weren't, or weren't beside a white pixel, before."""
+    x, y = point
+    r = cfg.GHOST_OUTLINE_RADIUS
+    top, left = max(0, y - r), max(0, x - r)
+    was = (before[top:y + r, left:x + r].min(axis=2) >= cfg.GHOST_OUTLINE_WHITE).astype(np.uint8)
+    now = after[top:y + r, left:x + r].min(axis=2) >= cfg.GHOST_OUTLINE_WHITE
+    new = now & (cv2.dilate(was, np.ones((5, 5), np.uint8)) == 0)
+    return int(np.count_nonzero(new)) >= cfg.GHOST_OUTLINE_MIN
+
+def find_furniture(watch: MinigameWatch) -> Point:
+    """Somewhere the beam can be held on furniture: the mouse is moved to up to GHOST_FURNITURE_PROBES random places in
+    GHOST_FURNITURE_BOX (far from the character, far_from_character()), a look at each (furniture_outlined()), and the first
+    one that gets the white outline is it; none did, the last place tried."""
+    point = far_from_character(cfg.GHOST_FURNITURE_BOX, cfg.GHOST_FURNITURE_MIN_DISTANCE)
+    before = minigame_look(watch)
+    for probe in range(cfg.GHOST_FURNITURE_PROBES):
+        if probe:
+            point = far_from_character(cfg.GHOST_FURNITURE_BOX, cfg.GHOST_FURNITURE_MIN_DISTANCE)
+        pydirectinput.moveTo(*to_screen(*point))
+        wait_interruptible(cfg.GHOST_OUTLINE_WAIT)
+        after = minigame_look(watch)
+        if furniture_outlined(before, after, point):
+            return point
+        before = after
+    return point
+
 def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     """Ghost Gallery: once its overlay shows (or the start wait is over), look at the screen every GHOST_LOOK_INTERVAL,
     aim the mouse at a ghost (choose_ghost_target()) and hold the button down on it, until the victory screen shows or the
@@ -2811,6 +2880,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     target: Optional[Point] = None
     held = False
     moving: Optional[str] = None                     # the key being held to walk, and until when
+    chasing: Optional[str] = None                    # the key held to get to what is aimed at (a `moving` that has no end)
     move_until = 0.0
     next_move = time.time() + cfg.GHOST_MOVE_PERIOD
     phase = "ghosts"
@@ -2855,15 +2925,30 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 aim(target)
             elif phase == "ghosts":                                         # nothing to be seen before the boss: try the furniture
                 if furniture is None or now >= furniture_until:
-                    furniture = far_from_character(cfg.GHOST_FURNITURE_BOX, cfg.GHOST_FURNITURE_MIN_DISTANCE)
-                    furniture_until = now + cfg.GHOST_FURNITURE_PERIOD
+                    let_go()                                                # (the beam would be what turns white while the places are tried)
+                    furniture = find_furniture(watch)
+                    furniture_until = time.time() + cfg.GHOST_FURNITURE_PERIOD
                 aim(furniture)
             else:
                 let_go()
-            if target is None and now - max(last_turn, last_seen) >= cfg.GHOST_CAMERA_PERIOD:
-                rotate_camera()
+            camera_period = cfg.GHOST_CAMERA_PERIOD if phase == "ghosts" else cfg.GHOST_BOSS_CAMERA_PERIOD
+            if target is None and now - max(last_turn, last_seen) >= camera_period:
+                rotate_camera()                                             # (in the boss phase quickly: the boss is somewhere in the dark)
                 last_turn = time.time()
-            if moving is not None and now >= move_until:           # walking about, a step at a time, without stopping the aiming
+            chase = None                                                    # a key held for as long as it takes to get near what is aimed at
+            if target is not None and (target[0] - cfg.GHOST_CHARACTER[0]) ** 2 + (target[1] - cfg.GHOST_CHARACTER[1]) ** 2 > cfg.GHOST_CHASE_DISTANCE ** 2:
+                chase = ghost_step_key(target)
+            elif target is None and phase != "ghosts":
+                chase = "w"                                                 # the boss fight is in the middle of the room: forward, turning the camera as it goes
+            if chase is not None or chasing is not None:
+                if chase != chasing:
+                    stop_walking()
+                    chasing = chase
+                    if chase is not None:
+                        moving = chase
+                        pydirectinput.keyDown(chase)
+                move_until = now
+            elif moving is not None and now >= move_until:         # walking about, a step at a time, without stopping the aiming
                 stop_walking()
                 next_move = now + cfg.GHOST_MOVE_PERIOD
             elif moving is None and now >= next_move:

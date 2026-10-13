@@ -2831,6 +2831,35 @@ def rotate_camera(drag: tuple[int, int] = cfg.GHOST_CAMERA_DRAG, tilt: int = cfg
     finally:
         pydirectinput.mouseUp(button="right")
 
+def furniture_outlined(before: Image, after: Image, point: Point) -> bool:
+    """Whether the mouse, moved to `point` between the screenshots `before` and `after`, is over a piece of furniture the beam can
+    be held on, which gets a white outline when hovered: at least GHOST_OUTLINE_MIN pixels within GHOST_OUTLINE_RADIUS px of `point`
+    have turned white (every channel at least GHOST_OUTLINE_WHITE) that weren't, or weren't beside a white pixel, before."""
+    x, y = point
+    r = cfg.GHOST_OUTLINE_RADIUS
+    top, left = max(0, y - r), max(0, x - r)
+    was = (before[top:y + r, left:x + r].min(axis=2) >= cfg.GHOST_OUTLINE_WHITE).astype(np.uint8)
+    now = after[top:y + r, left:x + r].min(axis=2) >= cfg.GHOST_OUTLINE_WHITE
+    new = now & (cv2.dilate(was, np.ones((5, 5), np.uint8)) == 0)
+    return int(np.count_nonzero(new)) >= cfg.GHOST_OUTLINE_MIN
+
+def find_furniture(watch: MinigameWatch) -> Point:
+    """Somewhere the beam can be held on furniture: the mouse is moved to up to GHOST_FURNITURE_PROBES random places in
+    GHOST_FURNITURE_BOX (far from the character, far_from_character()), a look at each (furniture_outlined()), and the first
+    one that gets the white outline is it; none did, the last place tried."""
+    point = far_from_character(cfg.GHOST_FURNITURE_BOX, cfg.GHOST_FURNITURE_MIN_DISTANCE)
+    before = minigame_look(watch)
+    for probe in range(cfg.GHOST_FURNITURE_PROBES):
+        if probe:
+            point = far_from_character(cfg.GHOST_FURNITURE_BOX, cfg.GHOST_FURNITURE_MIN_DISTANCE)
+        pydirectinput.moveTo(*to_screen(*point))
+        wait_interruptible(cfg.GHOST_OUTLINE_WAIT)
+        after = minigame_look(watch)
+        if furniture_outlined(before, after, point):
+            return point
+        before = after
+    return point
+
 def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     """Ghost Gallery: once its overlay shows (or the start wait is over), look at the screen every GHOST_LOOK_INTERVAL,
     aim the mouse at a ghost (choose_ghost_target()) and hold the button down on it, until the victory screen shows or the
@@ -2851,6 +2880,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     target: Optional[Point] = None
     held = False
     moving: Optional[str] = None                     # the key being held to walk, and until when
+    chasing: Optional[str] = None                    # the key held to get to what is aimed at (a `moving` that has no end)
     move_until = 0.0
     next_move = time.time() + cfg.GHOST_MOVE_PERIOD
     phase = "ghosts"
@@ -2895,15 +2925,30 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 aim(target)
             elif phase == "ghosts":                                         # nothing to be seen before the boss: try the furniture
                 if furniture is None or now >= furniture_until:
-                    furniture = far_from_character(cfg.GHOST_FURNITURE_BOX, cfg.GHOST_FURNITURE_MIN_DISTANCE)
-                    furniture_until = now + cfg.GHOST_FURNITURE_PERIOD
+                    let_go()                                                # (the beam would be what turns white while the places are tried)
+                    furniture = find_furniture(watch)
+                    furniture_until = time.time() + cfg.GHOST_FURNITURE_PERIOD
                 aim(furniture)
             else:
                 let_go()
-            if target is None and now - max(last_turn, last_seen) >= cfg.GHOST_CAMERA_PERIOD:
-                rotate_camera()
+            camera_period = cfg.GHOST_CAMERA_PERIOD if phase == "ghosts" else cfg.GHOST_BOSS_CAMERA_PERIOD
+            if target is None and now - max(last_turn, last_seen) >= camera_period:
+                rotate_camera()                                             # (in the boss phase quickly: the boss is somewhere in the dark)
                 last_turn = time.time()
-            if moving is not None and now >= move_until:           # walking about, a step at a time, without stopping the aiming
+            chase = None                                                    # a key held for as long as it takes to get near what is aimed at
+            if target is not None and (target[0] - cfg.GHOST_CHARACTER[0]) ** 2 + (target[1] - cfg.GHOST_CHARACTER[1]) ** 2 > cfg.GHOST_CHASE_DISTANCE ** 2:
+                chase = ghost_step_key(target)
+            elif target is None and phase != "ghosts":
+                chase = "w"                                                 # the boss fight is in the middle of the room: forward, turning the camera as it goes
+            if chase is not None or chasing is not None:
+                if chase != chasing:
+                    stop_walking()
+                    chasing = chase
+                    if chase is not None:
+                        moving = chase
+                        pydirectinput.keyDown(chase)
+                move_until = now
+            elif moving is not None and now >= move_until:         # walking about, a step at a time, without stopping the aiming
                 stop_walking()
                 next_move = now + cfg.GHOST_MOVE_PERIOD
             elif moving is None and now >= next_move:

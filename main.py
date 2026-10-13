@@ -2514,7 +2514,8 @@ def hauntlet_use_item(item: HauntletItem) -> None:
 
 def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, watch: MinigameWatch, until_doors: bool = False) -> bool:
     """Walk to a door: hold forward, with `direction` (a strafe key, or None) held for the first `duration` seconds,
-    until the room number changes (at most HAUNTLET_WALK_MAX seconds) - or, with `until_doors`, until a row of TVs is
+    until the room number changes (at most HAUNTLET_WALK_MAX seconds) and then HAUNTLET_WALK_PAST_DURATION longer, as
+    the number changes with the player still in the doorway - or, with `until_doors`, until a row of TVs is
     on screen (a hall's doorway leads into a room whose number is the same). True if the victory screen showed."""
     run.chosen_at = started = time.time()
     pydirectinput.keyDown(cfg.HAUNTLET_2_FORWARD_KEY)
@@ -2530,7 +2531,10 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
             if detect_minigame_victory(img):
                 return True
             room = read_hauntlet_room(img)
-            if (room is not None and room != run.room) or watch.problem or (until_doors and find_door_tvs(img)):
+            if room is not None and room != run.room:
+                wait_interruptible(cfg.HAUNTLET_WALK_PAST_DURATION)             # the number changes in the doorway: on into the room
+                break
+            if watch.problem or (until_doors and find_door_tvs(img)):
                 break
             wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
     finally:
@@ -2571,31 +2575,130 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
             log_run_event(f"Hauntlet 2: got as far as room {run.room}")
     return False
 
+def find_ghost_blobs(img: Image, boss: bool = False) -> list[tuple[int, int, int]]:
+    """(x, y, area) of every ghost in `img`, biggest first: the connected pieces of the translucent cyan the ghosts and the
+    boss are drawn in (GHOST_COLOR), at least GHOST_MIN_AREA px, not in the HUD (GHOST_IGNORE_BOXES) or on the character -
+    and, in the boss phase (`boss`), not on the boss's health bar, whose crest and icons are cyan too."""
+    low, high = cfg.GHOST_COLOR
+    mask = cv2.inRange(cv2.cvtColor(img, cv2.COLOR_BGR2HSV), low, high)
+    for left, top, right, bottom in cfg.GHOST_IGNORE_BOXES + ((cfg.GHOST_BOSS_BAR_IGNORE,) if boss else ()):
+        mask[top:bottom, left:right] = 0
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((cfg.GHOST_CLOSE, cfg.GHOST_CLOSE), np.uint8))
+    count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    blobs = [(int(centres[i][0]), int(centres[i][1]), int(stats[i, cv2.CC_STAT_AREA])) for i in range(1, count)
+             if stats[i, cv2.CC_STAT_AREA] >= cfg.GHOST_MIN_AREA]
+    return sorted(blobs, key=lambda blob: -blob[2])
+
+def ghost_boss_bar_visible(img: Image) -> bool:
+    """Whether the boss's health bar (a gold frame along the top, GHOST_BOSS_BAR_*) is on screen: the boss phase."""
+    left, top, right, bottom = cfg.GHOST_BOSS_BAR_BOX
+    low, high = cfg.GHOST_BOSS_BAR_GOLD
+    gold = cv2.inRange(cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV), low, high)
+    return int(np.count_nonzero(gold)) >= cfg.GHOST_BOSS_BAR_MIN
+
+def ghost_boss_shielded(img: Image) -> bool:
+    """Whether the boss, its bar being up, can't be hurt now: the bar shows two or three ghost icons instead of its
+    cyan health (no GHOST_BOSS_FILL pixels), the boss itself is dim and small ghosts fly in - they are what is
+    to be caught then. (The bar's health is down to a sliver at the very end, but not nothing.)"""
+    left, top, right, bottom = cfg.GHOST_BOSS_BAR_BOX
+    low, high = cfg.GHOST_BOSS_FILL
+    fill = cv2.inRange(cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV), low, high)
+    return int(np.count_nonzero(fill)) < cfg.GHOST_BOSS_FILL_MIN
+
+def choose_ghost_target(blobs: list[tuple[int, int, int]], boss: bool, previous: Optional[Point]) -> Optional[Point]:
+    """Where to aim, from `blobs` (find_ghost_blobs()): when the boss can be hurt (`boss`) the biggest one (the boss), else the
+    one that is still the one aimed at (`previous`, if a ghost is within GHOST_STICK px of it - they move, and aiming at
+    another each look would lose them all), else the one nearest the character (GHOST_CHARACTER). None if there are none."""
+    if not blobs:
+        return None
+    if boss:
+        return blobs[0][:2]
+    if previous is not None:
+        near = min(blobs, key=lambda b: (b[0] - previous[0]) ** 2 + (b[1] - previous[1]) ** 2)
+        if (near[0] - previous[0]) ** 2 + (near[1] - previous[1]) ** 2 <= cfg.GHOST_STICK ** 2:
+            return near[:2]
+    cx, cy = cfg.GHOST_CHARACTER
+    return min(blobs, key=lambda b: (b[0] - cx) ** 2 + (b[1] - cy) ** 2)[:2]
+
+def rotate_camera() -> None:
+    """Turn the camera: hold the right mouse button and drag the mouse sideways (a random way, GHOST_CAMERA_DRAG px, a little up
+    or down too) over GHOST_CAMERA_DRAG_DURATION seconds, in GHOST_CAMERA_DRAG_STEPS moves, as Roblox wants a drag."""
+    dx = random.choice((-1, 1)) * random.randint(*cfg.GHOST_CAMERA_DRAG)
+    dy = random.randint(-cfg.GHOST_CAMERA_TILT, cfg.GHOST_CAMERA_TILT)
+    pydirectinput.mouseDown(button="right")
+    try:
+        for _ in range(cfg.GHOST_CAMERA_DRAG_STEPS):
+            pydirectinput.moveRel(dx // cfg.GHOST_CAMERA_DRAG_STEPS, dy // cfg.GHOST_CAMERA_DRAG_STEPS, relative=True)
+            wait_interruptible(cfg.GHOST_CAMERA_DRAG_DURATION / cfg.GHOST_CAMERA_DRAG_STEPS)
+    finally:
+        pydirectinput.mouseUp(button="right")
+
 def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
-    """Ghost Gallery: run about at random with the mouse held in holds until victory or the
-    overlay says it's over. True if won before `deadline`. See docs/ARCHITECTURE.md#need-handlers.
+    """Ghost Gallery: once its overlay shows (or the start wait is over), look at the screen every GHOST_LOOK_INTERVAL,
+    aim the mouse at a ghost (choose_ghost_target()) and hold the button down on it, until the victory screen shows or the
+    overlay says it's over. In the boss phase it is the boss, but while the boss's bar shows ghost icons it can't be hurt
+    (ghost_boss_shielded()) and the small ghosts are aimed at instead. With no ghost in sight, before the boss phase the beam
+    is held on random furniture (ghosts hide there), and the camera is turned every GHOST_CAMERA_PERIOD to find some;
+    it jumps now and then. True if won before `deadline`. See docs/ARCHITECTURE.md#playing-ghost-gallery.
     """
-    print(f"[debug] ghost gallery: waiting {cfg.MINIGAME_START_WAIT:g}s for it to start...")
-    minigame_wait(cfg.MINIGAME_START_WAIT, watch)
+    print(f"[debug] Ghost Gallery: waiting for it to start (at most {cfg.MINIGAME_START_WAIT:g}s)...")
+    waited_until = time.time() + cfg.MINIGAME_START_WAIT
+    while time.time() < waited_until and watch.last_seen is None:       # its overlay (TIME LEFT, the score) shows when the game has begun
+        minigame_wait(cfg.GHOST_START_LOOK_INTERVAL, watch)
     watch.start_wait_over()
-    while time.time() < deadline and not watch.problem:
-        pydirectinput.mouseDown()
-        try:
-            hold_until = time.time() + cfg.GHOST_GALLERY_HOLD
-            while time.time() < hold_until and not watch.problem:
-                if minigame_won(watch):
-                    return True
-                key = random.choice(cfg.MOVE_KEYS)
-                pydirectinput.keyDown(key)
-                try:
-                    pydirectinput.press(cfg.KEY_JUMP)
-                    wait_interruptible(min(random.uniform(cfg.GHOST_GALLERY_STEP_MIN, cfg.GHOST_GALLERY_STEP_MAX),
-                                           max(0.0, hold_until - time.time())))
-                finally:
-                    pydirectinput.keyUp(key)
-        finally:
+    target: Optional[Point] = None
+    held = False
+    phase = "ghosts"
+    furniture: Optional[Point] = None
+    furniture_until = 0.0
+    last_turn = last_seen = time.time()
+    next_jump = time.time() + random.uniform(cfg.GHOST_JUMP_MIN, cfg.GHOST_JUMP_MAX)
+
+    def aim(point: Point) -> None:
+        nonlocal held
+        pydirectinput.moveTo(*to_screen(*point))
+        if not held:
+            pydirectinput.mouseDown()
+            held = True
+
+    def let_go() -> None:
+        nonlocal held
+        if held:
             pydirectinput.mouseUp()
-        wait_interruptible(cfg.GHOST_GALLERY_HOLD_GAP)
+            held = False
+
+    try:
+        while time.time() < deadline and not watch.problem:
+            img = minigame_look(watch)
+            if detect_minigame_victory(img):
+                return True
+            bar = ghost_boss_bar_visible(img)
+            now_phase = ("shielded" if ghost_boss_shielded(img) else "boss") if bar else "ghosts"
+            if now_phase != phase:
+                print(f"[debug] Ghost Gallery: {dict(ghosts='the boss phase is over', boss='the boss can be hurt', shielded='the boss is shielded: after the small ghosts')[now_phase]}")
+                phase = now_phase
+            target = choose_ghost_target(find_ghost_blobs(img, bar), phase == "boss", target)
+            now = time.time()
+            if target is not None:
+                last_seen = now
+                aim(target)
+            elif phase == "ghosts":                                         # nothing to be seen before the boss: try the furniture
+                if furniture is None or now >= furniture_until:
+                    left, top, right, bottom = cfg.GHOST_FURNITURE_BOX
+                    furniture = (random.randint(left, right), random.randint(top, bottom))
+                    furniture_until = now + cfg.GHOST_FURNITURE_PERIOD
+                aim(furniture)
+            else:
+                let_go()
+            if target is None and now - max(last_turn, last_seen) >= cfg.GHOST_CAMERA_PERIOD:
+                rotate_camera()
+                last_turn = time.time()
+            if now >= next_jump:
+                pydirectinput.press(cfg.KEY_JUMP)
+                next_jump = now + random.uniform(cfg.GHOST_JUMP_MIN, cfg.GHOST_JUMP_MAX)
+            wait_interruptible(cfg.GHOST_LOOK_INTERVAL)
+    finally:
+        let_go()
     return False
 
 MINIGAME_PLAYERS = {"hauntlet_2": play_hauntlet_2, "ghost_gallery": play_ghost_gallery}
@@ -3413,11 +3516,15 @@ class HauntletDoor:
     kind: Optional[str]
 
 def find_door_tvs(img: Image) -> list[tuple[int, int]]:
-    """The centre of every TV number (HAUNTLET_TV_*) in `img`, left to right: the three above a room's doors, in
-    the row they make - [] when there isn't one (a fork's hall, a close-up, a transition)."""
+    """The centre of the three TV numbers (HAUNTLET_TV_*) in `img`, left to right: the three above a room's doors, in
+    the row they make - [] when there isn't one (a fork's hall, a close-up, a transition). With the camera close the
+    middle TV can be off the top of the screen or behind the room panel: two TVs far enough apart to be the outer ones
+    (HAUNTLET_TV_PAIR_GAP) and centred on the screen (the player stands in front of the middle door) give the middle one
+    halfway between."""
     low, high = cfg.HAUNTLET_TV_GLOW
     mask = cv2.inRange(img, (low[2], low[1], low[0]), (high[2], high[1], high[0]))   # BGR
-    mask[:cfg.HAUNTLET_TV_MIN_Y] = 0
+    left, top, right, bottom = cfg.HAUNTLET_TV_HUD_BOX
+    mask[top:bottom, left:right] = 0
     count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
     found = sorted((float(centres[i][0]), float(centres[i][1])) for i in range(1, count)
                    if cfg.HAUNTLET_TV_AREA[0] <= stats[i, cv2.CC_STAT_AREA] <= cfg.HAUNTLET_TV_AREA[1])
@@ -3428,6 +3535,11 @@ def find_door_tvs(img: Image) -> list[tuple[int, int]]:
                 and all(cfg.HAUNTLET_TV_SPACING[0] <= gap <= cfg.HAUNTLET_TV_SPACING[1] for gap in gaps)
                 and abs(gaps[0] - gaps[1]) <= cfg.HAUNTLET_TV_SPACING_TOLERANCE * max(gaps)):
             return [(int(x), int(y)) for x, y in (first, middle, last)]
+    for first, last in zip(found, found[1:]):
+        if (abs(first[1] - last[1]) <= cfg.HAUNTLET_TV_ROW_TOLERANCE
+                and cfg.HAUNTLET_TV_PAIR_GAP[0] <= last[0] - first[0] <= cfg.HAUNTLET_TV_PAIR_GAP[1]
+                and abs((first[0] + last[0]) / 2 - cfg.REFERENCE_CENTER_X) <= cfg.HAUNTLET_TV_PAIR_OFF_CENTER):
+            return [(int(first[0]), int(first[1])), (int((first[0] + last[0]) / 2), int((first[1] + last[1]) / 2)), (int(last[0]), int(last[1]))]
     return []
 
 def hauntlet_door_kind(img: Image, x: int, y: int, scale: float) -> Optional[str]:
@@ -3437,7 +3549,7 @@ def hauntlet_door_kind(img: Image, x: int, y: int, scale: float) -> Optional[str
         left, top, right, bottom = box
         return img[max(0, int(y + top * scale)):int(y + bottom * scale), max(0, int(x + left * scale)):int(x + right * scale)]
     light = region(cfg.HAUNTLET_LOCK_LIGHT_BOX).astype(int)
-    if light.size and np.count_nonzero((light[..., 2] > 170) & (light[..., 1] < 90) & (light[..., 0] < 90)) >= cfg.HAUNTLET_LOCK_LIGHT_MIN:
+    if light.size and np.count_nonzero((light[..., 2] >= cfg.HAUNTLET_LOCK_LIGHT_RED) & (light[..., 1] <= cfg.HAUNTLET_LOCK_LIGHT_OTHER) & (light[..., 0] <= cfg.HAUNTLET_LOCK_LIGHT_OTHER)) >= cfg.HAUNTLET_LOCK_LIGHT_MIN:
         return "locked"
     door = region(cfg.HAUNTLET_DOOR_BOX)
     if door.size == 0:

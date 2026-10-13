@@ -665,10 +665,9 @@ out `MINIGAME_MAX_DURATION` (600 s).
 - `play_hauntlet_2()` waits `MINIGAME_START_WAIT` (50 s), then goes through the rooms - reads the screen, picks a door
   and walks to it, room after room - until victory or until the overlay says it's over. See
   [Playing Hauntlet 2](#playing-hauntlet-2).
-- `play_ghost_gallery()` waits `MINIGAME_START_WAIT`, then holds the mouse
-  in `GHOST_GALLERY_HOLD`-second holds (`GHOST_GALLERY_HOLD_GAP` apart) while
-  running in random `MOVE_KEYS` directions with a jump, each for a random time
-  between `GHOST_GALLERY_STEP_MIN` and `_MAX`, until victory.
+- `play_ghost_gallery()` waits until the game's overlay shows (at most `MINIGAME_START_WAIT`), then finds the ghosts on screen, aims the
+  mouse at one and holds the button on it, and on the boss in the boss phase, until victory. See
+  [Playing Ghost Gallery](#playing-ghost-gallery).
 
 A handler only counts as resolved (and only then triggers a respawn) if
 `handle()` returns `True`. `ButtonNeedHandler` returns `False` if
@@ -1192,13 +1191,17 @@ look at a few frames in a row.
 while the player passes through a door, which is also when the screen still shows the *last* room's doors. `find_hauntlet_doors()`
 finds the three doors of a room from the TVs above them: each TV shows its number (the players standing before that door)
 in a light cyan, `(206, 255, 255)`, that no other pixel of the game has in that quantity; `find_door_tvs()` takes the pieces
-of `HAUNTLET_TV_AREA` px below `HAUNTLET_TV_MIN_Y` and wants three of them in a row (the same height within
+of `HAUNTLET_TV_AREA` px (except those in `HAUNTLET_TV_HUD_BOX`, where the room panel and timer glow) and wants three of them in a row (the same height within
 `HAUNTLET_TV_ROW_TOLERANCE`, evenly spaced within `HAUNTLET_TV_SPACING_TOLERANCE`), else `[]` - a fork's hall has no TVs, and neither do
-the close-ups. The spacing between TVs (330-410 px as the camera zooms) is the picture's scale, so the boxes under each
+the close-ups. **With the camera close** - which is how it looks once the macro stands still in a room - the middle TV is above the top of
+the screen or behind the room panel, and only the outer two show; two TVs `HAUNTLET_TV_PAIR_GAP` apart (about 900 px) and centred on the
+screen (`HAUNTLET_TV_PAIR_OFF_CENTER`; the player stands in front of the middle door) are taken for the outer two, the middle one halfway between.
+Two neighbours with the third off screen are 350-780 px apart but not centred, so they don't pass. The spacing between TVs (330-410 px as the camera zooms) is the picture's scale, so the boxes under each
 TV (`HAUNTLET_LOCK_LIGHT_BOX`, `HAUNTLET_DOOR_BOX`, measured at a spacing of `HAUNTLET_DOOR_SPACING`) are scaled with it.
 `HauntletDoor(x, y, kind)` gives each door's `kind` from its pixels (`hauntlet_door_kind()`), the first that fits:
 
-- `locked` - the padlock's red light above the door: 40-99 red pixels, none on other doors;
+- `locked` - the padlock's red light above the door: 40-99 pure red pixels (`HAUNTLET_LOCK_LIGHT_RED`: (255, 37, 37)), none on other doors. The
+  dark red outline of the player's hearts, which can be under the door, is (204, 68, 54) and doesn't count;
 - `dark` - over 40% near-black pixels (44-74% on the doors that look so, at most 37% on the others);
 - `mystery` - the pale grey "???" door, brightness 180-203 where every other door is under 164;
 - `boarded` or `plain` - by the planks: the share of the door's pixels on a strong, near-horizontal edge
@@ -1243,7 +1246,10 @@ use with `choose_hauntlet_item()`, and logs the lot: `room 12, 3 hearts (1 lost)
 the items, any of them, is used - `hauntlet_use_item()` clicks its slot, as the capture shows a human doing, and waits `HAUNTLET_ITEM_WAIT`, before the
 walk starts); `choose_hauntlet_door(doors, hearts, items)` and `choose_hauntlet_item(items, hearts)` are where the risk-based logic goes. Whether
 an item worked is not looked at. `hauntlet_strafe()` works out how far to go sideways and `hauntlet_walk()` then holds `HAUNTLET_2_FORWARD_KEY` - plus
-`HAUNTLET_LEFT_KEY` or `HAUNTLET_RIGHT_KEY` for the strafe - until the number changes or `HAUNTLET_WALK_MAX` seconds. The
+`HAUNTLET_LEFT_KEY` or `HAUNTLET_RIGHT_KEY` for the strafe - until the number changes (or `HAUNTLET_WALK_MAX` seconds), and then `HAUNTLET_WALK_PAST_DURATION` longer. **The number changes while the
+player is still in the doorway** (the camera close on the door, its TV filling the screen, the next room's doors out of sight); a human keeps walking
+1.0-2.0 s more (median 1.4 s in the capture) and a macro that let go at once stood there for the rest of the run - which is how the
+macro's own captures showed it. The
 strafe is the distance from the player to the door's TV in *door spacings* (the distance between neighbouring TVs, which
 also takes the camera's zoom out of it) times `HAUNTLET_STRAFE_DURATION` seconds per spacing - no strafe under `HAUNTLET_STRAFE_MIN`
 spacings, never more than `HAUNTLET_STRAFE_MAX`. The player's place is measured, not assumed, because where a room is entered may
@@ -1254,6 +1260,47 @@ capture's keys against its room numbers, from the middle: left door 1.0-1.1 s, r
 carries the character as far as one pressed by hand is **not yet checked in the game**, and neither is the strafe in a fork's hall
 (its doorways were seen at other distances in rooms 10 and 20) - both are the first things to tune. The keys are always released,
 also when the macro is stopped. When the run ends, `got as far as room N` goes in the run log.
+
+### Playing Ghost Gallery
+
+From a human's 162 s run (the capture of the keys, the mouse and 209 frames). **How the game works:** ghosts run about a hall and hide
+behind the furniture; the player has a beam (the round button at the bottom) that goes from the character **to the mouse cursor** while the
+left button is held, and a ghost held in it scores ("+2700", a combo counter "x3"...). The player is sometimes knocked down. About **1:08
+before the end** (the game lasts 3 minutes) the ghosts and furniture are replaced by the **boss**, a huge cyan ghost with a segmented
+health bar (a gold frame, `GHOST_BOSS_BAR_*`) along the top, and it is where most of the points are. At the end the screen goes white
+and a "GAME OVER!" results screen with a NICE! button shows, which the existing `detect_minigame_victory()` already handles. In the run the human
+held the button on a ghost for a second or less at a time (and on the boss for tens of seconds), the cursor staying within about 150 px of
+the character while the camera followed it.
+
+`find_ghost_blobs()` finds the ghosts and the boss as the connected pieces of their translucent cyan (`GHOST_COLOR`, OpenCV HSV (85, 140, 250)
+under the human's cursor), at least `GHOST_MIN_AREA` px (ghosts 880-7200 px in the run, the boss 9500-41000), biggest first, leaving out the
+HUD and the character's own glow (`GHOST_IGNORE_BOXES`) and, in the boss phase, the boss's health bar (its crest and its ghost icons are the
+same cyan). `ghost_boss_bar_visible()` is the boss phase: 13,000-17,000 gold pixels in `GHOST_BOSS_BAR_BOX` against none (at most 230) before it, right on
+every frame of the run but the ones at the very start and end of the boss's bar. `choose_ghost_target()` picks where to aim: the biggest blob
+in the boss phase, else the ghost already being followed (one within `GHOST_STICK` px of where it was, since they move and aiming at another one at each look
+would lose them all), else the nearest the character (`GHOST_CHARACTER`). Against the human's own play, its choice was within 150 px of
+where the human held the beam in 69 of 80 frames outside the boss phase and the boss was where the human held it in 12 of 13.
+
+**The boss's shield.** The boss can't always be hurt: in three phases of the run (6-7 s each, at 1:10, 0:37 and 0:25 before the end, a few seconds after
+each other) its bar shows two or three round ghost icons instead of its cyan health, the boss itself goes dim, and small ghosts fly in; catching them is
+what gets the boss back. `ghost_boss_shielded()` is the bar's cyan fill (`GHOST_BOSS_FILL`, BGR (255, 222, 0)) being gone: 500-20000 pixels of it in `GHOST_BOSS_BAR_BOX` when the
+boss can be hurt, 0 in the icon phases (a sliver, 470-2000, in the last seconds of the boss's life, which is why the limit, `GHOST_BOSS_FILL_MIN`, is 200). The boss
+is dim enough then to fall under `GHOST_COLOR`'s brightness, so `find_ghost_blobs()` finds only the small ghosts, and they are aimed at like any ghosts
+(nearest the character). Replaying the run, the three phases come out at 110.4-115.8 s, 127.2-133.5 s and 139.8-147.1 s of the capture, with the boss
+phase before, between and after them, as in the frames.
+
+`play_ghost_gallery()` waits until the overlay (TIME LEFT, the score) has been seen - the game starts about 25 s after the popup's Yes, not 50 - then, every
+`GHOST_LOOK_INTERVAL`, looks and works out the phase (before the boss, the boss can be hurt, the boss is shielded), moves the mouse to the target with `pydirectinput.moveTo()` (not
+`hover_move()`: its three settling pauses are too slow for tracking) and holds the left button down while there is one. **With nothing to aim at** (the boss phase's case is below):
+before the boss it holds the beam on a random place in `GHOST_FURNITURE_BOX` - the ghosts hide in the furniture, and holding the beam on it is how to get them out; no furniture is
+looked for, the place is just random and changes every `GHOST_FURNITURE_PERIOD` - and in the boss phase it lets go and doesn't aim at anything. Either way, with nothing to aim at for
+`GHOST_CAMERA_PERIOD` seconds it **turns the camera** (`rotate_camera()`): the right button held while the mouse is dragged sideways `GHOST_CAMERA_DRAG` px, a random way (and a little up or
+down, `GHOST_CAMERA_TILT`), in `GHOST_CAMERA_DRAG_STEPS` moves over `GHOST_CAMERA_DRAG_DURATION` seconds, so as to find some. Every `GHOST_JUMP_MIN`-`GHOST_JUMP_MAX`
+seconds it **jumps** (`KEY_JUMP`). The buttons are always let go, also when the macro is stopped.
+**Not yet checked in the game:** that `pydirectinput.moveRel(..., relative=True)` with the right button held turns Roblox's camera the way a hand does, the size of the drag, where the
+furniture is (the box is a guess around the character), and the jump's use. **What it does not do:** dodge, react to being knocked down, or choose between ghosts
+by anything but distance (the human often picked the second or third nearest); it can't tell furniture from floor, and doesn't try to "get the best view" by anything
+smarter than turning when it sees nothing.
 
 ### Recording a run
 
@@ -1285,7 +1332,7 @@ exact values and rationale):
 
 | Group | Examples |
 |---|---|
-| Behavior flags | `ENABLED_NEEDS`, `STOP_HOTKEY`, `BACKPACK_*`, `HALLOWEEN`, `MINIGAME_*`, `HAUNTLET_2_*`, `GHOST_GALLERY_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
+| Behavior flags | `ENABLED_NEEDS`, `STOP_HOTKEY`, `BACKPACK_*`, `HALLOWEEN`, `MINIGAME_*`, `HAUNTLET_2_*`, `GHOST_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
 | Window / coordinates | `REFERENCE_WIDTH`, `REFERENCE_HEIGHT`, `REFERENCE_CENTER_X/Y`, `ROBLOX_RECT_TTL` |
 | Timing | `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `STOP_CLICK_GRACE`, `NEED_GONE_*` |
 | Stuck needs | `NEED_STUCK_CHECKS` |
@@ -1298,6 +1345,7 @@ exact values and rationale):
 | Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
 | Hauntlet 2 reader | `HAUNTLET_ROOM_BOX`, `HAUNTLET_DIGIT_*`, `HAUNTLET_ROOM_MAX_DIGITS`, `HAUNTLET_SLOT_*`, `HAUNTLET_ITEM_*`, `HAUNTLET_BADGE_*`, `HAUNTLET_COUNT_*`, `HAUNTLET_NOT_ITEMS`, `HAUNTLET_HEART_*`, `HAUNTLET_*_DIR` |
+| Ghost Gallery play | `GHOST_COLOR`, `GHOST_CLOSE`, `GHOST_MIN_AREA`, `GHOST_IGNORE_BOXES`, `GHOST_CHARACTER`, `GHOST_STICK`, `GHOST_BOSS_BAR_*`, `GHOST_BOSS_FILL*`, `GHOST_LOOK_INTERVAL`, `GHOST_START_LOOK_INTERVAL`, `GHOST_FURNITURE_*`, `GHOST_CAMERA_*`, `GHOST_JUMP_*` |
 | Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_DARK_*`, `HAUNTLET_PLANK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_*`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_ITEM_CHANCE`, `HAUNTLET_ITEM_WAIT`, `HAUNTLET_KEY_ITEMS`, `HAUNTLET_LEARN_LIMIT` |
 | Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `MINIGAME_CAPTURE`, `RUN_CAPTURES_DIR`, `RUN_CAPTURE_ZIPS`, `MAX_RUN_CAPTURES`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |
@@ -1430,6 +1478,7 @@ clicks instead of making them. They cover:
 - `test_loop.py` - the whole workflow loop run for a moment with the game stubbed out (idle respawns, the resource monitor starting and stopping, the report being written);
 - `test_capture.py` - the input capture against a made-up keyboard, mouse and screen (events, both coordinate systems, click frames, skipping unchanged frames, the summary, the zips, stopping by itself, the hotkey toggle and pruning, and the automatic recording of minigame runs: the frame budget, its thinning, the outcome, the zip);
 - `test_hauntlet_2.py` - reading the Hauntlet 2 screen against crops of a real run;
+- `test_ghost_gallery.py` - ghost and boss finding against crops of a human's run, the aim and the player with a fake clock and mouse;
 - `test_hauntlet_2_play.py` - the timer and doors against crops of that run, then the room tracking, the choices (door, item), the walk and the whole loop with a fake clock and keyboard;
 - `test_features.py` - the daily money reset, the run-every-need sequence, the win screen and the like;
 - `test_config.py` - the real need tables in `magic_numbers.py`, without pinning any value: every entry is well formed (known keys, on-screen positions, movement keys, a `final_click` has its `prompt_pos`), has a handler, and the handler carries out exactly what the entry says (run over whichever needs exist, so `HALLOWEEN` off just drops `sick`). The handler tests elsewhere use made-up entries; this is what keeps the real ones honest;

@@ -75,13 +75,9 @@ MINIGAME_POPUP_CHECK_INTERVAL = 4.0   # the popup checks (stray windows, paychec
 MINIGAME_MAX_DURATION = 600.0       # gives up (and logs a failure) if the victory screen hasn't shown by then
 MINIGAME_FINISH_WAIT = 5.0          # after clicking NICE!, before carrying on
 MINIGAME_VICTORY_CLICK_TRIES = 3      # NICE! clicks before giving up on the win screen closing
-MINIGAME_START_WAIT = 50.0          # both minigames wait this long after teleporting, before they act (Hauntlet 2 then holds
-                                    # HAUNTLET_2_FORWARD_KEY, Ghost Gallery starts running about)
+MINIGAME_START_WAIT = 50.0          # Hauntlet 2 waits this long after teleporting, before it acts; Ghost Gallery waits until its overlay
+                                    # shows, but at most this long
 HAUNTLET_2_FORWARD_KEY = "w"
-GHOST_GALLERY_HOLD = 5.0            # the mouse is held down in holds this long...
-GHOST_GALLERY_HOLD_GAP = 0.2        # ...with this short a pause between them
-GHOST_GALLERY_STEP_MIN = 0.3        # while it's held, a random direction (MOVE_KEYS) is run in, with a jump,
-GHOST_GALLERY_STEP_MAX = 1.0        # for a random time between these
 
 # ============================================================================
 # STRAY WINDOWS
@@ -202,6 +198,43 @@ RUN_CAPTURE_ZIPS = 5
 MAX_RUN_CAPTURES = 5
 CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into zips of at most this size (chat attachments are limited to 30 MB)
 
+# Playing Ghost Gallery (from a human's 162 s run). The ghosts and the boss are drawn in a translucent cyan, HSV (85, 140, 250) under the
+# cursor of a player holding the button on one: GHOST_COLOR (OpenCV HSV, low and high) finds it; a ghost is at least GHOST_MIN_AREA px
+# (880-7200 seen; the smaller bits are the character's glow and the score popups), the boss 9500-41000. Nothing counts in GHOST_IGNORE_BOXES
+# (left, top, right, bottom): the HUD along the top and the character's own glow. The boss phase begins about 1:08 before the end
+# and is told by the boss's health bar, a gold frame (15800-16800 gold pixels in GHOST_BOSS_BAR_BOX; 0-230 before). The player is aimed
+# with the mouse: the beam goes to the cursor. The ghost aimed at is followed while a ghost is within GHOST_STICK px of where it was.
+GHOST_COLOR = ((78, 90, 200), (100, 210, 255))
+GHOST_CLOSE = 7
+GHOST_MIN_AREA = 600
+GHOST_IGNORE_BOXES = ((0, 0, 1920, 90), (900, 520, 1020, 680))
+GHOST_CHARACTER = (960, 540)
+GHOST_STICK = 120
+GHOST_BOSS_BAR_BOX = (680, 150, 1240, 290)
+GHOST_BOSS_BAR_GOLD = ((15, 150, 160), (30, 255, 255))
+GHOST_BOSS_BAR_MIN = 3000
+GHOST_BOSS_BAR_IGNORE = (680, 150, 1240, 275)  # the bar itself, in the boss phase: its crest and its ghost icons are the same cyan
+GHOST_LOOK_INTERVAL = 0.12
+GHOST_START_LOOK_INTERVAL = 0.5              # while waiting for the game to begin
+# The boss can't be hurt while its bar shows two or three ghost icons instead of its health: the bar's cyan fill (BGR (255, 222, 0),
+# 500-20000 px in GHOST_BOSS_BAR_BOX) is gone then (0 px), the boss is dim - too dim for GHOST_COLOR, so only the small ghosts that fly in
+# are found - and it is those the beam goes on (a human's run: three such phases, 6-7 s each).
+GHOST_BOSS_FILL = ((86, 230, 230), (96, 255, 255))
+GHOST_BOSS_FILL_MIN = 200
+# Before the boss, with no ghost in sight, the beam is held on a random place in GHOST_FURNITURE_BOX (ghosts hide in the furniture; a new
+# place every GHOST_FURNITURE_PERIOD seconds) and the camera is turned every GHOST_CAMERA_PERIOD seconds with nothing to aim at: the right
+# button held while the mouse is dragged GHOST_CAMERA_DRAG px (a random way, and up to GHOST_CAMERA_TILT px up or down). The character jumps
+# every GHOST_JUMP_MIN-GHOST_JUMP_MAX seconds.
+GHOST_FURNITURE_BOX = (560, 250, 1360, 760)
+GHOST_FURNITURE_PERIOD = 1.0
+GHOST_CAMERA_PERIOD = 3.0
+GHOST_CAMERA_DRAG = (150, 450)
+GHOST_CAMERA_TILT = 60
+GHOST_CAMERA_DRAG_DURATION = 0.3
+GHOST_CAMERA_DRAG_STEPS = 6
+GHOST_JUMP_MIN = 3.0
+GHOST_JUMP_MAX = 7.0
+
 # Hauntlet 2, read from the screen (see the HAUNTLET 2 READER section of main.py).
 # The ROOM panel's number: white digits on a dark panel, always in the same place, at most HAUNTLET_ROOM_MAX_DIGITS long.
 # Each digit is cut out, shrunk to HAUNTLET_DIGIT_SIZE and compared with the saved ones; the mean difference (0-255) of the
@@ -265,7 +298,9 @@ HAUNTLET_TIMER_WHITE_LEVEL = 215
 HAUNTLET_TIMER_MIN_WHITE = 500
 HAUNTLET_TV_GLOW = ((150, 248, 248), (225, 255, 255))   # (low, high) red, green, blue of the number's light
 HAUNTLET_TV_AREA = (150, 600)                # px of one such number
-HAUNTLET_TV_MIN_Y = 150                      # nothing above this is a TV (the room panel's glow)
+HAUNTLET_TV_HUD_BOX = (700, 0, 1220, 150)      # left, top, right, bottom: the room panel and timer; their glow is no TV
+HAUNTLET_TV_PAIR_GAP = (560, 1000)           # px between two TVs that are the outer two of three (900 with the camera close)
+HAUNTLET_TV_PAIR_OFF_CENTER = 150            # px: and their middle is this close to the middle of the screen (neighbours with the third off screen are not)
 HAUNTLET_TV_SPACING = (200, 500)             # px between neighbouring TVs
 HAUNTLET_TV_ROW_TOLERANCE = 15               # px: the TVs of a row are this level...
 HAUNTLET_TV_SPACING_TOLERANCE = 0.25         # ...and these spacings this close
@@ -279,6 +314,8 @@ HAUNTLET_DOOR_SPACING = 360
 # 0.11-0.24 on boarded ones (median 0.18); the threshold is the best one found on the doors of 25 rooms, 94% right on
 # rooms left out of the search, and wrong mostly on the third layer's spiked doors and on boarded doors half hidden by the player.
 HAUNTLET_LOCK_LIGHT_BOX = (-60, 20, 60, 70)
+HAUNTLET_LOCK_LIGHT_RED = 225                # the light is pure red, (255, 37, 37); the player's hearts, which can be under the door, have dark red outlines (204, 68, 54)
+HAUNTLET_LOCK_LIGHT_OTHER = 70
 HAUNTLET_LOCK_LIGHT_MIN = 25
 HAUNTLET_DOOR_BOX = (-45, 35, 45, 130)
 HAUNTLET_MYSTERY_BRIGHTNESS = 172
@@ -298,7 +335,8 @@ HAUNTLET_PLANK_FRACTION = 0.103
 # door: HAUNTLET_STRAFE_DURATION seconds per door spacing (the distance between neighbouring doors) of distance, measured
 # from the player's hearts to the door's TV, no strafe under HAUNTLET_STRAFE_MIN spacings and never more than
 # HAUNTLET_STRAFE_MAX (a human's runs, from the middle: left door 1.0-1.1 s, right 0.9-1.3 s) - until the room number
-# changes, at most HAUNTLET_WALK_MAX seconds (a human's room: W held 3-4.8 s). If the number still hasn't changed
+# changes, at most HAUNTLET_WALK_MAX seconds (a human's room: W held 3-4.8 s), and then HAUNTLET_WALK_PAST_DURATION longer: the
+# number changes with the player still in the doorway, the camera close on the door, and the next room's doors can't be seen from there. If the number still hasn't changed
 # HAUNTLET_ROOM_TIMEOUT seconds after, a door is chosen again.
 # A room whose number is a multiple of HAUNTLET_FORK_EVERY (10 and 20 were seen) is a fork: no TVs, two doorways. A
 # room without a row of TVs is a single doorway ahead - at once for room 1, the entrance hall (its doorway leads into a room
@@ -309,6 +347,7 @@ HAUNTLET_STRAFE_DURATION = 1.1
 HAUNTLET_STRAFE_MIN = 0.15
 HAUNTLET_STRAFE_MAX = 2.5
 HAUNTLET_WALK_MAX = 6.0
+HAUNTLET_WALK_PAST_DURATION = 1.5            # more of W after the number changed (a human's: 1.0-2.0 s, median 1.4)
 HAUNTLET_LOOK_INTERVAL = 0.35
 HAUNTLET_ROOM_SETTLE = 2.0
 HAUNTLET_TV_STABLE = 4

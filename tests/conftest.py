@@ -67,3 +67,46 @@ def macro(tmp_path, monkeypatch):
     main.STOP_EVENT.clear()
     main.close_output_log()
     main._NEED_STRIP_CACHE.update(strip=None, found=[], reuses=0)
+
+
+class Clock:
+    """A time that only moves when the macro waits."""
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+@pytest.fixture
+def world(macro, monkeypatch):
+    """Fake time, keyboard and mouse for the minigame players: `world.keys` lists ("down"/"up", key, time), `world.mouse` lists
+    ("move", x, y) / ("down",) / ("up",) (for the right button ("down", "right") ...) / ("rel", dx, dy), `world.screens` is what the next looks see (a list, the last one staying, or a
+    function of the world), `world.waits` the waits."""
+    clock = Clock()
+    world = types.SimpleNamespace(clock=clock, keys=[], mouse=[], waits=[], screens=[], looks=0)
+    monkeypatch.setattr(macro, "time", types.SimpleNamespace(**{**vars(macro.time), "time": clock}))
+
+    def wait(duration):
+        world.waits.append(duration)
+        clock.now += duration
+
+    def look(watch):
+        world.looks += 1
+        if callable(world.screens):
+            return world.screens()
+        return world.screens.pop(0) if len(world.screens) > 1 else world.screens[0]
+
+    monkeypatch.setattr(macro, "wait_interruptible", wait)
+    monkeypatch.setattr(macro, "minigame_look", look)
+    monkeypatch.setattr(macro, "minigame_wait", lambda duration, watch: clock.__setattr__("now", clock.now + duration))
+    monkeypatch.setattr(macro, "detect_minigame_victory", lambda img: False)
+    monkeypatch.setattr(macro.pydirectinput, "keyDown", lambda key: world.keys.append(("down", key, clock.now)), raising=False)
+    monkeypatch.setattr(macro.pydirectinput, "keyUp", lambda key: world.keys.append(("up", key, clock.now)), raising=False)
+    monkeypatch.setattr(macro.pydirectinput, "moveTo", lambda x, y, **kw: world.mouse.append(("move", x, y)), raising=False)
+    monkeypatch.setattr(macro.pydirectinput, "mouseDown", lambda *a, button="left", **k: world.mouse.append(("down",) if button == "left" else ("down", button)), raising=False)
+    monkeypatch.setattr(macro.pydirectinput, "mouseUp", lambda *a, button="left", **k: world.mouse.append(("up",) if button == "left" else ("up", button)), raising=False)
+    monkeypatch.setattr(macro.pydirectinput, "moveRel", lambda dx, dy, **k: world.mouse.append(("rel", dx, dy)), raising=False)
+    monkeypatch.setattr(macro.pydirectinput, "press", lambda key, **k: world.keys.append(("press", key, clock.now)), raising=False)
+    monkeypatch.setattr(macro, "to_screen", lambda x, y: (x, y))
+    return world

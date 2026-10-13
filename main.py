@@ -2948,6 +2948,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     target: Optional[Point] = None
     held = False
     moving: Optional[str] = None                     # the key being held to walk, and until when
+    regrab_at = time.time() + cfg.GHOST_REGRAB_PERIOD   # when the beam is let go of and pressed again
     chasing: Optional[str] = None                    # the key held to get to what is aimed at (a `moving` that has no end)
     turn: Optional[int] = None                       # the way the camera is being turned to find the boss (-1 or 1)
     move_until = 0.0
@@ -2983,6 +2984,9 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
             if detect_minigame_victory(img):
                 return True
             bar = ghost_boss_bar_visible(img)
+            if held and time.time() >= regrab_at:                           # knocked down, the player lets go of the beam and has to press again: do both now and then
+                let_go()
+                regrab_at = time.time() + cfg.GHOST_REGRAB_PERIOD
             now_phase = ("shielded" if ghost_boss_shielded(img) else "boss") if bar else "ghosts"
             if now_phase != phase:
                 print(f"[debug] Ghost Gallery: {dict(ghosts='the boss phase is over', boss='the boss can be hurt', shielded='the boss is shielded: after the small ghosts')[now_phase]}")
@@ -2994,7 +2998,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 aim(target)
             elif phase == "ghosts":                                         # nothing to be seen before the boss: try the furniture
                 if furniture is None or now >= furniture_until:
-                    furniture = find_furniture(watch)                       # (the beam stays down all the while: the mouse is just moved around)
+                    furniture = find_furniture(watch)                       # (the mouse is moved around with the beam down)
                     furniture_until = time.time() + cfg.GHOST_FURNITURE_PERIOD
                 aim(furniture)
             if target is not None:

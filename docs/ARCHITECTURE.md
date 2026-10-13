@@ -446,7 +446,7 @@ rather than a flat sleep after the fact.
 
 | Need | How it's handled |
 |---|---|
-| `hungry` / `thirsty` / `dirty` / `potty` / `sleepy` | `ButtonNeedHandler`: walk to the action buttons (`walk_to_buttons()`), refresh the button mapping (`refresh_button_mapping()`), click the matching one (`click_need_button()`), which then calls `wait_until_need_gone()` for that need name. |
+| `hungry` / `thirsty` / `dirty` / `potty` / `sleepy` | `ButtonNeedHandler`: walk to the action buttons (`walk_to_buttons()`), refresh the button mapping (`refresh_button_mapping()`), click the matching one (`click_need_button()`), which then calls `wait_until_need_gone()` for that need name. A click can be refused - the game answers "Only Pets, Babies, and Dolls can use this." even when all five buttons were found - and for `BUTTON_REJECT_LOOK` seconds after each click `only_pets_message_visible()` looks for that text (the white of its letters against `ref/popups/only_pets.png`, `ONLY_PETS_*`, so what is behind it doesn't matter). If it is there the button is clicked again, up to `BUTTON_CLICK_TRIES` clicks in all (a run event each time); if the last one is refused too the handler returns False without waiting for the icon. |
 | `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → hold zoom-in → throw the toy by clicking empty space `CATCH_THROW_COUNT` times, `CATCH_EMOTE_DELAY` after each → unequip. A fixed sequence: it doesn't wait for the icon (the next check sees whether it cleared). |
 | `pet` | `PetNeedHandler`: `focus_pet()` (see below, with `PET_FOCUS_CLICK_DURATION`), click the screen centre, move to `PET_SWIPE_START_OFFSET` above it, then hold the mouse down and swipe once down to `PET_SWIPE_END_OFFSET` below it over `PET_SWIPE_DURATION`, releasing the button in a `finally`. Same as `catch` - always the full fixed duration. |
 | `choose` | `ChooseNeedHandler`: `focus_pet()` (see below), find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. It doesn't wait for the icon to clear (it's gone at once; the next check confirms). |
@@ -454,7 +454,7 @@ rather than a flat sleep after the fact.
 | `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`: after pressing `e` and waiting `SICK_CONFIRM_WAIT` the handler looks for the doctor's dialog, `detect_sick_dialog()`. Recognised: it clicks Yes. Not recognised and the pet view is not open: it logs `sick: dialog not recognised after e (pet focused: False) - clicking Yes anyway` and clicks Yes all the same, and the wait for the icon says whether it worked (in run 2 the recognition failed on 27 of 27 real attempts while the plain click had worked in run 1, so it is not trusted to fail the need). Not recognised and the pet view *is* open - the prompt is then a hand button `e` doesn't press: it logs `sick: no dialog after e (pet focused: True) - clicking the prompt`, backs out of the pet view (`dismiss_stray_windows()`), clicks the prompt on screen (`prompt_pos`, `SICK_PROMPT_POS`) and looks once more. Only if the dialog still isn't up has the need failed: the character respawns and the handler returns False at once, with no wait for the icon to clear, and `process_needs()` logs the failure), `helicopter` (see below) and `max_wait` (how long to wait for the need to clear afterwards; default `NEED_GONE_MAX_WAIT`, 75s). `sick` also sets `enter_by_white` (see **Getting in by the white screen** below). `sick` waits `SICK_PRE_E_WAIT` after its last hold before pressing `e`. Which table is used depends on `HALLOWEEN` - see below. |
 | `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")` - up to `NEED_GONE_MAX_WAIT`, same early-exit as `ride` above. |
 
-**Getting in by the white screen.** The walk to the hospital doesn't always end indoors, and going in shows as a white screen (`detect_white_screen()`), so an entry with `enter_by_white` checks for it instead of trusting the timings. After the teleport the handler first waits (up to `TELEPORT_ARRIVE_MAX`, `wait_until_screen_clear()`) for the teleport's own white screen to pass, then holds each step with `hold_key(..., poll=...)`, which calls the poll every `WATCH_POLL_INTERVAL` seconds and records any white screen seen. If one was seen the walk worked and the handler goes on to the desk as before. If not, `_find_the_way_in()` zigzags until one is, for at most the entry's `enter_wait` seconds: forward for `ENTER_SEARCH_FORWARD`, then sideways (left and right alternately, a longer stretch each time, capped at `ENTER_SEARCH_SIDE_MAX`, starting at `ENTER_SEARCH_SIDE`) and a jump. After a late entry it waits for the white to clear (`ENTER_CLEAR_MAX`) and walks the entry's `inside_steps`, which the early entry would have covered. If it never gets in the need fails like a missing dialog: a run event is logged, the character respawns and the handler returns False with no dialog and no waiting.
+**Getting in by the white screen.** The walk to the hospital doesn't always end indoors, and going in shows as a white screen (`detect_white_screen()`), so an entry with `enter_by_white` checks for it instead of trusting the timings. After the teleport the handler first waits (up to `TELEPORT_ARRIVE_MAX`, `wait_until_screen_clear()`) for the teleport's own white screen to pass, then holds each step with `hold_key(..., poll=...)`, which calls the poll every `WATCH_POLL_INTERVAL` seconds and records any white screen seen. If one was seen the walk worked and the handler goes on to the desk as before. If not, `_find_the_way_in()` works for at most the entry's `enter_wait` seconds, until one is seen. It looks for the door first (`find_door_light()`: the white light of the open doorway with the doors' pale yellow panes beside it - `DOOR_*` - outside the HUD, the character's place, the bottom of the screen and the macro's own window) and, with it in sight, steps towards it for `ENTER_DOOR_STEP` seconds at a time: `w`, or `a`/`d` when it is more than `ENTER_DOOR_MARGIN` px to a side of the character. It was checked against the capture's last steps to the door only; from the plaza, shop windows look like it too. With no door in sight it zigzags: forward for `ENTER_SEARCH_FORWARD`, then sideways (left and right alternately, a longer stretch each time, capped at `ENTER_SEARCH_SIDE_MAX`, starting at `ENTER_SEARCH_SIDE`) and a jump. After a late entry it waits for the white to clear (`ENTER_CLEAR_MAX`) and walks the entry's `inside_steps`, which the early entry would have covered. If it never gets in the need fails like a missing dialog: a run event is logged, the character respawns and the handler returns False with no dialog and no waiting.
 
 **Helicopter.** A teleport-walk entry can fly instead of walk. `HELICOPTER_REQUIRED`
 (`magic_numbers.py`, default `False`) is the default for entries that don't
@@ -525,6 +525,8 @@ the camera on the pet with a BACK button; `close_pos` is that button). Only
 `only_when_unwanted`: `dismiss_stray_windows()` skips it while
 `wanting_pet_focus()` is active (those two handlers), and clicks BACK in every
 other case - including mid-task, e.g. a throw click that focused the pet.
+
+`profile` is the player's own profile page (`ref/popups/profile.png`, the toolbar of Stickers / Preview / paint / save; `close_pos` is its red X), which a stray click on the character or the character menu's Profile opens.
 
 `cant_spawn_vehicle` is the "You can't spawn a vehicle here." popup
 (`ref/popups/cant_spawn_vehicle.png`; `close_pos` is its Okay button). It is
@@ -635,8 +637,12 @@ Each minigame has a switch in the game config (`hauntlet_2_enabled`,
 Options tab). `minigame_popup()`:
 - **switched off, or not recognised** - clicks `MINIGAME_POPUP_DONT_SHOW_POS`
   ("Do not show again this session") and `MINIGAME_POPUP_NO_POS`;
-- **switched on** - `play_minigame()` clicks Yes (`MINIGAME_POPUP_YES_POS`)
-  and plays it, as below. Minigames are time-sensitive, so this also happens
+- **switched on** - `play_minigame()` clicks Yes (`MINIGAME_POPUP_YES_POS`) with `accept_minigame_popup()`
+  and plays it, as below. The click is checked: within `MINIGAME_TELEPORT_WAIT` seconds (looking every `MINIGAME_TELEPORT_POLL`) there
+  must be the white screen of a teleport or a view that has changed (`screen_changed()`: the shrunk screen differs from the one at the click by
+  more than `MINIGAME_TELEPORT_CHANGE` grey levels). If not and the popup is still up (`detect_minigame_popup()`) the click didn't take and Yes is clicked
+  again, up to `MINIGAME_YES_TRIES` clicks; if the popup is gone and nothing teleported the start has failed at once - a logged failure and a respawn,
+  no capture and no wait for a game that isn't there (run 6: Hauntlet 2's Yes clicked, the character still in the house 114 s later). Minigames are time-sensitive, so this also happens
   when the popup turns up while a handler is waiting in
   a handler's waits (see [Per-cycle checks while a task
   runs](#need-handlers)): the minigame is played right
@@ -1070,11 +1076,11 @@ knowing if you're modifying it:
   (which is only safe from its own thread): it queues `func`, waits until it
   has run or `timeout` seconds pass (`None` = as long as it takes, for a
   dialog such as the new-need name prompt) and returns what it returned.
-- **`watch_stop_hotkey()`** starts a thread that watches two hotkeys in any
-  window (holding one doesn't retrigger): `STOP_HOTKEY` stops a running macro (it
+- **`watch_stop_hotkey()`** starts a thread that watches two hotkeys (holding one doesn't retrigger; `hotkey_fires()` decides):
+  `STOP_HOTKEY` stops a running macro, in any window (it
   does nothing while nothing runs), so you can take over the computer without
   reaching for the GUI, and `CAPTURE_HOTKEY` starts or stops an
-  [input capture](#input-capture). The action is handed to Tk's thread.
+  [input capture](#input-capture), only while Roblox is the focused window. The action is handed to Tk's thread.
 - **`add_config_checkbox(key)`** makes a checkbox for a persisted switch. It is
   deliberately not in `action_buttons`: the switches stay usable while a
   workflow runs, which is safe because `update_game_config()` is locked.
@@ -1090,7 +1096,7 @@ knowing if you're modifying it:
 
 ### Input capture
 
-Press `CAPTURE_HOTKEY` (`m`) in any window to start recording and again to stop. It is for working out
+Press `CAPTURE_HOTKEY` (`m`) while Roblox is the focused window to start recording and again to stop. It is for working out
 how something is played by hand - the Hauntlet 2 rooms, say - and gives the macro's author lossless
 frames and the inputs that went with them. It is separate from **Record the next run** (a low-quality
 video of a macro run): it works whether or not the macro is running, and the macro's own key presses
@@ -1123,7 +1129,7 @@ is recompressed. For a zip that already exists (a capture zipped by hand, say) `
 - `info.json` - when it started and stopped, the screen and Roblox window sizes, the frame (and skipped-frame) and event
   counts and why it stopped.
 
-**Minigame runs are recorded automatically.** `play_minigame()` starts a capture of its own after taking the popup's Yes
+**Minigame runs are recorded automatically.** `play_minigame()` starts a capture of its own after the teleport that the popup's Yes brought
 (`start_run_capture()`) and stops it when the run is over, whichever way it ends - won, left, timed out or stopped
 (`finish_run_capture()`, which also writes `outcome` into `info.json` and zips the capture as above). It is the same recorder, so it
 has the macro's own key presses and clicks and the frames on the same clock, but in `debug/minigame_captures/`
@@ -1320,9 +1326,8 @@ moves the mouse to the target with `pydirectinput.moveTo()` (not `hover_move()`:
 **With nothing to aim at** (the boss phase's case is below): before the boss it holds the beam on a random place in `GHOST_FURNITURE_BOX` at least `GHOST_FURNITURE_MIN_DISTANCE` px from the
 character (`far_from_character()`; the ghosts hide in the furniture, and holding the beam on it is how to get them out - no furniture is looked for, the place is just random and changes
 every `GHOST_FURNITURE_PERIOD`) and in the boss phase it lets go and doesn't aim at anything. Either way, with nothing to aim at for `GHOST_CAMERA_PERIOD` seconds it **turns the camera**
-(`rotate_camera()`): the right button held while the mouse is dragged sideways `GHOST_CAMERA_DRAG` px, a random way (and a little up or down, `GHOST_CAMERA_TILT`), in
-`GHOST_CAMERA_DRAG_STEPS` moves over `GHOST_CAMERA_DRAG_DURATION` seconds, so as to find some. **It walks about**: every `GHOST_MOVE_PERIOD` seconds a random `MOVE_KEYS` key is held for
-`GHOST_MOVE_STEP_MIN`-`GHOST_MOVE_STEP_MAX` seconds, one at a time, the aiming going on meanwhile. Every `GHOST_JUMP_MIN`-`GHOST_JUMP_MAX` seconds it **jumps** (`KEY_JUMP`).
+(`rotate_camera()`; like `tilt_camera_down()` it first moves the mouse to the middle of the screen, as the drag moves the cursor by hundreds of px and a right button released over the window's border or title bar opens its menu and takes the game's focus): the right button held while the mouse is dragged sideways `GHOST_CAMERA_DRAG` px, a random way (and a little up or down, `GHOST_CAMERA_TILT`), in
+`GHOST_CAMERA_DRAG_STEPS` moves over `GHOST_CAMERA_DRAG_DURATION` seconds, so as to find some. **It walks**: first forward for `GHOST_START_FORWARD` seconds, out of where the game puts the player and into the middle of the hall; then every `GHOST_MOVE_PERIOD` seconds a key is held for `GHOST_MOVE_STEP_MIN`-`GHOST_MOVE_STEP_MAX` seconds, one at a time, the aiming going on meanwhile - towards the ghost being aimed at (`ghost_step_key()`: `w` if it is above the character, `s` below, `a`/`d` to a side, along the axis it is farther off on, if that is more than `GHOST_TOWARD_MARGIN` px), a random `MOVE_KEYS` key if none is in sight or it is close. Every `GHOST_JUMP_MIN`-`GHOST_JUMP_MAX` seconds it **jumps** (`KEY_JUMP`).
 The buttons and the walking key are always let go, also when the macro is stopped. The macro's own window is out of the way (sent to the back, see
 `send_macro_window_to_back()`) for the whole of both minigames, as it covers part of the screen.
 **Not yet checked in the game:** that `pydirectinput.moveRel(..., relative=True)` with the right button held turns Roblox's camera the way a hand does, the size of the drags and of
@@ -1373,7 +1378,7 @@ exact values and rationale):
 | Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
 | Hauntlet 2 reader | `HAUNTLET_ROOM_BOX`, `HAUNTLET_DIGIT_*`, `HAUNTLET_ROOM_MAX_DIGITS`, `HAUNTLET_SLOT_*`, `HAUNTLET_ITEM_*`, `HAUNTLET_BADGE_*`, `HAUNTLET_COUNT_*`, `HAUNTLET_NOT_ITEMS`, `HAUNTLET_HEART_*`, `HAUNTLET_*_DIR` |
-| Ghost Gallery play | `GHOST_COLOR`, `GHOST_CLOSE`, `GHOST_MIN_AREA`, `GHOST_IGNORE_BOXES`, `GHOST_CHARACTER`, `GHOST_STICK`, `GHOST_BOSS_BAR_*`, `GHOST_BOSS_FILL*`, `GHOST_LOOK_INTERVAL`, `GHOST_START_LOOK_INTERVAL`, `GHOST_FURNITURE_*`, `GHOST_CAMERA_*`, `GHOST_START_TILT`, `GHOST_MOVE_*`, `GHOST_JUMP_*`, `KEY_ZOOM_OUT`, `MINIGAME_ZOOM_OUT_DURATION` |
+| Ghost Gallery play | `GHOST_COLOR`, `GHOST_CLOSE`, `GHOST_MIN_AREA`, `GHOST_IGNORE_BOXES`, `GHOST_CHARACTER`, `GHOST_STICK`, `GHOST_BOSS_BAR_*`, `GHOST_BOSS_FILL*`, `GHOST_LOOK_INTERVAL`, `GHOST_START_LOOK_INTERVAL`, `GHOST_FURNITURE_*`, `GHOST_CAMERA_*`, `GHOST_START_TILT`, `GHOST_MOVE_*`, `GHOST_START_FORWARD`, `GHOST_TOWARD_MARGIN`, `GHOST_JUMP_*`, `KEY_ZOOM_OUT`, `MINIGAME_ZOOM_OUT_DURATION` |
 | Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_DARK_*`, `HAUNTLET_PLANK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_*`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_ITEM_*`, `HAUNTLET_LOW_HEARTS`, `HAUNTLET_PHONE_CHANCE`, `HAUNTLET_ARROW_*`, `HAUNTLET_LEARN_LIMIT` |
 | Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `MINIGAME_CAPTURE`, `RUN_CAPTURES_DIR`, `RUN_CAPTURE_ZIPS`, `MAX_RUN_CAPTURES`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |

@@ -66,6 +66,11 @@ def hotkey_down(key: str) -> bool:
     window has the focus (Windows)."""
     return bool(ctypes.windll.user32.GetAsyncKeyState(ord(key.upper())) & 0x8000)  # type: ignore[attr-defined]  # Windows only
 
+def hotkey_fires(down: bool, was_down: bool, only_while_running: bool, running: bool, only_in_roblox: bool) -> bool:
+    """Whether a hotkey seen `down` (and not `was_down` at the last look) is to act: not while it is just being held, not when it is
+    one for a run that isn't going (`only_while_running`), and not when it is for Roblox's window only (`only_in_roblox`) and another is focused."""
+    return down and not was_down and (running or not only_while_running) and (not only_in_roblox or is_roblox_focused())
+
 def check_stop() -> None:
     """Raise StopRequested if [STOP] was pressed - the one checkpoint that doesn't
     require Roblox focus (see run_full_cycle()).
@@ -1110,20 +1115,46 @@ def refresh_button_mapping() -> bool:
     print("\n[!] BUTTON MAPPING REFRESHED\n")
     return True
 
+def only_pets_message_visible(img: Image) -> bool:
+    """True if the game's "Only Pets, Babies, and Dolls can use this." is on screen in `img`: the white of its letters matches the same
+    of the crop (ONLY_PETS_*), which doesn't depend on what the world behind it looks like."""
+    crop = load_templates(cfg.STRAY_WINDOW_DIR).get("only_pets")
+    left, top, right, bottom = cfg.ONLY_PETS_BOX
+    if crop is None:
+        return False
+    band = (img[top:bottom, left:right].min(axis=2) >= cfg.ONLY_PETS_WHITE).astype(np.float32)
+    letters = (crop.min(axis=2) >= cfg.ONLY_PETS_WHITE).astype(np.float32)
+    if letters.shape[0] > band.shape[0] or letters.shape[1] > band.shape[1] or not letters.any() or not band.any():
+        return False
+    return float(cv2.minMaxLoc(cv2.matchTemplate(band, letters, cv2.TM_CCOEFF_NORMED))[1]) >= cfg.ONLY_PETS_THRESHOLD
+
+def button_click_refused() -> bool:
+    """Look for the "Only Pets, Babies, and Dolls can use this." message for BUTTON_REJECT_LOOK seconds after a need button was clicked."""
+    end = time.time() + cfg.BUTTON_REJECT_LOOK
+    while time.time() < end:
+        if only_pets_message_visible(grab_screen()):
+            return True
+        wait_interruptible(cfg.WATCH_POLL_INTERVAL)
+    return False
+
 def click_need_button(need_name: str) -> bool:
-    """Click the button mapped to `need_name`, then wait for its icon to clear. Returns
-    False if no button was mapped or clicked (the need must not count as resolved).
-    See docs/ARCHITECTURE.md#need-handlers.
+    """Click the button mapped to `need_name` - again if the game answers "Only Pets, Babies, and Dolls can use this.", up to
+    BUTTON_CLICK_TRIES clicks - then wait for its icon to clear. Returns False if no button was mapped or clicked (the need must
+    not count as resolved). See docs/ARCHITECTURE.md#need-handlers.
     """
     if need_name not in state.button_positions:
         print(f"[!] WARNING: no button mapped for '{need_name}'")
         return False
     button_x, button_y = state.button_positions[need_name]
-    print(f"[!] CLICKING: {need_name}")
-    if not click_button(button_x, button_y, need_name):
-        return False
-    wait_until_need_gone(need_name)
-    return True
+    for attempt in range(cfg.BUTTON_CLICK_TRIES):
+        print(f"[!] CLICKING: {need_name}")
+        if not click_button(button_x, button_y, need_name):
+            return False
+        if not button_click_refused():
+            wait_until_need_gone(need_name)
+            return True
+        log_run_event(f"{need_name}: the game said only pets can use it (click {attempt + 1})")
+    return False
 
 # ============================================================================
 # MOVEMENT
@@ -1166,6 +1197,27 @@ def hold_key(key: str, duration: float, poll: Optional[Callable[[], Any]] = None
             poll()
     finally:
         pydirectinput.keyUp(key)
+
+def find_door_light(img: Image) -> Optional[Point]:
+    """Where the hospital's open door is on screen in `img`: the middle of the biggest patch of white light (at least DOOR_MIN_AREA px, not in
+    DOOR_IGNORE_BOXES) that has the doors' yellow panes (DOOR_YELLOW, at least DOOR_YELLOW_MIN px of them) within DOOR_YELLOW_REACH px; None
+    if there is none. Shop windows of the plaza look like it from afar; it is for the last steps."""
+    white = (img.min(axis=2) >= cfg.WHITE_SCREEN_LEVEL).astype(np.uint8)
+    panes = cv2.inRange(cv2.cvtColor(img, cv2.COLOR_BGR2HSV), cfg.DOOR_YELLOW[0], cfg.DOOR_YELLOW[1])
+    for left, top, right, bottom in cfg.DOOR_IGNORE_BOXES:
+        white[top:bottom, left:right] = 0
+        panes[top:bottom, left:right] = 0
+    if np.count_nonzero(panes) < cfg.DOOR_YELLOW_MIN:
+        return None
+    closed = cv2.morphologyEx(white, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+    near = cv2.dilate(panes, np.ones((cfg.DOOR_YELLOW_REACH, cfg.DOOR_YELLOW_REACH), np.uint8)) > 0
+    count, labels, stats, centres = cv2.connectedComponentsWithStats(closed)
+    best: Optional[tuple[int, Point]] = None
+    for i in range(1, count):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        if area >= cfg.DOOR_MIN_AREA and np.count_nonzero((labels == i) & near) > 0.2 * area and (best is None or area > best[0]):
+            best = (area, (int(centres[i][0]), int(centres[i][1])))
+    return best[1] if best else None
 
 def wait_until_screen_clear(max_wait: float) -> None:
     """Wait (at most `max_wait` seconds) for the screen to stop being the white of a teleport or of going indoors
@@ -1859,7 +1911,9 @@ class TeleportWalkNeedHandler(NeedHandler):
         if watch and not entered:
             if not self._find_the_way_in(watch, entered):
                 print(f"[debug] never got in for the {self.name} need - it failed")
-                log_run_event(f"{self.name}: did not get in within {self.config.get('enter_wait', cfg.NEED_GONE_MAX_WAIT):g}s")
+                shot = save_failure_report(f"{self.name} did not get in")       # where the character stands, before the respawn
+                log_run_event(f"{self.name}: did not get in within {self.config.get('enter_wait', cfg.NEED_GONE_MAX_WAIT):g}s"
+                              + (f" (screenshot: failures/{shot})" if shot else ""))
                 respawn_character()
                 return False
             wait_until_screen_clear(cfg.ENTER_CLEAR_MAX)
@@ -1886,6 +1940,18 @@ class TeleportWalkNeedHandler(NeedHandler):
         print(f"[!] {self.name.capitalize()} complete!")
         return True
 
+    def _step_towards_the_door(self, watch: Callable[[], None]) -> bool:
+        """Look for the door (find_door_light()) and, if it is in sight, walk a step towards it: W, or A / D if it is more than
+        ENTER_DOOR_MARGIN px to the left / right of the character. Whether it was in sight."""
+        door = find_door_light(grab_screen())
+        if door is None:
+            return False
+        dx = door[0] - cfg.GHOST_CHARACTER[0]
+        key = "w" if abs(dx) <= cfg.ENTER_DOOR_MARGIN else (cfg.HAUNTLET_RIGHT_KEY if dx > 0 else cfg.HAUNTLET_LEFT_KEY)
+        print(f"[debug] the door is at {door} - stepping {key}")
+        hold_key(key, cfg.ENTER_DOOR_STEP, poll=watch)
+        return True
+
     def _find_the_way_in(self, watch: Callable[[], None], entered: list[float]) -> bool:
         """The walk didn't end indoors (no white screen was seen, which is what going in looks like): zigzag forward until one
         is, at most the entry's enter_wait seconds - forward ENTER_SEARCH_FORWARD seconds, then sideways, a way that alternates,
@@ -1896,6 +1962,10 @@ class TeleportWalkNeedHandler(NeedHandler):
         deadline = time.time() + wait
         sweep = 0
         while time.time() < deadline:
+            if self._step_towards_the_door(watch):
+                if entered:
+                    break
+                continue
             hold_key("w", cfg.ENTER_SEARCH_FORWARD, poll=watch)
             if entered:
                 break
@@ -2762,10 +2832,17 @@ def choose_ghost_target(blobs: list[tuple[int, int, int]], boss: bool, previous:
     cx, cy = cfg.GHOST_CHARACTER
     return min(blobs, key=lambda b: (b[0] - cx) ** 2 + (b[1] - cy) ** 2)[:2]
 
+def start_camera_drag() -> None:
+    """Move the mouse to the middle of the screen and press the right button there. The drag that follows moves the cursor by
+    hundreds of px, and a right button released over the window's border or title bar opens its menu and takes the focus from
+    the game - which is where the cursor was left by whatever had been aimed at before."""
+    pydirectinput.moveTo(*to_screen(cfg.REFERENCE_CENTER_X, cfg.REFERENCE_CENTER_Y))
+    pydirectinput.mouseDown(button="right")
+
 def tilt_camera_down() -> None:
     """Drag the mouse down with the right button held, GHOST_START_TILT px: the camera rises behind the character, for a view
     from above, over GHOST_CAMERA_DRAG_DURATION seconds in GHOST_CAMERA_DRAG_STEPS moves."""
-    pydirectinput.mouseDown(button="right")
+    start_camera_drag()
     try:
         for _ in range(cfg.GHOST_CAMERA_DRAG_STEPS):
             pydirectinput.moveRel(0, cfg.GHOST_START_TILT // cfg.GHOST_CAMERA_DRAG_STEPS, relative=True)
@@ -2783,12 +2860,23 @@ def far_from_character(box: tuple[int, int, int, int], minimum: float) -> Point:
             return x, y
     return max(((left, top), (right, top), (left, bottom), (right, bottom)), key=lambda c: (c[0] - cx) ** 2 + (c[1] - cy) ** 2)
 
+def ghost_step_key(target: Optional[Point]) -> str:
+    """The key to walk a step with: towards `target` (W if it is above the character, S below, A/D left/right - along the axis
+    it is farther off on, if it is more than GHOST_TOWARD_MARGIN px off), else a random MOVE_KEYS key."""
+    if target is not None:
+        dx, dy = target[0] - cfg.GHOST_CHARACTER[0], target[1] - cfg.GHOST_CHARACTER[1]
+        if max(abs(dx), abs(dy)) > cfg.GHOST_TOWARD_MARGIN:
+            if abs(dx) > abs(dy):
+                return cfg.HAUNTLET_RIGHT_KEY if dx > 0 else cfg.HAUNTLET_LEFT_KEY
+            return cfg.HAUNTLET_BACK_KEY if dy > 0 else "w"
+    return random.choice(cfg.MOVE_KEYS)
+
 def rotate_camera(drag: tuple[int, int] = cfg.GHOST_CAMERA_DRAG, tilt: int = cfg.GHOST_CAMERA_TILT) -> None:
     """Turn the camera: hold the right mouse button and drag the mouse sideways (a random way, `drag` = least and most px, and
     up to `tilt` px up or down too) over GHOST_CAMERA_DRAG_DURATION seconds, in GHOST_CAMERA_DRAG_STEPS moves, as Roblox wants a drag."""
     dx = random.choice((-1, 1)) * random.randint(*drag)
     dy = random.randint(-tilt, tilt)
-    pydirectinput.mouseDown(button="right")
+    start_camera_drag()
     try:
         for _ in range(cfg.GHOST_CAMERA_DRAG_STEPS):
             pydirectinput.moveRel(dx // cfg.GHOST_CAMERA_DRAG_STEPS, dy // cfg.GHOST_CAMERA_DRAG_STEPS, relative=True)
@@ -2812,6 +2900,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     minigame_wait(cfg.GHOST_INTRO_WAIT, watch)
     zoom_out()
     tilt_camera_down()
+    hold_key("w", cfg.GHOST_START_FORWARD)           # into the middle of the hall, from where the game puts the player
     target: Optional[Point] = None
     held = False
     moving: Optional[str] = None                     # the key being held to walk, and until when
@@ -2871,7 +2960,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 stop_walking()
                 next_move = now + cfg.GHOST_MOVE_PERIOD
             elif moving is None and now >= next_move:
-                moving = random.choice(cfg.MOVE_KEYS)
+                moving = ghost_step_key(target)
                 pydirectinput.keyDown(moving)
                 move_until = now + random.uniform(cfg.GHOST_MOVE_STEP_MIN, cfg.GHOST_MOVE_STEP_MAX)
             if now >= next_jump:
@@ -2898,6 +2987,37 @@ def click_nice_until_gone() -> bool:
     log_failure("minigame win screen would not close")
     return False
 
+def screen_changed(before: Image, after: Image) -> bool:
+    """Whether the view is a different one: the mean grey-level difference of the two (shrunk) screens is over MINIGAME_TELEPORT_CHANGE."""
+    small = [cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), (80, 45), interpolation=cv2.INTER_AREA).astype(np.int16) for img in (before, after)]
+    return bool(np.abs(small[0] - small[1]).mean() > cfg.MINIGAME_TELEPORT_CHANGE)
+
+def minigame_teleported(before: Image) -> bool:
+    """Wait up to MINIGAME_TELEPORT_WAIT seconds for the character to be teleported after the popup's Yes: the white screen of a
+    teleport (detect_white_screen()) or a view changed from `before` (the screen as it was at the click; screen_changed())."""
+    end = time.time() + cfg.MINIGAME_TELEPORT_WAIT
+    while time.time() < end:
+        wait_interruptible(cfg.MINIGAME_TELEPORT_POLL)
+        img = grab_screen()
+        if detect_white_screen(img) or screen_changed(before, img):
+            return True
+    return False
+
+def accept_minigame_popup() -> bool:
+    """Click the popup's Yes and check that it teleported the character (minigame_teleported()). If not and the popup is still
+    up, the click didn't take: click again, up to MINIGAME_YES_TRIES clicks in all. False if it never did, or the popup is gone
+    without a teleport (it was gone before the click, or the click was lost). See docs/ARCHITECTURE.md#need-handlers."""
+    for attempt in range(cfg.MINIGAME_YES_TRIES):
+        before = grab_screen()
+        hover_click(*cfg.MINIGAME_POPUP_YES_POS)
+        if minigame_teleported(before):
+            return True
+        if not detect_minigame_popup(grab_screen()):
+            print("[debug] the minigame popup is gone and nothing teleported")
+            return False
+        print(f"[debug] the popup is still up after click {attempt + 1}")
+    return False
+
 def play_minigame(name: str) -> bool:
     """Take the popup's Yes, play `name` until its victory screen, click NICE!, respawn. Gives
     up (a logged failure) if the overlay shows it over or never started, or after
@@ -2909,7 +3029,11 @@ def play_minigame(name: str) -> bool:
     # The handler this interrupted may be holding a key or the mouse button
     # down (hold_key(), the pet swipe); that must not carry into the minigame.
     release_all_inputs()
-    hover_click(*cfg.MINIGAME_POPUP_YES_POS)
+    if not accept_minigame_popup():
+        log_failure(f"{label} could not be started (the popup's Yes did not teleport the character)")
+        state.last_detection = time.time()
+        respawn_character()
+        return False
     started = time.time()
     watch = MinigameWatch(name)
     capture = start_run_capture(name)
@@ -4565,17 +4689,18 @@ class AdoptMeGUI:
         self.root.destroy()
 
     def watch_stop_hotkey(self) -> None:
-        """Start a thread that watches the hotkeys in any window: STOP_HOTKEY stops the macro, CAPTURE_HOTKEY starts or
-        stops an input capture. See docs/ARCHITECTURE.md#gui-internals."""
-        hotkeys = [(cfg.STOP_HOTKEY, self.stop_by_hotkey, True), (cfg.CAPTURE_HOTKEY, self.capture_by_hotkey, False)]   # (key, action, only while a run is going)
+        """Start a thread that watches the hotkeys: STOP_HOTKEY stops the macro (in any window), CAPTURE_HOTKEY starts or
+        stops an input capture (only while Roblox is focused). See docs/ARCHITECTURE.md#gui-internals."""
+        hotkeys = [(cfg.STOP_HOTKEY, self.stop_by_hotkey, True, False),
+                   (cfg.CAPTURE_HOTKEY, self.capture_by_hotkey, False, True)]   # (key, action, only while a run is going, only while Roblox is focused)
 
         def watch():
             was_down = [False] * len(hotkeys)
             while True:
                 try:
-                    for i, (key, action, only_while_running) in enumerate(hotkeys):
+                    for i, (key, action, only_while_running, only_in_roblox) in enumerate(hotkeys):
                         down = hotkey_down(key)
-                        if down and not was_down[i] and (self.is_running or not only_while_running):
+                        if hotkey_fires(down, was_down[i], only_while_running, self.is_running, only_in_roblox):
                             self.root.after(0, action)
                         was_down[i] = down
                 except (RuntimeError, tk.TclError):

@@ -12,8 +12,10 @@ HERE = os.path.join(os.path.dirname(__file__), "ghost_gallery")
 
 @pytest.fixture(autouse=True)
 def no_intro_wait(macro, monkeypatch):
-    """The game's intro camera is waited out before the camera is set up; the tests that don't look at that skip the wait."""
+    """The game's intro camera is waited out before the camera is set up, and the walk into the hall follows it; the tests that
+    don't look at those skip the time (the walk stays, as a hold of no length)."""
     monkeypatch.setattr(macro.cfg, "GHOST_INTRO_WAIT", 0.0)
+    monkeypatch.setattr(macro.cfg, "GHOST_START_FORWARD", 0.0)
 
 
 def shot(name):
@@ -104,14 +106,15 @@ def test_in_the_boss_phase_it_holds_on_the_boss(macro, world):
 
 
 def left_held_on(world):
-    """The places the beam was held on: the mouse moves made while the left button was down."""
+    """The places the beam was held on: the mouse moves made while the left button was down (but not the one to the middle of the
+    screen that a camera drag, the right button going down, starts with)."""
     places, down = [], False
-    for event in world.mouse:
+    for i, event in enumerate(world.mouse):
         if event == ("down",):
             down = True
         elif event == ("up",):
             down = False
-        elif event[0] == "move" and down:
+        elif event[0] == "move" and down and world.mouse[i + 1:i + 2] != [("down", "right")]:
             places.append(event[1:])
     return places
 
@@ -143,6 +146,9 @@ def test_the_camera_is_turned_by_dragging_with_the_right_button_when_there_is_no
         elif event[0] == "rel" and current is not None:
             current.append(event[1:])
     assert len(drags) >= 2 and current is None                                                 # turned more than once, and every time let go
+    centre = ("move", cfg.REFERENCE_CENTER_X, cfg.REFERENCE_CENTER_Y)
+    downs = [i for i, event in enumerate(world.mouse) if event == ("down", "right")]
+    assert all(world.mouse[i - 1] == centre for i in downs)                                    # each drag starts in the middle, far from the window's border
     for steps in drags:
         assert len(steps) == cfg.GHOST_CAMERA_DRAG_STEPS
         total_x = sum(dx for dx, _ in steps)
@@ -244,7 +250,9 @@ def test_stopping_lets_go_of_the_button(macro, world, monkeypatch):
     world.screens = [shot("ghosts_50")]
 
     def stop(duration):
-        raise macro.StopRequested()
+        if ("down",) in world.mouse:                     # (once the beam is held)
+            raise macro.StopRequested()
+        world.clock.now += duration
     monkeypatch.setattr(macro, "wait_interruptible", stop)
     with pytest.raises(macro.StopRequested):
         macro.play_ghost_gallery(world.clock.now + 100, watch_started(macro))
@@ -276,7 +284,7 @@ def test_zooming_out_holds_the_zoom_out_key_and_the_tilt_drags_down_with_the_rig
     assert [(kind, key) for kind, key, _ in world.keys] == [("down", cfg.KEY_ZOOM_OUT), ("up", cfg.KEY_ZOOM_OUT)]
     assert world.keys[1][2] - world.keys[0][2] == pytest.approx(cfg.MINIGAME_ZOOM_OUT_DURATION)
     world.real_tilt()
-    assert world.mouse[0] == ("down", "right") and world.mouse[-1] == ("up", "right")
+    assert world.mouse[:2] == [("move", cfg.REFERENCE_CENTER_X, cfg.REFERENCE_CENTER_Y), ("down", "right")] and world.mouse[-1] == ("up", "right")
     drags = [e for e in world.mouse if e[0] == "rel"]
     assert len(drags) == cfg.GHOST_CAMERA_DRAG_STEPS and all(dx == 0 and dy > 0 for _, dx, dy in drags)       # straight down
     assert sum(dy for _, _, dy in drags) == pytest.approx(cfg.GHOST_START_TILT, abs=cfg.GHOST_CAMERA_DRAG_STEPS)
@@ -287,7 +295,7 @@ def test_it_walks_about_a_step_at_a_time_without_stopping_the_aiming(macro, worl
     world.screens = [shot("ghosts_50")]
     start = world.clock.now
     macro.play_ghost_gallery(start + cfg.GHOST_MOVE_PERIOD * 3.5, watch_started(macro))
-    steps = [(kind, key, at) for kind, key, at in world.keys if key in cfg.MOVE_KEYS]
+    steps = [(kind, key, at) for kind, key, at in world.keys if key in cfg.MOVE_KEYS][2:]      # (after the walk at the start)
     downs = [at for kind, _, at in steps if kind == "down"]
     assert len(downs) >= 2 and downs[0] - start >= cfg.GHOST_MOVE_PERIOD - 0.5                  # not at once
     held = 0
@@ -328,3 +336,33 @@ def test_what_is_cyan_at_the_bottom_of_the_screen_is_not_a_ghost(macro):
     assert macro.find_ghost_blobs(screen) == []
     screen[300:500, 700:1000] = cyan                                                          # the same blob higher up is one
     assert len(macro.find_ghost_blobs(screen)) == 1
+
+
+def test_it_walks_forward_at_the_start_and_then_towards_the_ghost(macro, world, monkeypatch):
+    cfg = macro.cfg
+    monkeypatch.setattr(cfg, "GHOST_START_FORWARD", 2.0)
+    cx, cy = cfg.GHOST_CHARACTER
+    far = cfg.GHOST_TOWARD_MARGIN * 3
+    assert macro.ghost_step_key((cx, cy - far)) == "w" and macro.ghost_step_key((cx, cy + far)) == cfg.HAUNTLET_BACK_KEY
+    assert macro.ghost_step_key((cx - far, cy)) == cfg.HAUNTLET_LEFT_KEY and macro.ghost_step_key((cx + far, cy - 10)) == cfg.HAUNTLET_RIGHT_KEY
+    assert {macro.ghost_step_key((cx + 5, cy - 5)) for _ in range(60)} == set(cfg.MOVE_KEYS)       # close by, or none in sight: any way
+    assert {macro.ghost_step_key(None) for _ in range(60)} == set(cfg.MOVE_KEYS)
+    world.screens = [blank()]
+    start = world.clock.now
+    macro.play_ghost_gallery(start + cfg.GHOST_START_FORWARD + 1, watch_started(macro))
+    first = [(kind, key, at) for kind, key, at in world.keys if key in cfg.MOVE_KEYS][:2]
+    assert [k[:2] for k in first] == [("down", "w"), ("up", "w")]
+    assert first[1][2] - first[0][2] == pytest.approx(cfg.GHOST_START_FORWARD)
+    assert len(world.tilts) == 1 and first[0][2] >= world.tilts[0]                              # once the view is set up
+
+
+def test_the_steps_it_walks_while_there_is_a_ghost_are_towards_it(macro, world):
+    cfg = macro.cfg
+    img = shot("shield_129")                           # a small ghost well to the right of the character
+    target = macro.choose_ghost_target(macro.find_ghost_blobs(img, True), False, None)
+    x, y = target[:2]
+    assert max(abs(x - cfg.GHOST_CHARACTER[0]), abs(y - cfg.GHOST_CHARACTER[1])) > cfg.GHOST_TOWARD_MARGIN, "this fixture's ghost is too close to tell"
+    world.screens = [img]
+    macro.play_ghost_gallery(world.clock.now + cfg.GHOST_MOVE_PERIOD * 4.5, watch_started(macro))
+    steps = [key for kind, key, _ in world.keys if kind == "down" and key in cfg.MOVE_KEYS][1:]        # (after the walk at the start)
+    assert len(steps) >= 3 and set(steps) == {macro.ghost_step_key(target)}

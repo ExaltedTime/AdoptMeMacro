@@ -417,6 +417,7 @@ def test_play_minigame_records_the_run_and_says_how_it_ended(macro, monkeypatch,
     monkeypatch.setattr(macro, "bring_macro_window_to_front", lambda: order.append("window front"))
     for name in ("release_all_inputs", "respawn_character"):
         monkeypatch.setattr(macro, name, lambda *a, **k: None)
+    monkeypatch.setattr(macro, "accept_minigame_popup", lambda: True)
     monkeypatch.setattr(macro, "hover_click", lambda *a, **k: None)
     monkeypatch.setattr(macro, "click_nice_until_gone", lambda: True)
     monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: None)

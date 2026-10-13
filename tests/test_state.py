@@ -2,6 +2,7 @@
 import json
 import os
 import threading
+import types
 import time
 
 import pytest
@@ -379,6 +380,8 @@ def indoors(macro, world, monkeypatch):
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
     monkeypatch.setattr(macro, "teleport_to", lambda pos: start.__setitem__(0, world.clock.now))
     monkeypatch.setattr(macro, "grab_screen", lambda: None)
+    monkeypatch.setattr(macro, "save_failure_report", lambda reason: (events.append("shot"), "x/screen.png")[1])
+    monkeypatch.setattr(macro, "find_door_light", lambda img: None)
     monkeypatch.setattr(macro, "respawn_character", lambda: events.append("respawn"))
     monkeypatch.setattr(macro, "log_run_event", lambda text: events.append(text))
     monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=0, **kw: waited.append(max_wait))
@@ -416,10 +419,42 @@ def test_not_getting_in_makes_it_look_for_the_way_then_walk_on_inside(macro, ind
     assert indoors.waited and "respawn" not in indoors.events
 
 
+def door_image(shift=0):
+    import cv2
+    import numpy as np
+    door = cv2.imread(os.path.join(os.path.dirname(__file__), "sick_door", "door_ahead.png"))
+    return np.roll(door, shift, axis=1) if shift else door
+
+
+def test_the_hospital_door_is_found_by_its_light_and_panes(macro):
+    import numpy as np
+    x, y = macro.find_door_light(door_image())
+    assert 900 < x < 1200 and y < 500                                      # the doorway, ahead and above the character
+    assert macro.find_door_light(door_image(-400))[0] < x - 300 and macro.find_door_light(door_image(400))[0] > x + 300
+    assert macro.find_door_light(np.zeros((1080, 1920, 3), np.uint8)) is None
+    far_light = door_image()
+    far_light[500:800, 100:400] = 255                                       # a bigger patch of white, far from the panes
+    assert 900 < macro.find_door_light(far_light)[0] < 1200
+    assert macro.find_door_light(np.full((1080, 1920, 3), 255, np.uint8)) is None          # a white screen has no panes: not a door
+
+
+def test_with_the_door_in_sight_the_search_walks_towards_it_and_without_it_zigzags(macro, indoors, world, monkeypatch):
+    cfg = macro.cfg
+    cx = cfg.GHOST_CHARACTER[0]
+    sights = iter([(cx + 400, 300), (cx - 400, 300), (cx + 10, 300)])
+    monkeypatch.setattr(macro, "find_door_light", lambda img: next(sights, None))
+    indoors(macro.cfg.TELEPORT_WALK_STEP_GAP + 5.0, enter_wait=30.0).handle()
+    keys = downs(world)
+    after = keys[2:5]                                                      # after the entry's own two steps
+    assert after == [cfg.HAUNTLET_RIGHT_KEY, cfg.HAUNTLET_LEFT_KEY, "w"]   # right, left, then straight on
+    assert set(keys[5:-1]) <= {"w", "a", "d"} and keys[-1] == "w"          # then (door out of sight) the zigzag, and the walk inside
+
+
 def test_never_getting_in_fails_the_need_with_a_respawn(indoors, world):
     handler = indoors(white_at=None)
     assert handler.handle() is False
-    assert "respawn" in indoors.events and indoors.waited == []       # no dialog, no waiting for the need to clear
+    assert "respawn" in indoors.events and indoors.waited == []
+    assert indoors.events.index("shot") < indoors.events.index("respawn")      # the screenshot shows where it stood, not the respawn spot       # no dialog, no waiting for the need to clear
     assert world.clock.now - 1000.0 < 10.0 + 20.0                      # and it gave up at enter_wait (plus the steps), not later
 
 
@@ -1123,6 +1158,7 @@ def test_the_real_white_transition_is_white_and_no_other_real_screenshot_is(macr
 def test_a_failed_minigame_does_not_count_as_progress_but_a_won_one_does(macro, monkeypatch):
     stalled = time.time() - 100
     monkeypatch.setattr(macro, "release_all_inputs", lambda: None)
+    monkeypatch.setattr(macro, "accept_minigame_popup", lambda: True)
     monkeypatch.setattr(macro, "hover_click", lambda *a, **k: None)
     monkeypatch.setattr(macro, "respawn_character", lambda: None)
     monkeypatch.setattr(macro, "click_nice_until_gone", lambda: True)
@@ -1133,3 +1169,82 @@ def test_a_failed_minigame_does_not_count_as_progress_but_a_won_one_does(macro, 
         assert macro.play_minigame("ghost_gallery") is won
         assert (macro.state.last_progress == stalled) is (not won)
         assert time.time() - macro.state.last_detection < 5                            # needs couldn't be seen meanwhile either way
+
+
+@pytest.fixture
+def popup_world(macro, world, monkeypatch):
+    """A screen that follows the clicks on the popup's Yes: `popup_world.after(n_clicks)` -> what the screen shows after that many
+    ('dark' = the same as before, 'white', 'other' = a different view); `.popup_up` says whether the popup is still on screen."""
+    import numpy as np
+    shown = {"dark": np.full((1080, 1920, 3), 30, np.uint8), "white": np.full((1080, 1920, 3), 255, np.uint8),
+             "other": np.full((1080, 1920, 3), 200, np.uint8)}
+    scene = types.SimpleNamespace(after=lambda clicks: "dark", popup_up=lambda clicks: True)
+    monkeypatch.setattr(macro, "grab_screen", lambda: shown[scene.after(len(macro.clicks))])
+    monkeypatch.setattr(macro, "detect_minigame_popup", lambda img: scene.popup_up(len(macro.clicks)))
+    return scene
+
+
+def test_a_yes_that_teleports_is_clicked_once(macro, popup_world, world):
+    popup_world.after = lambda clicks: "white" if clicks else "dark"
+    assert macro.accept_minigame_popup() is True and len(macro.clicks) == 1
+    del macro.clicks[:]
+    popup_world.after = lambda clicks: "other" if clicks else "dark"                     # a teleport whose white screen was missed
+    assert macro.accept_minigame_popup() is True and len(macro.clicks) == 1
+
+
+def test_a_yes_that_did_not_take_is_clicked_again_while_the_popup_is_up(macro, popup_world, world):
+    popup_world.after = lambda clicks: "white" if clicks >= 2 else "dark"
+    assert macro.accept_minigame_popup() is True and len(macro.clicks) == 2
+    del macro.clicks[:]
+    popup_world.after = lambda clicks: "dark"                                              # never does
+    assert macro.accept_minigame_popup() is False and len(macro.clicks) == macro.cfg.MINIGAME_YES_TRIES
+
+
+def test_a_popup_that_is_gone_with_no_teleport_is_a_failed_start_at_once(macro, popup_world, world):
+    popup_world.popup_up = lambda clicks: False
+    start = world.clock.now
+    assert macro.accept_minigame_popup() is False and len(macro.clicks) == 1
+    assert world.clock.now - start < macro.cfg.MINIGAME_TELEPORT_WAIT + 2                  # one wait, not a minigame's start wait
+
+
+def test_a_minigame_whose_popup_did_not_teleport_is_not_played_but_logged(macro, monkeypatch):
+    events = []
+    monkeypatch.setattr(macro, "accept_minigame_popup", lambda: False)
+    monkeypatch.setattr(macro, "release_all_inputs", lambda: None)
+    monkeypatch.setattr(macro, "respawn_character", lambda: events.append("respawn"))
+    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: events.append(reason))
+    monkeypatch.setattr(macro, "start_run_capture", lambda label: events.append("capture"))
+    monkeypatch.setitem(macro.MINIGAME_PLAYERS, "ghost_gallery", lambda deadline, watch: events.append("played"))
+    assert macro.play_minigame("ghost_gallery") is False
+    assert len(events) == 2 and "could not be started" in events[0] and events[1] == "respawn"       # no capture, no play
+
+
+def test_a_hotkey_acts_on_a_new_press_only_when_its_conditions_hold(macro, monkeypatch):
+    focused = [True]
+    monkeypatch.setattr(macro, "is_roblox_focused", lambda: focused[0])
+    fires = macro.hotkey_fires
+    assert fires(True, False, False, False, False)
+    assert not fires(True, True, False, False, False) and not fires(False, False, False, False, False)      # held, or not pressed
+    assert not fires(True, False, True, False, False) and fires(True, False, True, True, False)               # a stop key needs a run
+    assert fires(True, False, False, False, True)
+    focused[0] = False
+    assert not fires(True, False, False, False, True) and fires(True, False, False, False, False)             # M needs Roblox, P doesn't
+
+
+def test_a_button_the_game_refuses_is_clicked_again_until_it_takes(macro, world, monkeypatch):
+    waited, refusals = [], [2]
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "grab_screen", lambda: None)
+    monkeypatch.setattr(macro, "only_pets_message_visible", lambda img: refusals[0] > 0 and (refusals.__setitem__(0, refusals[0] - 1) or True))
+    monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, **kw: waited.append(name))
+    macro.state.button_positions["potty"] = (100, 200)
+    assert macro.click_need_button("potty") is True                                    # refused twice, then taken
+    assert macro.clicks.count((100, 200)) == 3 and waited == ["potty"]
+    del macro.clicks[:]
+    refusals[0] = 10 ** 6                                                              # always refused: given up, not waited for
+    waited.clear()
+    assert macro.click_need_button("potty") is False
+    assert macro.clicks.count((100, 200)) == macro.cfg.BUTTON_CLICK_TRIES and waited == []
+    del macro.clicks[:]
+    refusals[0] = 0                                                                    # not refused: clicked once
+    assert macro.click_need_button("potty") is True and macro.clicks.count((100, 200)) == 1

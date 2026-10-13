@@ -72,6 +72,10 @@ MINIGAME_OVERLAY_LOST_TIMEOUT = 10.0
 MINIGAME_OVERLAY_START_GRACE = 60.0
 MINIGAME_VICTORY_CHECK_INTERVAL = 1.0
 MINIGAME_POPUP_CHECK_INTERVAL = 4.0   # the popup checks (stray windows, paycheck) run this often while a minigame is played
+MINIGAME_YES_TRIES = 3              # the popup's Yes is clicked this often at most, if it did not teleport the character...
+MINIGAME_TELEPORT_WAIT = 6.0        # ...which is looked for this long after each click: a white screen, or the whole view changing
+MINIGAME_TELEPORT_POLL = 0.1
+MINIGAME_TELEPORT_CHANGE = 25       # mean grey-level difference (0-255, over the whole screen, shrunk) from before the click that counts as a changed view
 MINIGAME_MAX_DURATION = 600.0       # gives up (and logs a failure) if the victory screen hasn't shown by then
 MINIGAME_ZOOM_OUT_DURATION = 3.0    # both minigames hold KEY_ZOOM_OUT this long when they begin (Hauntlet 2 again where it can't find the doors)
 MINIGAME_FINISH_WAIT = 5.0          # after clicking NICE!, before carrying on
@@ -104,6 +108,9 @@ STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     # doesn't allow it. "close_pos" is its Okay button; "abort_task" abandons the need that was running (it's
     # tried again from scratch on the next check) - see unscrew().
     "cant_spawn_vehicle": {"box": (760, 420, 1160, 630), "close_pos": (962, 657), "abort_task": True},
+    # The player's own profile page (Stickers / Preview / paint / save, with its red X): a click on a player or on the character
+    # menu's Profile opens it. The crop is the toolbar; "close_pos" is the X.
+    "profile": {"box": (480, 170, 1560, 360), "close_pos": (1462, 262)},
 }
 
 # Other things recognised by a crop in STRAY_WINDOW_DIR (file name = the name here) found within "box"
@@ -122,6 +129,15 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
 # The sick need's own "Ask Doctor Heart to heal your family?" Yes/No dialog (POPUP_TEMPLATES["sick_dialog"]) has the
 # same Yes green + No red as a minigame popup; it is the sick handler's to answer (SICK_FINAL_CLICK_POS is its Yes),
 # so detect_minigame_popup() ignores it.
+# "Only Pets, Babies, and Dolls can use this." - the game's answer to a need button clicked while the pet is too far from it (or
+# otherwise not taken). The text is found by the white of its letters (>= ONLY_PETS_WHITE in every channel) matched against the same of
+# the crop ref/popups/only_pets.png, whatever is behind it: a score of at least ONLY_PETS_THRESHOLD within ONLY_PETS_BOX. A need
+# button is clicked again, up to BUTTON_CLICK_TRIES clicks in all; after each, the message is looked for for BUTTON_REJECT_LOOK seconds.
+ONLY_PETS_BOX = (600, 830, 1320, 930)
+ONLY_PETS_WHITE = 235
+ONLY_PETS_THRESHOLD = 0.6
+BUTTON_CLICK_TRIES = 3
+BUTTON_REJECT_LOOK = 1.5
 STRAY_OKAY_BOX = (800, 637, 1120, 680)
 STRAY_OKAY_MIN_PIXELS = 5000      # the button is ~11000 exact-color px in that box
 STRAY_OKAY_POS = (962, 657)
@@ -227,7 +243,7 @@ GHOST_BOSS_FILL_MIN = 200
 # place every GHOST_FURNITURE_PERIOD seconds) and the camera is turned every GHOST_CAMERA_PERIOD seconds with nothing to aim at: the right
 # button held while the mouse is dragged GHOST_CAMERA_DRAG px (a random way, and up to GHOST_CAMERA_TILT px up or down). The character jumps
 # every GHOST_JUMP_MIN-GHOST_JUMP_MAX seconds.
-GHOST_FURNITURE_BOX = (300, 150, 1500, 800)
+GHOST_FURNITURE_BOX = (100, 120, 1820, 880)
 GHOST_FURNITURE_MIN_DISTANCE = 300           # px: the place is at least this far from the character
 GHOST_FURNITURE_PERIOD = 1.0
 GHOST_CAMERA_PERIOD = 3.0
@@ -239,6 +255,8 @@ GHOST_START_TILT = 200                       # px of mouse drag down, right butt
 GHOST_MOVE_PERIOD = 4.0                      # the character walks a step (a random MOVE_KEY held GHOST_MOVE_STEP_MIN-MAX seconds) this often
 GHOST_MOVE_STEP_MIN = 0.4
 GHOST_MOVE_STEP_MAX = 1.2
+GHOST_START_FORWARD = 3.0                    # seconds of W after the camera is set up: out of the doorway and into the middle of the hall
+GHOST_TOWARD_MARGIN = 150                    # px: a ghost this far from the character (GHOST_CHARACTER) on an axis is walked towards along it
 GHOST_JUMP_MIN = 3.0
 GHOST_JUMP_MAX = 7.0
 
@@ -588,6 +606,16 @@ TELEPORT_ARRIVE_MAX = 8.0           # at most this long is waited for the telepo
 ENTER_SEARCH_FORWARD = 0.6          # looking for the way in: forward this long, then sideways (alternating) ENTER_SEARCH_SIDE seconds more each time...
 ENTER_SEARCH_SIDE = 0.35
 ENTER_SEARCH_SIDE_MAX = 2.0         # ...up to this long
+ENTER_DOOR_STEP = 0.4               # looking for the way in, with the door in sight: walk towards it in steps this long (W, or A/D if it is more than ENTER_DOOR_MARGIN px off to a side)
+ENTER_DOOR_MARGIN = 120
+# The hospital's door, as find_door_light() sees it: the white light of its open doorway (WHITE_SCREEN_LEVEL) with the pale yellow panes of
+# the doors beside it, in a screen that leaves out the HUD, the character and the bottom (DOOR_IGNORE_BOXES: the pet, its tags, the backpack
+# button) and the macro's own window.
+DOOR_IGNORE_BOXES = ((0, 0, 1920, 90), (840, 330, 1080, 900), (0, 940, 1920, 1080), (1540, 100, 1920, 800))
+DOOR_MIN_AREA = 2500                # px of white light
+DOOR_YELLOW = ((20, 40, 235), (34, 140, 255))      # HSV of the panes
+DOOR_YELLOW_MIN = 1500              # px of them on screen
+DOOR_YELLOW_REACH = 61              # px: the panes are within this of the light
 ENTER_CLEAR_MAX = 6.0               # once in, at most this long is waited for the white screen to clear
 DISABLED_NEEDS_REJOIN_THRESHOLD = 4  # this many needs disabled for the run (see NEED_STUCK_CHECKS) means something is
                                      # badly wrong: rejoin the game, run setup, and give every need a fresh chance

@@ -1250,10 +1250,13 @@ logged once per run as a failure, which keeps a screenshot of what the TVs were 
 `HAUNTLET_RETRY_WAIT` seconds and then chosen from again if its number hasn't changed - the retry for a walk that got stuck.
 
 **Getting stuck.** The room timer runs out after a while and the run is over, so a stuck player has to do something else, quickly. A walk that ended with the
-number unchanged counts in `HauntletRun.stuck`; the next one (`hauntlet_walk()`) steps back first (`HAUNTLET_BACK_KEY`, `HAUNTLET_BACKUP_DURATION`), avoids the door that
-got the player stuck when there is another (`choose_hauntlet_door(avoid=...)`), and **wiggles** while it holds forward: every `HAUNTLET_WIGGLE_PERIOD` seconds a short
-step sideways (a random way, `HAUNTLET_WIGGLE_DURATION`) and a jump, to get off whatever it is caught on. A walk straight ahead (a hall, or doors that weren't found) wiggles
-the same way. When the doors can't be found at all - the camera zoomed in too far, turned away (room 8 of a macro-played run was seen from an angle, and the macro held W for 25 s against
+number unchanged counts in `HauntletRun.stuck`; the next one (`hauntlet_walk()`) steps back first (`HAUNTLET_BACK_KEY`, `HAUNTLET_BACKUP_DURATION`) and avoids the door that
+got the player stuck when there is another (`choose_hauntlet_door(avoid=...)`). Within a walk, **a view that doesn't move is the sign of being caught on something**: the camera follows the player, so a walking
+player makes the whole picture move (`hauntlet_view()`: the screen shrunk to grey, without the room panel and the item bar). In the captured run the mean change between two looks was 0.1-1.1 grey levels while the player stood against a door's
+leaf for 14 s and 11-44 while it walked, so under `HAUNTLET_STILL_LEVEL` for `HAUNTLET_STILL_AFTER` seconds with forward held is stuck, and `hauntlet_unstick()` steps sideways (forward stays held, so it
+slides along) with a jump: towards the door being walked to (its TV against where the player stands, `HAUNTLET_UNSTICK_MARGIN`), the other way at every try, and a random way if the
+doors can't be seen; each step `HAUNTLET_UNSTICK_STEP` seconds longer than the last, up to `HAUNTLET_UNSTICK_MAX`. Where the player stands is read from the hearts above its head; if they can't be read it is the middle of the
+screen (the camera follows the player; in that run's room 3 the player stood 350 px right of the middle door, the hearts unread, and the macro, taking it to be in front of the middle door, walked into the wall for 14 s). When the doors can't be found at all - the camera zoomed in too far, turned away (room 8 of a macro-played run was seen from an angle, and the macro held W for 25 s against
 a wall until the timer ran out), or a TV hidden - the camera is dragged round with the right button (`rotate_camera()`, `HAUNTLET_CAMERA_DRAG`) up to `HAUNTLET_SEARCH_TURNS` times, a look
 after each, before walking ahead. A TV showing a "1" (the player stands before that door) is a thin stroke, much smaller than the "0"s of the others, hence the low end of
 `HAUNTLET_TV_AREA`; the real run's row was missed for 25 s because of one.

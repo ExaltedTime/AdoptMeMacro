@@ -981,15 +981,16 @@ def release_all_inputs() -> None:
     """Best-effort safety net: release every key the macro holds and the mouse button,
     called when a background task ends. See docs/ARCHITECTURE.md#stopping--focus-safety.
     """
-    for key in (*cfg.MOVE_KEYS, cfg.KEY_HELICOPTER, cfg.KEY_ZOOM_IN):
+    for key in (*cfg.MOVE_KEYS, cfg.KEY_HELICOPTER, cfg.KEY_ZOOM_IN, cfg.KEY_ZOOM_OUT):
         try:
             pydirectinput.keyUp(key)
         except Exception:
             pass
-    try:
-        pydirectinput.mouseUp()
-    except Exception:
-        pass
+    for button in ("left", "right"):
+        try:
+            pydirectinput.mouseUp(button=button)
+        except Exception:
+            pass
 
 # ============================================================================
 # BUTTON DETECTION
@@ -2404,6 +2405,12 @@ def minigame_won(watch: MinigameWatch) -> bool:
     """minigame_look(), then True if it shows the victory screen (detect_minigame_victory())."""
     return detect_minigame_victory(minigame_look(watch))
 
+def zoom_out() -> None:
+    """Zoom the camera out (KEY_ZOOM_OUT held MINIGAME_ZOOM_OUT_DURATION seconds) to see the whole room: close up, the TVs
+    over a Hauntlet 2 room's doors are cut off by the top of the screen."""
+    print("[debug] zooming the camera out")
+    hold_key(cfg.KEY_ZOOM_OUT, cfg.MINIGAME_ZOOM_OUT_DURATION)
+
 def minigame_wait(duration: float, watch: MinigameWatch) -> None:
     """wait_interruptible(), with the popup checks every
     MINIGAME_POPUP_CHECK_INTERVAL and `watch` kept up to date - for the long
@@ -2461,17 +2468,28 @@ class HauntletRun:
             return [HauntletDoor(0, 0, None)]                                  # one doorway, straight ahead
         return None
 
-def choose_hauntlet_door(doors: list[HauntletDoor], hearts: Optional[HauntletHearts], items: list[HauntletItem]) -> int:
-    """The index in `doors` (left to right) of the door to go through. A random one so far - `hearts` and `items` are
-    here for the decision logic to come - but a locked door only when a key is held (or every door is locked)."""
-    has_key = any(item.name in cfg.HAUNTLET_KEY_ITEMS for item in items)
-    options = [i for i, door in enumerate(doors) if door.kind != "locked" or has_key]
-    return random.choice(options or list(range(len(doors))))
+def choose_hauntlet_door(doors: list[HauntletDoor], hearts: Optional[HauntletHearts], items: list[HauntletItem], avoid: Optional[int] = None) -> int:
+    """The index in `doors` (left to right) of the door to go through: a random one, but not the one the phone's arrow is
+    over (`avoid`: a ghost is behind it) and a locked one only when the grey key is held - unless that leaves
+    nothing, then any. (`hearts` is here for the decision logic to come.)"""
+    has_key = any(item.name == cfg.HAUNTLET_ITEM_KEY for item in items)
+    options = [i for i, door in enumerate(doors) if i != avoid and (door.kind != "locked" or has_key)]
+    return random.choice(options or [i for i in range(len(doors)) if i != avoid] or list(range(len(doors))))
 
-def choose_hauntlet_item(items: list[HauntletItem], hearts: Optional[HauntletHearts]) -> Optional[HauntletItem]:
-    """The item to use now, or None. Random so far - with a chance of HAUNTLET_ITEM_CHANCE one of the `items` is used, any
-    of them - `hearts` is here for the decision logic to come."""
-    return random.choice(items) if items and random.random() < cfg.HAUNTLET_ITEM_CHANCE else None
+def hauntlet_items_for(door: HauntletDoor, hearts: Optional[HauntletHearts], items: list[HauntletItem]) -> list[str]:
+    """The items (names) to use before going through `door`, in the order to use them: the grey key for a locked door, a cyan potion
+    (a heart that lasts the room) for a boarded one, the red potion when the hearts are down to HAUNTLET_LOW_HEARTS or fewer, and a
+    heart potion whenever there is one. Only those held."""
+    held = {item.name for item in items}
+    wanted = []
+    if door.kind == "locked":
+        wanted.append(cfg.HAUNTLET_ITEM_KEY)
+    if door.kind == "boarded":
+        wanted.append(cfg.HAUNTLET_ITEM_BOARDED)
+    if hearts is not None and hearts.red <= cfg.HAUNTLET_LOW_HEARTS:
+        wanted.append(cfg.HAUNTLET_ITEM_REFILL)
+    wanted.append(cfg.HAUNTLET_ITEM_HEART)
+    return [name for name in wanted if name in held]
 
 def hauntlet_strafe(img: Image, doors: list[HauntletDoor], index: int) -> tuple[Optional[str], float]:
     """The key to strafe with, and for how long, to reach door `index` from where the player stands in `img`: the
@@ -2491,26 +2509,51 @@ def hauntlet_strafe(img: Image, doors: list[HauntletDoor], index: int) -> tuple[
         return None, 0.0
     return (cfg.HAUNTLET_RIGHT_KEY if distance > 0 else cfg.HAUNTLET_LEFT_KEY), min(abs(distance), cfg.HAUNTLET_STRAFE_MAX) * cfg.HAUNTLET_STRAFE_DURATION
 
-def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun) -> tuple[int, Optional[HauntletItem]]:
-    """Read the hearts and items off `img`, choose a door (choose_hauntlet_door()) and an item to use, if any
-    (choose_hauntlet_item()), and log the lot."""
+def hauntlet_use_item(name: str, watch: MinigameWatch) -> Optional[Image]:
+    """Click the slot of the item called `name` and give the game HAUNTLET_ITEM_WAIT seconds to use it. The slots move together
+    when an item is used up, so the slot is looked for on a fresh screenshot each time. The screenshot taken after the click,
+    or None if the item isn't there."""
+    item = next((i for i in read_hauntlet_items(minigame_look(watch)) if i.name == name), None)
+    if item is None:
+        return None
+    hover_click(*item.pos)
+    wait_interruptible(cfg.HAUNTLET_ITEM_WAIT)
+    return minigame_look(watch)
+
+def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun, watch: MinigameWatch) -> tuple[int, Image]:
+    """Choose the door and use the items it calls for, logging the lot. With a chance of HAUNTLET_PHONE_CHANCE the phone is used first, and
+    the door its red arrow shows is not gone through. Returns the door's index and the latest screenshot."""
     hearts = read_hauntlet_hearts(img)
     items = read_hauntlet_items(img, learn=len(run.learned) < cfg.HAUNTLET_LEARN_LIMIT)
     run.learned |= {item.name for item in items if item.name.startswith("unknown_")}
-    index = choose_hauntlet_door(doors, hearts, items)
-    item = choose_hauntlet_item(items, hearts)
     names = {1: ("ahead",), 2: ("left", "right"), 3: ("left", "middle", "right")}[len(doors)]
+    ghost: Optional[int] = None
+    used: list[str] = []
+    if any(item.name == cfg.HAUNTLET_ITEM_PHONE for item in items) and random.random() < cfg.HAUNTLET_PHONE_CHANCE:
+        shown = hauntlet_use_item(cfg.HAUNTLET_ITEM_PHONE, watch)
+        if shown is not None:
+            used.append(cfg.HAUNTLET_ITEM_PHONE)
+            img = shown
+            for _ in range(cfg.HAUNTLET_ARROW_LOOKS):                           # the arrow takes a moment to show
+                ghost = find_ghost_door(img, doors)
+                if ghost is not None:
+                    break
+                wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
+                img = minigame_look(watch)
+            items = read_hauntlet_items(img)
+    index = choose_hauntlet_door(doors, hearts, items, avoid=ghost)
+    for name in hauntlet_items_for(doors[index], hearts, items):
+        shown = hauntlet_use_item(name, watch)
+        if shown is not None:
+            used.append(name)
+            img = shown
     print(f"[debug] Hauntlet 2: room {run.room}, "
           + (f"{hearts.red} hearts ({hearts.black} lost)" if hearts else "hearts not seen")
           + f", items: {', '.join(f'{item.name} x{item.count or 1}' for item in items) or 'none'}"
-          + f", doors: {', '.join(door.kind or '-' for door in doors)}, going {names[index]}"
-          + (f", using {item.name}" if item else ""))
-    return index, item
-
-def hauntlet_use_item(item: HauntletItem) -> None:
-    """Click `item`'s slot, then give the game HAUNTLET_ITEM_WAIT seconds to use it."""
-    hover_click(*item.pos)
-    wait_interruptible(cfg.HAUNTLET_ITEM_WAIT)
+          + f", doors: {', '.join(door.kind or '-' for door in doors)}"
+          + (f", ghost behind the {names[ghost]} one" if ghost is not None else "")
+          + f", going {names[index]}" + (f", used {', '.join(used)}" if used else ""))
+    return index, img
 
 def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, watch: MinigameWatch, until_doors: bool = False) -> bool:
     """Walk to a door: hold forward, with `direction` (a strafe key, or None) held for the first `duration` seconds,
@@ -2549,6 +2592,7 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
     print(f"[debug] Hauntlet 2: waiting {cfg.MINIGAME_START_WAIT:g}s for it to start...")
     minigame_wait(cfg.MINIGAME_START_WAIT, watch)
     watch.start_wait_over()
+    zoom_out()
     run = HauntletRun()
     try:
         while time.time() < deadline and not watch.problem:
@@ -2562,9 +2606,9 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
             if len(doors) == 1 and run.room and run.room > 1 and not run.doors_missing_reported:   # not the entrance hall (room 1): keep the screenshot
                 run.doors_missing_reported = True
                 log_failure(f"Hauntlet 2: no doors found in room {run.room}")
-            index, item = hauntlet_choose(img, doors, run)
-            if item:
-                hauntlet_use_item(item)
+            if len(doors) == 1 and run.room and run.room > 1:
+                zoom_out()                                                      # perhaps the camera is too close to see the TVs
+            index, img = hauntlet_choose(img, doors, run, watch)
             direction, duration = hauntlet_strafe(img, doors, index)
             if hauntlet_walk(direction, duration, run, watch, until_doors=len(doors) == 1):
                 return True
@@ -2620,6 +2664,27 @@ def choose_ghost_target(blobs: list[tuple[int, int, int]], boss: bool, previous:
     cx, cy = cfg.GHOST_CHARACTER
     return min(blobs, key=lambda b: (b[0] - cx) ** 2 + (b[1] - cy) ** 2)[:2]
 
+def tilt_camera_down() -> None:
+    """Drag the mouse down with the right button held, GHOST_START_TILT px: the camera rises behind the character, for a view
+    from above, over GHOST_CAMERA_DRAG_DURATION seconds in GHOST_CAMERA_DRAG_STEPS moves."""
+    pydirectinput.mouseDown(button="right")
+    try:
+        for _ in range(cfg.GHOST_CAMERA_DRAG_STEPS):
+            pydirectinput.moveRel(0, cfg.GHOST_START_TILT // cfg.GHOST_CAMERA_DRAG_STEPS, relative=True)
+            wait_interruptible(cfg.GHOST_CAMERA_DRAG_DURATION / cfg.GHOST_CAMERA_DRAG_STEPS)
+    finally:
+        pydirectinput.mouseUp(button="right")
+
+def far_from_character(box: tuple[int, int, int, int], minimum: float) -> Point:
+    """A random point in `box` at least `minimum` px from the character (GHOST_CHARACTER); the middle of the farthest corner if the box has none."""
+    left, top, right, bottom = box
+    cx, cy = cfg.GHOST_CHARACTER
+    for _ in range(50):
+        x, y = random.randint(left, right), random.randint(top, bottom)
+        if (x - cx) ** 2 + (y - cy) ** 2 >= minimum ** 2:
+            return x, y
+    return max(((left, top), (right, top), (left, bottom), (right, bottom)), key=lambda c: (c[0] - cx) ** 2 + (c[1] - cy) ** 2)
+
 def rotate_camera() -> None:
     """Turn the camera: hold the right mouse button and drag the mouse sideways (a random way, GHOST_CAMERA_DRAG px, a little up
     or down too) over GHOST_CAMERA_DRAG_DURATION seconds, in GHOST_CAMERA_DRAG_STEPS moves, as Roblox wants a drag."""
@@ -2636,18 +2701,23 @@ def rotate_camera() -> None:
 def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     """Ghost Gallery: once its overlay shows (or the start wait is over), look at the screen every GHOST_LOOK_INTERVAL,
     aim the mouse at a ghost (choose_ghost_target()) and hold the button down on it, until the victory screen shows or the
-    overlay says it's over. In the boss phase it is the boss, but while the boss's bar shows ghost icons it can't be hurt
+    overlay says it's over. It begins by zooming the camera out and tilting it down for a better view. In the boss phase it is the boss, but while the boss's bar shows ghost icons it can't be hurt
     (ghost_boss_shielded()) and the small ghosts are aimed at instead. With no ghost in sight, before the boss phase the beam
     is held on random furniture (ghosts hide there), and the camera is turned every GHOST_CAMERA_PERIOD to find some;
-    it jumps now and then. True if won before `deadline`. See docs/ARCHITECTURE.md#playing-ghost-gallery.
+    it jumps now and then, and walks about a step at a time. True if won before `deadline`. See docs/ARCHITECTURE.md#playing-ghost-gallery.
     """
     print(f"[debug] Ghost Gallery: waiting for it to start (at most {cfg.MINIGAME_START_WAIT:g}s)...")
     waited_until = time.time() + cfg.MINIGAME_START_WAIT
     while time.time() < waited_until and watch.last_seen is None:       # its overlay (TIME LEFT, the score) shows when the game has begun
         minigame_wait(cfg.GHOST_START_LOOK_INTERVAL, watch)
     watch.start_wait_over()
+    zoom_out()
+    tilt_camera_down()
     target: Optional[Point] = None
     held = False
+    moving: Optional[str] = None                     # the key being held to walk, and until when
+    move_until = 0.0
+    next_move = time.time() + cfg.GHOST_MOVE_PERIOD
     phase = "ghosts"
     furniture: Optional[Point] = None
     furniture_until = 0.0
@@ -2667,6 +2737,12 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
             pydirectinput.mouseUp()
             held = False
 
+    def stop_walking() -> None:
+        nonlocal moving
+        if moving is not None:
+            pydirectinput.keyUp(moving)
+            moving = None
+
     try:
         while time.time() < deadline and not watch.problem:
             img = minigame_look(watch)
@@ -2684,8 +2760,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 aim(target)
             elif phase == "ghosts":                                         # nothing to be seen before the boss: try the furniture
                 if furniture is None or now >= furniture_until:
-                    left, top, right, bottom = cfg.GHOST_FURNITURE_BOX
-                    furniture = (random.randint(left, right), random.randint(top, bottom))
+                    furniture = far_from_character(cfg.GHOST_FURNITURE_BOX, cfg.GHOST_FURNITURE_MIN_DISTANCE)
                     furniture_until = now + cfg.GHOST_FURNITURE_PERIOD
                 aim(furniture)
             else:
@@ -2693,12 +2768,20 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
             if target is None and now - max(last_turn, last_seen) >= cfg.GHOST_CAMERA_PERIOD:
                 rotate_camera()
                 last_turn = time.time()
+            if moving is not None and now >= move_until:           # walking about, a step at a time, without stopping the aiming
+                stop_walking()
+                next_move = now + cfg.GHOST_MOVE_PERIOD
+            elif moving is None and now >= next_move:
+                moving = random.choice(cfg.MOVE_KEYS)
+                pydirectinput.keyDown(moving)
+                move_until = now + random.uniform(cfg.GHOST_MOVE_STEP_MIN, cfg.GHOST_MOVE_STEP_MAX)
             if now >= next_jump:
                 pydirectinput.press(cfg.KEY_JUMP)
                 next_jump = now + random.uniform(cfg.GHOST_JUMP_MIN, cfg.GHOST_JUMP_MAX)
             wait_interruptible(cfg.GHOST_LOOK_INTERVAL)
     finally:
         let_go()
+        stop_walking()
     return False
 
 MINIGAME_PLAYERS = {"hauntlet_2": play_hauntlet_2, "ghost_gallery": play_ghost_gallery}
@@ -2732,11 +2815,13 @@ def play_minigame(name: str) -> bool:
     watch = MinigameWatch(name)
     capture = start_run_capture(name)
     outcome = "interrupted"
+    send_macro_window_to_back()                 # it covers part of the game's screen, and would be in the recording and the readers' way
     try:
         won = MINIGAME_PLAYERS[name](started + cfg.MINIGAME_MAX_DURATION, watch)
         outcome = "won" if won else (watch.problem or "did not reach the victory screen in time")
     finally:
         release_all_inputs()
+        bring_macro_window_to_front()
         finish_run_capture(capture, outcome)
     if won:
         log_run_event(f"minigame finished: {label} ({time.time() - started:.0f}s)")
@@ -3567,6 +3652,28 @@ def hauntlet_door_kind(img: Image, x: int, y: int, scale: float) -> Optional[str
     angle = np.degrees(np.arctan2(dy, dx)) % 180                # an edge's direction is square to its gradient: 90 is a horizontal edge
     on_plank_edge = (np.hypot(dx, dy) > cfg.HAUNTLET_PLANK_EDGE) & (np.abs(angle - 90) < cfg.HAUNTLET_PLANK_ANGLE)
     return "boarded" if np.count_nonzero(on_plank_edge) >= cfg.HAUNTLET_PLANK_FRACTION * on_plank_edge.size else "plain"
+
+def find_ghost_door(img: Image, doors: list[HauntletDoor]) -> Optional[int]:
+    """The index of the door with the phone's red arrow over it (the ghost's door), or None: a big red triangle with a ghost on
+    it (HAUNTLET_ARROW_*) just above the TV of the door it points at. Doors that weren't located can't be told."""
+    if len(doors) != 3 or not doors[0].x:
+        return None
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    mask = cv2.bitwise_or(cv2.inRange(hsv, *cfg.HAUNTLET_ARROW_RED[0]), cv2.inRange(hsv, *cfg.HAUNTLET_ARROW_RED[1]))
+    left, top, right, bottom = cfg.HAUNTLET_ARROW_BOX
+    box = np.zeros_like(mask)
+    box[top:bottom, left:right] = mask[top:bottom, left:right]
+    box = cv2.morphologyEx(box, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+    count, _, stats, centres = cv2.connectedComponentsWithStats(box, connectivity=8)
+    spacing = (doors[2].x - doors[0].x) / 2
+    for i in range(1, count):
+        if (cfg.HAUNTLET_ARROW_AREA[0] <= stats[i, cv2.CC_STAT_AREA] <= cfg.HAUNTLET_ARROW_AREA[1]
+                and cfg.HAUNTLET_ARROW_WIDTH[0] <= stats[i, cv2.CC_STAT_WIDTH] <= cfg.HAUNTLET_ARROW_WIDTH[1]
+                and cfg.HAUNTLET_ARROW_HEIGHT[0] <= stats[i, cv2.CC_STAT_HEIGHT] <= cfg.HAUNTLET_ARROW_HEIGHT[1]):
+            nearest = min(range(3), key=lambda k: abs(doors[k].x - centres[i][0]))
+            if abs(doors[nearest].x - centres[i][0]) <= cfg.HAUNTLET_ARROW_MAX_OFFSET * spacing:
+                return nearest
+    return None
 
 def find_hauntlet_doors(img: Image) -> list[HauntletDoor]:
     """The three doors of the room in `img`, left to right, with their kinds - [] if there is no row of TVs."""

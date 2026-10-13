@@ -82,9 +82,9 @@ class Clock:
 def world(macro, monkeypatch):
     """Fake time, keyboard and mouse for the minigame players: `world.keys` lists ("down"/"up", key, time), `world.mouse` lists
     ("move", x, y) / ("down",) / ("up",) (for the right button ("down", "right") ...) / ("rel", dx, dy), `world.screens` is what the next looks see (a list, the last one staying, or a
-    function of the world), `world.waits` the waits."""
+    function of the world), `world.waits` the waits, `world.zooms` / `world.tilts` when the camera was zoomed out / tilted down."""
     clock = Clock()
-    world = types.SimpleNamespace(clock=clock, keys=[], mouse=[], waits=[], screens=[], looks=0)
+    world = types.SimpleNamespace(clock=clock, keys=[], mouse=[], waits=[], screens=[], looks=0, zooms=[], tilts=[], real_zoom_out=macro.zoom_out, real_tilt=macro.tilt_camera_down)
     monkeypatch.setattr(macro, "time", types.SimpleNamespace(**{**vars(macro.time), "time": clock}))
 
     def wait(duration):
@@ -101,6 +101,8 @@ def world(macro, monkeypatch):
     monkeypatch.setattr(macro, "minigame_look", look)
     monkeypatch.setattr(macro, "minigame_wait", lambda duration, watch: clock.__setattr__("now", clock.now + duration))
     monkeypatch.setattr(macro, "detect_minigame_victory", lambda img: False)
+    monkeypatch.setattr(macro, "zoom_out", lambda: world.zooms.append(clock.now))      # (world.real_zoom_out is the real one)
+    monkeypatch.setattr(macro, "tilt_camera_down", lambda: world.tilts.append(clock.now))
     monkeypatch.setattr(macro.pydirectinput, "keyDown", lambda key: world.keys.append(("down", key, clock.now)), raising=False)
     monkeypatch.setattr(macro.pydirectinput, "keyUp", lambda key: world.keys.append(("up", key, clock.now)), raising=False)
     monkeypatch.setattr(macro.pydirectinput, "moveTo", lambda x, y, **kw: world.mouse.append(("move", x, y)), raising=False)

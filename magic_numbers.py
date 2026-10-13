@@ -73,6 +73,7 @@ MINIGAME_OVERLAY_START_GRACE = 60.0
 MINIGAME_VICTORY_CHECK_INTERVAL = 1.0
 MINIGAME_POPUP_CHECK_INTERVAL = 4.0   # the popup checks (stray windows, paycheck) run this often while a minigame is played
 MINIGAME_MAX_DURATION = 600.0       # gives up (and logs a failure) if the victory screen hasn't shown by then
+MINIGAME_ZOOM_OUT_DURATION = 3.0    # both minigames hold KEY_ZOOM_OUT this long when they begin (Hauntlet 2 again where it can't find the doors)
 MINIGAME_FINISH_WAIT = 5.0          # after clicking NICE!, before carrying on
 MINIGAME_VICTORY_CLICK_TRIES = 3      # NICE! clicks before giving up on the win screen closing
 MINIGAME_START_WAIT = 50.0          # Hauntlet 2 waits this long after teleporting, before it acts; Ghost Gallery waits until its overlay
@@ -225,13 +226,18 @@ GHOST_BOSS_FILL_MIN = 200
 # place every GHOST_FURNITURE_PERIOD seconds) and the camera is turned every GHOST_CAMERA_PERIOD seconds with nothing to aim at: the right
 # button held while the mouse is dragged GHOST_CAMERA_DRAG px (a random way, and up to GHOST_CAMERA_TILT px up or down). The character jumps
 # every GHOST_JUMP_MIN-GHOST_JUMP_MAX seconds.
-GHOST_FURNITURE_BOX = (560, 250, 1360, 760)
+GHOST_FURNITURE_BOX = (300, 150, 1500, 800)
+GHOST_FURNITURE_MIN_DISTANCE = 300           # px: the place is at least this far from the character
 GHOST_FURNITURE_PERIOD = 1.0
 GHOST_CAMERA_PERIOD = 3.0
 GHOST_CAMERA_DRAG = (150, 450)
 GHOST_CAMERA_TILT = 60
 GHOST_CAMERA_DRAG_DURATION = 0.3
 GHOST_CAMERA_DRAG_STEPS = 6
+GHOST_START_TILT = 200                       # px of mouse drag down, right button held, at the start (after zooming out): a view from above
+GHOST_MOVE_PERIOD = 4.0                      # the character walks a step (a random MOVE_KEY held GHOST_MOVE_STEP_MIN-MAX seconds) this often
+GHOST_MOVE_STEP_MIN = 0.4
+GHOST_MOVE_STEP_MAX = 1.2
 GHOST_JUMP_MIN = 3.0
 GHOST_JUMP_MAX = 7.0
 
@@ -354,9 +360,27 @@ HAUNTLET_TV_STABLE = 4
 HAUNTLET_ROOM_TIMEOUT = 15.0
 HAUNTLET_FORK_EVERY = 10
 HAUNTLET_DOORS_TIMEOUT = 8.0
-HAUNTLET_ITEM_CHANCE = 0.35                  # the chance, at each choice of a door, that an item (picked at random) is used too
+# The items (their folder names in HAUNTLET_ITEM_DIR) and what each is for: the grey key opens a locked door; a cyan potion makes a heart
+# that lasts one room, for a boarded door; the red potion refills the hearts, used when only HAUNTLET_LOW_HEARTS or fewer are left; a
+# heart potion adds one and is used whenever there is one; the phone, used with a chance of HAUNTLET_PHONE_CHANCE at each choice
+# of a door, puts a red arrow over the door with a ghost behind it - a big red triangle (HAUNTLET_ARROW_RED, HSV; the area, width and
+# height in px it was seen with, in HAUNTLET_ARROW_BOX = left, top, right, bottom), over the TV of its door, no more than
+# HAUNTLET_ARROW_MAX_OFFSET door spacings off its middle - which is then not gone through. The arrow is looked for HAUNTLET_ARROW_LOOKS times.
+HAUNTLET_ITEM_KEY = "key"
+HAUNTLET_ITEM_BOARDED = "cyan_potion"
+HAUNTLET_ITEM_REFILL = "red_potion"
+HAUNTLET_ITEM_HEART = "heart_potion"
+HAUNTLET_ITEM_PHONE = "phone"
+HAUNTLET_LOW_HEARTS = 1
+HAUNTLET_PHONE_CHANCE = 0.35
 HAUNTLET_ITEM_WAIT = 0.6                     # seconds after clicking an item
-HAUNTLET_KEY_ITEMS = ("key", "gold_key")  # items that open a locked door
+HAUNTLET_ARROW_RED = (((0, 200, 170), (8, 255, 255)), ((172, 200, 170), (180, 255, 255)))
+HAUNTLET_ARROW_BOX = (0, 90, 1780, 640)
+HAUNTLET_ARROW_AREA = (2200, 6000)
+HAUNTLET_ARROW_WIDTH = (100, 150)
+HAUNTLET_ARROW_HEIGHT = (45, 125)
+HAUNTLET_ARROW_MAX_OFFSET = 0.5
+HAUNTLET_ARROW_LOOKS = 4
 HAUNTLET_LEARN_LIMIT = 4                     # new item pictures saved in one play (unknown_<n> folders); more is a misreading
 
 # ============================================================================
@@ -565,6 +589,7 @@ KEY_MOUNT = "e"
 KEY_INTERACT = "e"             # same physical key as KEY_MOUNT, named for its other use: collecting/
                                 # harvesting (lure_collect(), tree_collect()) rather than mounting a vehicle
 KEY_ZOOM_IN = "i"
+KEY_ZOOM_OUT = "o"              # zooms the camera out while held (the minigames hold it to see the whole room)
 KEY_HELICOPTER = "r"           # held to fly the equipped helicopter (also held briefly by ride)
 KEY_JUMP = "space"
 MOVE_KEYS = ("w", "a", "s", "d")

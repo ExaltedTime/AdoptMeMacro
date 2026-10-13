@@ -224,8 +224,8 @@ instead, to show what else was on it.
 
 `detect_need_icons()` scans a region of the screen for the round need icons. Only that region is captured (`grab_screen_region()`: the strip plus the margin the icon crops reach past it, about 13% of the screen), when the Roblox window is exactly the reference size - otherwise it falls back to cropping a full `grab_screen()`, which gives the same pixels:
 
-1. Crop to the top `NEED_ICON_TOP_PERCENT` (15%) of screen height and the
-   left `NEED_ICON_WIDTH_PERCENT` (70%) of screen width. The width crop
+1. Crop to the top `NEED_ICON_TOP_PERCENT` of screen height and the
+   left `NEED_ICON_WIDTH_PERCENT` of screen width. The width crop
    exists specifically so the GUI panel itself - docked top-right and kept
    always-on-top - is never captured in the same screenshot the macro is
    scanning, which would otherwise let the macro mistake its own colorful
@@ -287,7 +287,7 @@ when a file in `ref/needs/` is added, changed or removed, so a check doesn't
 re-read the folder) - including subfolders, so related icons can be grouped (the
 seasonal `diving` and `puddle` icons live in `ref/needs/weather/`); a need's
 name is just its file name, wherever it sits - and keeps the best score. A best score below
-`ICON_MATCH_THRESHOLD` (0.93) means "not confident this is anything we've
+`ICON_MATCH_THRESHOLD` means "not confident this is anything we've
 seen" - the icon is then unknown and, when `SAVE_NEW_NEEDS` is on, goes to
 `prompt_rename_need()`; otherwise it is just skipped.
 
@@ -301,7 +301,7 @@ the same check in parallel with their movement, see
 `scan_needs()` (one detect-and-match pass; the circle search may be skipped
 while the strip is unchanged, except for the second look of each check, which is
 always a real search) every
-`NEED_GONE_POLL_INTERVAL` (3.5s) until a check finds the target need gone - one
+`NEED_GONE_POLL_INTERVAL` until a check finds the target need gone - one
 check is enough; each check looks twice, as described below - up to
 `NEED_GONE_MAX_WAIT` total, 75s - the one maximum for every need (the
 teleport-walk needs time out by themselves in the game, and camping was seen
@@ -357,7 +357,7 @@ the buttons:
    These thresholds are deliberately looser than the need-icon ones, since
    buttons are more variable in how cleanly they contour.
 5. Prefer candidates with a white outline, then by size; take the top
-   `BUTTON_MAX_COUNT` (5), then sort left-to-right.
+   `BUTTON_MAX_COUNT`, then sort left-to-right.
 6. `refresh_button_mapping()` zips that left-to-right order against
    `BUTTON_NAMES = ["hungry", "thirsty", "dirty", "potty", "sleepy"]` and
    stores the result in `state.button_positions`. This assumes the five buttons
@@ -444,20 +444,20 @@ rather than a flat sleep after the fact.
 | Need | How it's handled |
 |---|---|
 | `hungry` / `thirsty` / `dirty` / `potty` / `sleepy` | `ButtonNeedHandler`: walk to the action buttons (`walk_to_buttons()`), refresh the button mapping (`refresh_button_mapping()`), click the matching one (`click_need_button()`), which then calls `wait_until_need_gone()` for that need name. |
-| `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → hold zoom-in → throw the toy by clicking empty space `CATCH_THROW_COUNT` (3) times, `CATCH_EMOTE_DELAY` (5s) after each → unequip. A fixed sequence: it doesn't wait for the icon (the next check sees whether it cleared). |
-| `pet` | `PetNeedHandler`: `focus_pet()` (see below, with `PET_FOCUS_CLICK_DURATION`), click the screen centre, move to `PET_SWIPE_START_OFFSET` above it, then hold the mouse down and swipe once down to `PET_SWIPE_END_OFFSET` below it over `PET_SWIPE_DURATION` (8s), releasing the button in a `finally`. Same as `catch` - always the full fixed duration. |
+| `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → hold zoom-in → throw the toy by clicking empty space `CATCH_THROW_COUNT` times, `CATCH_EMOTE_DELAY` after each → unequip. A fixed sequence: it doesn't wait for the icon (the next check sees whether it cleared). |
+| `pet` | `PetNeedHandler`: `focus_pet()` (see below, with `PET_FOCUS_CLICK_DURATION`), click the screen centre, move to `PET_SWIPE_START_OFFSET` above it, then hold the mouse down and swipe once down to `PET_SWIPE_END_OFFSET` below it over `PET_SWIPE_DURATION`, releasing the button in a `finally`. Same as `catch` - always the full fixed duration. |
 | `choose` | `ChooseNeedHandler`: `focus_pet()` (see below), find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. It doesn't wait for the icon to clear (it's gone at once; the next check confirms). |
-| `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then `equip_favorite_vehicle()` (backpack → vehicles → first vehicle → equip → close backpack), hold `r` (`KEY_HELICOPTER`) for `RIDE_R_HOLD_DURATION` (1.5s), then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT` (75s), ending early the moment "ride" is confirmed cleared (see below). |
+| `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then `equip_favorite_vehicle()` (backpack → vehicles → first vehicle → equip → close backpack), hold `r` (`KEY_HELICOPTER`) for `RIDE_R_HOLD_DURATION`, then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT`, ending early the moment "ride" is confirmed cleared (see below). |
 | `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`: after pressing `e` and waiting `SICK_CONFIRM_WAIT` the handler looks for the doctor's dialog, `detect_sick_dialog()`. Recognised: it clicks Yes. Not recognised and the pet view is not open: it logs `sick: dialog not recognised after e (pet focused: False) - clicking Yes anyway` and clicks Yes all the same, and the wait for the icon says whether it worked (in run 2 the recognition failed on 27 of 27 real attempts while the plain click had worked in run 1, so it is not trusted to fail the need). Not recognised and the pet view *is* open - the prompt is then a hand button `e` doesn't press: it logs `sick: no dialog after e (pet focused: True) - clicking the prompt`, backs out of the pet view (`dismiss_stray_windows()`), clicks the prompt on screen (`prompt_pos`, `SICK_PROMPT_POS`) and looks once more. Only if the dialog still isn't up has the need failed: the character respawns and the handler returns False at once, with no wait for the icon to clear, and `process_needs()` logs the failure), `helicopter` (see below) and `max_wait` (how long to wait for the need to clear afterwards; default `NEED_GONE_MAX_WAIT`, 75s). `sick` waits `SICK_PRE_E_WAIT` after its last hold before pressing `e`. Which table is used depends on `HALLOWEEN` - see below. |
-| `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")` - up to `NEED_GONE_MAX_WAIT` (75s), same early-exit as `ride` above. |
+| `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")` - up to `NEED_GONE_MAX_WAIT`, same early-exit as `ride` above. |
 
 **Helicopter.** A teleport-walk entry can fly instead of walk. `HELICOPTER_REQUIRED`
 (`magic_numbers.py`, default `False`) is the default for entries that don't
 say; an entry overrides it with `helicopter=True`/`False`. When on, after
-`teleport_to()` the handler holds `w` for `HELICOPTER_FORWARD_DURATION` (1s),
+`teleport_to()` the handler holds `w` for `HELICOPTER_FORWARD_DURATION`,
 calls `equip_favorite_vehicle()` (the same backpack sequence `ride` uses; the
 first vehicle is the favorite once `setup_game()` has filtered the backpack),
-holds `r` for `HELICOPTER_HOLD_DURATION` (4s), runs the entry's steps as
+holds `r` for `HELICOPTER_HOLD_DURATION`, runs the entry's steps as
 usual, then presses space (`KEY_JUMP`) on arrival, before any `final_click`.
 Only the Halloween `bored`, `beach` and `camping` entries use it.
 
@@ -489,7 +489,7 @@ one. For the same reason
 (`ref/popups/paycheck.png`, within its `POPUP_TEMPLATES` box) instead of counting green:
 it used to count green pixels, and the green tiles of an open backpack passed
 that, so it "dismissed" a paycheck every cycle - and its second dismiss click,
-`PAYCHECK_DISMISS_POS_2` (948, 627), lands on the little orange box next to the
+`PAYCHECK_DISMISS_POS_2`, lands on the little orange box next to the
 backpack's settings button, which expands the backpack.
 `rejoin_game()` is the automatic recovery - see
 [Automatic recovery](#stuck-needs).
@@ -549,7 +549,7 @@ started the task, and never from inside `unscrew()` itself). It's the same
 `unscrew()`, with two differences: the rejoin check only acts on a disconnect or a
 white screen (`rejoin_game(kinds=("disconnect", "white_screen"))`; the stuck, scheduled and stalled rejoins wait
 for the top of a cycle), and the backpack is only closed once it has been seen
-open on `BACKPACK_CLOSE_CONFIRMATIONS` (2) checks in a row - a handler opens the
+open on `BACKPACK_CLOSE_CONFIRMATIONS` checks in a row - a handler opens the
 normal backpack for a few seconds on purpose, so one sighting could be a
 handler in the middle of its steps, but two `UNSCREW_TASK_INTERVAL` apart is a
 backpack open for longer than any handler needs. The paycheck check is skipped
@@ -639,10 +639,11 @@ Options tab). `minigame_popup()`:
   character is unknown afterwards, and the next check sees what is still
   needed.
 
-*Playing.* No needs can be seen while a minigame runs, so both end on the
+*Playing.* The macro's own window is sent to the back while a minigame is played and brought back after it, whichever way it ends (it covers part of the screen, and would be in
+the recording and in the readers' way). No needs can be seen while a minigame runs, so both end on the
 victory screen instead - a red GAME OVER! banner over a green NICE! button,
 found by exact color (`detect_minigame_victory()`, checked every
-`MINIGAME_VICTORY_CHECK_INTERVAL`), which is the same for both. While it plays, `minigame_popup_checks()` runs `dismiss_stray_windows()` (and `detect_paycheck()` if it closed nothing) at most every `MINIGAME_POPUP_CHECK_INTERVAL` (4s), including during the start waits (`minigame_wait()`) - the in-task `unscrew()` can't, since the minigame is played from it. Then NICE!
+`MINIGAME_VICTORY_CHECK_INTERVAL`), which is the same for both. While it plays, `minigame_popup_checks()` runs `dismiss_stray_windows()` (and `detect_paycheck()` if it closed nothing) at most every `MINIGAME_POPUP_CHECK_INTERVAL`, including during the start waits (`minigame_wait()`) - the in-task `unscrew()` can't, since the minigame is played from it. Then NICE!
 (`MINIGAME_VICTORY_BUTTON_POS`) is clicked and `MINIGAME_FINISH_WAIT` waited
 out (`click_nice_until_gone()`, which looks again and clicks up to
 `MINIGAME_VICTORY_CLICK_TRIES` times while the win screen is still up, logging a
@@ -657,12 +658,12 @@ LEFT / GHOST GALLERY / Score banner), recognised by a crop in
 (`detect_minigame_overlay()`, at least `MINIGAME_OVERLAY_THRESHOLD`). A
 `MinigameWatch` made by `play_minigame()` is fed every screenshot the player
 takes (`minigame_look()`, `minigame_won()`, `minigame_wait()`): once the overlay has been seen,
-losing it for `MINIGAME_OVERLAY_LOST_TIMEOUT` (10 s) means the minigame was left
+losing it for `MINIGAME_OVERLAY_LOST_TIMEOUT` means the minigame was left
 (game over without the victory screen, kicked out) and it stops there; never
-seeing it within `MINIGAME_OVERLAY_START_GRACE` (60 s) of the start wait means it
+seeing it within `MINIGAME_OVERLAY_START_GRACE` of the start wait means it
 never started. Either is a logged failure with that reason, instead of waiting
-out `MINIGAME_MAX_DURATION` (600 s).
-- `play_hauntlet_2()` waits `MINIGAME_START_WAIT` (50 s), then goes through the rooms - reads the screen, picks a door
+out `MINIGAME_MAX_DURATION`.
+- `play_hauntlet_2()` waits `MINIGAME_START_WAIT`, then goes through the rooms - reads the screen, picks a door
   and walks to it, room after room - until victory or until the overlay says it's over. See
   [Playing Hauntlet 2](#playing-hauntlet-2).
 - `play_ghost_gallery()` waits until the game's overlay shows (at most `MINIGAME_START_WAIT`), then finds the ghosts on screen, aims the
@@ -684,7 +685,7 @@ just waiting its turn - that isn't being stuck. What is: `record_detection()`
 compares each check with the needs the *previous pass attempted*
 (`state.attempted_last`). An attempted need still on screen has its streak in
 `state.attempt_streaks` raised; one that's gone has it dropped. When an *enabled*
-need's streak reaches `NEED_STUCK_CHECKS` (5) - it's supposed to be getting
+need's streak reaches `NEED_STUCK_CHECKS` - it's supposed to be getting
 resolved, yet it never goes away - it's added to `state.disabled_needs` and
 `get_need_handler()` returns `None` for it from then on, same as a need that
 isn't in `ENABLED_NEEDS`. A single check without it, even one that detects
@@ -705,7 +706,7 @@ asks `rejoin_reason()` whether the game needs rejoining. In order:
    game behind it is blurred, so nothing else fills a box like that).
 2. *White screen* - at least `WHITE_SCREEN_MIN_FRACTION` of the screen has been
    completely white (every channel at or above `WHITE_SCREEN_LEVEL`,
-   `detect_white_screen()`) for `WHITE_SCREEN_REJOIN_AFTER` (30s) in a row. The
+   `detect_white_screen()`) for `WHITE_SCREEN_REJOIN_AFTER` in a row. The
    game shows a white screen for a moment on a respawn, teleport or change of
    location, so only a long one counts; a bright scene is nowhere near it (the
    real white transition in `tests/icon_detection/` is 93% white, every other
@@ -713,7 +714,7 @@ asks `rejoin_reason()` whether the game needs rejoining. In order:
    asked, which is every cycle and every `UNSCREW_TASK_INTERVAL` mid-task, and
    the clock (`state.white_since`) restarts whenever the screen isn't white.
    (Needs stay visible on the white screen, so nothing else notices it.)
-3. *Stuck* - `DISABLED_NEEDS_REJOIN_THRESHOLD` (4) needs have been disabled as
+3. *Stuck* - `DISABLED_NEEDS_REJOIN_THRESHOLD` needs have been disabled as
    stuck.
 4. *Stalled* - no need has been resolved for `NO_PROGRESS_REJOIN_INTERVAL`
    (20 minutes; `state.last_progress`, set when the loop starts, whenever a need is
@@ -744,7 +745,7 @@ wait for the next top of a cycle.
 
 Separately from those, `respawn_if_no_detection()` (in `run_full_cycle()`, after
 `process_needs()` found nothing to resolve) respawns the character when no
-need has been *detected* for `NO_DETECTION_RESPAWN_INTERVAL` (4 minutes) - it
+need has been *detected* for `NO_DETECTION_RESPAWN_INTERVAL` - it
 may be stuck somewhere the icons don't show from. It counts from
 `state.last_detection` (set whenever a need is detected, and when the loop starts, the game is rejoined or a minigame is
 played), and again from each respawn, so it repeats at most once per interval.
@@ -769,7 +770,7 @@ lure and tree actions are only reachable through `side_quest()`.
   `rejoin_game()` calls to recover. Modelled on how Natro Macro (a Bee
   Swarm Simulator macro) reconnects: close the game properly, relaunch it
   through a deeplink, and wait in stages by looking at the screen rather
-  than for a fixed time. Up to `REJOIN_MAX_ATTEMPTS` (3) times:
+  than for a fixed time. Up to `REJOIN_MAX_ATTEMPTS` times:
   1. `close_roblox()` - if `clean_leave` (it's off when the game is gone or
      showing the Disconnected dialog, where Enter could press Reconnect) and
      the Roblox window is at least `REJOIN_MIN_LEAVE_HEIGHT` tall (the L
@@ -787,7 +788,7 @@ lure and tree actions are only reachable through `side_quest()`.
      to `REJOIN_LOAD_TIMEOUT` for the game's green Play button
      (`GREEN_BUTTON_COLOR`) to show up around `REJOIN_JOIN_POS`
      (`detect_play_button()`).
-  4. Wait `REJOIN_PLAY_SETTLE`, click it, wait `REJOIN_AFTER_JOIN_WAIT` (15s),
+  4. Wait `REJOIN_PLAY_SETTLE`, click it, wait `REJOIN_AFTER_JOIN_WAIT`,
      respawn and return `True`. A stage that times out starts the next attempt;
      after the last one it returns `False`.
 
@@ -795,9 +796,9 @@ lure and tree actions are only reachable through `side_quest()`.
   `wait_interruptible()` also stops the run when Roblox loses focus, which is
   what used to kill the rejoin as soon as the game closed - there is no
   focused Roblox window while it restarts.
-- **`lure_collect()`** - holds `a` for `LURE_COLLECT_WALK_DURATION` (2s),
+- **`lure_collect()`** - holds `a` for `LURE_COLLECT_WALK_DURATION`,
   presses `KEY_INTERACT` (`e`) to collect the current lure's rewards,
-  waits `LURE_COLLECT_SETTLE_DELAY` (1s), presses `KEY_INTERACT` again,
+  waits `LURE_COLLECT_SETTLE_DELAY`, presses `KEY_INTERACT` again,
   waits `UI_SETTLE` for the placement panel, calls `set_new_lure()` (and gives
   up with False if that does), then respawns. `side_quest()` runs it - and
   `tree_collect()` - through `run_side_action()`, inside `task_unscrew()` like a
@@ -807,8 +808,8 @@ lure and tree actions are only reachable through `side_quest()`.
   (`UI_SETTLE` after each - they used to follow the key press with no wait), the two clicks that place a fresh lure. Split out from
   `lure_collect()` specifically so this placement step can be tested and
   tuned on its own, without walking to the old lure first each time.
-- **`tree_collect()`** - holds `d` for `TREE_COLLECT_WALK_DURATION` (2s),
-  then `s` for `TREE_COLLECT_BACKWARD_DURATION` (1s) to line up with the
+- **`tree_collect()`** - holds `d` for `TREE_COLLECT_WALK_DURATION`,
+  then `s` for `TREE_COLLECT_BACKWARD_DURATION` to line up with the
   tree, then presses `KEY_INTERACT` and respawns (like `lure_collect()`).
 - **`setup_game()`** - respawns, clicks `SETUP_LOCK_HOUSE_POS` to lock the
   house, then opens the backpack and clicks through
@@ -970,8 +971,8 @@ actually on disk (so an old config missing a newer key still works), and
 `save_game_config()` overwrites the whole file:
 
 - **`money_collected`** - how much `tree_collect()` has yielded so far,
-  in `TREE_HARVEST_YIELD` (16) increments. It goes up with each harvest and
-  is put back to 0 every day at `MONEY_RESET_HOUR` (17:00, local time) by
+  in `TREE_HARVEST_YIELD` increments. It goes up with each harvest and
+  is put back to 0 every day at `MONEY_RESET_HOUR` by
   `reset_money_if_due()` (see `side_quest()` below), or by the Debug tab's
   **Reset Config** button.
 - **`money_reset_boundary`** - the last daily reset moment already dealt with
@@ -1001,12 +1002,11 @@ During a run, this file is read and updated by:
   `run_full_cycle()`'s loop (so on the same cadence as the paycheck
   check); first applies the daily money reset (`reset_money_if_due()`), then does
   nothing if `side_quest_enabled` is off. While
-  `money_collected` is below `MONEY_COLLECTED_TARGET` (200) *and*
+  `money_collected` is below `MONEY_COLLECTED_TARGET` *and*
   `tree_timer` has passed, it calls `tree_collect()`, adds
   `TREE_HARVEST_YIELD`, and pushes `tree_timer` `TREE_CHECK_INTERVAL`
   (10 minutes) out. Once `lure_timer` has passed, it calls
-  `lure_collect()` and pushes `lure_timer` `LURE_RECOLLECT_INTERVAL` (4
-  hours) out. Each action only updates the config if the call actually
+  `lure_collect()` and pushes `lure_timer` `LURE_RECOLLECT_INTERVAL` out. Each action only updates the config if the call actually
   returned `True`, and does so immediately - so stopping partway through
   doesn't lose progress already made.
 
@@ -1092,19 +1092,19 @@ and clicks are recorded too, since `GetAsyncKeyState` sees them like any others.
 Each capture is a folder in `debug/captures/` (`CAPTURES_DIR`, git-ignored, emptied by **Refresh debug**;
 the newest `MAX_CAPTURES` are kept) named `capture_<date>_<time>`. **Getting one to someone else:** when a
 capture stops, `zip_capture()` (on a thread of its own) also splits it into zips of at most `CAPTURE_ZIP_MB`
-(25, since chat attachments are limited to 30 MB) in the capture's `zips/` folder:
+(chat attachments are limited to 30 MB) in the capture's `zips/` folder:
 `capture_<time>_part01.zip`, `_part02.zip`, ... The frames are in time order, none twice; part 1 also holds
-`events.jsonl` and `info.json`. They are stored, not compressed (PNGs don't shrink), so a 25 MB part is about
-14 frames. Attach them all (send them in order); a zip arrives byte for byte, unlike a pasted image, which
+`events.jsonl` and `info.json`. They are stored, not compressed (PNGs don't shrink), so a part holds only a
+few frames. Attach them all (send them in order); a zip arrives byte for byte, unlike a pasted image, which
 is recompressed. For a zip that already exists (a capture zipped by hand, say) `python tools/split_zip.py big.zip` cuts it into
 `big_part01.zip`, ... of at most 25 MB (or the number of MB given as a second argument), every file kept whole. The files themselves stay in the folder:
 
 - `frame_<n>_<seconds>.png` - `grab_screen()` (the Roblox window at the reference size, the macro's own
   window included if it is on top), lossless. The screen is looked at every `CAPTURE_FRAME_INTERVAL`
   (0.5 s) and right after every mouse click, but a frame is only **saved if it differs from the last one
-  saved**: at least `CAPTURE_CHANGE_FRACTION` (0.2%) of the picture, shrunk to 320x180, has moved by more
+  saved**: at least `CAPTURE_CHANGE_FRACTION` of the picture, shrunk to 320x180, has moved by more
   than `CAPTURE_CHANGE_LEVEL` grey levels. A character walking or a door opening does that; a ticking
-  timer or a blinking light doesn't. A click always gets a frame, and so does every `CAPTURE_MAX_SKIP` (3 s)
+  timer or a blinking light doesn't. A click always gets a frame, and so does every `CAPTURE_MAX_SKIP`
   without one, so a gap in the numbers means nothing changed, not that the capture stalled. `<seconds>` is
   on the same clock as the events.
 - `events.jsonl` - one JSON object per line, in time order, `t` being seconds since the start:
@@ -1121,22 +1121,22 @@ is recompressed. For a zip that already exists (a capture zipped by hand, say) `
 (`finish_run_capture()`, which also writes `outcome` into `info.json` and zips the capture as above). It is the same recorder, so it
 has the macro's own key presses and clicks and the frames on the same clock, but in `debug/minigame_captures/`
 (`RUN_CAPTURES_DIR`, the newest `MAX_RUN_CAPTURES` kept, named `<minigame>_<date>_<time>`) so the hotkey's captures and these
-never delete each other, and with a **budget of `RUN_CAPTURE_ZIPS` zips** (5, so up to about 125 MB, spread over the whole run): the
+never delete each other, and with a **budget of `RUN_CAPTURE_ZIPS` zips**, spread over the whole run: the
 zips are counted as `zip_capture()` will make them (`plan_zip_parts()`, the events in the first). A lossless frame is 1-3 MB, so
-that is some 60-80 frames; when a run would need more zips, `InputCapture._keep_within_budget()` deletes
+the budget buys some tens of frames; when a run would need more zips, `InputCapture._keep_within_budget()` deletes
 every other saved frame - never the newest, and the first stays - and from then on saves frames twice as far apart, so what is
 left is spread evenly over the run however long it is. It is checked after every saved frame and once more when the capture
 stops (the events have grown by then). The events of the deleted frames stay in `events.jsonl`, followed by a `frame_dropped`
 line naming the file, so a reader can tell; `info.json` has `frames_dropped` and `max_zips`, and `stopped_because` is "the minigame
-ended". The folders are big (the frames and then the same again as zips), hence `MAX_RUN_CAPTURES` is 5. Switch it off with `MINIGAME_CAPTURE`; it isn't started while the
+ended". The folders are big (the frames and then the same again as zips), hence only the newest `MAX_RUN_CAPTURES` are kept. Switch it off with `MINIGAME_CAPTURE`; it isn't started while the
 hotkey's capture is running (two recorders would only get in each other's way), and a capture that can't be started or finished is a
 message, never a reason not to play. If more frames per run are wanted the choice is more zips or lossy frames (which would no
 longer be the exact pixels the readers are tuned on).
 
-Keys and mouse buttons are read by polling `GetAsyncKeyState` every `CAPTURE_POLL_INTERVAL` (10 ms) -
+Keys and mouse buttons are read by polling `GetAsyncKeyState` every `CAPTURE_POLL_INTERVAL` -
 the same call as the stop hotkey, so no extra package is needed - and the position with `GetCursorPos`.
 The cost of polling is that **the mouse wheel isn't seen** (no async state to read) and a key pressed
-and released between two polls is missed. A capture stops by itself after `CAPTURE_MAX_MINUTES` (15) or
+and released between two polls is missed. A capture stops by itself after `CAPTURE_MAX_MINUTES` or
 when less than `CAPTURE_MIN_FREE_MB` of disk is free - a frame is roughly 1-3 MB; how many are saved depends on how much moves, but at worst two a second - and the next
 press of the hotkey then tidies it up and starts a new one. Screenshots and input are written from two
 threads of the capture's own; the hotkey is watched by the GUI's hotkey thread (with the stop hotkey) and
@@ -1150,7 +1150,7 @@ The panel is flat UI that never moves or scales, so the digits are matched exact
 (`HAUNTLET_DIGIT_WHITE_LEVEL`) inside `HAUNTLET_ROOM_BOX` are split into connected pieces, each piece is cut
 out, shrunk to `HAUNTLET_DIGIT_SIZE` and compared with the saved digit pictures in `ref/hauntlet_2/digits/`
 (`0.png` ... `9.png`, cut from a real run) by mean difference. The best must be under
-`HAUNTLET_DIGIT_MAX_DIFF` (20); on a 256-frame run (rooms 1-29, three layers of the hotel) every readable frame
+`HAUNTLET_DIGIT_MAX_DIFF`; on a 256-frame run (rooms 1-29, three layers of the hotel) every readable frame
 matched at 0.0 and the two most alike digits are 43.7 apart. No panel (the white transition, the lobby, a
 door close-up that hides it), no digit pieces, more than `HAUNTLET_ROOM_MAX_DIGITS`, or a piece that matches
 none of the digits all give `None` rather than a guess. `tests/test_hauntlet_2.py` runs a crop of each of the 29
@@ -1161,7 +1161,7 @@ rooms (`tests/hauntlet_2/room_panels/`) back through the reader.
 `HAUNTLET_SLOT_BAND` (`find_item_slots()`, Hough, radius `HAUNTLET_SLOT_RADIUS`; a slot that has just changed is a
 little bigger). Each slot's `HAUNTLET_ITEM_CROP`-px square is matched by correlation, as a grey picture so the slot's
 bright blue or dim teal background matters little, against the pictures in `ref/hauntlet_2/items/<name>/` (a folder per
-item, several pictures each - bright, dim, slightly enlarged). The best must reach `HAUNTLET_ITEM_MATCH` (0.75) or the
+item, several pictures each - bright, dim, slightly enlarged). The best must reach `HAUNTLET_ITEM_MATCH` or the
 item is `unknown`. They were cut from the 382 slots of a 256-frame run: `phone`, `key`, `gold_key`, `cyan_potion`,
 `heart_potion`, `red_potion`, plus `backpack` (the lobby's button, which sits where a slot would and is left out,
 `HAUNTLET_NOT_ITEMS`); every slot of that run is read as the item it is (60 ms a frame). The wand was not in it, so
@@ -1194,7 +1194,7 @@ in a light cyan, `(206, 255, 255)`, that no other pixel of the game has in that 
 of `HAUNTLET_TV_AREA` px (except those in `HAUNTLET_TV_HUD_BOX`, where the room panel and timer glow) and wants three of them in a row (the same height within
 `HAUNTLET_TV_ROW_TOLERANCE`, evenly spaced within `HAUNTLET_TV_SPACING_TOLERANCE`), else `[]` - a fork's hall has no TVs, and neither do
 the close-ups. **With the camera close** - which is how it looks once the macro stands still in a room - the middle TV is above the top of
-the screen or behind the room panel, and only the outer two show; two TVs `HAUNTLET_TV_PAIR_GAP` apart (about 900 px) and centred on the
+the screen or behind the room panel, and only the outer two show; two TVs `HAUNTLET_TV_PAIR_GAP` apart (the real gap was about twice the neighbours') and centred on the
 screen (`HAUNTLET_TV_PAIR_OFF_CENTER`; the player stands in front of the middle door) are taken for the outer two, the middle one halfway between.
 Two neighbours with the third off screen are 350-780 px apart but not centred, so they don't pass. The spacing between TVs (330-410 px as the camera zooms) is the picture's scale, so the boxes under each
 TV (`HAUNTLET_LOCK_LIGHT_BOX`, `HAUNTLET_DOOR_BOX`, measured at a spacing of `HAUNTLET_DOOR_SPACING`) are scaled with it.
@@ -1219,7 +1219,8 @@ fewer black pixels than the rule wants (4 of 10 read as boarded or plain), and a
 
 ### Playing Hauntlet 2
 
-`play_hauntlet_2()` (after `MINIGAME_START_WAIT`) takes a screenshot every `HAUNTLET_LOOK_INTERVAL` and hands it to a
+`play_hauntlet_2()` (after `MINIGAME_START_WAIT`, and a `zoom_out()` - `KEY_ZOOM_OUT` held `MINIGAME_ZOOM_OUT_DURATION` seconds: with the camera close the TVs are cut off by the top of the
+screen and the doors can't be found; again before each walk into a room whose doors weren't found) takes a screenshot every `HAUNTLET_LOOK_INTERVAL` and hands it to a
 `HauntletRun`, which keeps the room number and when it changed (`read_hauntlet_room()`) and says through `look()` when it is time
 to choose, returning the doors to choose from. The number changes as the player passes through a door, while the last
 room's doors are still on screen (open, the camera following the player), so the doors are only trusted when
@@ -1229,8 +1230,7 @@ room's doors are still on screen (open, the camera following the player), so the
 - the row of TVs is where it was on the look before, within `HAUNTLET_TV_STABLE` px - the camera has stopped (it zooms
   and pans at the start of a room; the macro stands still, so it does) - or `HAUNTLET_DOORS_TIMEOUT` has gone by.
 
-A room whose number is a multiple of `HAUNTLET_FORK_EVERY` (10 and 20 in the run - it is an assumption that 30, 40 and so on
-are forks too) with no row of TVs on two looks in a row is a fork: two doorways. **Room 1 is the entrance hall** ("Welcome to the Hauntlet
+A room whose number is a multiple of `HAUNTLET_FORK_EVERY` (rooms 10 and 20 were forks in the captured run; that every such room is one is an assumption) with no row of TVs on two looks in a row is a fork: two doorways. **Room 1 is the entrance hall** ("Welcome to the Hauntlet
 Hotel": one doorway straight ahead, no TVs, the timer already showing; in both captured runs the doorway leads into a room with three
 doors that is still numbered 1), and any other room without TVs for `HAUNTLET_DOORS_TIMEOUT` is treated the same way: a single
 doorway ahead, walked to by holding forward only (no strafe) until a row of TVs is on screen (`hauntlet_walk(until_doors=True)`) or the
@@ -1240,12 +1240,18 @@ logged once per run as a failure, which keeps a screenshot of what the TVs were 
 again, which is the retry for a walk that got stuck.
 
 `hauntlet_choose()` reads the hearts and the items off the same screenshot (new items are saved, at most
-`HAUNTLET_LEARN_LIMIT` per play, so a misreading can't fill the folder), picks a door with `choose_hauntlet_door()` and an item to
-use with `choose_hauntlet_item()`, and logs the lot: `room 12, 3 hearts (1 lost), items: phone x1, key x1, doors: -, -, locked, going middle`. **The choices are random for now**
-(a locked door is only taken when a key is held, or when all are locked; with a chance of `HAUNTLET_ITEM_CHANCE` at each choice one of
-the items, any of them, is used - `hauntlet_use_item()` clicks its slot, as the capture shows a human doing, and waits `HAUNTLET_ITEM_WAIT`, before the
-walk starts); `choose_hauntlet_door(doors, hearts, items)` and `choose_hauntlet_item(items, hearts)` are where the risk-based logic goes. Whether
-an item worked is not looked at. `hauntlet_strafe()` works out how far to go sideways and `hauntlet_walk()` then holds `HAUNTLET_2_FORWARD_KEY` - plus
+`HAUNTLET_LEARN_LIMIT` per play, so a misreading can't fill the folder), chooses the door, uses the items the choice calls for, and logs the lot:
+`room 12, 3 hearts (1 lost), items: phone x1, key x1, doors: -, -, locked, going right, used key`.
+
+*The door* (`choose_hauntlet_door()`) is a random one, with two exceptions: a locked door is only a choice when the **grey key** (`HAUNTLET_ITEM_KEY`; the gold key is not it)
+is held, and the door the phone's arrow is over is left alone (both only while there is any other door to take). *The items* (`hauntlet_items_for()`), each only if held and in
+this order: the grey key for a locked door; a **cyan potion** (a heart that lasts the room) for a boarded one; the **red potion** (it refills the hearts) when the red hearts are down to
+`HAUNTLET_LOW_HEARTS` or fewer; a **heart potion** (one more heart) whenever there is one. *The phone* is used first, with a chance of `HAUNTLET_PHONE_CHANCE` at each choice: it puts a
+red arrow - a big red triangle with a ghost on it, `HAUNTLET_ARROW_*` - over the TV of the door with a ghost behind it, which then isn't chosen. `find_ghost_door()` finds the arrow (it
+takes a moment to show, so it is looked for `HAUNTLET_ARROW_LOOKS` times) and says which door it belongs to; over the captured runs it fired on 9 frames, all of the hand-played run (the one that used the phone), and where the doors were
+found (6 of them) always within a few percent of a door spacing of a door's TV; it fired on none of the ~700 frames of the macro-played runs, which used no phone. `hauntlet_use_item()` clicks an item's slot, as the capture shows a human doing, and waits
+`HAUNTLET_ITEM_WAIT`; the slots close up when an item is used up, so it looks for the slot on a fresh screenshot each time. The items are used before the walk starts. Whether an item
+worked is not looked at, and the gold key and the wand have no use yet. `hauntlet_strafe()` works out how far to go sideways and `hauntlet_walk()` then holds `HAUNTLET_2_FORWARD_KEY` - plus
 `HAUNTLET_LEFT_KEY` or `HAUNTLET_RIGHT_KEY` for the strafe - until the number changes (or `HAUNTLET_WALK_MAX` seconds), and then `HAUNTLET_WALK_PAST_DURATION` longer. **The number changes while the
 player is still in the doorway** (the camera close on the door, its TV filling the screen, the next room's doors out of sight); a human keeps walking
 1.0-2.0 s more (median 1.4 s in the capture) and a macro that let go at once stood there for the rest of the run - which is how the
@@ -1284,23 +1290,28 @@ where the human held the beam in 69 of 80 frames outside the boss phase and the 
 **The boss's shield.** The boss can't always be hurt: in three phases of the run (6-7 s each, at 1:10, 0:37 and 0:25 before the end, a few seconds after
 each other) its bar shows two or three round ghost icons instead of its cyan health, the boss itself goes dim, and small ghosts fly in; catching them is
 what gets the boss back. `ghost_boss_shielded()` is the bar's cyan fill (`GHOST_BOSS_FILL`, BGR (255, 222, 0)) being gone: 500-20000 pixels of it in `GHOST_BOSS_BAR_BOX` when the
-boss can be hurt, 0 in the icon phases (a sliver, 470-2000, in the last seconds of the boss's life, which is why the limit, `GHOST_BOSS_FILL_MIN`, is 200). The boss
+boss can be hurt, 0 in the icon phases (a sliver, 470-2000, in the last seconds of the boss's life, which is why the limit, `GHOST_BOSS_FILL_MIN`, isn't zero). The boss
 is dim enough then to fall under `GHOST_COLOR`'s brightness, so `find_ghost_blobs()` finds only the small ghosts, and they are aimed at like any ghosts
 (nearest the character). Replaying the run, the three phases come out at 110.4-115.8 s, 127.2-133.5 s and 139.8-147.1 s of the capture, with the boss
 phase before, between and after them, as in the frames.
 
-`play_ghost_gallery()` waits until the overlay (TIME LEFT, the score) has been seen - the game starts about 25 s after the popup's Yes, not 50 - then, every
-`GHOST_LOOK_INTERVAL`, looks and works out the phase (before the boss, the boss can be hurt, the boss is shielded), moves the mouse to the target with `pydirectinput.moveTo()` (not
-`hover_move()`: its three settling pauses are too slow for tracking) and holds the left button down while there is one. **With nothing to aim at** (the boss phase's case is below):
-before the boss it holds the beam on a random place in `GHOST_FURNITURE_BOX` - the ghosts hide in the furniture, and holding the beam on it is how to get them out; no furniture is
-looked for, the place is just random and changes every `GHOST_FURNITURE_PERIOD` - and in the boss phase it lets go and doesn't aim at anything. Either way, with nothing to aim at for
-`GHOST_CAMERA_PERIOD` seconds it **turns the camera** (`rotate_camera()`): the right button held while the mouse is dragged sideways `GHOST_CAMERA_DRAG` px, a random way (and a little up or
-down, `GHOST_CAMERA_TILT`), in `GHOST_CAMERA_DRAG_STEPS` moves over `GHOST_CAMERA_DRAG_DURATION` seconds, so as to find some. Every `GHOST_JUMP_MIN`-`GHOST_JUMP_MAX`
-seconds it **jumps** (`KEY_JUMP`). The buttons are always let go, also when the macro is stopped.
-**Not yet checked in the game:** that `pydirectinput.moveRel(..., relative=True)` with the right button held turns Roblox's camera the way a hand does, the size of the drag, where the
-furniture is (the box is a guess around the character), and the jump's use. **What it does not do:** dodge, react to being knocked down, or choose between ghosts
-by anything but distance (the human often picked the second or third nearest); it can't tell furniture from floor, and doesn't try to "get the best view" by anything
-smarter than turning when it sees nothing.
+`play_ghost_gallery()` waits until the overlay (TIME LEFT, the score) has been seen - the game starts well before `MINIGAME_START_WAIT` would be over - and
+**sets up the view**: `zoom_out()` (`KEY_ZOOM_OUT` held `MINIGAME_ZOOM_OUT_DURATION` seconds; in a macro-played run the camera was right behind the character, whose
+cyan hoodie filled the screen and was taken for a ghost, so that the beam was held on the character for the whole run) and `tilt_camera_down()` (the right button held while the mouse is
+dragged down `GHOST_START_TILT` px, for a view from above). Then, every `GHOST_LOOK_INTERVAL`, it looks and works out the phase (before the boss, the boss can be hurt, the boss is shielded),
+moves the mouse to the target with `pydirectinput.moveTo()` (not `hover_move()`: its three settling pauses are too slow for tracking) and holds the left button down while there is one.
+**With nothing to aim at** (the boss phase's case is below): before the boss it holds the beam on a random place in `GHOST_FURNITURE_BOX` at least `GHOST_FURNITURE_MIN_DISTANCE` px from the
+character (`far_from_character()`; the ghosts hide in the furniture, and holding the beam on it is how to get them out - no furniture is looked for, the place is just random and changes
+every `GHOST_FURNITURE_PERIOD`) and in the boss phase it lets go and doesn't aim at anything. Either way, with nothing to aim at for `GHOST_CAMERA_PERIOD` seconds it **turns the camera**
+(`rotate_camera()`): the right button held while the mouse is dragged sideways `GHOST_CAMERA_DRAG` px, a random way (and a little up or down, `GHOST_CAMERA_TILT`), in
+`GHOST_CAMERA_DRAG_STEPS` moves over `GHOST_CAMERA_DRAG_DURATION` seconds, so as to find some. **It walks about**: every `GHOST_MOVE_PERIOD` seconds a random `MOVE_KEYS` key is held for
+`GHOST_MOVE_STEP_MIN`-`GHOST_MOVE_STEP_MAX` seconds, one at a time, the aiming going on meanwhile. Every `GHOST_JUMP_MIN`-`GHOST_JUMP_MAX` seconds it **jumps** (`KEY_JUMP`).
+The buttons and the walking key are always let go, also when the macro is stopped. The macro's own window is out of the way (sent to the back, see
+`send_macro_window_to_back()`) for the whole of both minigames, as it covers part of the screen.
+**Not yet checked in the game:** that `pydirectinput.moveRel(..., relative=True)` with the right button held turns Roblox's camera the way a hand does, the size of the drags and of
+the start's tilt, where the furniture is (the box is a guess), and the walking's and jumping's use; nor whether the character's own colours (a cyan costume) are kept out of the ghost finder
+once the camera is out (`GHOST_IGNORE_BOXES` is the character's place in a human's zoomed-out run). **What it does not do:** dodge, react to being knocked down, or choose between ghosts
+by anything but distance (the human often picked the second or third nearest); it can't tell furniture from floor.
 
 ### Recording a run
 
@@ -1308,12 +1319,12 @@ Tick **Record the next run (low quality video)** on the Debug tab's Other subtab
 `record_next_run` config switch) and the next time the loop starts it records
 the Roblox window to `debug/recordings/run<N>_<time>.mp4` - then clears the
 switch, so it's one run only. `start_recording_if_requested()` starts a
-`RunRecorder`, which writes `RECORD_WIDTH` x `RECORD_HEIGHT` (640x360) frames at
-`RECORD_FPS` (4) from a background thread, each stamped with the time (white text on a solid black box in the top-left
+`RunRecorder`, which writes `RECORD_WIDTH` x `RECORD_HEIGHT` frames at
+`RECORD_FPS` from a background thread, each stamped with the time (white text on a solid black box in the top-left
 corner, which stays readable over any scene at the cost of that corner) so the
 video lines up with `output.log` and `run_log.txt`; a slow grab is covered by
 repeating the last frame, so playback is real time. It stops when the loop
-ends or after `RECORD_MAX_MINUTES` (480, 8 hours), and only the newest `MAX_RECORDINGS` videos
+ends or after `RECORD_MAX_MINUTES`, and only the newest `MAX_RECORDINGS` videos
 are kept. It's MP4 (`mp4v`) where OpenCV can write one, otherwise MJPG in an
 `.avi`; `recording started` / `recording stopped` (with the size) go in the run
 log. The picture is the Roblox window as the macro sees it, so the macro's own
@@ -1345,8 +1356,8 @@ exact values and rationale):
 | Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
 | Hauntlet 2 reader | `HAUNTLET_ROOM_BOX`, `HAUNTLET_DIGIT_*`, `HAUNTLET_ROOM_MAX_DIGITS`, `HAUNTLET_SLOT_*`, `HAUNTLET_ITEM_*`, `HAUNTLET_BADGE_*`, `HAUNTLET_COUNT_*`, `HAUNTLET_NOT_ITEMS`, `HAUNTLET_HEART_*`, `HAUNTLET_*_DIR` |
-| Ghost Gallery play | `GHOST_COLOR`, `GHOST_CLOSE`, `GHOST_MIN_AREA`, `GHOST_IGNORE_BOXES`, `GHOST_CHARACTER`, `GHOST_STICK`, `GHOST_BOSS_BAR_*`, `GHOST_BOSS_FILL*`, `GHOST_LOOK_INTERVAL`, `GHOST_START_LOOK_INTERVAL`, `GHOST_FURNITURE_*`, `GHOST_CAMERA_*`, `GHOST_JUMP_*` |
-| Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_DARK_*`, `HAUNTLET_PLANK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_*`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_ITEM_CHANCE`, `HAUNTLET_ITEM_WAIT`, `HAUNTLET_KEY_ITEMS`, `HAUNTLET_LEARN_LIMIT` |
+| Ghost Gallery play | `GHOST_COLOR`, `GHOST_CLOSE`, `GHOST_MIN_AREA`, `GHOST_IGNORE_BOXES`, `GHOST_CHARACTER`, `GHOST_STICK`, `GHOST_BOSS_BAR_*`, `GHOST_BOSS_FILL*`, `GHOST_LOOK_INTERVAL`, `GHOST_START_LOOK_INTERVAL`, `GHOST_FURNITURE_*`, `GHOST_CAMERA_*`, `GHOST_START_TILT`, `GHOST_MOVE_*`, `GHOST_JUMP_*`, `KEY_ZOOM_OUT`, `MINIGAME_ZOOM_OUT_DURATION` |
+| Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_DARK_*`, `HAUNTLET_PLANK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_*`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_ITEM_*`, `HAUNTLET_LOW_HEARTS`, `HAUNTLET_PHONE_CHANCE`, `HAUNTLET_ARROW_*`, `HAUNTLET_LEARN_LIMIT` |
 | Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `MINIGAME_CAPTURE`, `RUN_CAPTURES_DIR`, `RUN_CAPTURE_ZIPS`, `MAX_RUN_CAPTURES`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
@@ -1369,7 +1380,7 @@ again, since the counter goes with the logs.
 - **`output.log`** - everything the macro prints (the same as the GUI
   console), one timestamped line each, appended to across runs. `log_output()`
   is called by `DebugCapture`, so this only exists while the GUI is up. The file stays open between writes (flushed after each one, so a crash loses nothing); `close_output_log()` closes it before **Refresh debug** deletes it, since Windows won't delete an open file. Past
-  `OUTPUT_LOG_MAX_BYTES` (5 MB) it moves to `output.log.old`, replacing the
+  `OUTPUT_LOG_MAX_BYTES` it moves to `output.log.old`, replacing the
   previous one.
 - **`run_log.txt`** - the short version: one tagged line per notable event
   (needs detected, resolved with how long they took, popups dismissed,
@@ -1392,7 +1403,7 @@ again, since the counter goes with the logs.
 - **`reports/run<N>.png`** - a chart of one run, drawn from `run_log.txt` by
   `generate_run_report()` in `main.py` with OpenCV (no extra dependency). Written automatically when a
   run stops (`write_run_report()`, in the `finally` of `run_workflow_loop()`)
-  (so there is no button for it); the oldest reports beyond `MAX_REPORTS` (50) are deleted then (`keep_newest_files()`) - the logs they are drawn from are kept, so one can be drawn again. Five panels: needs resolved per unit of time (the unit is picked
+  (so there is no button for it); the oldest reports beyond `MAX_REPORTS` are deleted then (`keep_newest_files()`) - the logs they are drawn from are kept, so one can be drawn again. Five panels: needs resolved per unit of time (the unit is picked
   from `BUCKET_STEPS` so the run fills about `TARGET_BUCKETS` bars, stacked by
   basic / teleport / other need, with failures and rejoins marked); needs
   detected per check; average seconds per resolved need with how many there
@@ -1413,7 +1424,7 @@ again, since the counter goes with the logs.
   need is disabled as stuck, a recovery starts or fails, Roblox loses focus
   and stops the run, and when the run crashes (the full traceback is in
   `output.log`). It never raises, since it runs while something else is
-  already wrong. The oldest folders beyond `MAX_FAILURE_FOLDERS` (100) are
+  already wrong. The oldest folders beyond `MAX_FAILURE_FOLDERS` are
   deleted.
 - **`status.json`** - rewritten every cycle and on every failure/resolved
   need (`write_status()`): the run number and start time, time of the last

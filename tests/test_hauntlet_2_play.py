@@ -12,9 +12,17 @@ HERE = os.path.join(os.path.dirname(__file__), "hauntlet_2")
 PANEL_AT = (1060, 60)
 
 
-def frame(macro, doors=None, room=None, timer=True):
-    """A screen: the doors fixture (a number, or None for a blank one), with the timer and the room panel on it."""
-    screen = np.zeros((1080, 1920, 3), np.uint8) if doors is None else cv2.imread(os.path.join(HERE, "doors", f"{doors:03d}.png"))
+BAR_AT = (640, 930)                        # where the item bar crops were cut from
+
+
+def frame(macro, doors=None, room=None, timer=True, bar=None):
+    """A screen: the doors fixture (a number, a name, or None for a blank one), with the timer, the room panel and the item bar
+    (a number of tests/hauntlet_2/item_bars/) on it."""
+    name = f"{doors:03d}" if isinstance(doors, int) else doors
+    screen = np.zeros((1080, 1920, 3), np.uint8) if doors is None else cv2.imread(os.path.join(HERE, "doors", f"{name}.png"))
+    if bar is not None:
+        crop = cv2.imread(os.path.join(HERE, "item_bars", f"{bar:03d}.png"))
+        screen[BAR_AT[1]:BAR_AT[1] + crop.shape[0], BAR_AT[0]:BAR_AT[0] + crop.shape[1]] = crop
     if timer:
         left, top, right, bottom = macro.cfg.HAUNTLET_TIMER_BOX
         screen[top:bottom, left:right] = cv2.imread(os.path.join(HERE, "timer", "shown.png"))
@@ -112,30 +120,58 @@ def test_the_players_hearts_under_a_door_are_not_a_lock_light(macro):
     assert macro.find_hauntlet_doors(screen)[1].kind == "locked"
 
 
+def test_the_red_arrow_over_a_door_is_found_and_belongs_to_that_door(macro):
+    screen = frame(macro, "phone_arrow")
+    doors = macro.find_hauntlet_doors(screen)
+    assert macro.find_ghost_door(screen, doors) == 1
+    arrow = screen[100:260, 860:1050].copy()
+    for index in (0, 2):                                                                      # the same arrow over the left and over the right door
+        moved = frame(macro, "phone_arrow")
+        moved[100:260, 860:1050] = frame(macro, "016")[100:260, 860:1050]
+        x = doors[index].x
+        moved[100:260, x - 95:x + 95] = arrow
+        assert macro.find_ghost_door(moved, doors) == index
+    far = frame(macro, "016")
+    far[100:260, 120:310] = arrow                                                             # a red thing far to the left of every door
+    assert macro.find_ghost_door(far, macro.find_hauntlet_doors(frame(macro, "phone_arrow"))) is None
+    assert macro.find_ghost_door(frame(macro, 97), macro.find_hauntlet_doors(frame(macro, 97))) is None      # no arrow
+    assert macro.find_ghost_door(screen, [macro.HauntletDoor(0, 0, None)]) is None                          # doors not located: can't tell
+
+
 # --- choosing and walking ---
 
 def door(kind=None):
     return types.SimpleNamespace(x=0, y=0, kind=kind)
 
 
-def test_a_door_is_chosen_at_random_but_a_locked_one_only_with_a_key(macro):
+def item(macro, name, x=0):
+    return macro.HauntletItem(name, 1, (x, 1000))
+
+
+def test_a_door_is_chosen_at_random_but_a_locked_one_only_with_the_grey_key_and_not_the_ghosts(macro):
+    cfg = macro.cfg
     doors = [door("locked"), door(), door("locked")]
     assert {macro.choose_hauntlet_door(doors, None, []) for _ in range(60)} == {1}
-    key = macro.HauntletItem("gold_key", 1, (0, 0))
-    assert {macro.choose_hauntlet_door(doors, None, [key]) for _ in range(200)} == {0, 1, 2}
-    assert {macro.choose_hauntlet_door([door("locked")] * 3, None, []) for _ in range(200)} == {0, 1, 2}   # nothing else to take
+    assert {macro.choose_hauntlet_door(doors, None, [item(macro, "gold_key")]) for _ in range(60)} == {1}       # the gold one is not it
+    assert {macro.choose_hauntlet_door(doors, None, [item(macro, cfg.HAUNTLET_ITEM_KEY)]) for _ in range(200)} == {0, 1, 2}
+    assert {macro.choose_hauntlet_door([door("locked")] * 3, None, []) for _ in range(200)} == {0, 1, 2}        # nothing else to take
+    plain = [door(), door(), door()]
+    assert {macro.choose_hauntlet_door(plain, None, [], avoid=1) for _ in range(200)} == {0, 2}                  # the arrow's door is left alone
+    assert {macro.choose_hauntlet_door([door("locked"), door(), door()], None, [], avoid=1) for _ in range(200)} == {2}
+    assert macro.choose_hauntlet_door([door("locked")] * 2 + [door()], None, [], avoid=2) in (0, 1)            # only the ghost's door open: not it, if possible
 
 
-def test_an_item_is_used_with_the_set_chance_and_any_item_can_be_the_one(macro, monkeypatch):
-    items = [macro.HauntletItem(name, 1, (100 * i, 1000)) for i, name in enumerate(["phone", "key", "cyan_potion"])]
-    monkeypatch.setattr(macro.cfg, "HAUNTLET_ITEM_CHANCE", 1.0)
-    assert {macro.choose_hauntlet_item(items, None).name for _ in range(200)} == {"phone", "key", "cyan_potion"}
-    assert macro.choose_hauntlet_item([], None) is None
-    monkeypatch.setattr(macro.cfg, "HAUNTLET_ITEM_CHANCE", 0.0)
-    assert macro.choose_hauntlet_item(items, None) is None
-    monkeypatch.setattr(macro.cfg, "HAUNTLET_ITEM_CHANCE", 0.5)
-    used = sum(macro.choose_hauntlet_item(items, None) is not None for _ in range(2000))
-    assert 800 < used < 1200
+def test_each_door_and_the_hearts_call_for_their_items(macro):
+    cfg = macro.cfg
+    everything = [item(macro, name) for name in (cfg.HAUNTLET_ITEM_PHONE, cfg.HAUNTLET_ITEM_KEY, cfg.HAUNTLET_ITEM_BOARDED, cfg.HAUNTLET_ITEM_REFILL, cfg.HAUNTLET_ITEM_HEART, "gold_key")]
+    full, low = macro.HauntletHearts(cfg.HAUNTLET_LOW_HEARTS + 1, 0, 30, (0, 0)), macro.HauntletHearts(cfg.HAUNTLET_LOW_HEARTS, 2, 30, (0, 0))
+    assert macro.hauntlet_items_for(door("locked"), full, everything) == [cfg.HAUNTLET_ITEM_KEY, cfg.HAUNTLET_ITEM_HEART]
+    assert macro.hauntlet_items_for(door("boarded"), full, everything) == [cfg.HAUNTLET_ITEM_BOARDED, cfg.HAUNTLET_ITEM_HEART]
+    assert macro.hauntlet_items_for(door("plain"), full, everything) == [cfg.HAUNTLET_ITEM_HEART]
+    assert macro.hauntlet_items_for(door("plain"), low, everything) == [cfg.HAUNTLET_ITEM_REFILL, cfg.HAUNTLET_ITEM_HEART]    # low on hearts: the red potion
+    assert macro.hauntlet_items_for(door("plain"), None, everything) == [cfg.HAUNTLET_ITEM_HEART]                              # hearts not seen: not low
+    assert macro.hauntlet_items_for(door("locked"), low, []) == []                                                             # only what is held
+    assert macro.hauntlet_items_for(door("locked"), full, [item(macro, cfg.HAUNTLET_ITEM_BOARDED)]) == []                    # a cyan potion doesn't open a lock
 
 
 def hearts_at(macro, monkeypatch, x):
@@ -368,6 +404,8 @@ def test_the_loop_chooses_a_door_walks_to_it_and_goes_on_in_the_next_room(macro,
     assert "room 12, hearts not seen, items: none, doors: boarded, boarded, locked, going middle" in out
     assert "Hauntlet 2: room 13" in out
     assert events == ["Hauntlet 2: got as far as room 13"]
+    first_walk = next(at for kind, key, at in world.keys if key == "w")
+    assert len(world.zooms) == 1 and world.zooms[0] < first_walk                              # zoomed out once, before the first step
 
 
 def test_the_loop_returns_true_on_the_victory_screen(macro, world, monkeypatch):
@@ -384,17 +422,83 @@ def test_the_loop_stops_when_the_overlay_says_the_minigame_is_over(macro, world)
     assert world.keys == [] and world.looks == 0
 
 
-def test_the_loop_clicks_the_item_it_chose_before_walking(macro, world, monkeypatch, capsys):
+def slot_of(macro, name, bar=16):
+    """Where the slot holding `name` is on the item bar fixture."""
+    return next(i.pos for i in macro.read_hauntlet_items(frame(macro, bar=bar)) if i.name == name)
+
+
+def play_one_room(macro, world, screens, seconds=1.5):
+    world.screens = screens
     cfg = macro.cfg
-    item = macro.HauntletItem("phone", 1, (850, 1000))
-    monkeypatch.setattr(cfg, "HAUNTLET_ITEM_CHANCE", 1.0)
-    monkeypatch.setattr(macro, "read_hauntlet_items", lambda img, learn=False: [item])
+    macro.play_hauntlet_2(world.clock.now + cfg.MINIGAME_START_WAIT + cfg.HAUNTLET_ROOM_SETTLE + seconds, watch_of(macro))
+
+
+def test_the_grey_key_is_used_for_a_locked_door_a_cyan_potion_for_a_boarded_one_and_a_heart_potion_always(macro, world, monkeypatch, capsys):
+    cfg = macro.cfg
     monkeypatch.setattr(macro, "log_run_event", lambda text: None)
-    world.screens = [frame(macro, 97, room=12)]
-    macro.play_hauntlet_2(world.clock.now + cfg.MINIGAME_START_WAIT + 3 * (cfg.HAUNTLET_ROOM_SETTLE + cfg.HAUNTLET_ROOM_TIMEOUT + cfg.HAUNTLET_WALK_MAX), watch_of(macro))
-    assert macro.clicks and set(macro.clicks) == {(850, 1000)}
-    assert "using phone" in capsys.readouterr().out
-    assert cfg.HAUNTLET_ITEM_WAIT in world.waits
+    monkeypatch.setattr(cfg, "HAUNTLET_PHONE_CHANCE", 0.0)
+    base = frame(macro, 97, room=12, bar=16)                                                  # boarded, boarded, locked; a phone, key, cyan and heart potion
+    for index, expected in ((2, ["key", "heart_potion"]), (0, ["cyan_potion", "heart_potion"]), (1, ["cyan_potion", "heart_potion"])):
+        macro.clicks.clear()
+        world.clock.now += 1000
+        monkeypatch.setattr(macro.random, "choice", lambda options, index=index: index)
+        play_one_room(macro, world, [base])
+        assert macro.clicks[:2] == [slot_of(macro, name) for name in expected], index
+    assert "used key, heart_potion" in capsys.readouterr().out
+
+
+def test_the_red_potion_is_used_when_the_hearts_are_low_and_not_otherwise(macro, world, monkeypatch):
+    cfg = macro.cfg
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    monkeypatch.setattr(cfg, "HAUNTLET_PHONE_CHANCE", 0.0)
+    base = frame(macro, 97, room=12, bar=100)                                                 # a red potion only
+    red = slot_of(macro, "red_potion", bar=100)
+    for hearts, used in ((macro.HauntletHearts(cfg.HAUNTLET_LOW_HEARTS, 2, 30, (0, 0)), True), (macro.HauntletHearts(cfg.HAUNTLET_LOW_HEARTS + 1, 0, 30, (0, 0)), False)):
+        macro.clicks.clear()
+        world.clock.now += 1000
+        monkeypatch.setattr(macro, "read_hauntlet_hearts", lambda img, hearts=hearts: hearts)
+        play_one_room(macro, world, [base])
+        assert (red in macro.clicks) is used
+
+
+def test_an_item_not_held_is_not_clicked(macro, world, monkeypatch):
+    world.screens = [frame(macro, bar=100)]
+    assert macro.hauntlet_use_item("phone", watch_of(macro)) is None and macro.clicks == []
+    assert macro.hauntlet_use_item("red_potion", watch_of(macro)) is not None and macro.clicks == [slot_of(macro, "red_potion", bar=100)]
+
+
+def test_after_the_phone_the_door_with_the_red_arrow_is_not_gone_through(macro, world, monkeypatch, capsys):
+    cfg = macro.cfg
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    monkeypatch.setattr(cfg, "HAUNTLET_PHONE_CHANCE", 1.0)
+    before = frame(macro, 97, room=12, bar=16)
+    arrow = cv2.imread(os.path.join(HERE, "doors", "phone_arrow.png"))[100:260, 860:1050]
+    after = before.copy()
+    after[100:260, 860:1050] = arrow                                                          # the arrow over the middle door
+    phone = slot_of(macro, "phone")
+    chosen = []
+    monkeypatch.setattr(macro.random, "choice", lambda options: chosen.append(list(options)) or options[0])
+    play_one_room(macro, world, lambda: after if phone in macro.clicks else before)
+    assert macro.clicks[0] == phone
+    assert chosen and 1 not in chosen[0]                                                      # the middle door was not among those to choose from
+    assert "ghost behind the middle one" in capsys.readouterr().out
+
+
+def test_without_the_arrow_every_door_is_still_a_choice_and_the_phone_is_only_used_by_chance(macro, world, monkeypatch):
+    cfg = macro.cfg
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    base = frame(macro, 97, room=12, bar=16)
+    phone = slot_of(macro, "phone")
+    monkeypatch.setattr(cfg, "HAUNTLET_PHONE_CHANCE", 0.0)
+    play_one_room(macro, world, [base])
+    assert phone not in macro.clicks
+    macro.clicks.clear()
+    world.clock.now += 1000
+    monkeypatch.setattr(cfg, "HAUNTLET_PHONE_CHANCE", 1.0)
+    chosen = []
+    monkeypatch.setattr(macro.random, "choice", lambda options: chosen.append(list(options)) or options[0])
+    play_one_room(macro, world, [base])
+    assert macro.clicks[0] == phone and chosen and chosen[0] == [0, 1, 2]                             # nothing to avoid (and the key is held, so the lock is a choice)
 
 
 def test_a_room_whose_doors_are_never_found_is_walked_straight_on_and_the_screenshot_kept_once(macro, world, monkeypatch):
@@ -408,6 +512,7 @@ def test_a_room_whose_doors_are_never_found_is_walked_straight_on_and_the_screen
     keys = [key for _, key, _ in world.keys]
     assert keys.count("w") >= 4 and set(keys) == {"w"}                         # walked more than once, forward only
     assert failures == [f"Hauntlet 2: no doors found in room {number}"]        # reported once, not every try
+    assert len(world.zooms) >= 3                                               # zoomed out at the start and before each walk, in case the camera was too close
 
 
 def test_the_entrance_hall_is_walked_through_until_the_doors_show_without_a_failure(macro, world, monkeypatch, capsys):

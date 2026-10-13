@@ -652,12 +652,13 @@ def test_only_the_first_look_of_a_run_counts_as_the_start(macro, monkeypatch):
     assert macro.state.run_start_pending is False
 
 
-def test_the_zoom_key_is_released_with_the_rest(macro, monkeypatch):
-    released = []
+def test_the_zoom_keys_and_both_mouse_buttons_are_released_with_the_rest(macro, monkeypatch):
+    released, buttons = [], []
     monkeypatch.setattr(macro.pydirectinput, "keyUp", lambda key: released.append(key), raising=False)
-    monkeypatch.setattr(macro.pydirectinput, "mouseUp", lambda: None, raising=False)
+    monkeypatch.setattr(macro.pydirectinput, "mouseUp", lambda button="left": buttons.append(button), raising=False)
     macro.release_all_inputs()
-    assert macro.cfg.KEY_ZOOM_IN in released and macro.cfg.KEY_HELICOPTER in released
+    assert {macro.cfg.KEY_ZOOM_IN, macro.cfg.KEY_ZOOM_OUT, macro.cfg.KEY_HELICOPTER} <= set(released)
+    assert sorted(buttons) == ["left", "right"]                                      # (the camera is turned with the right one)
 
 
 def test_the_rejoin_is_booked_before_the_respawn_that_can_lose_focus(macro, monkeypatch):

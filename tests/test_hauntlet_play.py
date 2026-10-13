@@ -40,7 +40,7 @@ def test_the_timer_is_there_or_hidden(macro):
 # what is on each fixture's three doors, left to right (from the pictures)
 DOORS = {
     16: ["plain", "plain", "plain"],                  # the first layer, yellow walls
-    30: ["plain", "boarded", "boarded"],
+    25: ["boarded", "boarded", "plain"],
     46: ["locked", "plain", "dark"],
     88: ["mystery", "dark", "dark"],                  # the second layer, white walls
     97: ["boarded", "boarded", "locked"],
@@ -80,6 +80,18 @@ def test_a_door_is_chosen_at_random_but_a_locked_one_only_with_a_key(macro):
     key = macro.HauntletItem("gold_key", 1, (0, 0))
     assert {macro.choose_hauntlet_door(doors, None, [key]) for _ in range(200)} == {0, 1, 2}
     assert {macro.choose_hauntlet_door([door("locked")] * 3, None, []) for _ in range(200)} == {0, 1, 2}   # nothing else to take
+
+
+def test_an_item_is_used_with_the_set_chance_and_any_item_can_be_the_one(macro, monkeypatch):
+    items = [macro.HauntletItem(name, 1, (100 * i, 1000)) for i, name in enumerate(["phone", "key", "cyan_potion"])]
+    monkeypatch.setattr(macro.cfg, "HAUNTLET_ITEM_CHANCE", 1.0)
+    assert {macro.choose_hauntlet_item(items, None).name for _ in range(200)} == {"phone", "key", "cyan_potion"}
+    assert macro.choose_hauntlet_item([], None) is None
+    monkeypatch.setattr(macro.cfg, "HAUNTLET_ITEM_CHANCE", 0.0)
+    assert macro.choose_hauntlet_item(items, None) is None
+    monkeypatch.setattr(macro.cfg, "HAUNTLET_ITEM_CHANCE", 0.5)
+    used = sum(macro.choose_hauntlet_item(items, None) is not None for _ in range(2000))
+    assert 800 < used < 1200
 
 
 def hearts_at(macro, monkeypatch, x):
@@ -349,3 +361,25 @@ def test_the_loop_stops_when_the_overlay_says_the_minigame_is_over(macro, world)
     world.screens = [frame(macro, 97, room=12)]
     assert macro.play_hauntlet_2(world.clock.now + 1000, watch) is False
     assert world.keys == [] and world.looks == 0
+
+
+def test_the_loop_clicks_the_item_it_chose_before_walking(macro, world, monkeypatch, capsys):
+    cfg = macro.cfg
+    item = macro.HauntletItem("phone", 1, (850, 1000))
+    monkeypatch.setattr(cfg, "HAUNTLET_ITEM_CHANCE", 1.0)
+    monkeypatch.setattr(macro, "read_hauntlet_items", lambda img, learn=False: [item])
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    world.screens = [frame(macro, 97, room=12)]
+    macro.play_hauntlet_2(world.clock.now + cfg.MINIGAME_START_WAIT + 3 * (cfg.HAUNTLET_ROOM_SETTLE + cfg.HAUNTLET_ROOM_TIMEOUT + cfg.HAUNTLET_WALK_MAX), watch_of(macro))
+    assert macro.clicks and set(macro.clicks) == {(850, 1000)}
+    assert "using phone" in capsys.readouterr().out
+    assert cfg.HAUNTLET_ITEM_WAIT in world.waits
+
+
+def test_the_loop_uses_no_item_when_there_is_none(macro, world, monkeypatch, capsys):
+    cfg = macro.cfg
+    monkeypatch.setattr(cfg, "HAUNTLET_ITEM_CHANCE", 1.0)
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    world.screens = [frame(macro, 97, room=12)]
+    macro.play_hauntlet_2(world.clock.now + cfg.MINIGAME_START_WAIT + 2 * (cfg.HAUNTLET_ROOM_SETTLE + cfg.HAUNTLET_WALK_MAX), watch_of(macro))
+    assert macro.clicks == [] and "using" not in capsys.readouterr().out

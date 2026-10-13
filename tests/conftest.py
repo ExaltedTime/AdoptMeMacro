@@ -54,6 +54,7 @@ def macro(tmp_path, monkeypatch):
                         ("OUTPUT_LOG_PATH", tmp_path / "output.log"), ("FAILURE_DIR", tmp_path / "failures"),
                         ("REPORTS_DIR", tmp_path / "reports")):
         monkeypatch.setattr(cfg, name, str(value))
+    monkeypatch.setattr(cfg, "MINIGAME_CAPTURE", False)      # (the tests of the recording switch it on)
     monkeypatch.setattr(main, "state", main.State())
     monkeypatch.setattr(main, "run_stats", main.RunStats())
     main.STOP_EVENT.clear()

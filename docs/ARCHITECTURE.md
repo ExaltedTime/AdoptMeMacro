@@ -171,7 +171,7 @@ an extra walk from wherever the previous need left the character standing.
   runs them during a task; and `side_quest()`.
 - **RUN RECORDING** - `RunRecorder` and `start_recording_if_requested()`. See
   [Recording a run](#recording-a-run).
-- **INPUT CAPTURE** - `InputCapture`, `toggle_input_capture()`, `zip_capture()` and the key / mouse
+- **INPUT CAPTURE** - `InputCapture`, `toggle_input_capture()`, `start_run_capture()`, `zip_capture()` and the key / mouse
   readers (`pressed_inputs()`, `cursor_position()`, `to_reference()`). See
   [Input capture](#input-capture).
 - **HAUNTLET 2 READER** - `read_hauntlet_room()`, `read_hauntlet_items()`, `read_hauntlet_hearts()`,
@@ -1117,6 +1117,21 @@ is recompressed. For a zip that already exists (a capture zipped by hand, say) `
 - `info.json` - when it started and stopped, the screen and Roblox window sizes, the frame (and skipped-frame) and event
   counts and why it stopped.
 
+**Minigame runs are recorded automatically.** `play_minigame()` starts a capture of its own after taking the popup's Yes
+(`start_run_capture()`) and stops it when the run is over, whichever way it ends - won, left, timed out or stopped
+(`finish_run_capture()`, which also writes `outcome` into `info.json` and zips the capture as above). It is the same recorder, so it
+has the macro's own key presses and clicks and the frames on the same clock, but in `debug/minigame_captures/`
+(`RUN_CAPTURES_DIR`, the newest `MAX_RUN_CAPTURES` kept, named `<minigame>_<date>_<time>`) so the hotkey's captures and these
+never delete each other, and with a **size budget**: the frames and events of a run are kept within `RUN_CAPTURE_MB` (24, a little under
+the zip limit, so a run is one zip to hand over). A lossless frame is 1-3 MB, so that is only some 10-20 frames; to make them
+cover the whole run (a Hauntlet 2 run can last minutes), whenever the budget is passed `InputCapture._keep_within_budget()` deletes
+every other saved frame - never the newest, and the first stays - and from then on saves frames twice as far apart.
+The events of the deleted frames stay in `events.jsonl`, followed by a `frame_dropped` line naming the file, so
+a reader can tell; `info.json` has `frames_dropped` and `budget_mb`. Switch it off with `MINIGAME_CAPTURE`; it isn't started while the
+hotkey's capture is running (two recorders would only get in each other's way), and a capture that can't be started or finished is a
+message, never a reason not to play. If more frames per run are wanted the choice is a bigger budget (more zips to send) or lossy
+frames (which would no longer be the exact pixels the readers are tuned on).
+
 Keys and mouse buttons are read by polling `GetAsyncKeyState` every `CAPTURE_POLL_INTERVAL` (10 ms) -
 the same call as the stop hotkey, so no extra package is needed - and the position with `GetCursorPos`.
 The cost of polling is that **the mouse wheel isn't seen** (no async state to read) and a key pressed
@@ -1216,10 +1231,12 @@ are forks too) with no row of TVs on two looks in a row is a fork: two doorways.
 again, which is the retry for a walk that got stuck.
 
 `hauntlet_choose()` reads the hearts and the items off the same screenshot (new items are saved, at most
-`HAUNTLET_LEARN_LIMIT` per play, so a misreading can't fill the folder), picks a door with `choose_hauntlet_door()` and logs the
-lot: `room 12, 3 hearts (1 lost), items: phone x1, key x1, doors: -, -, locked, going middle`. **The choice is random for now**
-(a locked door is only taken when a key is held, or when all are locked); `choose_hauntlet_door(doors, hearts, items)` is where
-the risk-based logic goes. `hauntlet_strafe()` works out how far to go sideways and `hauntlet_walk()` then holds `HAUNTLET_2_FORWARD_KEY` - plus
+`HAUNTLET_LEARN_LIMIT` per play, so a misreading can't fill the folder), picks a door with `choose_hauntlet_door()` and an item to
+use with `choose_hauntlet_item()`, and logs the lot: `room 12, 3 hearts (1 lost), items: phone x1, key x1, doors: -, -, locked, going middle`. **The choices are random for now**
+(a locked door is only taken when a key is held, or when all are locked; with a chance of `HAUNTLET_ITEM_CHANCE` at each choice one of
+the items, any of them, is used - `hauntlet_use_item()` clicks its slot, as the capture shows a human doing, and waits `HAUNTLET_ITEM_WAIT`, before the
+walk starts); `choose_hauntlet_door(doors, hearts, items)` and `choose_hauntlet_item(items, hearts)` are where the risk-based logic goes. Whether
+an item worked is not looked at. `hauntlet_strafe()` works out how far to go sideways and `hauntlet_walk()` then holds `HAUNTLET_2_FORWARD_KEY` - plus
 `HAUNTLET_LEFT_KEY` or `HAUNTLET_RIGHT_KEY` for the strafe - until the number changes or `HAUNTLET_WALK_MAX` seconds. The
 strafe is the distance from the player to the door's TV in *door spacings* (the distance between neighbouring TVs, which
 also takes the camera's zoom out of it) times `HAUNTLET_STRAFE_DURATION` seconds per spacing - no strafe under `HAUNTLET_STRAFE_MIN`
@@ -1275,8 +1292,8 @@ exact values and rationale):
 | Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
 | Hauntlet 2 reader | `HAUNTLET_ROOM_BOX`, `HAUNTLET_DIGIT_*`, `HAUNTLET_ROOM_MAX_DIGITS`, `HAUNTLET_SLOT_*`, `HAUNTLET_ITEM_*`, `HAUNTLET_BADGE_*`, `HAUNTLET_COUNT_*`, `HAUNTLET_NOT_ITEMS`, `HAUNTLET_HEART_*`, `HAUNTLET_*_DIR` |
-| Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_DARK_*`, `HAUNTLET_PLANK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_*`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_KEY_ITEMS`, `HAUNTLET_LEARN_LIMIT` |
-| Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
+| Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_DARK_*`, `HAUNTLET_PLANK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_*`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_ITEM_CHANCE`, `HAUNTLET_ITEM_WAIT`, `HAUNTLET_KEY_ITEMS`, `HAUNTLET_LEARN_LIMIT` |
+| Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `MINIGAME_CAPTURE`, `RUN_CAPTURES_DIR`, `RUN_CAPTURE_MB`, `MAX_RUN_CAPTURES`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
@@ -1405,9 +1422,9 @@ clicks instead of making them. They cover:
   popups and stray windows against the real crops in `ref/` (including that every `POPUP_TEMPLATES` entry has a crop that fits its box);
 - `test_icon_screenshots.py` - every real screenshot in `tests/icon_detection/<folder>/` (the need bar over dark, bright, busy and white scenes) run through the circle search and the matching; each must be listed in `EXPECTED` with the needs on its bar, so a screenshot added without a label fails;
 - `test_loop.py` - the whole workflow loop run for a moment with the game stubbed out (idle respawns, the resource monitor starting and stopping, the report being written);
-- `test_capture.py` - the input capture against a made-up keyboard, mouse and screen (events, both coordinate systems, click frames, skipping unchanged frames, the summary, the zips, stopping by itself, the hotkey toggle and pruning);
+- `test_capture.py` - the input capture against a made-up keyboard, mouse and screen (events, both coordinate systems, click frames, skipping unchanged frames, the summary, the zips, stopping by itself, the hotkey toggle and pruning, and the automatic recording of minigame runs: the frame budget, its thinning, the outcome, the zip);
 - `test_hauntlet.py` - reading the Hauntlet 2 screen against crops of a real run;
-- `test_hauntlet_play.py` - the timer and doors against crops of that run, then the room tracking, the choice, the walk and the whole loop with a fake clock and keyboard;
+- `test_hauntlet_play.py` - the timer and doors against crops of that run, then the room tracking, the choices (door, item), the walk and the whole loop with a fake clock and keyboard;
 - `test_features.py` - the daily money reset, the run-every-need sequence, the win screen and the like;
 - `test_config.py` - the real need tables in `magic_numbers.py`, without pinning any value: every entry is well formed (known keys, on-screen positions, movement keys, a `final_click` has its `prompt_pos`), has a handler, and the handler carries out exactly what the entry says (run over whichever needs exist, so `HALLOWEEN` off just drops `sick`). The handler tests elsewhere use made-up entries; this is what keeps the real ones honest;
 - `test_report.py` - the run-report parser against the exact log wording the

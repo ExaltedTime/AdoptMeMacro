@@ -2467,6 +2467,11 @@ def choose_hauntlet_door(doors: list[HauntletDoor], hearts: Optional[HauntletHea
     options = [i for i, door in enumerate(doors) if door.kind != "locked" or has_key]
     return random.choice(options or list(range(len(doors))))
 
+def choose_hauntlet_item(items: list[HauntletItem], hearts: Optional[HauntletHearts]) -> Optional[HauntletItem]:
+    """The item to use now, or None. Random so far - with a chance of HAUNTLET_ITEM_CHANCE one of the `items` is used, any
+    of them - `hearts` is here for the decision logic to come."""
+    return random.choice(items) if items and random.random() < cfg.HAUNTLET_ITEM_CHANCE else None
+
 def hauntlet_strafe(img: Image, doors: list[HauntletDoor], index: int) -> tuple[Optional[str], float]:
     """The key to strafe with, and for how long, to reach door `index` from where the player stands in `img`: the
     distance to the door in door spacings (the TVs' spacing) times HAUNTLET_STRAFE_DURATION, or no strafe when that
@@ -2482,18 +2487,26 @@ def hauntlet_strafe(img: Image, doors: list[HauntletDoor], index: int) -> tuple[
         return None, 0.0
     return (cfg.HAUNTLET_RIGHT_KEY if distance > 0 else cfg.HAUNTLET_LEFT_KEY), min(abs(distance), cfg.HAUNTLET_STRAFE_MAX) * cfg.HAUNTLET_STRAFE_DURATION
 
-def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun) -> int:
-    """Read the hearts and items off `img`, choose a door (choose_hauntlet_door()) and log the lot."""
+def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun) -> tuple[int, Optional[HauntletItem]]:
+    """Read the hearts and items off `img`, choose a door (choose_hauntlet_door()) and an item to use, if any
+    (choose_hauntlet_item()), and log the lot."""
     hearts = read_hauntlet_hearts(img)
     items = read_hauntlet_items(img, learn=len(run.learned) < cfg.HAUNTLET_LEARN_LIMIT)
     run.learned |= {item.name for item in items if item.name.startswith("unknown_")}
     index = choose_hauntlet_door(doors, hearts, items)
+    item = choose_hauntlet_item(items, hearts)
     names = ("left", "right") if len(doors) == 2 else ("left", "middle", "right")
     print(f"[debug] hauntlet 2: room {run.room}, "
           + (f"{hearts.red} hearts ({hearts.black} lost)" if hearts else "hearts not seen")
           + f", items: {', '.join(f'{item.name} x{item.count or 1}' for item in items) or 'none'}"
-          + f", doors: {', '.join(door.kind or '-' for door in doors)}, going {names[index]}")
-    return index
+          + f", doors: {', '.join(door.kind or '-' for door in doors)}, going {names[index]}"
+          + (f", using {item.name}" if item else ""))
+    return index, item
+
+def hauntlet_use_item(item: HauntletItem) -> None:
+    """Click `item`'s slot, then give the game HAUNTLET_ITEM_WAIT seconds to use it."""
+    hover_click(*item.pos)
+    wait_interruptible(cfg.HAUNTLET_ITEM_WAIT)
 
 def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, watch: MinigameWatch) -> bool:
     """Walk to a door: hold forward, with `direction` (a strafe key, or None) held for the first `duration` seconds,
@@ -2537,7 +2550,10 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
             if doors is None:
                 wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
                 continue
-            direction, duration = hauntlet_strafe(img, doors, hauntlet_choose(img, doors, run))
+            index, item = hauntlet_choose(img, doors, run)
+            if item:
+                hauntlet_use_item(item)
+            direction, duration = hauntlet_strafe(img, doors, index)
             if hauntlet_walk(direction, duration, run, watch):
                 return True
     finally:
@@ -2601,10 +2617,14 @@ def play_minigame(name: str) -> bool:
     hover_click(*cfg.MINIGAME_POPUP_YES_POS)
     started = time.time()
     watch = MinigameWatch(name)
+    capture = start_run_capture(name)
+    outcome = "interrupted"
     try:
         won = MINIGAME_PLAYERS[name](started + cfg.MINIGAME_MAX_DURATION, watch)
+        outcome = "won" if won else (watch.problem or "did not reach the victory screen in time")
     finally:
         release_all_inputs()
+        finish_run_capture(capture, outcome)
     if won:
         log_run_event(f"minigame finished: {label} ({time.time() - started:.0f}s)")
         click_nice_until_gone()
@@ -2876,10 +2896,16 @@ class InputCapture:
     the start): key_down / key_up with the key, mouse_down / mouse_up with the button, move (rate limited), and a
     frame line for each screenshot. Mouse events carry the screen position (x, y) and the reference-space one
     (rx, ry). The capture hotkey itself is left out. It stops by itself after CAPTURE_MAX_MINUTES or when the disk
-    runs low (`stopped_because` says why). See docs/ARCHITECTURE.md#input-capture."""
+    runs low (`stopped_because` says why). With a `budget_mb` the capture is kept within that many MB however long it
+    runs (events included): when they pass it every other saved frame is deleted (the newest stays) and frames are then saved twice as
+    far apart, so what is left is spread evenly over the whole run. See docs/ARCHITECTURE.md#input-capture."""
 
-    def __init__(self, folder: str) -> None:
+    def __init__(self, folder: str, budget_mb: Optional[float] = None) -> None:
         self.folder = folder
+        self.budget_mb = budget_mb
+        self.dropped = 0
+        self._kept: list[tuple[str, int]] = []          # the frames on disk, oldest first, with their sizes
+        self._gap = cfg.CAPTURE_FRAME_INTERVAL if budget_mb else 0.0     # least seconds between two saved frames
         self.stop_event = threading.Event()
         self.shot_now = threading.Event()
         self.stopped_because: Optional[str] = None
@@ -2902,7 +2928,7 @@ class InputCapture:
         with open(os.path.join(self.folder, "info.json"), "w") as f:
             json.dump({"started": time.strftime("%Y-%m-%d %H:%M:%S"), "screen": list(pyautogui.size()),
                        "roblox_rect": [left, top, width, height], "reference": [cfg.REFERENCE_WIDTH, cfg.REFERENCE_HEIGHT],
-                       "frame_interval": cfg.CAPTURE_FRAME_INTERVAL}, f, indent=1)
+                       "frame_interval": cfg.CAPTURE_FRAME_INTERVAL, "budget_mb": self.budget_mb}, f, indent=1)
         self._file = open(os.path.join(self.folder, "events.jsonl"), "w", encoding="utf-8")
         self._threads = [threading.Thread(target=self._poll, daemon=True), threading.Thread(target=self._shots, daemon=True)]
         for thread in self._threads:
@@ -2919,12 +2945,14 @@ class InputCapture:
                 self._file = None
         seconds = time.time() - self.started
         size_mb = sum(os.path.getsize(os.path.join(self.folder, f)) for f in os.listdir(self.folder)) / (1024 * 1024)
-        summary = f"{self.frames} frames ({self.skipped} unchanged ones skipped), {self.events} events, {seconds:.0f}s, {size_mb:.0f} MB in {self.folder}"
+        summary = (f"{self.frames} frames ({self.skipped} unchanged ones skipped"
+                   + (f", {self.dropped} thinned out to stay within {self.budget_mb:g} MB" if self.dropped else "")
+                   + f"), {self.events} events, {seconds:.0f}s, {size_mb:.0f} MB in {self.folder}")
         try:
             with open(os.path.join(self.folder, "info.json")) as f:
                 info = json.load(f)
             info.update(stopped=time.strftime("%Y-%m-%d %H:%M:%S"), seconds=round(seconds, 1), frames=self.frames, frames_skipped=self.skipped,
-                        events=self.events, stopped_because=self.stopped_because or "hotkey")
+                        frames_dropped=self.dropped, events=self.events, stopped_because=self.stopped_because or "hotkey")
             with open(os.path.join(self.folder, "info.json"), "w") as f:
                 json.dump(info, f, indent=1)
         except (OSError, ValueError):
@@ -2990,13 +3018,16 @@ class InputCapture:
                 seconds = time.time() - self.started
                 screen = grab_screen()
                 small = cv2.resize(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY), (320, 180), interpolation=cv2.INTER_AREA)
-                if (clicked or last_small is None or seconds - last_saved >= cfg.CAPTURE_MAX_SKIP
+                if seconds - last_saved >= self._gap and (
+                        clicked or last_small is None or seconds - last_saved >= max(cfg.CAPTURE_MAX_SKIP, self._gap)
                         or np.count_nonzero(cv2.absdiff(small, last_small) > cfg.CAPTURE_CHANGE_LEVEL) / small.size >= cfg.CAPTURE_CHANGE_FRACTION):
                     name = f"frame_{self.frames + 1:06d}_{seconds:.3f}.png"
                     if cv2.imwrite(os.path.join(self.folder, name), screen, [cv2.IMWRITE_PNG_COMPRESSION, 1]):
                         self.frames += 1
                         self._emit("frame", file=name)
                         last_small, last_saved = small, seconds
+                        self._kept.append((name, os.path.getsize(os.path.join(self.folder, name))))
+                        self._keep_within_budget()
                 else:
                     self.skipped += 1
             except Exception as error:
@@ -3004,6 +3035,26 @@ class InputCapture:
             self.shot_now.wait(cfg.CAPTURE_FRAME_INTERVAL)
             if self.shot_now.is_set():
                 self.stop_event.wait(0.02)      # let the click land on screen before looking
+
+    def _keep_within_budget(self) -> None:
+        """Over the budget (the frames and the events together): delete every other saved frame, never the newest, and save
+        frames twice as far apart from now on."""
+        events = os.path.join(self.folder, "events.jsonl")
+        while self.budget_mb and len(self._kept) > 1 and (
+                sum(size for _, size in self._kept) + (os.path.getsize(events) if os.path.exists(events) else 0) > self.budget_mb * 1024 * 1024):
+            keep = [frame for i, frame in enumerate(self._kept) if i % 2 == 0 or i == len(self._kept) - 1]
+            if len(keep) == len(self._kept):            # two frames, and the second is the newest: the older one goes
+                keep = keep[1:]
+            for name, _ in self._kept:
+                if (name, _) not in keep:
+                    try:
+                        os.remove(os.path.join(self.folder, name))
+                    except OSError:
+                        pass
+                    self._emit("frame_dropped", file=name)
+                    self.dropped += 1
+            self._kept = keep
+            self._gap *= 2
 
     def _give_up(self, reason: str) -> None:
         self.stopped_because = reason
@@ -3049,6 +3100,45 @@ def zip_capture_in_background(folder: str) -> threading.Thread:
     thread.start()
     return thread
 
+def make_room_for_capture(directory: str, limit: int) -> None:
+    """Create `directory` and delete its oldest folders, so that one more makes `limit`."""
+    os.makedirs(directory, exist_ok=True)
+    folders = sorted((os.path.join(directory, f) for f in os.listdir(directory)), key=os.path.getmtime)
+    for old in folders[:max(0, len(folders) - (limit - 1))]:
+        shutil.rmtree(old, ignore_errors=True)
+
+def start_run_capture(label: str) -> Optional[InputCapture]:
+    """Start recording a minigame run (when MINIGAME_CAPTURE is on, and the hotkey's capture isn't running): a folder
+    in RUN_CAPTURES_DIR, its frames kept within RUN_CAPTURE_MB. None if there is no capture. A capture that can't be
+    started is only a message: the minigame is played all the same."""
+    if not cfg.MINIGAME_CAPTURE or (state.capture is not None and state.capture.running):
+        return None
+    try:
+        make_room_for_capture(cfg.RUN_CAPTURES_DIR, cfg.MAX_RUN_CAPTURES)
+        capture = InputCapture(os.path.join(cfg.RUN_CAPTURES_DIR, f"{label}_{time.strftime('%Y%m%d_%H%M%S')}"), budget_mb=cfg.RUN_CAPTURE_MB)
+        capture.start()
+    except Exception as error:
+        print(f"[!] Couldn't start recording the minigame: {error}")
+        return None
+    print(f"[debug] recording the minigame: {capture.folder}")
+    return capture
+
+def finish_run_capture(capture: Optional[InputCapture], outcome: str) -> None:
+    """Stop a run capture (if there is one), note how the run ended in its info.json, and zip it for sending."""
+    if capture is None:
+        return
+    try:
+        print(f"[debug] minigame recording stopped: {capture.stop()}")
+        path = os.path.join(capture.folder, "info.json")
+        with open(path) as f:
+            info = json.load(f)
+        info["outcome"] = outcome
+        with open(path, "w") as f:
+            json.dump(info, f, indent=1)
+        zip_capture_in_background(capture.folder)
+    except Exception as error:
+        print(f"[!] Couldn't finish recording the minigame: {error}")
+
 def toggle_input_capture() -> Optional[InputCapture]:
     """Start a capture (a fresh folder in CAPTURES_DIR, the oldest beyond MAX_CAPTURES deleted) or, if one is
     running, stop it - what the capture hotkey does. Returns the capture that is running now, or None."""
@@ -3060,10 +3150,7 @@ def toggle_input_capture() -> Optional[InputCapture]:
         zip_capture_in_background(current.folder)
         if was_running:
             return None            # (one that had stopped by itself is only tidied up here: this press starts a new one)
-    os.makedirs(cfg.CAPTURES_DIR, exist_ok=True)
-    folders = sorted((os.path.join(cfg.CAPTURES_DIR, f) for f in os.listdir(cfg.CAPTURES_DIR)), key=os.path.getmtime)
-    for old in folders[:max(0, len(folders) - (cfg.MAX_CAPTURES - 1))]:
-        shutil.rmtree(old, ignore_errors=True)
+    make_room_for_capture(cfg.CAPTURES_DIR, cfg.MAX_CAPTURES)
     capture = InputCapture(os.path.join(cfg.CAPTURES_DIR, "capture_" + time.strftime("%Y%m%d_%H%M%S")))
     capture.start()
     state.capture = capture

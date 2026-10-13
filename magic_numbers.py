@@ -193,6 +193,14 @@ CAPTURE_MOVE_INTERVAL = 0.03             # the mouse position is written at most
 CAPTURE_MAX_MINUTES = 15                 # a capture stops by itself after this long...
 CAPTURE_MIN_FREE_MB = 3000               # ...or when less than this much disk is free
 MAX_CAPTURES = 5                         # oldest captures are deleted beyond this many
+# Every minigame played is recorded the same way, automatically (MINIGAME_CAPTURE; not while a capture of the hotkey's is
+# running), into a folder of RUN_CAPTURES_DIR, the newest MAX_RUN_CAPTURES kept. A lossless frame is 1-3 MB, so the frames of a run are
+# kept within RUN_CAPTURE_MB (with the events) by thinning them out evenly (see InputCapture), a little under CAPTURE_ZIP_MB so
+# that a run is one zip.
+MINIGAME_CAPTURE = True
+RUN_CAPTURES_DIR = os.path.join(DEBUG_DIR, "minigame_captures")
+RUN_CAPTURE_MB = 24
+MAX_RUN_CAPTURES = 10
 CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into zips of at most this size (chat attachments are limited to 30 MB)
 
 # Hauntlet 2, read from the screen (see the HAUNTLET 2 READER section of main.py).
@@ -307,6 +315,8 @@ HAUNTLET_TV_STABLE = 4
 HAUNTLET_ROOM_TIMEOUT = 15.0
 HAUNTLET_FORK_EVERY = 10
 HAUNTLET_DOORS_TIMEOUT = 8.0
+HAUNTLET_ITEM_CHANCE = 0.35                  # the chance, at each choice of a door, that an item (picked at random) is used too
+HAUNTLET_ITEM_WAIT = 0.6                     # seconds after clicking an item
 HAUNTLET_KEY_ITEMS = ("key", "gold_key")  # items that open a locked door
 HAUNTLET_LEARN_LIMIT = 4                     # new item pictures saved in one play (unknown_<n> folders); more is a misreading
 

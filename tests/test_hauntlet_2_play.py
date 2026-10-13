@@ -206,42 +206,6 @@ def test_a_forks_doorways_are_the_left_and_the_right_for_one_door_spacing(macro)
     assert macro.hauntlet_strafe(frame(macro), doorways, 1) == (cfg.HAUNTLET_RIGHT_KEY, cfg.HAUNTLET_STRAFE_DURATION)
 
 
-class Clock:
-    """A time that only moves when the macro waits."""
-    def __init__(self):
-        self.now = 1000.0
-
-    def __call__(self):
-        return self.now
-
-
-@pytest.fixture
-def world(macro, monkeypatch):
-    """Fake time and keyboard: `world.keys` lists ("down"/"up", key, time), `world.screens` is what the next looks see (a list,
-    the last one staying, or a function of the world), `world.waits` the waits."""
-    clock = Clock()
-    world = types.SimpleNamespace(clock=clock, keys=[], waits=[], screens=[], looks=0)
-    monkeypatch.setattr(macro, "time", types.SimpleNamespace(**{**vars(macro.time), "time": clock}))
-
-    def wait(duration):
-        world.waits.append(duration)
-        clock.now += duration
-
-    def look(watch):
-        world.looks += 1
-        if callable(world.screens):
-            return world.screens()
-        return world.screens.pop(0) if len(world.screens) > 1 else world.screens[0]
-
-    monkeypatch.setattr(macro, "wait_interruptible", wait)
-    monkeypatch.setattr(macro, "minigame_look", look)
-    monkeypatch.setattr(macro, "minigame_wait", lambda duration, watch: clock.__setattr__("now", clock.now + duration))
-    monkeypatch.setattr(macro, "detect_minigame_victory", lambda img: False)
-    monkeypatch.setattr(macro.pydirectinput, "keyDown", lambda key: world.keys.append(("down", key, clock.now)), raising=False)
-    monkeypatch.setattr(macro.pydirectinput, "keyUp", lambda key: world.keys.append(("up", key, clock.now)), raising=False)
-    return world
-
-
 def room_to_look_around(macro, monkeypatch):
     """A walk time long enough for several looks after the strafe, whatever the timings are tuned to."""
     cfg = macro.cfg

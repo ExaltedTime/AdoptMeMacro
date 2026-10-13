@@ -75,13 +75,9 @@ MINIGAME_POPUP_CHECK_INTERVAL = 4.0   # the popup checks (stray windows, paychec
 MINIGAME_MAX_DURATION = 600.0       # gives up (and logs a failure) if the victory screen hasn't shown by then
 MINIGAME_FINISH_WAIT = 5.0          # after clicking NICE!, before carrying on
 MINIGAME_VICTORY_CLICK_TRIES = 3      # NICE! clicks before giving up on the win screen closing
-MINIGAME_START_WAIT = 50.0          # both minigames wait this long after teleporting, before they act (Hauntlet 2 then holds
-                                    # HAUNTLET_2_FORWARD_KEY, Ghost Gallery starts running about)
+MINIGAME_START_WAIT = 50.0          # Hauntlet 2 waits this long after teleporting, before it acts; Ghost Gallery waits until its overlay
+                                    # shows, but at most this long
 HAUNTLET_2_FORWARD_KEY = "w"
-GHOST_GALLERY_HOLD = 5.0            # the mouse is held down in holds this long...
-GHOST_GALLERY_HOLD_GAP = 0.2        # ...with this short a pause between them
-GHOST_GALLERY_STEP_MIN = 0.3        # while it's held, a random direction (MOVE_KEYS) is run in, with a jump,
-GHOST_GALLERY_STEP_MAX = 1.0        # for a random time between these
 
 # ============================================================================
 # STRAY WINDOWS
@@ -201,6 +197,27 @@ RUN_CAPTURES_DIR = os.path.join(DEBUG_DIR, "minigame_captures")
 RUN_CAPTURE_ZIPS = 5
 MAX_RUN_CAPTURES = 5
 CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into zips of at most this size (chat attachments are limited to 30 MB)
+
+# Playing Ghost Gallery (from a human's 162 s run). The ghosts and the boss are drawn in a translucent cyan, HSV (85, 140, 250) under the
+# cursor of a player holding the button on one: GHOST_COLOR (OpenCV HSV, low and high) finds it; a ghost is at least GHOST_MIN_AREA px
+# (880-7200 seen; the smaller bits are the character's glow and the score popups), the boss 9500-41000. Nothing counts in GHOST_IGNORE_BOXES
+# (left, top, right, bottom): the HUD along the top and the character's own glow. The boss phase begins about 1:08 before the end
+# and is told by the boss's health bar, a gold frame (15800-16800 gold pixels in GHOST_BOSS_BAR_BOX; 0-230 before). The player is aimed
+# with the mouse: the beam goes to the cursor. The ghost aimed at is followed while a ghost is within GHOST_STICK px of where it was.
+GHOST_COLOR = ((78, 90, 200), (100, 210, 255))
+GHOST_CLOSE = 7
+GHOST_MIN_AREA = 600
+GHOST_IGNORE_BOXES = ((0, 0, 1920, 90), (900, 520, 1020, 680))
+GHOST_CHARACTER = (960, 540)
+GHOST_STICK = 120
+GHOST_BOSS_BAR_BOX = (680, 150, 1240, 290)
+GHOST_BOSS_BAR_GOLD = ((15, 150, 160), (30, 255, 255))
+GHOST_BOSS_BAR_MIN = 3000
+GHOST_BOSS_BAR_IGNORE = (680, 150, 1240, 275)  # the bar itself, in the boss phase: its crest and its ghost icons are the same cyan
+GHOST_LOOK_INTERVAL = 0.12
+GHOST_START_LOOK_INTERVAL = 0.5              # while waiting for the game to begin
+GHOST_SEARCH_AFTER = 2.0                     # seconds without a ghost in sight, then a step in a random direction...
+GHOST_SEARCH_STEP = 0.4                      # ...this long
 
 # Hauntlet 2, read from the screen (see the HAUNTLET 2 READER section of main.py).
 # The ROOM panel's number: white digits on a dark panel, always in the same place, at most HAUNTLET_ROOM_MAX_DIGITS long.

@@ -2575,31 +2575,85 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
             log_run_event(f"Hauntlet 2: got as far as room {run.room}")
     return False
 
+def find_ghost_blobs(img: Image, boss: bool = False) -> list[tuple[int, int, int]]:
+    """(x, y, area) of every ghost in `img`, biggest first: the connected pieces of the translucent cyan the ghosts and the
+    boss are drawn in (GHOST_COLOR), at least GHOST_MIN_AREA px, not in the HUD (GHOST_IGNORE_BOXES) or on the character -
+    and, in the boss phase (`boss`), not on the boss's health bar, whose crest and icons are cyan too."""
+    low, high = cfg.GHOST_COLOR
+    mask = cv2.inRange(cv2.cvtColor(img, cv2.COLOR_BGR2HSV), low, high)
+    for left, top, right, bottom in cfg.GHOST_IGNORE_BOXES + ((cfg.GHOST_BOSS_BAR_IGNORE,) if boss else ()):
+        mask[top:bottom, left:right] = 0
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((cfg.GHOST_CLOSE, cfg.GHOST_CLOSE), np.uint8))
+    count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    blobs = [(int(centres[i][0]), int(centres[i][1]), int(stats[i, cv2.CC_STAT_AREA])) for i in range(1, count)
+             if stats[i, cv2.CC_STAT_AREA] >= cfg.GHOST_MIN_AREA]
+    return sorted(blobs, key=lambda blob: -blob[2])
+
+def ghost_boss_bar_visible(img: Image) -> bool:
+    """Whether the boss's health bar (a gold frame along the top, GHOST_BOSS_BAR_*) is on screen: the boss phase."""
+    left, top, right, bottom = cfg.GHOST_BOSS_BAR_BOX
+    low, high = cfg.GHOST_BOSS_BAR_GOLD
+    gold = cv2.inRange(cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV), low, high)
+    return int(np.count_nonzero(gold)) >= cfg.GHOST_BOSS_BAR_MIN
+
+def choose_ghost_target(blobs: list[tuple[int, int, int]], boss: bool, previous: Optional[Point]) -> Optional[Point]:
+    """Where to aim, from `blobs` (find_ghost_blobs()): in the boss phase the biggest one (the boss), else the one that
+    is still the one aimed at (`previous`, if a ghost is within GHOST_STICK px of it - they move, and aiming at another
+    each look would lose them all), else the one nearest the character (GHOST_CHARACTER). None if there are none."""
+    if not blobs:
+        return None
+    if boss:
+        return blobs[0][:2]
+    if previous is not None:
+        near = min(blobs, key=lambda b: (b[0] - previous[0]) ** 2 + (b[1] - previous[1]) ** 2)
+        if (near[0] - previous[0]) ** 2 + (near[1] - previous[1]) ** 2 <= cfg.GHOST_STICK ** 2:
+            return near[:2]
+    cx, cy = cfg.GHOST_CHARACTER
+    return min(blobs, key=lambda b: (b[0] - cx) ** 2 + (b[1] - cy) ** 2)[:2]
+
 def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
-    """Ghost Gallery: run about at random with the mouse held in holds until victory or the
-    overlay says it's over. True if won before `deadline`. See docs/ARCHITECTURE.md#need-handlers.
+    """Ghost Gallery: once its overlay shows (or the start wait is over), look at the screen every GHOST_LOOK_INTERVAL, aim the mouse at a ghost
+    (choose_ghost_target()) and hold the button down on it - on the boss, in the boss phase - until the victory screen
+    shows or the overlay says it's over. With no ghost in sight for GHOST_SEARCH_AFTER seconds, walk about a little.
+    True if won before `deadline`. See docs/ARCHITECTURE.md#playing-ghost-gallery.
     """
-    print(f"[debug] ghost gallery: waiting {cfg.MINIGAME_START_WAIT:g}s for it to start...")
-    minigame_wait(cfg.MINIGAME_START_WAIT, watch)
+    print(f"[debug] Ghost Gallery: waiting for it to start (at most {cfg.MINIGAME_START_WAIT:g}s)...")
+    waited_until = time.time() + cfg.MINIGAME_START_WAIT
+    while time.time() < waited_until and watch.last_seen is None:       # its overlay (TIME LEFT, the score) shows when the game has begun
+        minigame_wait(cfg.GHOST_START_LOOK_INTERVAL, watch)
     watch.start_wait_over()
-    while time.time() < deadline and not watch.problem:
-        pydirectinput.mouseDown()
-        try:
-            hold_until = time.time() + cfg.GHOST_GALLERY_HOLD
-            while time.time() < hold_until and not watch.problem:
-                if minigame_won(watch):
-                    return True
-                key = random.choice(cfg.MOVE_KEYS)
-                pydirectinput.keyDown(key)
-                try:
-                    pydirectinput.press(cfg.KEY_JUMP)
-                    wait_interruptible(min(random.uniform(cfg.GHOST_GALLERY_STEP_MIN, cfg.GHOST_GALLERY_STEP_MAX),
-                                           max(0.0, hold_until - time.time())))
-                finally:
-                    pydirectinput.keyUp(key)
-        finally:
+    target: Optional[Point] = None
+    held = False
+    last_seen = time.time()
+    was_boss = False
+    try:
+        while time.time() < deadline and not watch.problem:
+            img = minigame_look(watch)
+            if detect_minigame_victory(img):
+                return True
+            boss = ghost_boss_bar_visible(img)
+            if boss != was_boss:
+                print("[debug] Ghost Gallery: the boss is here" if boss else "[debug] Ghost Gallery: the boss phase is over")
+                was_boss = boss
+            target = choose_ghost_target(find_ghost_blobs(img, boss), boss, target)
+            if target is not None:
+                last_seen = time.time()
+                pydirectinput.moveTo(*to_screen(*target))
+                if not held:
+                    pydirectinput.mouseDown()
+                    held = True
+            else:
+                if held:
+                    pydirectinput.mouseUp()
+                    held = False
+                if time.time() - last_seen >= cfg.GHOST_SEARCH_AFTER:
+                    key = random.choice(cfg.MOVE_KEYS)
+                    hold_key(key, cfg.GHOST_SEARCH_STEP)
+                    last_seen = time.time()
+            wait_interruptible(cfg.GHOST_LOOK_INTERVAL)
+    finally:
+        if held:
             pydirectinput.mouseUp()
-        wait_interruptible(cfg.GHOST_GALLERY_HOLD_GAP)
     return False
 
 MINIGAME_PLAYERS = {"hauntlet_2": play_hauntlet_2, "ghost_gallery": play_ghost_gallery}

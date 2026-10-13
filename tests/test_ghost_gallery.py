@@ -94,7 +94,7 @@ def test_it_aims_at_the_ghost_follows_it_and_moves_on_to_furniture_when_it_is_go
     assert all(m[1:] == big for m in moves[:5])                                            # follows it every look
     left, top, right, bottom = cfg.GHOST_FURNITURE_BOX
     assert all(left <= m[1] <= right and top <= m[2] <= bottom for m in moves[5:]) and len(moves) > 5      # then the furniture
-    assert world.mouse.count(("down",)) == 1                                               # without letting go in between
+    assert world.mouse.count(("down",)) >= 2                                               # and the beam is held again, on a place
 
 
 def test_in_the_boss_phase_it_holds_on_the_boss(macro, world):
@@ -129,7 +129,6 @@ def test_before_the_boss_with_no_ghost_in_sight_the_beam_is_held_on_random_furni
     cx, cy = cfg.GHOST_CHARACTER
     assert all(((x - cx) ** 2 + (y - cy) ** 2) ** .5 >= cfg.GHOST_FURNITURE_MIN_DISTANCE for x, y in places)      # not next to the character
     assert len(set(places)) >= 3                                                               # somewhere else every GHOST_FURNITURE_PERIOD
-    assert world.mouse.count(("down",)) == 1                                                   # the button stays down meanwhile
 
 
 def test_the_camera_is_turned_by_dragging_with_the_right_button_when_there_is_nothing_to_aim_at(macro, world):
@@ -365,4 +364,65 @@ def test_the_steps_it_walks_while_there_is_a_ghost_are_towards_it(macro, world):
     world.screens = [img]
     macro.play_ghost_gallery(world.clock.now + cfg.GHOST_MOVE_PERIOD * 4.5, watch_started(macro))
     steps = [key for kind, key, _ in world.keys if kind == "down" and key in cfg.MOVE_KEYS][1:]        # (after the walk at the start)
-    assert len(steps) >= 3 and set(steps) == {macro.ghost_step_key(target)}
+    assert steps and set(steps) == {macro.ghost_step_key(target)}                                      # towards it, and the key stays held while it is far
+
+
+def test_a_ghost_far_from_the_character_is_chased_with_a_key_held_until_it_is_near(macro, world):
+    cfg = macro.cfg
+    far = shot("shield_129")                                                         # a small ghost well to the right
+    near = shot("ghosts_50")                                                         # one close to the character
+    key = macro.ghost_step_key(macro.choose_ghost_target(macro.find_ghost_blobs(far, True), False, None))
+    world.screens = [far] * 6 + [near]
+    macro.play_ghost_gallery(world.clock.now + 4, watch_started(macro))
+    moves = [(kind, k, at) for kind, k, at in world.keys if k == key]
+    assert key != "w" and [m[0] for m in moves[:2]] == ["down", "up"]                # held, then let go
+    assert moves[1][2] - moves[0][2] >= 5 * cfg.GHOST_LOOK_INTERVAL                  # for as many looks as the ghost was far, not a step of GHOST_MOVE_STEP_MAX
+
+
+def test_in_the_boss_phase_with_nothing_in_sight_it_walks_forward_and_turns_the_camera_quickly(macro, world):
+    cfg = macro.cfg
+    bar_only = np.zeros((1080, 1920, 3), np.uint8)
+    boss = shot("boss_100")
+    left, top, right, bottom = cfg.GHOST_BOSS_BAR_BOX
+    bar_only[top:270, left:right] = boss[top:270, left:right]
+    world.screens = [bar_only]
+    start = world.clock.now
+    macro.play_ghost_gallery(start + cfg.GHOST_BOSS_CAMERA_PERIOD * 3.5, watch_started(macro))
+    forward = [(kind, at) for kind, k, at in world.keys if k == "w"][2:]              # (after the start's walk)
+    assert [kind for kind, _ in forward] == ["down", "up"]                            # W held all the while, let go at the end
+    assert forward[0][1] - start < cfg.GHOST_MOVE_PERIOD / 2                           # from the first looks, not as one of the steps taken every GHOST_MOVE_PERIOD
+    assert world.mouse.count(("down", "right")) >= 3                                  # the camera turned every GHOST_BOSS_CAMERA_PERIOD, not every GHOST_CAMERA_PERIOD
+
+
+def white_ring(point, radius=60):
+    ring = np.zeros((1080, 1920, 3), np.uint8)
+    cv2.circle(ring, point, radius, (255, 255, 255), 3)
+    return ring
+
+
+def test_furniture_is_the_place_that_turns_white_when_the_mouse_is_over_it(macro):
+    cfg = macro.cfg
+    spot = (900, 400)
+    dark = blank()
+    assert macro.furniture_outlined(dark, white_ring(spot), spot)
+    assert not macro.furniture_outlined(dark, dark, spot)                            # nothing happened
+    assert not macro.furniture_outlined(dark, white_ring((300, 700)), spot)           # a white thing elsewhere
+    assert not macro.furniture_outlined(white_ring(spot), white_ring(spot), spot)     # white that was already there is not an outline
+    assert not macro.furniture_outlined(dark, white_ring(spot, 3), spot)              # a speck, not an outline
+    assert cfg.GHOST_OUTLINE_MIN > 3
+
+
+def test_the_beam_is_held_on_the_furniture_that_gets_the_outline(macro, world, monkeypatch):
+    cfg = macro.cfg
+    places = [(400, 300), (1500, 700), (1200, 200), (300, 600)]
+    queue = iter(places * 20)
+    monkeypatch.setattr(macro, "far_from_character", lambda box, minimum: next(queue))
+    chosen = places[2]
+
+    def screen():
+        moved = [m for m in world.mouse if m[0] == "move"]
+        return white_ring(chosen) if moved and moved[-1][1:] == chosen else blank()
+    world.screens = screen
+    macro.play_ghost_gallery(world.clock.now + cfg.GHOST_FURNITURE_PERIOD * 0.5, watch_started(macro))
+    held = left_held_on(world)
+    assert held and held[0] == chosen                                                  # the third place tried got the outline: the beam goes there

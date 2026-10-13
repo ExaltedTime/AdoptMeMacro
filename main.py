@@ -2441,7 +2441,7 @@ class HauntletRun:
         if room is not None and room != self.room:
             self.room, self.since, self.chosen_at, self.rooms = room, now, None, self.rooms + 1
             self.tvs, self.empty_looks = None, 0
-            print(f"[debug] hauntlet 2: room {room}")
+            print(f"[debug] Hauntlet 2: room {room}")
         if self.room is None:
             return None
         age = now - self.since
@@ -2500,7 +2500,7 @@ def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun) -> 
     index = choose_hauntlet_door(doors, hearts, items)
     item = choose_hauntlet_item(items, hearts)
     names = {1: ("ahead",), 2: ("left", "right"), 3: ("left", "middle", "right")}[len(doors)]
-    print(f"[debug] hauntlet 2: room {run.room}, "
+    print(f"[debug] Hauntlet 2: room {run.room}, "
           + (f"{hearts.red} hearts ({hearts.black} lost)" if hearts else "hearts not seen")
           + f", items: {', '.join(f'{item.name} x{item.count or 1}' for item in items) or 'none'}"
           + f", doors: {', '.join(door.kind or '-' for door in doors)}, going {names[index]}"
@@ -2542,7 +2542,7 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
     hauntlet_choose(), hauntlet_walk()) until the victory screen shows or the overlay says it's over. True if won
     before `deadline`. See docs/ARCHITECTURE.md#playing-hauntlet-2.
     """
-    print(f"[debug] hauntlet 2: waiting {cfg.MINIGAME_START_WAIT:g}s for it to start...")
+    print(f"[debug] Hauntlet 2: waiting {cfg.MINIGAME_START_WAIT:g}s for it to start...")
     minigame_wait(cfg.MINIGAME_START_WAIT, watch)
     watch.start_wait_over()
     run = HauntletRun()
@@ -2557,7 +2557,7 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
                 continue
             if len(doors) == 1 and run.room and run.room > 1 and not run.doors_missing_reported:   # not the entrance hall (room 1): keep the screenshot
                 run.doors_missing_reported = True
-                log_failure(f"hauntlet 2: no doors found in room {run.room}")
+                log_failure(f"Hauntlet 2: no doors found in room {run.room}")
             index, item = hauntlet_choose(img, doors, run)
             if item:
                 hauntlet_use_item(item)
@@ -2568,7 +2568,7 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
                 run.chosen_at = None                                            # whatever is past the doorway is looked at at once
     finally:
         if run.room is not None:
-            log_run_event(f"hauntlet 2: got as far as room {run.room}")
+            log_run_event(f"Hauntlet 2: got as far as room {run.room}")
     return False
 
 def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:

@@ -1235,9 +1235,17 @@ Hotel": one doorway straight ahead, no TVs, the timer already showing; in both c
 doors that is still numbered 1), and any other room without TVs for `HAUNTLET_DOORS_TIMEOUT` is treated the same way: a single
 doorway ahead, walked to by holding forward only (no strafe) until a row of TVs is on screen (`hauntlet_walk(until_doors=True)`) or the
 number changes, after which the room is looked at at once. For a room other than 1, `no doors found in room N` is
-logged once per run as a failure, which keeps a screenshot of what the TVs were not found in. Once a door was chosen the room is left alone for
-`HAUNTLET_ROOM_TIMEOUT` seconds (the walk takes up to `HAUNTLET_WALK_MAX`); a room whose number didn't change by then is chosen from
-again, which is the retry for a walk that got stuck.
+logged once per run as a failure, which keeps a screenshot of what the TVs were not found in. After a walk the room is left alone for
+`HAUNTLET_RETRY_WAIT` seconds and then chosen from again if its number hasn't changed - the retry for a walk that got stuck.
+
+**Getting stuck.** The room timer runs out after a while and the run is over, so a stuck player has to do something else, quickly. A walk that ended with the
+number unchanged counts in `HauntletRun.stuck`; the next one (`hauntlet_walk()`) steps back first (`HAUNTLET_BACK_KEY`, `HAUNTLET_BACKUP_DURATION`), avoids the door that
+got the player stuck when there is another (`choose_hauntlet_door(avoid=...)`), and **wiggles** while it holds forward: every `HAUNTLET_WIGGLE_PERIOD` seconds a short
+step sideways (a random way, `HAUNTLET_WIGGLE_DURATION`) and a jump, to get off whatever it is caught on. A walk straight ahead (a hall, or doors that weren't found) wiggles
+the same way. When the doors can't be found at all - the camera zoomed in too far, turned away (room 8 of a macro-played run was seen from an angle, and the macro held W for 25 s against
+a wall until the timer ran out), or a TV hidden - the camera is dragged round with the right button (`rotate_camera()`, `HAUNTLET_CAMERA_DRAG`) up to `HAUNTLET_SEARCH_TURNS` times, a look
+after each, before walking ahead. A TV showing a "1" (the player stands before that door) is a thin stroke, much smaller than the "0"s of the others, hence the low end of
+`HAUNTLET_TV_AREA`; the real run's row was missed for 25 s because of one.
 
 `hauntlet_choose()` reads the hearts and the items off the same screenshot (new items are saved, at most
 `HAUNTLET_LEARN_LIMIT` per play, so a misreading can't fill the folder), chooses the door, uses the items the choice calls for, and logs the lot:
@@ -1246,7 +1254,7 @@ again, which is the retry for a walk that got stuck.
 *The door* (`choose_hauntlet_door()`) is a random one, with two exceptions: a locked door is only a choice when the **grey key** (`HAUNTLET_ITEM_KEY`; the gold key is not it)
 is held, and the door the phone's arrow is over is left alone (both only while there is any other door to take). *The items* (`hauntlet_items_for()`), each only if held and in
 this order: the grey key for a locked door; a **cyan potion** (a heart that lasts the room) for a boarded one; the **red potion** (it refills the hearts) when the red hearts are down to
-`HAUNTLET_LOW_HEARTS` or fewer; a **heart potion** (one more heart) whenever there is one. *The phone* is used first, with a chance of `HAUNTLET_PHONE_CHANCE` at each choice: it puts a
+`HAUNTLET_LOW_HEARTS` or fewer; a **heart potion** (one more heart) whenever there is one. *The phone* is used first, with a chance of `HAUNTLET_PHONE_CHANCE` at each choice (`HAUNTLET_PHONE_CHANCE_LOW` when the hearts are low - it is then that knowing where the ghost is matters most): it puts a
 red arrow - a big red triangle with a ghost on it, `HAUNTLET_ARROW_*` - over the TV of the door with a ghost behind it, which then isn't chosen. `find_ghost_door()` finds the arrow (it
 takes a moment to show, so it is looked for `HAUNTLET_ARROW_LOOKS` times) and says which door it belongs to; over the captured runs it fired on 9 frames, all of the hand-played run (the one that used the phone), and where the doors were
 found (6 of them) always within a few percent of a door spacing of a door's TV; it fired on none of the ~700 frames of the macro-played runs, which used no phone. `hauntlet_use_item()` clicks an item's slot, as the capture shows a human doing, and waits
@@ -1280,7 +1288,8 @@ the character while the camera followed it.
 
 `find_ghost_blobs()` finds the ghosts and the boss as the connected pieces of their translucent cyan (`GHOST_COLOR`, OpenCV HSV (85, 140, 250)
 under the human's cursor), at least `GHOST_MIN_AREA` px (ghosts 880-7200 px in the run, the boss 9500-41000), biggest first, leaving out the
-HUD and the character's own glow (`GHOST_IGNORE_BOXES`) and, in the boss phase, the boss's health bar (its crest and its ghost icons are the
+HUD, the character's own glow and the bottom of the screen (`GHOST_IGNORE_BOXES`: a player's pet, in the macro-played run a cyan one - the same cyan as the ghosts to a few units of hue and brightness, so it can't be told apart by colour -
+was aimed at for 20 s of a run, the camera being close, and a cyan costume was taken for a ghost for much longer) and, in the boss phase, the boss's health bar (its crest and its ghost icons are the
 same cyan). `ghost_boss_bar_visible()` is the boss phase: 13,000-17,000 gold pixels in `GHOST_BOSS_BAR_BOX` against none (at most 230) before it, right on
 every frame of the run but the ones at the very start and end of the boss's bar. `choose_ghost_target()` picks where to aim: the biggest blob
 in the boss phase, else the ghost already being followed (one within `GHOST_STICK` px of where it was, since they move and aiming at another one at each look
@@ -1295,8 +1304,9 @@ is dim enough then to fall under `GHOST_COLOR`'s brightness, so `find_ghost_blob
 (nearest the character). Replaying the run, the three phases come out at 110.4-115.8 s, 127.2-133.5 s and 139.8-147.1 s of the capture, with the boss
 phase before, between and after them, as in the frames.
 
-`play_ghost_gallery()` waits until the overlay (TIME LEFT, the score) has been seen - the game starts well before `MINIGAME_START_WAIT` would be over - and
-**sets up the view**: `zoom_out()` (`KEY_ZOOM_OUT` held `MINIGAME_ZOOM_OUT_DURATION` seconds; in a macro-played run the camera was right behind the character, whose
+`play_ghost_gallery()` waits until the overlay (TIME LEFT, the score) has been seen - the game starts well before `MINIGAME_START_WAIT` would be over - and then for
+`GHOST_INTRO_WAIT` more, while the game's own intro camera (a look at the ceiling) runs: a zoom made during it is undone when the play camera takes over, as it was in both macro-played runs.
+Then it **sets up the view**: `zoom_out()` (`KEY_ZOOM_OUT` held `MINIGAME_ZOOM_OUT_DURATION` seconds; in a macro-played run the camera was right behind the character, whose
 cyan hoodie filled the screen and was taken for a ghost, so that the beam was held on the character for the whole run) and `tilt_camera_down()` (the right button held while the mouse is
 dragged down `GHOST_START_TILT` px, for a view from above). Then, every `GHOST_LOOK_INTERVAL`, it looks and works out the phase (before the boss, the boss can be hurt, the boss is shielded),
 moves the mouse to the target with `pydirectinput.moveTo()` (not `hover_move()`: its three settling pauses are too slow for tracking) and holds the left button down while there is one.
@@ -1310,7 +1320,7 @@ The buttons and the walking key are always let go, also when the macro is stoppe
 `send_macro_window_to_back()`) for the whole of both minigames, as it covers part of the screen.
 **Not yet checked in the game:** that `pydirectinput.moveRel(..., relative=True)` with the right button held turns Roblox's camera the way a hand does, the size of the drags and of
 the start's tilt, where the furniture is (the box is a guess), and the walking's and jumping's use; nor whether the character's own colours (a cyan costume) are kept out of the ghost finder
-once the camera is out (`GHOST_IGNORE_BOXES` is the character's place in a human's zoomed-out run). **What it does not do:** dodge, react to being knocked down, or choose between ghosts
+once the camera is out (`GHOST_IGNORE_BOXES` has the character's place in a human's zoomed-out run). **What it does not do:** dodge, react to being knocked down, or choose between ghosts
 by anything but distance (the human often picked the second or third nearest); it can't tell furniture from floor.
 
 ### Recording a run

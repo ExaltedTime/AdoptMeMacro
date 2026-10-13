@@ -75,6 +75,14 @@ def blob(screen, x, y):
     screen[y - 9:y + 9, x - 9:x + 9] = (255, 255, 206)
 
 
+def test_a_thin_one_on_a_tv_does_not_hide_the_row(macro):
+    """Room 8 of a macro-played run: the player stands before the left door, whose TV shows a "1" - a stroke of about 115 px
+    where the "0"s of the other two are over 300 - and the row was not found for 25 s."""
+    screen = cv2.imread(os.path.join(HERE, "doors", "thin_one.png"))
+    tvs = macro.find_door_tvs(screen)
+    assert [x for x, _ in tvs] == pytest.approx([862, 1315, 1786], abs=3)
+
+
 def test_the_outer_two_tvs_give_the_middle_one_when_the_camera_is_close(macro):
     """Real frame of room 1: the middle TV is above the top of the screen, and the outer two are above y=150."""
     screen = cv2.imread(os.path.join(HERE, "doors", "room1_close.png"))
@@ -156,9 +164,10 @@ def test_a_door_is_chosen_at_random_but_a_locked_one_only_with_the_grey_key_and_
     assert {macro.choose_hauntlet_door(doors, None, [item(macro, cfg.HAUNTLET_ITEM_KEY)]) for _ in range(200)} == {0, 1, 2}
     assert {macro.choose_hauntlet_door([door("locked")] * 3, None, []) for _ in range(200)} == {0, 1, 2}        # nothing else to take
     plain = [door(), door(), door()]
-    assert {macro.choose_hauntlet_door(plain, None, [], avoid=1) for _ in range(200)} == {0, 2}                  # the arrow's door is left alone
-    assert {macro.choose_hauntlet_door([door("locked"), door(), door()], None, [], avoid=1) for _ in range(200)} == {2}
-    assert macro.choose_hauntlet_door([door("locked")] * 2 + [door()], None, [], avoid=2) in (0, 1)            # only the ghost's door open: not it, if possible
+    assert {macro.choose_hauntlet_door(plain, None, [], avoid={1}) for _ in range(200)} == {0, 2}                  # the arrow's door is left alone
+    assert {macro.choose_hauntlet_door([door("locked"), door(), door()], None, [], avoid={1}) for _ in range(200)} == {2}
+    assert macro.choose_hauntlet_door(plain, None, [], avoid={0, 1}) == 2 and macro.choose_hauntlet_door(plain, None, [], avoid={0, 1, 2}) in (0, 1, 2)   # several to avoid, and nothing left
+    assert macro.choose_hauntlet_door([door("locked")] * 2 + [door()], None, [], avoid={2}) in (0, 1)            # only the ghost's door open: not it, if possible
 
 
 def test_each_door_and_the_hearts_call_for_their_items(macro):
@@ -254,7 +263,7 @@ def test_a_walk_holds_forward_and_the_strafe_key_for_the_strafe_then_stops_when_
     assert world.keys[2][2] - start == pytest.approx(cfg.HAUNTLET_STRAFE_DURATION)
     assert world.looks == 4                                                          # it stopped for the new room, not the time...
     assert world.keys[3][2] - start == pytest.approx(cfg.HAUNTLET_STRAFE_DURATION + 3 * cfg.HAUNTLET_LOOK_INTERVAL + cfg.HAUNTLET_WALK_PAST_DURATION)   # ...and walked on past the doorway
-    assert run.chosen_at == start
+    assert run.walked_at == world.keys[3][2] and run.stuck == 0                          # the walk's end is noted, and it got somewhere
 
 
 def test_a_walk_to_the_middle_door_strafes_not_at_all_and_gives_up_after_the_walk_time(macro, world, monkeypatch):
@@ -321,18 +330,17 @@ def test_nothing_is_chosen_while_the_timer_is_hidden_or_the_room_is_unknown(macr
             assert run.look(screen, t) is None
 
 
-def test_after_a_choice_the_room_is_left_alone_until_the_timeout_then_chosen_from_again(macro):
+def test_after_a_walk_the_room_is_left_alone_for_a_moment_then_chosen_from_again(macro):
     cfg = macro.cfg
     run = macro.HauntletRun()
     screen = frame(macro, 97, room=12)
-    chosen = 100.0 + cfg.HAUNTLET_ROOM_SETTLE + 1.0
+    walked = 100.0 + cfg.HAUNTLET_ROOM_SETTLE + 1.0
     run.look(screen, 100.0)
-    run.look(screen, chosen - 0.1)
-    assert run.look(screen, chosen) is not None
-    run.chosen_at = chosen
-    assert run.look(screen, chosen + 0.1) is None
-    assert run.look(screen, chosen + cfg.HAUNTLET_ROOM_TIMEOUT - 0.1) is None
-    assert run.look(screen, chosen + cfg.HAUNTLET_ROOM_TIMEOUT + 0.1) is not None
+    run.look(screen, walked - 0.1)
+    assert run.look(screen, walked) is not None
+    run.walked_at = walked
+    assert run.look(screen, walked + cfg.HAUNTLET_RETRY_WAIT * 0.5) is None
+    assert run.look(screen, walked + cfg.HAUNTLET_RETRY_WAIT + 0.1) is not None
 
 
 def test_a_new_room_number_starts_the_room_afresh(macro):
@@ -340,9 +348,9 @@ def test_a_new_room_number_starts_the_room_afresh(macro):
     run = macro.HauntletRun()
     run.look(frame(macro, 97, room=12), 100.0)
     run.look(frame(macro, 97, room=12), settled)
-    run.chosen_at = settled
+    run.walked_at, run.stuck, run.last_index, run.turns = settled, 2, 1, 3
     assert run.look(frame(macro, 97, room=13), settled + 2.0) is None            # the number changed: settling again
-    assert (run.room, run.rooms, run.chosen_at) == (13, 2, None)
+    assert (run.room, run.rooms, run.walked_at, run.stuck, run.last_index, run.turns) == (13, 2, None, 0, None, 0)
 
 
 def fork_room(macro):
@@ -396,7 +404,7 @@ def test_the_loop_chooses_a_door_walks_to_it_and_goes_on_in_the_next_room(macro,
     # room 12 (a locked door on the right, which isn't taken without a key) until the first walk is under way, then 13
     world.screens = lambda: room_13 if world.keys and world.clock.now > world.keys[0][2] + 1 else room_12
     start = world.clock.now
-    macro.play_hauntlet_2(start + cfg.MINIGAME_START_WAIT + 10 * (cfg.HAUNTLET_ROOM_SETTLE + cfg.HAUNTLET_ROOM_TIMEOUT + cfg.HAUNTLET_WALK_MAX), watch_of(macro))
+    macro.play_hauntlet_2(start + cfg.MINIGAME_START_WAIT + 10 * (cfg.HAUNTLET_ROOM_SETTLE + cfg.HAUNTLET_RETRY_WAIT + cfg.HAUNTLET_WALK_MAX), watch_of(macro))
     pressed = [(kind, key) for kind, key, _ in world.keys]
     assert pressed[:2] == [("down", "w"), ("up", "w")]                           # the middle door: forward only
     assert pressed.count(("down", "w")) == pressed.count(("up", "w"))
@@ -508,11 +516,13 @@ def test_a_room_whose_doors_are_never_found_is_walked_straight_on_and_the_screen
     monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: failures.append(reason))
     monkeypatch.setattr(macro, "log_run_event", lambda text: None)
     world.screens = [frame(macro, room=number)]                                # the timer and the room, but no TVs at all
-    macro.play_hauntlet_2(world.clock.now + cfg.MINIGAME_START_WAIT + 3 * (cfg.HAUNTLET_DOORS_TIMEOUT + cfg.HAUNTLET_ROOM_TIMEOUT + cfg.HAUNTLET_WALK_MAX), watch_of(macro))
-    keys = [key for _, key, _ in world.keys]
-    assert keys.count("w") >= 4 and set(keys) == {"w"}                         # walked more than once, forward only
+    macro.play_hauntlet_2(world.clock.now + cfg.MINIGAME_START_WAIT + 6 * (cfg.HAUNTLET_DOORS_TIMEOUT + cfg.HAUNTLET_RETRY_WAIT + cfg.HAUNTLET_WALK_MAX), watch_of(macro))
+    keys = [(kind, key) for kind, key, _ in world.keys]
+    turns = [e for e in world.mouse if e == ("down", "right")]
+    assert len(turns) == cfg.HAUNTLET_SEARCH_TURNS                             # it turned the camera to look for the doors, as many times as allowed,...
+    assert keys.count(("down", "w")) >= 2                                      # ...and then walked ahead, more than once
     assert failures == [f"Hauntlet 2: no doors found in room {number}"]        # reported once, not every try
-    assert len(world.zooms) >= 3                                               # zoomed out at the start and before each walk, in case the camera was too close
+    assert len(world.zooms) == 2                                               # zoomed out at the start and once more when the doors weren't found, not before each turn
 
 
 def test_the_entrance_hall_is_walked_through_until_the_doors_show_without_a_failure(macro, world, monkeypatch, capsys):
@@ -533,4 +543,75 @@ def test_the_entrance_hall_is_walked_through_until_the_doors_show_without_a_fail
     assert first_walk[1][2] - first_walk[0][2] < cfg.HAUNTLET_WALK_MAX          # it stopped at the doors, not after the full walk time
     assert "doors: boarded, boarded, locked" in out                              # and went on to choose among the three
     second_walk = [at for kind, key, at in world.keys if kind == "down" and key == "w"][1]
-    assert second_walk - first_walk[1][2] < cfg.HAUNTLET_ROOM_TIMEOUT / 2        # at once, not after waiting out a walk that "failed"
+    assert second_walk - first_walk[1][2] < 0.9 * cfg.HAUNTLET_RETRY_WAIT        # at once, not after the wait that follows a walk that "failed"
+
+
+# --- getting stuck ---
+
+def test_a_walk_that_gets_nowhere_is_followed_by_one_that_steps_back_first_and_wiggles(macro, world, monkeypatch):
+    cfg = macro.cfg
+    monkeypatch.setattr(cfg, "HAUNTLET_WALK_MAX", 5 * cfg.HAUNTLET_WIGGLE_PERIOD)
+    run = macro.HauntletRun()
+    run.room = 5
+    world.screens = [frame(macro, room=5)]                                       # the room never changes: stuck
+    macro.hauntlet_walk(None, 0.0, run, watch_of(macro))
+    assert [key for _, key, _ in world.keys] == ["w", "w"] and run.stuck == 1     # the first walk: forward only, no wiggling
+    world.keys.clear()
+    macro.hauntlet_walk(None, 0.0, run, watch_of(macro))
+    keys = [(kind, key) for kind, key, _ in world.keys]
+    assert keys[:2] == [("down", cfg.HAUNTLET_BACK_KEY), ("up", cfg.HAUNTLET_BACK_KEY)]       # the second begins with a step back...
+    assert world.keys[1][2] - world.keys[0][2] == pytest.approx(cfg.HAUNTLET_BACKUP_DURATION)
+    sideways = [k for k in keys if k[0] == "down" and k[1] in (cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_RIGHT_KEY)]
+    jumps = [k for k in keys if k[0] == "press"]
+    assert len(sideways) >= 3 and len(jumps) == len(sideways)                                # ...and wiggles on the way: a step sideways and a jump together
+    assert keys.count(("down", "w")) == keys.count(("up", "w")) == 1 and run.stuck == 2        # forward held all the while, and the count goes on
+
+
+def test_getting_somewhere_clears_the_stuck_count_and_a_stuck_room_avoids_the_door_that_failed(macro, world, monkeypatch):
+    cfg = macro.cfg
+    run = macro.HauntletRun()
+    run.room, run.stuck = 5, 3
+    world.screens = [frame(macro, room=5)] * 2 + [frame(macro, room=6)]
+    macro.hauntlet_walk(None, 0.0, run, watch_of(macro))
+    assert run.stuck == 0
+    monkeypatch.setattr(cfg, "HAUNTLET_PHONE_CHANCE", 0.0)
+    monkeypatch.setattr(cfg, "HAUNTLET_PHONE_CHANCE_LOW", 0.0)
+    options = []
+    monkeypatch.setattr(macro.random, "choice", lambda opts: options.append(list(opts)) or opts[0])
+    doors = macro.find_hauntlet_doors(frame(macro, 16))
+    run.last_index, run.stuck = 1, 1                                                       # the middle door got us stuck
+    macro.hauntlet_choose(frame(macro, 16, room=5), doors, run, watch_of(macro))
+    assert options[-1] == [0, 2]
+    run.stuck = 0                                                                          # (not stuck any more: it is a choice again)
+    macro.hauntlet_choose(frame(macro, 16, room=5), doors, run, watch_of(macro))
+    assert options[-1] == [0, 1, 2]
+
+
+def test_the_phone_is_used_more_when_the_hearts_are_low(macro, world, monkeypatch):
+    cfg = macro.cfg
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    monkeypatch.setattr(cfg, "HAUNTLET_PHONE_CHANCE", 0.2)
+    monkeypatch.setattr(cfg, "HAUNTLET_PHONE_CHANCE_LOW", 0.8)
+    monkeypatch.setattr(macro.random, "random", lambda: 0.5)                              # between the two chances
+    base = frame(macro, 97, room=12, bar=16)
+    phone = slot_of(macro, "phone")
+    for hearts, used in ((macro.HauntletHearts(cfg.HAUNTLET_LOW_HEARTS + 1, 0, 30, (0, 0)), False), (macro.HauntletHearts(cfg.HAUNTLET_LOW_HEARTS, 2, 30, (0, 0)), True)):
+        macro.clicks.clear()
+        world.clock.now += 1000
+        monkeypatch.setattr(macro, "read_hauntlet_hearts", lambda img, hearts=hearts: hearts)
+        play_one_room(macro, world, [base])
+        assert (phone in macro.clicks) is used
+
+
+def test_a_room_whose_doors_cannot_be_found_is_looked_around_for_before_walking_ahead(macro, world, monkeypatch):
+    """The camera can be turned away from them (room 8 of a macro-played run): it is dragged round and looked at again."""
+    cfg = macro.cfg
+    number = not_a_fork_or_the_hall(macro)
+    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: None)
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    nothing, doors = frame(macro, room=number), frame(macro, 97, room=number)
+    turns = lambda: sum(1 for e in world.mouse if e == ("down", "right"))
+    world.screens = lambda: doors if turns() >= 2 else nothing                              # the doors come into view with the second turn
+    macro.play_hauntlet_2(world.clock.now + cfg.MINIGAME_START_WAIT + cfg.HAUNTLET_DOORS_TIMEOUT + 4 * cfg.HAUNTLET_WALK_MAX, watch_of(macro))
+    assert turns() == 2                                                                    # it turned until it saw them, and no more
+    assert any(e[0] == "down" and e[1] == "w" for e in world.keys)                        # and then went on to choose and walk

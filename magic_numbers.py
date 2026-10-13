@@ -202,13 +202,13 @@ CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into
 # Playing Ghost Gallery (from a human's 162 s run). The ghosts and the boss are drawn in a translucent cyan, HSV (85, 140, 250) under the
 # cursor of a player holding the button on one: GHOST_COLOR (OpenCV HSV, low and high) finds it; a ghost is at least GHOST_MIN_AREA px
 # (880-7200 seen; the smaller bits are the character's glow and the score popups), the boss 9500-41000. Nothing counts in GHOST_IGNORE_BOXES
-# (left, top, right, bottom): the HUD along the top and the character's own glow. The boss phase begins about 1:08 before the end
+# (left, top, right, bottom): the HUD along the top, the character's own glow and the bottom of the screen (a pet in the same cyan sits there). The boss phase begins about 1:08 before the end
 # and is told by the boss's health bar, a gold frame (15800-16800 gold pixels in GHOST_BOSS_BAR_BOX; 0-230 before). The player is aimed
 # with the mouse: the beam goes to the cursor. The ghost aimed at is followed while a ghost is within GHOST_STICK px of where it was.
 GHOST_COLOR = ((78, 90, 200), (100, 210, 255))
 GHOST_CLOSE = 7
 GHOST_MIN_AREA = 600
-GHOST_IGNORE_BOXES = ((0, 0, 1920, 90), (900, 520, 1020, 680))
+GHOST_IGNORE_BOXES = ((0, 0, 1920, 90), (900, 520, 1020, 680), (0, 860, 1920, 1080))
 GHOST_CHARACTER = (960, 540)
 GHOST_STICK = 120
 GHOST_BOSS_BAR_BOX = (680, 150, 1240, 290)
@@ -217,6 +217,7 @@ GHOST_BOSS_BAR_MIN = 3000
 GHOST_BOSS_BAR_IGNORE = (680, 150, 1240, 275)  # the bar itself, in the boss phase: its crest and its ghost icons are the same cyan
 GHOST_LOOK_INTERVAL = 0.12
 GHOST_START_LOOK_INTERVAL = 0.5              # while waiting for the game to begin
+GHOST_INTRO_WAIT = 6.0                       # after its overlay shows, the game's own intro camera (a look at the ceiling) runs this long; the zoom and tilt come after, or are undone
 # The boss can't be hurt while its bar shows two or three ghost icons instead of its health: the bar's cyan fill (BGR (255, 222, 0),
 # 500-20000 px in GHOST_BOSS_BAR_BOX) is gone then (0 px), the boss is dim - too dim for GHOST_COLOR, so only the small ghosts that fly in
 # are found - and it is those the beam goes on (a human's run: three such phases, 6-7 s each).
@@ -303,7 +304,7 @@ HAUNTLET_TIMER_BOX = (730, 55, 865, 122)     # left, top, right, bottom
 HAUNTLET_TIMER_WHITE_LEVEL = 215
 HAUNTLET_TIMER_MIN_WHITE = 500
 HAUNTLET_TV_GLOW = ((150, 248, 248), (225, 255, 255))   # (low, high) red, green, blue of the number's light
-HAUNTLET_TV_AREA = (150, 600)                # px of one such number
+HAUNTLET_TV_AREA = (80, 1200)                # px of one such number (a thin "1" is the smallest, a TV close to the camera the biggest)
 HAUNTLET_TV_HUD_BOX = (700, 0, 1220, 150)      # left, top, right, bottom: the room panel and timer; their glow is no TV
 HAUNTLET_TV_PAIR_GAP = (560, 1000)           # px between two TVs that are the outer two of three (900 with the camera close)
 HAUNTLET_TV_PAIR_OFF_CENTER = 150            # px: and their middle is this close to the middle of the screen (neighbours with the third off screen are not)
@@ -343,7 +344,7 @@ HAUNTLET_PLANK_FRACTION = 0.103
 # HAUNTLET_STRAFE_MAX (a human's runs, from the middle: left door 1.0-1.1 s, right 0.9-1.3 s) - until the room number
 # changes, at most HAUNTLET_WALK_MAX seconds (a human's room: W held 3-4.8 s), and then HAUNTLET_WALK_PAST_DURATION longer: the
 # number changes with the player still in the doorway, the camera close on the door, and the next room's doors can't be seen from there. If the number still hasn't changed
-# HAUNTLET_ROOM_TIMEOUT seconds after, a door is chosen again.
+# HAUNTLET_RETRY_WAIT seconds after the walk, a door is chosen again (a walk that gets nowhere is followed by a step back, a different door and wiggling).
 # A room whose number is a multiple of HAUNTLET_FORK_EVERY (10 and 20 were seen) is a fork: no TVs, two doorways. A
 # room without a row of TVs is a single doorway ahead - at once for room 1, the entrance hall (its doorway leads into a room
 # with three doors that is still room 1), else HAUNTLET_DOORS_TIMEOUT seconds after its number changed - and is walked straight on.
@@ -357,7 +358,13 @@ HAUNTLET_WALK_PAST_DURATION = 1.5            # more of W after the number change
 HAUNTLET_LOOK_INTERVAL = 0.35
 HAUNTLET_ROOM_SETTLE = 2.0
 HAUNTLET_TV_STABLE = 4
-HAUNTLET_ROOM_TIMEOUT = 15.0
+HAUNTLET_RETRY_WAIT = 1.5                    # after a walk that didn't change the room, this long before the doors are chosen from again
+HAUNTLET_SEARCH_TURNS = 3                    # times the camera is turned, in a room whose doors can't be found, before walking straight ahead
+HAUNTLET_CAMERA_DRAG = (200, 500)            # px of mouse drag (right button held) for such a turn
+HAUNTLET_BACK_KEY = "s"
+HAUNTLET_BACKUP_DURATION = 0.7               # a walk after one that got nowhere begins with a step back this long
+HAUNTLET_WIGGLE_PERIOD = 1.2                 # and, like a walk straight ahead, wiggles: every this many seconds a step sideways...
+HAUNTLET_WIGGLE_DURATION = 0.3               # ...this long (a random way) and a jump
 HAUNTLET_FORK_EVERY = 10
 HAUNTLET_DOORS_TIMEOUT = 8.0
 # The items (their folder names in HAUNTLET_ITEM_DIR) and what each is for: the grey key opens a locked door; a cyan potion makes a heart
@@ -373,6 +380,7 @@ HAUNTLET_ITEM_HEART = "heart_potion"
 HAUNTLET_ITEM_PHONE = "phone"
 HAUNTLET_LOW_HEARTS = 1
 HAUNTLET_PHONE_CHANCE = 0.35
+HAUNTLET_PHONE_CHANCE_LOW = 0.9              # the phone's chance when the hearts are down to HAUNTLET_LOW_HEARTS or fewer
 HAUNTLET_ITEM_WAIT = 0.6                     # seconds after clicking an item
 HAUNTLET_ARROW_RED = (((0, 200, 170), (8, 255, 255)), ((172, 200, 170), (180, 255, 255)))
 HAUNTLET_ARROW_BOX = (0, 90, 1780, 640)

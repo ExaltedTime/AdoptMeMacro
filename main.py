@@ -17,9 +17,10 @@ from __future__ import annotations
 
 import os, sys, re, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib, shutil, zipfile
 import datetime
+import itertools
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field, fields
-from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, Union
+from typing import Collection, Any, Callable, Iterable, Iterator, Optional, Sequence, Union
 from abc import ABC, abstractmethod
 from functools import lru_cache, partial
 import tkinter as tk
@@ -2430,7 +2431,10 @@ class HauntletRun:
     def __init__(self) -> None:
         self.room: Optional[int] = None
         self.since = 0.0                              # when the number changed
-        self.chosen_at: Optional[float] = None        # when a door was last chosen, in this room
+        self.walked_at: Optional[float] = None        # when the last walk in this room ended
+        self.stuck = 0                                # walks in a row in this room that didn't change the room number
+        self.last_index: Optional[int] = None         # the door of the last of them
+        self.turns = 0                                # times the camera was turned to find the doors, in this room
         self.rooms = 0                                # numbers seen
         self.tvs: Optional[list[tuple[int, int]]] = None   # of the last look: None if the timer was hidden
         self.empty_looks = 0                          # looks in a row at a room without TVs
@@ -2446,14 +2450,15 @@ class HauntletRun:
         """Take in a screenshot. The doors to choose from - three, or a fork's two - if it is time to, else None."""
         room = read_hauntlet_room(img)
         if room is not None and room != self.room:
-            self.room, self.since, self.chosen_at, self.rooms = room, now, None, self.rooms + 1
+            self.room, self.since, self.walked_at, self.rooms = room, now, None, self.rooms + 1
+            self.stuck, self.last_index, self.turns = 0, None, 0
             self.tvs, self.empty_looks = None, 0
             print(f"[debug] Hauntlet 2: room {room}")
         if self.room is None:
             return None
         age = now - self.since
         before, self.tvs = self.tvs, (find_door_tvs(img) if hauntlet_timer_visible(img) else None)
-        if self.tvs is None or age < cfg.HAUNTLET_ROOM_SETTLE or (self.chosen_at is not None and now < self.chosen_at + cfg.HAUNTLET_ROOM_TIMEOUT):
+        if self.tvs is None or age < cfg.HAUNTLET_ROOM_SETTLE or (self.walked_at is not None and now < self.walked_at + cfg.HAUNTLET_RETRY_WAIT):
             self.empty_looks = 0
             return None
         if self.tvs:
@@ -2468,13 +2473,14 @@ class HauntletRun:
             return [HauntletDoor(0, 0, None)]                                  # one doorway, straight ahead
         return None
 
-def choose_hauntlet_door(doors: list[HauntletDoor], hearts: Optional[HauntletHearts], items: list[HauntletItem], avoid: Optional[int] = None) -> int:
-    """The index in `doors` (left to right) of the door to go through: a random one, but not the one the phone's arrow is
-    over (`avoid`: a ghost is behind it) and a locked one only when the grey key is held - unless that leaves
-    nothing, then any. (`hearts` is here for the decision logic to come.)"""
+def choose_hauntlet_door(doors: list[HauntletDoor], hearts: Optional[HauntletHearts], items: list[HauntletItem], avoid: Collection[int] = ()) -> int:
+    """The index in `doors` (left to right) of the door to go through: a random one, but none of `avoid` (the one the phone's
+    arrow is over, where a ghost is, and the one that just got the player stuck) and a locked one only when the grey key is
+    held - unless that leaves nothing, then whatever is left. (`hearts` is here for the decision logic to come.)"""
     has_key = any(item.name == cfg.HAUNTLET_ITEM_KEY for item in items)
-    options = [i for i, door in enumerate(doors) if i != avoid and (door.kind != "locked" or has_key)]
-    return random.choice(options or [i for i in range(len(doors)) if i != avoid] or list(range(len(doors))))
+    allowed = [i for i in range(len(doors)) if i not in avoid]
+    options = [i for i in allowed if doors[i].kind != "locked" or has_key]
+    return random.choice(options or allowed or list(range(len(doors))))
 
 def hauntlet_items_for(door: HauntletDoor, hearts: Optional[HauntletHearts], items: list[HauntletItem]) -> list[str]:
     """The items (names) to use before going through `door`, in the order to use them: the grey key for a locked door, a cyan potion
@@ -2529,7 +2535,9 @@ def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun, wat
     names = {1: ("ahead",), 2: ("left", "right"), 3: ("left", "middle", "right")}[len(doors)]
     ghost: Optional[int] = None
     used: list[str] = []
-    if any(item.name == cfg.HAUNTLET_ITEM_PHONE for item in items) and random.random() < cfg.HAUNTLET_PHONE_CHANCE:
+    low = hearts is not None and hearts.red <= cfg.HAUNTLET_LOW_HEARTS
+    chance = cfg.HAUNTLET_PHONE_CHANCE_LOW if low else cfg.HAUNTLET_PHONE_CHANCE                 # the phone shows where the ghost is: more use when hearts are few
+    if any(item.name == cfg.HAUNTLET_ITEM_PHONE for item in items) and random.random() < chance:
         shown = hauntlet_use_item(cfg.HAUNTLET_ITEM_PHONE, watch)
         if shown is not None:
             used.append(cfg.HAUNTLET_ITEM_PHONE)
@@ -2541,7 +2549,9 @@ def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun, wat
                 wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
                 img = minigame_look(watch)
             items = read_hauntlet_items(img)
-    index = choose_hauntlet_door(doors, hearts, items, avoid=ghost)
+    avoid = {door for door in (ghost, run.last_index if run.stuck else None) if door is not None}      # the ghost's, and the one that got us stuck
+    index = choose_hauntlet_door(doors, hearts, items, avoid=avoid)
+    run.last_index = index
     for name in hauntlet_items_for(doors[index], hearts, items):
         shown = hauntlet_use_item(name, watch)
         if shown is not None:
@@ -2559,8 +2569,15 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
     """Walk to a door: hold forward, with `direction` (a strafe key, or None) held for the first `duration` seconds,
     until the room number changes (at most HAUNTLET_WALK_MAX seconds) and then HAUNTLET_WALK_PAST_DURATION longer, as
     the number changes with the player still in the doorway - or, with `until_doors`, until a row of TVs is
-    on screen (a hall's doorway leads into a room whose number is the same). True if the victory screen showed."""
-    run.chosen_at = started = time.time()
+    on screen (a hall's doorway leads into a room whose number is the same). A walk that doesn't get anywhere counts in `run.stuck`;
+    the next one steps back first (HAUNTLET_BACKUP_DURATION) and, like a walk straight ahead, wiggles as it goes: every
+    HAUNTLET_WIGGLE_PERIOD seconds a short step sideways (a random way) and a jump, to get off whatever it is stuck on.
+    True if the victory screen showed."""
+    run.walked_at = started = time.time()
+    wiggle = run.stuck > 0 or until_doors
+    if run.stuck > 0:
+        hold_key(cfg.HAUNTLET_BACK_KEY, cfg.HAUNTLET_BACKUP_DURATION)
+    arrived = False
     pydirectinput.keyDown(cfg.HAUNTLET_2_FORWARD_KEY)
     try:
         if direction:
@@ -2569,19 +2586,30 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
                 wait_interruptible(duration)
             finally:
                 pydirectinput.keyUp(direction)
+        next_wiggle = time.time() + cfg.HAUNTLET_WIGGLE_PERIOD
         while time.time() < started + cfg.HAUNTLET_WALK_MAX:
             img = minigame_look(watch)
             if detect_minigame_victory(img):
                 return True
             room = read_hauntlet_room(img)
             if room is not None and room != run.room:
+                arrived = True
                 wait_interruptible(cfg.HAUNTLET_WALK_PAST_DURATION)             # the number changes in the doorway: on into the room
                 break
-            if watch.problem or (until_doors and find_door_tvs(img)):
+            if watch.problem:
                 break
+            if until_doors and find_door_tvs(img):
+                arrived = True
+                break
+            if wiggle and time.time() >= next_wiggle:
+                hold_key(random.choice((cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_RIGHT_KEY)), cfg.HAUNTLET_WIGGLE_DURATION)
+                pydirectinput.press(cfg.KEY_JUMP)
+                next_wiggle = time.time() + cfg.HAUNTLET_WIGGLE_PERIOD
             wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
     finally:
         pydirectinput.keyUp(cfg.HAUNTLET_2_FORWARD_KEY)
+        run.walked_at = time.time()
+        run.stuck = 0 if arrived else run.stuck + 1
     return False
 
 def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
@@ -2606,14 +2634,18 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
             if len(doors) == 1 and run.room and run.room > 1 and not run.doors_missing_reported:   # not the entrance hall (room 1): keep the screenshot
                 run.doors_missing_reported = True
                 log_failure(f"Hauntlet 2: no doors found in room {run.room}")
-            if len(doors) == 1 and run.room and run.room > 1:
-                zoom_out()                                                      # perhaps the camera is too close to see the TVs
+            if len(doors) == 1 and run.room and run.room > 1 and run.turns < cfg.HAUNTLET_SEARCH_TURNS:
+                if run.turns == 0:
+                    zoom_out()                                                  # perhaps the camera is too close to see the TVs...
+                rotate_camera(cfg.HAUNTLET_CAMERA_DRAG, 0)                      # ...or turned away from them: look around, then look again
+                run.turns += 1
+                continue
             index, img = hauntlet_choose(img, doors, run, watch)
             direction, duration = hauntlet_strafe(img, doors, index)
             if hauntlet_walk(direction, duration, run, watch, until_doors=len(doors) == 1):
                 return True
             if len(doors) == 1:
-                run.chosen_at = None                                            # whatever is past the doorway is looked at at once
+                run.walked_at = None                                            # whatever is past the doorway is looked at at once
     finally:
         if run.room is not None:
             log_run_event(f"Hauntlet 2: got as far as room {run.room}")
@@ -2685,11 +2717,11 @@ def far_from_character(box: tuple[int, int, int, int], minimum: float) -> Point:
             return x, y
     return max(((left, top), (right, top), (left, bottom), (right, bottom)), key=lambda c: (c[0] - cx) ** 2 + (c[1] - cy) ** 2)
 
-def rotate_camera() -> None:
-    """Turn the camera: hold the right mouse button and drag the mouse sideways (a random way, GHOST_CAMERA_DRAG px, a little up
-    or down too) over GHOST_CAMERA_DRAG_DURATION seconds, in GHOST_CAMERA_DRAG_STEPS moves, as Roblox wants a drag."""
-    dx = random.choice((-1, 1)) * random.randint(*cfg.GHOST_CAMERA_DRAG)
-    dy = random.randint(-cfg.GHOST_CAMERA_TILT, cfg.GHOST_CAMERA_TILT)
+def rotate_camera(drag: tuple[int, int] = cfg.GHOST_CAMERA_DRAG, tilt: int = cfg.GHOST_CAMERA_TILT) -> None:
+    """Turn the camera: hold the right mouse button and drag the mouse sideways (a random way, `drag` = least and most px, and
+    up to `tilt` px up or down too) over GHOST_CAMERA_DRAG_DURATION seconds, in GHOST_CAMERA_DRAG_STEPS moves, as Roblox wants a drag."""
+    dx = random.choice((-1, 1)) * random.randint(*drag)
+    dy = random.randint(-tilt, tilt)
     pydirectinput.mouseDown(button="right")
     try:
         for _ in range(cfg.GHOST_CAMERA_DRAG_STEPS):
@@ -2711,6 +2743,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     while time.time() < waited_until and watch.last_seen is None:       # its overlay (TIME LEFT, the score) shows when the game has begun
         minigame_wait(cfg.GHOST_START_LOOK_INTERVAL, watch)
     watch.start_wait_over()
+    minigame_wait(cfg.GHOST_INTRO_WAIT, watch)
     zoom_out()
     tilt_camera_down()
     target: Optional[Point] = None
@@ -3613,8 +3646,7 @@ def find_door_tvs(img: Image) -> list[tuple[int, int]]:
     count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
     found = sorted((float(centres[i][0]), float(centres[i][1])) for i in range(1, count)
                    if cfg.HAUNTLET_TV_AREA[0] <= stats[i, cv2.CC_STAT_AREA] <= cfg.HAUNTLET_TV_AREA[1])
-    for i in range(len(found) - 2):
-        first, middle, last = found[i:i + 3]
+    for first, middle, last in itertools.combinations(found, 3):                   # (not only neighbours: a stray glow can sit between)
         gaps = (middle[0] - first[0], last[0] - middle[0])
         if (abs(first[1] - middle[1]) <= cfg.HAUNTLET_TV_ROW_TOLERANCE and abs(middle[1] - last[1]) <= cfg.HAUNTLET_TV_ROW_TOLERANCE
                 and all(cfg.HAUNTLET_TV_SPACING[0] <= gap <= cfg.HAUNTLET_TV_SPACING[1] for gap in gaps)

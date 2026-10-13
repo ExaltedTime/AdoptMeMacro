@@ -370,6 +370,80 @@ def test_a_need_can_set_its_own_wait(walker):
     assert walker.waited == [150.0]
 
 
+@pytest.fixture
+def indoors(macro, world, monkeypatch):
+    """A teleport-walk need that must end with a white screen (going indoors). make(white_at=seconds after the teleport, **extra)
+    -> handler: the screen is white from `white_at` on (None: never). Returns the make function; .events has the respawns
+    and run events, .waited what wait_until_need_gone() was given."""
+    events, waited, start = [], [], [None]
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "teleport_to", lambda pos: start.__setitem__(0, world.clock.now))
+    monkeypatch.setattr(macro, "grab_screen", lambda: None)
+    monkeypatch.setattr(macro, "respawn_character", lambda: events.append("respawn"))
+    monkeypatch.setattr(macro, "log_run_event", lambda text: events.append(text))
+    monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=0, **kw: waited.append(max_wait))
+
+    def make(white_at, **extra):
+        monkeypatch.setattr(macro, "detect_white_screen", lambda img: white_at is not None and world.clock.now - start[0] >= white_at)
+        entry = dict(teleport_pos=(1, 2), steps=(("w", 2.0), ("d", 2.0)), helicopter=False, enter_by_white=True, enter_wait=10.0,
+                     inside_steps=(("w", 1.0),))
+        entry.update(extra)
+        monkeypatch.setitem(macro.cfg.TELEPORT_WALK_NEEDS, "test_need", entry)
+        return macro.TeleportWalkNeedHandler("test_need")
+
+    make.events, make.waited = events, waited
+    return make
+
+
+def downs(world):
+    return [key for kind, key, _ in world.keys if kind == "down"]
+
+
+def test_walking_in_on_the_first_try_needs_no_searching(indoors, world, monkeypatch):
+    handler = indoors(white_at=1.0)               # the white screen comes during the first step
+    assert handler.handle() is True
+    assert downs(world) == ["w", "d"]             # the steps, and nothing more: no search, no walk inside
+    assert indoors.waited and "respawn" not in indoors.events
+
+
+def test_not_getting_in_makes_it_look_for_the_way_then_walk_on_inside(macro, indoors, world):
+    handler = indoors(macro.cfg.TELEPORT_WALK_STEP_GAP + 5.0, enter_wait=30.0)       # after both steps (4 s and the gap)
+    assert handler.handle() is True
+    keys = downs(world)
+    assert keys[:2] == ["w", "d"]
+    assert set(keys[2:-1]) >= {"w"} and set(keys[2:-1]) <= {"w", "a", "d"} and len(keys) > 3
+    assert keys[-1] == "w"                         # then the steps inside, which only a late entry needs
+    assert indoors.waited and "respawn" not in indoors.events
+
+
+def test_never_getting_in_fails_the_need_with_a_respawn(indoors, world):
+    handler = indoors(white_at=None)
+    assert handler.handle() is False
+    assert "respawn" in indoors.events and indoors.waited == []       # no dialog, no waiting for the need to clear
+    assert world.clock.now - 1000.0 < 10.0 + 20.0                      # and it gave up at enter_wait (plus the steps), not later
+
+
+def test_a_hold_with_a_poll_calls_it_all_along_and_still_lets_go(macro, world):
+    seen = []
+    macro.hold_key("w", 1.0, poll=lambda: seen.append(world.clock.now))
+    assert len(seen) >= 3 and downs(world) == ["w"] and world.keys[-1][:2] == ("up", "w")
+    seen.clear()
+    with pytest.raises(RuntimeError):
+        macro.hold_key("a", 1.0, poll=lambda: (_ for _ in ()).throw(RuntimeError()))
+    assert world.keys[-1][:2] == ("up", "a")
+
+
+def test_the_white_screen_of_the_teleport_itself_does_not_count_as_getting_in(macro, world, monkeypatch):
+    """wait_until_screen_clear() holds off until the screen stops being white, but not for ever."""
+    monkeypatch.setattr(macro, "grab_screen", lambda: None)
+    monkeypatch.setattr(macro, "detect_white_screen", lambda img: world.clock.now < 1002.0)
+    macro.wait_until_screen_clear(8.0)
+    assert 1002.0 <= world.clock.now < 1003.0
+    monkeypatch.setattr(macro, "detect_white_screen", lambda img: True)
+    macro.wait_until_screen_clear(3.0)
+    assert 1005.0 <= world.clock.now < 1006.0
+
+
 def test_rejoin_reason_lists_the_windows_once(macro, monkeypatch):
     import numpy as np
     calls = []

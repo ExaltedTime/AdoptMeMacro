@@ -1150,15 +1150,29 @@ def respawn_character() -> None:
     wait_interruptible(cfg.RESPAWN_WAIT)
     print("[debug] respawn complete")
 
-def hold_key(key: str, duration: float) -> None:
+def hold_key(key: str, duration: float, poll: Optional[Callable[[], Any]] = None) -> None:
     """Hold `key` down for `duration` seconds (interruptibly). Always
     releases the key, even if StopRequested/FocusLost fires mid-hold -
-    otherwise it would stay stuck held down in the game."""
+    otherwise it would stay stuck held down in the game. With `poll`, it is called every WATCH_POLL_INTERVAL
+    seconds meanwhile (the hold goes on whatever it returns)."""
     pydirectinput.keyDown(key)
     try:
-        wait_interruptible(duration)
+        if poll is None:
+            wait_interruptible(duration)
+            return
+        end = time.time() + duration
+        while time.time() < end:
+            wait_interruptible(min(cfg.WATCH_POLL_INTERVAL, max(0.0, end - time.time())))
+            poll()
     finally:
         pydirectinput.keyUp(key)
+
+def wait_until_screen_clear(max_wait: float) -> None:
+    """Wait (at most `max_wait` seconds) for the screen to stop being the white of a teleport or of going indoors
+    (detect_white_screen())."""
+    end = time.time() + max_wait
+    while time.time() < end and detect_white_screen(grab_screen()):
+        wait_interruptible(cfg.WATCH_POLL_INTERVAL)
 
 def walk_to_buttons() -> None:
     """Walk forward from the respawn spot to where the action buttons are."""
@@ -1830,11 +1844,28 @@ class TeleportWalkNeedHandler(NeedHandler):
             print(f"[debug] holding {cfg.KEY_HELICOPTER} for {cfg.HELICOPTER_HOLD_DURATION}s...")
             hold_key(cfg.KEY_HELICOPTER, cfg.HELICOPTER_HOLD_DURATION)
 
+        watch: Optional[Callable[[], None]] = None
+        entered: list[float] = []                       # when the white screen of going indoors was seen (enter_by_white)
+        if self.config.get("enter_by_white"):
+            wait_until_screen_clear(cfg.TELEPORT_ARRIVE_MAX)       # the teleport's own white screen is not the one to look for
+            watch = lambda: entered.append(time.time()) if detect_white_screen(grab_screen()) else None   # noqa: E731
+
         for i, (key, duration) in enumerate(self.config["steps"]):
             if i:
                 wait_interruptible(cfg.TELEPORT_WALK_STEP_GAP)
             print(f"[debug] holding {key} for {duration}s...")
-            hold_key(key, duration)
+            hold_key(key, duration, poll=watch) if watch else hold_key(key, duration)
+
+        if watch and not entered:
+            if not self._find_the_way_in(watch, entered):
+                print(f"[debug] never got in for the {self.name} need - it failed")
+                log_run_event(f"{self.name}: did not get in within {self.config.get('enter_wait', cfg.NEED_GONE_MAX_WAIT):g}s")
+                respawn_character()
+                return False
+            wait_until_screen_clear(cfg.ENTER_CLEAR_MAX)
+            for key, duration in self.config.get("inside_steps", ()):          # the walk the late entry skipped
+                print(f"[debug] holding {key} for {duration}s inside...")
+                hold_key(key, duration)
 
         if helicopter:
             print("[debug] arrived, pressing space...")
@@ -1854,6 +1885,29 @@ class TeleportWalkNeedHandler(NeedHandler):
 
         print(f"[!] {self.name.capitalize()} complete!")
         return True
+
+    def _find_the_way_in(self, watch: Callable[[], None], entered: list[float]) -> bool:
+        """The walk didn't end indoors (no white screen was seen, which is what going in looks like): zigzag forward until one
+        is, at most the entry's enter_wait seconds - forward ENTER_SEARCH_FORWARD seconds, then sideways, a way that alternates,
+        for ENTER_SEARCH_SIDE seconds more each time (up to ENTER_SEARCH_SIDE_MAX), and a jump. Whether it got in."""
+        wait = self.config.get("enter_wait", cfg.NEED_GONE_MAX_WAIT)
+        print(f"[debug] no white screen after the walk - not in the {self.name} building; looking for the way in ({wait:g}s)...")
+        log_run_event(f"{self.name}: not inside after the walk - looking for the way in")
+        deadline = time.time() + wait
+        sweep = 0
+        while time.time() < deadline:
+            hold_key("w", cfg.ENTER_SEARCH_FORWARD, poll=watch)
+            if entered:
+                break
+            side = cfg.HAUNTLET_LEFT_KEY if sweep % 2 == 0 else cfg.HAUNTLET_RIGHT_KEY
+            hold_key(side, min(cfg.ENTER_SEARCH_SIDE * (sweep + 1), cfg.ENTER_SEARCH_SIDE_MAX), poll=watch)
+            pydirectinput.press(cfg.KEY_JUMP)
+            if entered:
+                break
+            sweep += 1
+        if entered:
+            print(f"[debug] got in after looking for {wait - (deadline - time.time()):.1f}s")
+        return bool(entered)
 
     def _open_dialog(self) -> bool:
         """Press 'e' and wait for the need's dialog (sick); if it isn't recognised and the pet

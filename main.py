@@ -999,7 +999,7 @@ def wait_stoppable(duration: float) -> None:
     check_stop()
 
 def release_all_inputs() -> None:
-    """Best-effort safety net: release every key the macro holds and the mouse button,
+    """Best-effort safety net: release every key the macro holds and the mouse buttons that are down,
     called when a background task ends. See docs/ARCHITECTURE.md#stopping--focus-safety.
     """
     for key in (*cfg.MOVE_KEYS, cfg.KEY_HELICOPTER, cfg.KEY_ZOOM_IN, cfg.KEY_ZOOM_OUT):
@@ -1007,7 +1007,12 @@ def release_all_inputs() -> None:
             pydirectinput.keyUp(key)
         except Exception:
             pass
+    # Only a button that is down: a right button released with none pressed is a click as far as the window under the mouse is
+    # concerned, and over its border or title bar that opens the window's menu and takes the focus from the game.
+    held = pressed_inputs()
     for button in ("left", "right"):
+        if f"mouse_{button}" not in held:
+            continue
         try:
             pydirectinput.mouseUp(button=button)
         except Exception:

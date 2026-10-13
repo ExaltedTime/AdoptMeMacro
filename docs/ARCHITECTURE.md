@@ -932,7 +932,7 @@ itself (below). Anywhere a key or the mouse
 button is held down (walking, petting) wraps the hold in `try/finally` so
 it's always released on the way up, regardless of which exception caused
 the unwind. `release_all_inputs()` runs once more in `run_async`'s
-`finally` block as a last line of defense.
+`finally` block as a last line of defense. It releases a mouse button only if `pressed_inputs()` says it is down: a button-up with the button not pressed is a click to the window under the mouse, and a right one over Roblox's border or title bar opens the window menu and takes the focus (seen at every minigame popup, whose `play_minigame()` releases everything first, the mouse being wherever the interrupted handler left it).
 
 **Resuming after focus loss.** The GUI's **Resume after focus loss** checkbox
 (on the Options tab; the `resume_on_focus_loss` config switch, off by default - stopping is the

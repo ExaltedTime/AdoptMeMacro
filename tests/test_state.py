@@ -653,13 +653,22 @@ def test_only_the_first_look_of_a_run_counts_as_the_start(macro, monkeypatch):
     assert macro.state.run_start_pending is False
 
 
-def test_the_zoom_keys_and_both_mouse_buttons_are_released_with_the_rest(macro, monkeypatch):
-    released, buttons = [], []
+def test_the_zoom_keys_and_the_mouse_buttons_that_are_down_are_released_with_the_rest(macro, monkeypatch):
+    released, buttons, held = [], [], [{"mouse_left", "mouse_right"}]
     monkeypatch.setattr(macro.pydirectinput, "keyUp", lambda key: released.append(key), raising=False)
     monkeypatch.setattr(macro.pydirectinput, "mouseUp", lambda button="left": buttons.append(button), raising=False)
+    monkeypatch.setattr(macro, "pressed_inputs", lambda: held[0])
     macro.release_all_inputs()
     assert {macro.cfg.KEY_ZOOM_IN, macro.cfg.KEY_ZOOM_OUT, macro.cfg.KEY_HELICOPTER} <= set(released)
     assert sorted(buttons) == ["left", "right"]                                      # (the camera is turned with the right one)
+    buttons.clear()
+    held[0] = {"mouse_left"}
+    macro.release_all_inputs()
+    assert buttons == ["left"]                                                       # a release with the button up is a click on whatever is under the mouse
+    buttons.clear()
+    held[0] = set()
+    macro.release_all_inputs()
+    assert buttons == []                                                             # (over the window's border or title bar, a right one opens its menu)
 
 
 def test_the_rejoin_is_booked_before_the_respawn_that_can_lose_focus(macro, monkeypatch):

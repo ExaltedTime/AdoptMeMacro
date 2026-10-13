@@ -265,30 +265,41 @@ HAUNTLET_TV_SPACING_TOLERANCE = 0.25         # ...and these spacings this close
 HAUNTLET_DOOR_SPACING = 360
 # What a door looks like, from the pixels below its TV, boxes (left, top, right, bottom) relative to the TV's number.
 # Told apart so far, from the 29 rooms of one captured run: a locked door (a red light above it, 40-99 pixels of it where
-# every other door has none), a "???" door (pale grey, mean brightness 180-203 where the others are at most 163) and a
-# dark door (more than 40% of it near black, 44-74% where no other door has more than 37%). Plain and boarded doors
-# (planks) are not told apart: how much planks and panels show depends on the layer's lighting, and no measure
-# separated them across the three layers.
+# every other door has none), a "???" door (pale grey, mean brightness 180-203 where the others are at most 163), a
+# dark door (more than 40% of it near black, 44-74% where no other door has more than 37%), and of the rest a boarded
+# door from a plain one by its planks: the share of the door's pixels on a strong, near-horizontal edge (the planks'
+# edges; a plain door's edges are mostly the vertical frame and panel). It is 0.03-0.13 on plain doors (median 0.06) and
+# 0.11-0.24 on boarded ones (median 0.18); the threshold is the best one found on the doors of 25 rooms, 94% right on
+# rooms left out of the search, and wrong mostly on the third layer's spiked doors and on boarded doors half hidden by the player.
 HAUNTLET_LOCK_LIGHT_BOX = (-60, 20, 60, 70)
 HAUNTLET_LOCK_LIGHT_MIN = 25
 HAUNTLET_DOOR_BOX = (-45, 35, 45, 130)
 HAUNTLET_MYSTERY_BRIGHTNESS = 172
 HAUNTLET_DARK_LEVEL = 55
 HAUNTLET_DARK_FRACTION = 0.4
+HAUNTLET_PLANK_BOX = (-55, 35, 55, 140)
+HAUNTLET_PLANK_BLUR = 1.2                    # px: the picture's grain is smoothed out before looking for edges
+HAUNTLET_PLANK_EDGE = 20                     # Sobel strength (of the 0-255 grey picture) from which a pixel is on an edge
+HAUNTLET_PLANK_ANGLE = 35                    # degrees: an edge this close to horizontal is a plank's
+HAUNTLET_PLANK_FRACTION = 0.103
 
 # Playing Hauntlet 2: after the start wait the screen is read every HAUNTLET_LOOK_INTERVAL seconds. The room number
 # changes as the player passes through a door, while the last room's doors are still on screen (open, the camera
 # following the player), so a room is only looked at HAUNTLET_ROOM_SETTLE seconds after its number changed, with the
 # timer showing and the row of TVs still where it was on the look before (within HAUNTLET_TV_STABLE px: the camera
-# has stopped). Then a door is chosen and walked to - W held, with A (left door) or D (right door) held for the first
-# HAUNTLET_STRAFE_DURATION seconds (a human's runs: left 1.0-1.1 s, right 0.9-1.3 s; the middle door W only) - until
-# the room number changes, at most HAUNTLET_WALK_MAX seconds (a human's room: W held 3-4.8 s). If the number still
-# hasn't changed HAUNTLET_ROOM_TIMEOUT seconds after, a door is chosen again.
+# has stopped). Then a door is chosen and walked to - W held, with A or D held to bring the player in front of the
+# door: HAUNTLET_STRAFE_DURATION seconds per door spacing (the distance between neighbouring doors) of distance, measured
+# from the player's hearts to the door's TV, no strafe under HAUNTLET_STRAFE_MIN spacings and never more than
+# HAUNTLET_STRAFE_MAX (a human's runs, from the middle: left door 1.0-1.1 s, right 0.9-1.3 s) - until the room number
+# changes, at most HAUNTLET_WALK_MAX seconds (a human's room: W held 3-4.8 s). If the number still hasn't changed
+# HAUNTLET_ROOM_TIMEOUT seconds after, a door is chosen again.
 # A room whose number is a multiple of HAUNTLET_FORK_EVERY (10 and 20 were seen) is a fork: no TVs, two doorways. A
 # room without a row of TVs HAUNTLET_DOORS_TIMEOUT seconds after its number changed is walked as if it had three doors.
 HAUNTLET_LEFT_KEY = "a"
 HAUNTLET_RIGHT_KEY = "d"
 HAUNTLET_STRAFE_DURATION = 1.1
+HAUNTLET_STRAFE_MIN = 0.15
+HAUNTLET_STRAFE_MAX = 2.5
 HAUNTLET_WALK_MAX = 6.0
 HAUNTLET_LOOK_INTERVAL = 0.35
 HAUNTLET_ROOM_SETTLE = 2.0

@@ -176,7 +176,7 @@ an extra walk from wherever the previous need left the character standing.
   [Input capture](#input-capture).
 - **HAUNTLET 2 READER** - `read_hauntlet_room()`, `read_hauntlet_items()`, `read_hauntlet_hearts()`,
   `hauntlet_timer_visible()`, `find_hauntlet_doors()` and their pictures. See [Reading Hauntlet 2](#reading-hauntlet-2).
-  (What is done with it - `HauntletRun`, `hauntlet_walk()`, `play_hauntlet_2()` - is with the other minigame code under
+  (What is done with it - `HauntletRun`, `hauntlet_strafe()`, `hauntlet_walk()`, `play_hauntlet_2()` - is with the other minigame code under
   NEED HANDLERS; see [Playing Hauntlet 2](#playing-hauntlet-2).)
 - **WORKFLOWS** - `run_full_cycle()` and `run_workflow_loop()` (plus
   `ResourceMonitor`, `check_quiet()` and `respawn_if_no_detection()`, which run
@@ -1179,14 +1179,23 @@ of `HAUNTLET_TV_AREA` px below `HAUNTLET_TV_MIN_Y` and wants three of them in a 
 `HAUNTLET_TV_ROW_TOLERANCE`, evenly spaced within `HAUNTLET_TV_SPACING_TOLERANCE`), else `[]` - a fork's hall has no TVs, and neither do
 the close-ups. The spacing between TVs (330-410 px as the camera zooms) is the picture's scale, so the boxes under each
 TV (`HAUNTLET_LOCK_LIGHT_BOX`, `HAUNTLET_DOOR_BOX`, measured at a spacing of `HAUNTLET_DOOR_SPACING`) are scaled with it.
-`HauntletDoor(x, y, kind)` gives each door's `kind` from its pixels (`hauntlet_door_kind()`): `locked` (the padlock's red
-light above the door: 40-99 red pixels, none on other doors), `mystery` (the pale grey "???" door, brightness 180-203 where every
-other door is under 164), `dark` (over 40% near-black pixels: 44-74% on the doors that look so, at most 37% on the others) or
-`None`. **What this does not do:** tell a plain door from a boarded one (both `None`) - no measure of the planks separated
-them across the three layers' lighting - and it misses some dark doors with fewer black pixels (4 of 10 in the run) and a lock
-whose light is cut off by the shear of a side door (2 of 14); checked against all three doors of 25 rooms of the captured run,
-69 of 75 doors are right in these three categories. It also can't see which door has the ghost behind it. The kinds
-are for the decision logic to use as far as they go.
+`HauntletDoor(x, y, kind)` gives each door's `kind` from its pixels (`hauntlet_door_kind()`), the first that fits:
+
+- `locked` - the padlock's red light above the door: 40-99 red pixels, none on other doors;
+- `dark` - over 40% near-black pixels (44-74% on the doors that look so, at most 37% on the others);
+- `mystery` - the pale grey "???" door, brightness 180-203 where every other door is under 164;
+- `boarded` or `plain` - by the planks: the share of the door's pixels on a strong, near-horizontal edge
+  (`HAUNTLET_PLANK_*`: the grey picture smoothed, Sobel, edge directions within 35 degrees of horizontal). Plain doors
+  are 0.03-0.13 (median 0.06), boarded ones 0.11-0.24 (median 0.18); the threshold, 0.103, is the best one over the
+  doors of 25 rooms (the first and second layers separate best, the third a little worse), and picked in turn without one
+  room of them it still gets 94% of that room's doors right. It was found by trying measures one after another - blob counts
+  for the nails, edge density, edge directions, colour - and this was the one that held across the three layers' lighting.
+
+All of it is judged against what was seen in one captured run, by eye: of all three doors of those 25 rooms, 63 of 75 come out as
+labelled (`boarded` / `plain` from the planks are the least sure part: 3 of 22 plain doors read boarded; and
+the third layer's spiked doors, 3 of them, come out `boarded`, there being no kind for them yet). The misses: dark doors with
+fewer black pixels than the rule wants (4 of 10 read as boarded or plain), and a lock whose light is cut off by the shear of a side door
+(2 of 14). It also can't see which door has the ghost behind it. The kinds are for the decision logic to use as far as they go.
 
 ### Playing Hauntlet 2
 
@@ -1210,10 +1219,15 @@ again, which is the retry for a walk that got stuck.
 `HAUNTLET_LEARN_LIMIT` per play, so a misreading can't fill the folder), picks a door with `choose_hauntlet_door()` and logs the
 lot: `room 12, 3 hearts (1 lost), items: phone x1, key x1, doors: -, -, locked, going middle`. **The choice is random for now**
 (a locked door is only taken when a key is held, or when all are locked); `choose_hauntlet_door(doors, hearts, items)` is where
-the risk-based logic goes. `hauntlet_walk()` then holds `HAUNTLET_2_FORWARD_KEY` - plus `HAUNTLET_LEFT_KEY` for the left door or
-`HAUNTLET_RIGHT_KEY` for the right one for the first `HAUNTLET_STRAFE_DURATION` seconds, nothing extra for the middle (a fork's two
-doorways are the left and the right) - until the number changes or `HAUNTLET_WALK_MAX` seconds. The durations are from a human's
-run (the capture's keys against its room numbers: left 1.0-1.1 s, right 0.9-1.3 s, W held 3-4.8 s); that a key held by the macro
+the risk-based logic goes. `hauntlet_strafe()` works out how far to go sideways and `hauntlet_walk()` then holds `HAUNTLET_2_FORWARD_KEY` - plus
+`HAUNTLET_LEFT_KEY` or `HAUNTLET_RIGHT_KEY` for the strafe - until the number changes or `HAUNTLET_WALK_MAX` seconds. The
+strafe is the distance from the player to the door's TV in *door spacings* (the distance between neighbouring TVs, which
+also takes the camera's zoom out of it) times `HAUNTLET_STRAFE_DURATION` seconds per spacing - no strafe under `HAUNTLET_STRAFE_MIN`
+spacings, never more than `HAUNTLET_STRAFE_MAX`. The player's place is measured, not assumed, because where a room is entered may
+depend on the door it came through (a player who came in at the left door has further to go to the right one): it is the middle of the
+row of hearts above the head (`HauntletHearts.center_x`), and where the hearts aren't seen, in front of the middle door. A fork's
+two doorways aren't located, so each is the left or the right key for one spacing. The seconds per spacing are from a human's run (the
+capture's keys against its room numbers, from the middle: left door 1.0-1.1 s, right 0.9-1.3 s; W held 3-4.8 s in all); that a key held by the macro
 carries the character as far as one pressed by hand is **not yet checked in the game**, and neither is the strafe in a fork's hall
 (its doorways were seen at other distances in rooms 10 and 20) - both are the first things to tune. The keys are always released,
 also when the macro is stopped. When the run ends, `got as far as room N` goes in the run log.
@@ -1261,7 +1275,7 @@ exact values and rationale):
 | Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
 | Hauntlet 2 reader | `HAUNTLET_ROOM_BOX`, `HAUNTLET_DIGIT_*`, `HAUNTLET_ROOM_MAX_DIGITS`, `HAUNTLET_SLOT_*`, `HAUNTLET_ITEM_*`, `HAUNTLET_BADGE_*`, `HAUNTLET_COUNT_*`, `HAUNTLET_NOT_ITEMS`, `HAUNTLET_HEART_*`, `HAUNTLET_*_DIR` |
-| Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_DARK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_DURATION`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_KEY_ITEMS`, `HAUNTLET_LEARN_LIMIT` |
+| Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_DARK_*`, `HAUNTLET_PLANK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_*`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_KEY_ITEMS`, `HAUNTLET_LEARN_LIMIT` |
 | Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |

@@ -2467,12 +2467,20 @@ def choose_hauntlet_door(doors: list[HauntletDoor], hearts: Optional[HauntletHea
     options = [i for i, door in enumerate(doors) if door.kind != "locked" or has_key]
     return random.choice(options or list(range(len(doors))))
 
-def hauntlet_direction(index: int, count: int) -> Optional[str]:
-    """The key to strafe with to reach door `index` of `count`: the left key for the first, the right for the last,
-    none for the one in the middle (a fork's two doorways are the first and the last)."""
-    if index == 0:
-        return cfg.HAUNTLET_LEFT_KEY
-    return cfg.HAUNTLET_RIGHT_KEY if index == count - 1 else None
+def hauntlet_strafe(img: Image, doors: list[HauntletDoor], index: int) -> tuple[Optional[str], float]:
+    """The key to strafe with, and for how long, to reach door `index` from where the player stands in `img`: the
+    distance to the door in door spacings (the TVs' spacing) times HAUNTLET_STRAFE_DURATION, or no strafe when that
+    is under HAUNTLET_STRAFE_MIN spacings. Where the player starts a room can depend on the door it came through, so
+    it is measured (the hearts above the head); not seen, it is taken to be in front of the middle door. A fork's two
+    doorways aren't located: the left key or the right one for one spacing."""
+    if len(doors) != 3:
+        return (cfg.HAUNTLET_LEFT_KEY if index == 0 else cfg.HAUNTLET_RIGHT_KEY), cfg.HAUNTLET_STRAFE_DURATION
+    spacing = (doors[2].x - doors[0].x) / 2
+    hearts = read_hauntlet_hearts(img)
+    distance = (doors[index].x - (hearts.center_x if hearts else doors[1].x)) / spacing
+    if abs(distance) < cfg.HAUNTLET_STRAFE_MIN:
+        return None, 0.0
+    return (cfg.HAUNTLET_RIGHT_KEY if distance > 0 else cfg.HAUNTLET_LEFT_KEY), min(abs(distance), cfg.HAUNTLET_STRAFE_MAX) * cfg.HAUNTLET_STRAFE_DURATION
 
 def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun) -> int:
     """Read the hearts and items off `img`, choose a door (choose_hauntlet_door()) and log the lot."""
@@ -2487,16 +2495,16 @@ def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun) -> 
           + f", doors: {', '.join(door.kind or '-' for door in doors)}, going {names[index]}")
     return index
 
-def hauntlet_walk(direction: Optional[str], run: HauntletRun, watch: MinigameWatch) -> bool:
-    """Walk to a door: hold forward, with `direction` (a strafe key, or None) held for the first HAUNTLET_STRAFE_DURATION
-    seconds, until the room number changes (at most HAUNTLET_WALK_MAX seconds). True if the victory screen showed."""
+def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, watch: MinigameWatch) -> bool:
+    """Walk to a door: hold forward, with `direction` (a strafe key, or None) held for the first `duration` seconds,
+    until the room number changes (at most HAUNTLET_WALK_MAX seconds). True if the victory screen showed."""
     run.chosen_at = started = time.time()
     pydirectinput.keyDown(cfg.HAUNTLET_2_FORWARD_KEY)
     try:
         if direction:
             pydirectinput.keyDown(direction)
             try:
-                wait_interruptible(cfg.HAUNTLET_STRAFE_DURATION)
+                wait_interruptible(duration)
             finally:
                 pydirectinput.keyUp(direction)
         while time.time() < started + cfg.HAUNTLET_WALK_MAX:
@@ -2529,7 +2537,8 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
             if doors is None:
                 wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
                 continue
-            if hauntlet_walk(hauntlet_direction(hauntlet_choose(img, doors, run), len(doors)), run, watch):
+            direction, duration = hauntlet_strafe(img, doors, hauntlet_choose(img, doors, run))
+            if hauntlet_walk(direction, duration, run, watch):
                 return True
     finally:
         if run.room is not None:
@@ -3226,6 +3235,11 @@ class HauntletHearts:
     width: int
     pos: Point
 
+    @property
+    def center_x(self) -> float:
+        """The middle of the row, in px - above the player's head, so where the player stands."""
+        return self.pos[0] + ((self.red + self.black - 1) * cfg.HAUNTLET_HEART_PITCH + 1) * self.width / 2
+
 def pink_heart_pieces(img: Image) -> list[tuple[int, int, int, int]]:
     """(x, y, w, h) of every heart-shaped pink piece of `img` (HAUNTLET_HEART_*), nothing above HAUNTLET_HEART_MIN_Y."""
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
@@ -3285,7 +3299,8 @@ def hauntlet_timer_visible(img: Image) -> bool:
 @dataclass
 class HauntletDoor:
     """A door of a Hauntlet 2 room: where its TV's number is on screen (`x`, `y`) and its `kind` - "locked", "mystery"
-    (the "???" door), "dark", or None for the others (plain and boarded doors aren't told apart)."""
+    (the "???" door), "dark", "boarded" or "plain"; None for a door that couldn't be looked at (or a fork's doorway,
+    which isn't looked for)."""
     x: int
     y: int
     kind: Optional[str]
@@ -3310,7 +3325,7 @@ def find_door_tvs(img: Image) -> list[tuple[int, int]]:
 
 def hauntlet_door_kind(img: Image, x: int, y: int, scale: float) -> Optional[str]:
     """What kind of door hangs below the TV number at (x, y), from its pixels (see HAUNTLET_LOCK_LIGHT_BOX); `scale`
-    is the picture's size against the one the boxes were measured at."""
+    is the picture's size against the one the boxes were measured at. None if the door is off the screen."""
     def region(box: tuple[int, int, int, int]) -> Image:
         left, top, right, bottom = box
         return img[max(0, int(y + top * scale)):int(y + bottom * scale), max(0, int(x + left * scale)):int(x + right * scale)]
@@ -3323,7 +3338,16 @@ def hauntlet_door_kind(img: Image, x: int, y: int, scale: float) -> Optional[str
     brightness = door.mean(axis=2)
     if np.count_nonzero(brightness <= cfg.HAUNTLET_DARK_LEVEL) >= cfg.HAUNTLET_DARK_FRACTION * brightness.size:
         return "dark"
-    return "mystery" if brightness.mean() >= cfg.HAUNTLET_MYSTERY_BRIGHTNESS else None
+    if brightness.mean() >= cfg.HAUNTLET_MYSTERY_BRIGHTNESS:
+        return "mystery"
+    planks = region(cfg.HAUNTLET_PLANK_BOX)
+    if min(planks.shape[:2]) < 3:
+        return None
+    grey = cv2.GaussianBlur(cv2.cvtColor(planks, cv2.COLOR_BGR2GRAY).astype(np.float32), (0, 0), cfg.HAUNTLET_PLANK_BLUR)
+    dx, dy = cv2.Sobel(grey, cv2.CV_32F, 1, 0), cv2.Sobel(grey, cv2.CV_32F, 0, 1)
+    angle = np.degrees(np.arctan2(dy, dx)) % 180                # an edge's direction is square to its gradient: 90 is a horizontal edge
+    on_plank_edge = (np.hypot(dx, dy) > cfg.HAUNTLET_PLANK_EDGE) & (np.abs(angle - 90) < cfg.HAUNTLET_PLANK_ANGLE)
+    return "boarded" if np.count_nonzero(on_plank_edge) >= cfg.HAUNTLET_PLANK_FRACTION * on_plank_edge.size else "plain"
 
 def find_hauntlet_doors(img: Image) -> list[HauntletDoor]:
     """The three doors of the room in `img`, left to right, with their kinds - [] if there is no row of TVs."""

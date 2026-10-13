@@ -37,13 +37,14 @@ def test_the_timer_is_there_or_hidden(macro):
 
 # --- the doors ---
 
-# what is on each fixture's three doors, left to right (from the pictures): plain and boarded ones are both None
+# what is on each fixture's three doors, left to right (from the pictures)
 DOORS = {
-    16: [None, None, None],
-    46: ["locked", None, "dark"],
-    88: ["mystery", "dark", "dark"],
-    97: [None, None, "locked"],
-    209: ["locked", "locked", None],                  # the third layer, with its blue walls
+    16: ["plain", "plain", "plain"],                  # the first layer, yellow walls
+    30: ["plain", "boarded", "boarded"],
+    46: ["locked", "plain", "dark"],
+    88: ["mystery", "dark", "dark"],                  # the second layer, white walls
+    97: ["boarded", "boarded", "locked"],
+    209: ["locked", "locked", "plain"],               # the third layer, blue walls
 }
 
 
@@ -81,10 +82,57 @@ def test_a_door_is_chosen_at_random_but_a_locked_one_only_with_a_key(macro):
     assert {macro.choose_hauntlet_door([door("locked")] * 3, None, []) for _ in range(200)} == {0, 1, 2}   # nothing else to take
 
 
-def test_the_keys_that_reach_each_door(macro):
+def hearts_at(macro, monkeypatch, x):
+    """Make the player's hearts read as centred on x."""
+    hearts = macro.HauntletHearts(3, 1, 30, (0, 700))
+    hearts.pos = (int(x - hearts.center_x + hearts.pos[0]), 700)
+    monkeypatch.setattr(macro, "read_hauntlet_hearts", lambda img: hearts)
+
+
+def test_the_strafe_is_the_distance_to_the_door_in_door_spacings(macro, monkeypatch):
     cfg = macro.cfg
-    assert [macro.hauntlet_direction(i, 3) for i in range(3)] == [cfg.HAUNTLET_LEFT_KEY, None, cfg.HAUNTLET_RIGHT_KEY]
-    assert [macro.hauntlet_direction(i, 2) for i in range(2)] == [cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_RIGHT_KEY]
+    doors = macro.find_hauntlet_doors(frame(macro, 97))
+    spacing = (doors[2].x - doors[0].x) / 2
+    screen = frame(macro, 97)
+    hearts_at(macro, monkeypatch, doors[1].x)                                        # in front of the middle door
+    assert macro.hauntlet_strafe(screen, doors, 1) == (None, 0.0)
+    key, seconds = macro.hauntlet_strafe(screen, doors, 0)
+    assert key == cfg.HAUNTLET_LEFT_KEY and seconds == pytest.approx((doors[1].x - doors[0].x) / spacing * cfg.HAUNTLET_STRAFE_DURATION, rel=0.01)
+    key, seconds = macro.hauntlet_strafe(screen, doors, 2)
+    assert key == cfg.HAUNTLET_RIGHT_KEY and seconds == pytest.approx((doors[2].x - doors[1].x) / spacing * cfg.HAUNTLET_STRAFE_DURATION, rel=0.01)
+
+
+def test_a_player_who_starts_elsewhere_strafes_the_distance_from_there(macro, monkeypatch):
+    """The spot a room is entered at can depend on the door it came through: the strafe follows where the player is."""
+    cfg = macro.cfg
+    screen = frame(macro, 97)
+    doors = macro.find_hauntlet_doors(screen)
+    hearts_at(macro, monkeypatch, doors[0].x)                                        # came in at the left door
+    assert macro.hauntlet_strafe(screen, doors, 0) == (None, 0.0)
+    key_far, far = macro.hauntlet_strafe(screen, doors, 2)
+    hearts_at(macro, monkeypatch, doors[1].x)
+    _, from_the_middle = macro.hauntlet_strafe(screen, doors, 2)
+    assert key_far == cfg.HAUNTLET_RIGHT_KEY and far == pytest.approx(2 * from_the_middle, rel=0.15)
+    hearts_at(macro, monkeypatch, doors[2].x)                                        # came in at the right: the middle is to its left
+    assert macro.hauntlet_strafe(screen, doors, 1)[0] == cfg.HAUNTLET_LEFT_KEY
+
+
+def test_the_strafe_is_capped_and_a_player_not_seen_is_taken_to_be_in_the_middle(macro, monkeypatch):
+    cfg = macro.cfg
+    screen = frame(macro, 97)
+    doors = macro.find_hauntlet_doors(screen)
+    hearts_at(macro, monkeypatch, doors[0].x - 5 * (doors[1].x - doors[0].x))        # far off to the left
+    assert macro.hauntlet_strafe(screen, doors, 2) == (cfg.HAUNTLET_RIGHT_KEY, cfg.HAUNTLET_STRAFE_MAX * cfg.HAUNTLET_STRAFE_DURATION)
+    monkeypatch.setattr(macro, "read_hauntlet_hearts", lambda img: None)
+    assert macro.hauntlet_strafe(screen, doors, 1) == (None, 0.0)
+    assert macro.hauntlet_strafe(screen, doors, 0)[0] == cfg.HAUNTLET_LEFT_KEY
+
+
+def test_a_forks_doorways_are_the_left_and_the_right_for_one_door_spacing(macro):
+    cfg = macro.cfg
+    doorways = [macro.HauntletDoor(0, 0, None)] * 2
+    assert macro.hauntlet_strafe(frame(macro), doorways, 0) == (cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_STRAFE_DURATION)
+    assert macro.hauntlet_strafe(frame(macro), doorways, 1) == (cfg.HAUNTLET_RIGHT_KEY, cfg.HAUNTLET_STRAFE_DURATION)
 
 
 class Clock:
@@ -140,7 +188,7 @@ def test_a_walk_holds_forward_and_the_strafe_key_for_the_strafe_then_stops_when_
     run.room = 5
     world.screens = [frame(macro, room=5)] * 3 + [frame(macro, room=6)]
     start = world.clock.now
-    assert macro.hauntlet_walk(cfg.HAUNTLET_LEFT_KEY, run, watch_of(macro)) is False
+    assert macro.hauntlet_walk(cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_STRAFE_DURATION, run, watch_of(macro)) is False
     assert [(kind, key) for kind, key, _ in world.keys] == [("down", "w"), ("down", cfg.HAUNTLET_LEFT_KEY), ("up", cfg.HAUNTLET_LEFT_KEY), ("up", "w")]
     assert world.keys[2][2] - start == pytest.approx(cfg.HAUNTLET_STRAFE_DURATION)
     assert world.looks == 4 and world.keys[3][2] - start < cfg.HAUNTLET_WALK_MAX     # it stopped for the new room, not the time
@@ -153,7 +201,7 @@ def test_a_walk_to_the_middle_door_strafes_not_at_all_and_gives_up_after_the_wal
     run.room = 5
     world.screens = [frame(macro, room=5)]                                       # the room never changes
     start = world.clock.now
-    assert macro.hauntlet_walk(None, run, watch_of(macro)) is False
+    assert macro.hauntlet_walk(None, 0.0, run, watch_of(macro)) is False
     assert [key for _, key, _ in world.keys] == ["w", "w"]
     assert world.keys[1][2] - start >= macro.cfg.HAUNTLET_WALK_MAX
 
@@ -164,7 +212,7 @@ def test_a_walk_lets_go_of_its_keys_when_stopped(macro, world, monkeypatch):
     monkeypatch.setattr(macro, "wait_interruptible", stop)
     run = macro.HauntletRun()
     with pytest.raises(macro.StopRequested):
-        macro.hauntlet_walk(macro.cfg.HAUNTLET_RIGHT_KEY, run, watch_of(macro))
+        macro.hauntlet_walk(macro.cfg.HAUNTLET_RIGHT_KEY, macro.cfg.HAUNTLET_STRAFE_DURATION, run, watch_of(macro))
     assert [(kind, key) for kind, key, _ in world.keys] == [("down", "w"), ("down", macro.cfg.HAUNTLET_RIGHT_KEY),
                                                               ("up", macro.cfg.HAUNTLET_RIGHT_KEY), ("up", "w")]
 
@@ -173,7 +221,7 @@ def test_a_walk_reports_the_victory_screen(macro, world, monkeypatch):
     monkeypatch.setattr(macro, "detect_minigame_victory", lambda img: True)
     world.screens = [frame(macro, room=5)]
     run = macro.HauntletRun()
-    assert macro.hauntlet_walk(None, run, watch_of(macro)) is True
+    assert macro.hauntlet_walk(None, 0.0, run, watch_of(macro)) is True
     assert [kind for kind, _, _ in world.keys][-1] == "up"
 
 
@@ -186,7 +234,7 @@ def test_the_doors_are_chosen_from_once_the_room_has_settled_and_the_camera_stop
     assert run.look(screen, 100.0) is None                                       # the number just changed
     assert run.look(screen, 100.0 + cfg.HAUNTLET_ROOM_SETTLE / 2) is None       # still settling
     doors = run.look(screen, 100.0 + cfg.HAUNTLET_ROOM_SETTLE + 0.1)
-    assert doors is not None and [d.kind for d in doors] == [None, None, "locked"]
+    assert doors is not None and [d.kind for d in doors] == ["boarded", "boarded", "locked"]
 
 
 def test_doors_still_moving_wait_for_the_timeout(macro):
@@ -284,7 +332,7 @@ def test_the_loop_chooses_a_door_walks_to_it_and_goes_on_in_the_next_room(macro,
     assert pressed[:2] == [("down", "w"), ("up", "w")]                           # the middle door: forward only
     assert pressed.count(("down", "w")) == pressed.count(("up", "w"))
     out = capsys.readouterr().out
-    assert "room 12, hearts not seen, items: none, doors: -, -, locked, going middle" in out
+    assert "room 12, hearts not seen, items: none, doors: boarded, boarded, locked, going middle" in out
     assert "hauntlet 2: room 13" in out
     assert events == ["hauntlet 2: got as far as room 13"]
 

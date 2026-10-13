@@ -117,6 +117,8 @@ def test_before_the_boss_with_no_ghost_in_sight_the_beam_is_held_on_random_furni
     places = left_held_on(world)
     left, top, right, bottom = cfg.GHOST_FURNITURE_BOX
     assert places and all(left <= x <= right and top <= y <= bottom for x, y in places)
+    cx, cy = cfg.GHOST_CHARACTER
+    assert all(((x - cx) ** 2 + (y - cy) ** 2) ** .5 >= cfg.GHOST_FURNITURE_MIN_DISTANCE for x, y in places)      # not next to the character
     assert len(set(places)) >= 3                                                               # somewhere else every GHOST_FURNITURE_PERIOD
     assert world.mouse.count(("down",)) == 1                                                   # the button stays down meanwhile
 
@@ -241,3 +243,62 @@ def test_stopping_lets_go_of_the_button(macro, world, monkeypatch):
     with pytest.raises(macro.StopRequested):
         macro.play_ghost_gallery(world.clock.now + 100, watch_started(macro))
     assert world.mouse[-1] == ("up",) and world.mouse.count(("down",)) == 1
+
+
+# --- the view, walking, the furniture ---
+
+def test_it_starts_with_a_zoomed_out_tilted_down_view_once_the_overlay_shows(macro, world, monkeypatch):
+    cfg = macro.cfg
+    looks, seen = [], {}
+
+    def look(w):
+        looks.append(1)
+        if len(looks) == 3:
+            w.last_seen = 1.0
+            seen["zoomed_before"] = len(world.zooms)
+        return blank()
+    watch = watch_started(macro, started=False)
+    monkeypatch.setattr(macro, "minigame_look", look)
+    monkeypatch.setattr(macro, "minigame_wait", lambda duration, w: look(w) is None)
+    macro.play_ghost_gallery(world.clock.now + cfg.MINIGAME_START_WAIT + 2, watch)
+    assert seen["zoomed_before"] == 0 and len(world.zooms) == 1 and len(world.tilts) == 1      # once, after the game began
+
+
+def test_zooming_out_holds_the_zoom_out_key_and_the_tilt_drags_down_with_the_right_button(macro, world):
+    cfg = macro.cfg
+    world.real_zoom_out()
+    assert [(kind, key) for kind, key, _ in world.keys] == [("down", cfg.KEY_ZOOM_OUT), ("up", cfg.KEY_ZOOM_OUT)]
+    assert world.keys[1][2] - world.keys[0][2] == pytest.approx(cfg.MINIGAME_ZOOM_OUT_DURATION)
+    world.real_tilt()
+    assert world.mouse[0] == ("down", "right") and world.mouse[-1] == ("up", "right")
+    drags = [e for e in world.mouse if e[0] == "rel"]
+    assert len(drags) == cfg.GHOST_CAMERA_DRAG_STEPS and all(dx == 0 and dy > 0 for _, dx, dy in drags)       # straight down
+    assert sum(dy for _, _, dy in drags) == pytest.approx(cfg.GHOST_START_TILT, abs=cfg.GHOST_CAMERA_DRAG_STEPS)
+
+
+def test_it_walks_about_a_step_at_a_time_without_stopping_the_aiming(macro, world):
+    cfg = macro.cfg
+    world.screens = [shot("ghosts_50")]
+    start = world.clock.now
+    macro.play_ghost_gallery(start + cfg.GHOST_MOVE_PERIOD * 3.5, watch_started(macro))
+    steps = [(kind, key, at) for kind, key, at in world.keys if key in cfg.MOVE_KEYS]
+    downs = [at for kind, _, at in steps if kind == "down"]
+    assert len(downs) >= 2 and downs[0] - start >= cfg.GHOST_MOVE_PERIOD - 0.5                  # not at once
+    held = 0
+    for kind, _, _ in steps:                                                                   # one key at a time, always let go
+        held += 1 if kind == "down" else -1
+        assert held in (0, 1)
+    assert held == 0
+    for (kind, _, at), (kind2, _, at2) in zip(steps[::2], steps[1::2]):
+        assert cfg.GHOST_MOVE_STEP_MIN - 0.3 <= at2 - at <= cfg.GHOST_MOVE_STEP_MAX + 0.3
+    assert world.mouse.count(("down",)) == 1 and len([m for m in world.mouse if m[0] == "move"]) > 20     # it kept aiming meanwhile
+
+
+def test_the_furniture_is_aimed_at_far_from_the_character(macro):
+    cfg = macro.cfg
+    cx, cy = cfg.GHOST_CHARACTER
+    left, top, right, bottom = cfg.GHOST_FURNITURE_BOX
+    for _ in range(300):
+        x, y = macro.far_from_character(cfg.GHOST_FURNITURE_BOX, cfg.GHOST_FURNITURE_MIN_DISTANCE)
+        assert left <= x <= right and top <= y <= bottom and ((x - cx) ** 2 + (y - cy) ** 2) ** .5 >= cfg.GHOST_FURNITURE_MIN_DISTANCE
+    assert macro.far_from_character((cx - 5, cy - 5, cx + 5, cy + 5), 400) in ((cx - 5, cy - 5), (cx + 5, cy - 5), (cx - 5, cy + 5), (cx + 5, cy + 5))   # a box with nothing far enough

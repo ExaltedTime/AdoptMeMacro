@@ -981,15 +981,16 @@ def release_all_inputs() -> None:
     """Best-effort safety net: release every key the macro holds and the mouse button,
     called when a background task ends. See docs/ARCHITECTURE.md#stopping--focus-safety.
     """
-    for key in (*cfg.MOVE_KEYS, cfg.KEY_HELICOPTER, cfg.KEY_ZOOM_IN):
+    for key in (*cfg.MOVE_KEYS, cfg.KEY_HELICOPTER, cfg.KEY_ZOOM_IN, cfg.KEY_ZOOM_OUT):
         try:
             pydirectinput.keyUp(key)
         except Exception:
             pass
-    try:
-        pydirectinput.mouseUp()
-    except Exception:
-        pass
+    for button in ("left", "right"):
+        try:
+            pydirectinput.mouseUp(button=button)
+        except Exception:
+            pass
 
 # ============================================================================
 # BUTTON DETECTION
@@ -2404,6 +2405,12 @@ def minigame_won(watch: MinigameWatch) -> bool:
     """minigame_look(), then True if it shows the victory screen (detect_minigame_victory())."""
     return detect_minigame_victory(minigame_look(watch))
 
+def zoom_out() -> None:
+    """Zoom the camera out (KEY_ZOOM_OUT held MINIGAME_ZOOM_OUT_DURATION seconds) to see the whole room: close up, the TVs
+    over a Hauntlet 2 room's doors are cut off by the top of the screen."""
+    print("[debug] zooming the camera out")
+    hold_key(cfg.KEY_ZOOM_OUT, cfg.MINIGAME_ZOOM_OUT_DURATION)
+
 def minigame_wait(duration: float, watch: MinigameWatch) -> None:
     """wait_interruptible(), with the popup checks every
     MINIGAME_POPUP_CHECK_INTERVAL and `watch` kept up to date - for the long
@@ -2549,6 +2556,7 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
     print(f"[debug] Hauntlet 2: waiting {cfg.MINIGAME_START_WAIT:g}s for it to start...")
     minigame_wait(cfg.MINIGAME_START_WAIT, watch)
     watch.start_wait_over()
+    zoom_out()
     run = HauntletRun()
     try:
         while time.time() < deadline and not watch.problem:
@@ -2562,6 +2570,8 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
             if len(doors) == 1 and run.room and run.room > 1 and not run.doors_missing_reported:   # not the entrance hall (room 1): keep the screenshot
                 run.doors_missing_reported = True
                 log_failure(f"Hauntlet 2: no doors found in room {run.room}")
+            if len(doors) == 1 and run.room and run.room > 1:
+                zoom_out()                                                      # perhaps the camera is too close to see the TVs
             index, item = hauntlet_choose(img, doors, run)
             if item:
                 hauntlet_use_item(item)
@@ -2620,6 +2630,27 @@ def choose_ghost_target(blobs: list[tuple[int, int, int]], boss: bool, previous:
     cx, cy = cfg.GHOST_CHARACTER
     return min(blobs, key=lambda b: (b[0] - cx) ** 2 + (b[1] - cy) ** 2)[:2]
 
+def tilt_camera_down() -> None:
+    """Drag the mouse down with the right button held, GHOST_START_TILT px: the camera rises behind the character, for a view
+    from above, over GHOST_CAMERA_DRAG_DURATION seconds in GHOST_CAMERA_DRAG_STEPS moves."""
+    pydirectinput.mouseDown(button="right")
+    try:
+        for _ in range(cfg.GHOST_CAMERA_DRAG_STEPS):
+            pydirectinput.moveRel(0, cfg.GHOST_START_TILT // cfg.GHOST_CAMERA_DRAG_STEPS, relative=True)
+            wait_interruptible(cfg.GHOST_CAMERA_DRAG_DURATION / cfg.GHOST_CAMERA_DRAG_STEPS)
+    finally:
+        pydirectinput.mouseUp(button="right")
+
+def far_from_character(box: tuple[int, int, int, int], minimum: float) -> Point:
+    """A random point in `box` at least `minimum` px from the character (GHOST_CHARACTER); the middle of the farthest corner if the box has none."""
+    left, top, right, bottom = box
+    cx, cy = cfg.GHOST_CHARACTER
+    for _ in range(50):
+        x, y = random.randint(left, right), random.randint(top, bottom)
+        if (x - cx) ** 2 + (y - cy) ** 2 >= minimum ** 2:
+            return x, y
+    return max(((left, top), (right, top), (left, bottom), (right, bottom)), key=lambda c: (c[0] - cx) ** 2 + (c[1] - cy) ** 2)
+
 def rotate_camera() -> None:
     """Turn the camera: hold the right mouse button and drag the mouse sideways (a random way, GHOST_CAMERA_DRAG px, a little up
     or down too) over GHOST_CAMERA_DRAG_DURATION seconds, in GHOST_CAMERA_DRAG_STEPS moves, as Roblox wants a drag."""
@@ -2636,18 +2667,23 @@ def rotate_camera() -> None:
 def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     """Ghost Gallery: once its overlay shows (or the start wait is over), look at the screen every GHOST_LOOK_INTERVAL,
     aim the mouse at a ghost (choose_ghost_target()) and hold the button down on it, until the victory screen shows or the
-    overlay says it's over. In the boss phase it is the boss, but while the boss's bar shows ghost icons it can't be hurt
+    overlay says it's over. It begins by zooming the camera out and tilting it down for a better view. In the boss phase it is the boss, but while the boss's bar shows ghost icons it can't be hurt
     (ghost_boss_shielded()) and the small ghosts are aimed at instead. With no ghost in sight, before the boss phase the beam
     is held on random furniture (ghosts hide there), and the camera is turned every GHOST_CAMERA_PERIOD to find some;
-    it jumps now and then. True if won before `deadline`. See docs/ARCHITECTURE.md#playing-ghost-gallery.
+    it jumps now and then, and walks about a step at a time. True if won before `deadline`. See docs/ARCHITECTURE.md#playing-ghost-gallery.
     """
     print(f"[debug] Ghost Gallery: waiting for it to start (at most {cfg.MINIGAME_START_WAIT:g}s)...")
     waited_until = time.time() + cfg.MINIGAME_START_WAIT
     while time.time() < waited_until and watch.last_seen is None:       # its overlay (TIME LEFT, the score) shows when the game has begun
         minigame_wait(cfg.GHOST_START_LOOK_INTERVAL, watch)
     watch.start_wait_over()
+    zoom_out()
+    tilt_camera_down()
     target: Optional[Point] = None
     held = False
+    moving: Optional[str] = None                     # the key being held to walk, and until when
+    move_until = 0.0
+    next_move = time.time() + cfg.GHOST_MOVE_PERIOD
     phase = "ghosts"
     furniture: Optional[Point] = None
     furniture_until = 0.0
@@ -2667,6 +2703,12 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
             pydirectinput.mouseUp()
             held = False
 
+    def stop_walking() -> None:
+        nonlocal moving
+        if moving is not None:
+            pydirectinput.keyUp(moving)
+            moving = None
+
     try:
         while time.time() < deadline and not watch.problem:
             img = minigame_look(watch)
@@ -2684,8 +2726,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 aim(target)
             elif phase == "ghosts":                                         # nothing to be seen before the boss: try the furniture
                 if furniture is None or now >= furniture_until:
-                    left, top, right, bottom = cfg.GHOST_FURNITURE_BOX
-                    furniture = (random.randint(left, right), random.randint(top, bottom))
+                    furniture = far_from_character(cfg.GHOST_FURNITURE_BOX, cfg.GHOST_FURNITURE_MIN_DISTANCE)
                     furniture_until = now + cfg.GHOST_FURNITURE_PERIOD
                 aim(furniture)
             else:
@@ -2693,12 +2734,20 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
             if target is None and now - max(last_turn, last_seen) >= cfg.GHOST_CAMERA_PERIOD:
                 rotate_camera()
                 last_turn = time.time()
+            if moving is not None and now >= move_until:           # walking about, a step at a time, without stopping the aiming
+                stop_walking()
+                next_move = now + cfg.GHOST_MOVE_PERIOD
+            elif moving is None and now >= next_move:
+                moving = random.choice(cfg.MOVE_KEYS)
+                pydirectinput.keyDown(moving)
+                move_until = now + random.uniform(cfg.GHOST_MOVE_STEP_MIN, cfg.GHOST_MOVE_STEP_MAX)
             if now >= next_jump:
                 pydirectinput.press(cfg.KEY_JUMP)
                 next_jump = now + random.uniform(cfg.GHOST_JUMP_MIN, cfg.GHOST_JUMP_MAX)
             wait_interruptible(cfg.GHOST_LOOK_INTERVAL)
     finally:
         let_go()
+        stop_walking()
     return False
 
 MINIGAME_PLAYERS = {"hauntlet_2": play_hauntlet_2, "ghost_gallery": play_ghost_gallery}
@@ -2732,11 +2781,13 @@ def play_minigame(name: str) -> bool:
     watch = MinigameWatch(name)
     capture = start_run_capture(name)
     outcome = "interrupted"
+    send_macro_window_to_back()                 # it covers part of the game's screen, and would be in the recording and the readers' way
     try:
         won = MINIGAME_PLAYERS[name](started + cfg.MINIGAME_MAX_DURATION, watch)
         outcome = "won" if won else (watch.problem or "did not reach the victory screen in time")
     finally:
         release_all_inputs()
+        bring_macro_window_to_front()
         finish_run_capture(capture, outcome)
     if won:
         log_run_event(f"minigame finished: {label} ({time.time() - started:.0f}s)")

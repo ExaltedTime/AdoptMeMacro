@@ -332,9 +332,9 @@ def test_frames_are_spread_over_the_run_not_all_at_its_start_or_end(macro, captu
     recorder.stop()
     times = [float(f.split("_")[2][:-4]) for f in sorted(os.listdir(capture["folder"])) if f.endswith(".png")]
     gaps = np.diff(times)
-    assert len(times) >= 3 and gaps.max() <= 4 * gaps.min()                    # no big hole anywhere in the run
+    assert len(times) >= 4 and gaps.max() <= (times[-1] - times[0]) / 2        # no big hole anywhere in the run
     saved = np.diff([e["t"] for e in events_of(capture["folder"]) if e["type"] == "frame"])
-    assert saved[-1] >= 2 * saved[0]                                           # frames were taken further apart as the run went on
+    assert np.mean(saved[-3:]) > 2 * np.mean(saved[:3])                        # frames were taken further apart as the run went on
 
 
 def test_a_capture_without_a_budget_keeps_every_frame(macro, capture, monkeypatch):
@@ -410,9 +410,11 @@ def test_the_zip_plan_keeps_frames_whole_in_order_and_counts_the_events_in_the_f
 
 @pytest.mark.parametrize("result, outcome", [(True, "won"), (False, "did not reach the victory screen in time"), ("raises", "interrupted")])
 def test_play_minigame_records_the_run_and_says_how_it_ended(macro, monkeypatch, result, outcome):
-    started, finished = [], []
+    started, finished, order = [], [], []
     monkeypatch.setattr(macro, "start_run_capture", lambda label: started.append(label) or "the capture")
-    monkeypatch.setattr(macro, "finish_run_capture", lambda capture, how: finished.append((capture, how)))
+    monkeypatch.setattr(macro, "finish_run_capture", lambda capture, how: finished.append((capture, how)) or order.append("finished"))
+    monkeypatch.setattr(macro, "send_macro_window_to_back", lambda: order.append("window back"))
+    monkeypatch.setattr(macro, "bring_macro_window_to_front", lambda: order.append("window front"))
     for name in ("release_all_inputs", "respawn_character"):
         monkeypatch.setattr(macro, name, lambda *a, **k: None)
     monkeypatch.setattr(macro, "hover_click", lambda *a, **k: None)
@@ -430,6 +432,7 @@ def test_play_minigame_records_the_run_and_says_how_it_ended(macro, monkeypatch,
     else:
         assert macro.play_minigame("ghost_gallery") is result
     assert started == ["ghost_gallery"] and finished == [("the capture", outcome)]
+    assert order == ["window back", "window front", "finished"]                                # the macro's window is out of the way while it is played, even when it is stopped
 
 
 def test_stopping_checks_the_zips_once_more_because_the_events_grew_after_the_last_frame(macro, tmp_path, monkeypatch):

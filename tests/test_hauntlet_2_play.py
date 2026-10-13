@@ -368,6 +368,8 @@ def test_the_loop_chooses_a_door_walks_to_it_and_goes_on_in_the_next_room(macro,
     assert "room 12, hearts not seen, items: none, doors: boarded, boarded, locked, going middle" in out
     assert "Hauntlet 2: room 13" in out
     assert events == ["Hauntlet 2: got as far as room 13"]
+    first_walk = next(at for kind, key, at in world.keys if key == "w")
+    assert len(world.zooms) == 1 and world.zooms[0] < first_walk                              # zoomed out once, before the first step
 
 
 def test_the_loop_returns_true_on_the_victory_screen(macro, world, monkeypatch):
@@ -408,6 +410,7 @@ def test_a_room_whose_doors_are_never_found_is_walked_straight_on_and_the_screen
     keys = [key for _, key, _ in world.keys]
     assert keys.count("w") >= 4 and set(keys) == {"w"}                         # walked more than once, forward only
     assert failures == [f"Hauntlet 2: no doors found in room {number}"]        # reported once, not every try
+    assert len(world.zooms) >= 3                                               # zoomed out at the start and before each walk, in case the camera was too close
 
 
 def test_the_entrance_hall_is_walked_through_until_the_doors_show_without_a_failure(macro, world, monkeypatch, capsys):

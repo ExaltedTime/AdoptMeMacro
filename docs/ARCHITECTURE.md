@@ -1226,7 +1226,9 @@ room's doors are still on screen (open, the camera following the player), so the
 
 A room whose number is a multiple of `HAUNTLET_FORK_EVERY` (10 and 20 in the run - it is an assumption that 30, 40 and so on
 are forks too) with no row of TVs on two looks in a row is a fork: two doorways. Any other room without TVs for
-`HAUNTLET_DOORS_TIMEOUT` is walked as if it had three doors. Once a door was chosen the room is left alone for
+`HAUNTLET_DOORS_TIMEOUT` is walked as if it had three doors - made-up ones with no positions, so the strafe is the left or
+right key for one spacing and nothing for the middle - and `no doors found in room N` is logged once per run as a failure, which
+keeps a screenshot of what the TVs were not found in. Once a door was chosen the room is left alone for
 `HAUNTLET_ROOM_TIMEOUT` seconds (the walk takes up to `HAUNTLET_WALK_MAX`); a room whose number didn't change by then is chosen from
 again, which is the retry for a walk that got stuck.
 

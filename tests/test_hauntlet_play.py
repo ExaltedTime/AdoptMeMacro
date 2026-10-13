@@ -140,6 +140,14 @@ def test_the_strafe_is_capped_and_a_player_not_seen_is_taken_to_be_in_the_middle
     assert macro.hauntlet_strafe(screen, doors, 0)[0] == cfg.HAUNTLET_LEFT_KEY
 
 
+def test_three_doors_that_were_never_found_are_strafed_to_without_dividing_by_their_spacing(macro):
+    """The doors HauntletRun.look() makes up when no TVs were found have no positions (all at 0): a run crashed on them."""
+    cfg = macro.cfg
+    unlocated = [macro.HauntletDoor(0, 0, None) for _ in range(3)]
+    assert [macro.hauntlet_strafe(frame(macro), unlocated, i) for i in range(3)] == [
+        (cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_STRAFE_DURATION), (None, 0.0), (cfg.HAUNTLET_RIGHT_KEY, cfg.HAUNTLET_STRAFE_DURATION)]
+
+
 def test_a_forks_doorways_are_the_left_and_the_right_for_one_door_spacing(macro):
     cfg = macro.cfg
     doorways = [macro.HauntletDoor(0, 0, None)] * 2
@@ -383,3 +391,15 @@ def test_the_loop_uses_no_item_when_there_is_none(macro, world, monkeypatch, cap
     world.screens = [frame(macro, 97, room=12)]
     macro.play_hauntlet_2(world.clock.now + cfg.MINIGAME_START_WAIT + 2 * (cfg.HAUNTLET_ROOM_SETTLE + cfg.HAUNTLET_WALK_MAX), watch_of(macro))
     assert macro.clicks == [] and "using" not in capsys.readouterr().out
+
+
+def test_a_room_whose_doors_are_never_found_is_walked_anyway_and_the_screenshot_kept_once(macro, world, monkeypatch):
+    cfg = macro.cfg
+    number = next(n for n in range(1, 30) if n % cfg.HAUNTLET_FORK_EVERY)
+    failures = []
+    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: failures.append(reason))
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    world.screens = [frame(macro, room=number)]                                # the timer and the room, but no TVs at all
+    macro.play_hauntlet_2(world.clock.now + cfg.MINIGAME_START_WAIT + 3 * (cfg.HAUNTLET_DOORS_TIMEOUT + cfg.HAUNTLET_ROOM_TIMEOUT + cfg.HAUNTLET_WALK_MAX), watch_of(macro))
+    assert [kind for kind, key, _ in world.keys if key == "w"].count("down") >= 2        # it walked, more than once
+    assert failures == [f"hauntlet 2: no doors found in room {number}"]        # reported once, not every try

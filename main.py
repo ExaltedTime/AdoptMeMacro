@@ -2428,6 +2428,7 @@ class HauntletRun:
         self.tvs: Optional[list[tuple[int, int]]] = None   # of the last look: None if the timer was hidden
         self.empty_looks = 0                          # looks in a row at a room without TVs
         self.learned: set[str] = set()                # unknown items seen (and saved) so far
+        self.doors_missing_reported = False           # the failure for a room with no doors found has been logged
 
     @property
     def fork(self) -> bool:
@@ -2476,11 +2477,14 @@ def hauntlet_strafe(img: Image, doors: list[HauntletDoor], index: int) -> tuple[
     """The key to strafe with, and for how long, to reach door `index` from where the player stands in `img`: the
     distance to the door in door spacings (the TVs' spacing) times HAUNTLET_STRAFE_DURATION, or no strafe when that
     is under HAUNTLET_STRAFE_MIN spacings. Where the player starts a room can depend on the door it came through, so
-    it is measured (the hearts above the head); not seen, it is taken to be in front of the middle door. A fork's two
-    doorways aren't located: the left key or the right one for one spacing."""
-    if len(doors) != 3:
+    it is measured (the hearts above the head); not seen, it is taken to be in front of the middle door. Doors that
+    aren't located (a fork's two doorways, or three that were never found - HauntletRun.look()) have no distance to
+    go: the left key or the right one for one spacing, nothing for the middle."""
+    spacing = (doors[2].x - doors[0].x) / 2 if len(doors) == 3 else 0
+    if spacing <= 0:
+        if len(doors) == 3 and index == 1:
+            return None, 0.0
         return (cfg.HAUNTLET_LEFT_KEY if index == 0 else cfg.HAUNTLET_RIGHT_KEY), cfg.HAUNTLET_STRAFE_DURATION
-    spacing = (doors[2].x - doors[0].x) / 2
     hearts = read_hauntlet_hearts(img)
     distance = (doors[index].x - (hearts.center_x if hearts else doors[1].x)) / spacing
     if abs(distance) < cfg.HAUNTLET_STRAFE_MIN:
@@ -2550,6 +2554,9 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
             if doors is None:
                 wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
                 continue
+            if not doors[0].x and not run.fork and not run.doors_missing_reported:    # the TVs were never found: keep the screenshot
+                run.doors_missing_reported = True
+                log_failure(f"hauntlet 2: no doors found in room {run.room}")
             index, item = hauntlet_choose(img, doors, run)
             if item:
                 hauntlet_use_item(item)

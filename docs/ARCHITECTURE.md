@@ -1122,15 +1122,17 @@ is recompressed. For a zip that already exists (a capture zipped by hand, say) `
 (`finish_run_capture()`, which also writes `outcome` into `info.json` and zips the capture as above). It is the same recorder, so it
 has the macro's own key presses and clicks and the frames on the same clock, but in `debug/minigame_captures/`
 (`RUN_CAPTURES_DIR`, the newest `MAX_RUN_CAPTURES` kept, named `<minigame>_<date>_<time>`) so the hotkey's captures and these
-never delete each other, and with a **size budget**: the frames and events of a run are kept within `RUN_CAPTURE_MB` (24, a little under
-the zip limit, so a run is one zip to hand over). A lossless frame is 1-3 MB, so that is only some 10-20 frames; to make them
-cover the whole run (a Hauntlet 2 run can last minutes), whenever the budget is passed `InputCapture._keep_within_budget()` deletes
-every other saved frame - never the newest, and the first stays - and from then on saves frames twice as far apart.
-The events of the deleted frames stay in `events.jsonl`, followed by a `frame_dropped` line naming the file, so
-a reader can tell; `info.json` has `frames_dropped` and `budget_mb`. Switch it off with `MINIGAME_CAPTURE`; it isn't started while the
+never delete each other, and with a **budget of `RUN_CAPTURE_ZIPS` zips** (5, so up to about 125 MB, spread over the whole run): the
+zips are counted as `zip_capture()` will make them (`plan_zip_parts()`, the events in the first). A lossless frame is 1-3 MB, so
+that is some 60-80 frames; when a run would need more zips, `InputCapture._keep_within_budget()` deletes
+every other saved frame - never the newest, and the first stays - and from then on saves frames twice as far apart, so what is
+left is spread evenly over the run however long it is. It is checked after every saved frame and once more when the capture
+stops (the events have grown by then). The events of the deleted frames stay in `events.jsonl`, followed by a `frame_dropped`
+line naming the file, so a reader can tell; `info.json` has `frames_dropped` and `max_zips`, and `stopped_because` is "the minigame
+ended". The folders are big (the frames and then the same again as zips), hence `MAX_RUN_CAPTURES` is 5. Switch it off with `MINIGAME_CAPTURE`; it isn't started while the
 hotkey's capture is running (two recorders would only get in each other's way), and a capture that can't be started or finished is a
-message, never a reason not to play. If more frames per run are wanted the choice is a bigger budget (more zips to send) or lossy
-frames (which would no longer be the exact pixels the readers are tuned on).
+message, never a reason not to play. If more frames per run are wanted the choice is more zips or lossy frames (which would no
+longer be the exact pixels the readers are tuned on).
 
 Keys and mouse buttons are read by polling `GetAsyncKeyState` every `CAPTURE_POLL_INTERVAL` (10 ms) -
 the same call as the stop hotkey, so no extra package is needed - and the position with `GetCursorPos`.
@@ -1225,10 +1227,12 @@ room's doors are still on screen (open, the camera following the player), so the
   and pans at the start of a room; the macro stands still, so it does) - or `HAUNTLET_DOORS_TIMEOUT` has gone by.
 
 A room whose number is a multiple of `HAUNTLET_FORK_EVERY` (10 and 20 in the run - it is an assumption that 30, 40 and so on
-are forks too) with no row of TVs on two looks in a row is a fork: two doorways. Any other room without TVs for
-`HAUNTLET_DOORS_TIMEOUT` is walked as if it had three doors - made-up ones with no positions, so the strafe is the left or
-right key for one spacing and nothing for the middle - and `no doors found in room N` is logged once per run as a failure, which
-keeps a screenshot of what the TVs were not found in. Once a door was chosen the room is left alone for
+are forks too) with no row of TVs on two looks in a row is a fork: two doorways. **Room 1 is the entrance hall** ("Welcome to the Hauntlet
+Hotel": one doorway straight ahead, no TVs, the timer already showing; in both captured runs the doorway leads into a room with three
+doors that is still numbered 1), and any other room without TVs for `HAUNTLET_DOORS_TIMEOUT` is treated the same way: a single
+doorway ahead, walked to by holding forward only (no strafe) until a row of TVs is on screen (`hauntlet_walk(until_doors=True)`) or the
+number changes, after which the room is looked at at once. For a room other than 1, `no doors found in room N` is
+logged once per run as a failure, which keeps a screenshot of what the TVs were not found in. Once a door was chosen the room is left alone for
 `HAUNTLET_ROOM_TIMEOUT` seconds (the walk takes up to `HAUNTLET_WALK_MAX`); a room whose number didn't change by then is chosen from
 again, which is the retry for a walk that got stuck.
 
@@ -1295,7 +1299,7 @@ exact values and rationale):
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
 | Hauntlet 2 reader | `HAUNTLET_ROOM_BOX`, `HAUNTLET_DIGIT_*`, `HAUNTLET_ROOM_MAX_DIGITS`, `HAUNTLET_SLOT_*`, `HAUNTLET_ITEM_*`, `HAUNTLET_BADGE_*`, `HAUNTLET_COUNT_*`, `HAUNTLET_NOT_ITEMS`, `HAUNTLET_HEART_*`, `HAUNTLET_*_DIR` |
 | Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_DARK_*`, `HAUNTLET_PLANK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_*`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_ITEM_CHANCE`, `HAUNTLET_ITEM_WAIT`, `HAUNTLET_KEY_ITEMS`, `HAUNTLET_LEARN_LIMIT` |
-| Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `MINIGAME_CAPTURE`, `RUN_CAPTURES_DIR`, `RUN_CAPTURE_MB`, `MAX_RUN_CAPTURES`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
+| Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `MINIGAME_CAPTURE`, `RUN_CAPTURES_DIR`, `RUN_CAPTURE_ZIPS`, `MAX_RUN_CAPTURES`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |

@@ -140,10 +140,11 @@ def test_the_strafe_is_capped_and_a_player_not_seen_is_taken_to_be_in_the_middle
     assert macro.hauntlet_strafe(screen, doors, 0)[0] == cfg.HAUNTLET_LEFT_KEY
 
 
-def test_three_doors_that_were_never_found_are_strafed_to_without_dividing_by_their_spacing(macro):
-    """The doors HauntletRun.look() makes up when no TVs were found have no positions (all at 0): a run crashed on them."""
+def test_doors_without_positions_are_strafed_to_without_dividing_by_their_spacing(macro):
+    """The doors HauntletRun.look() makes up have no positions (all at 0): a run crashed on three of them."""
     cfg = macro.cfg
-    unlocated = [macro.HauntletDoor(0, 0, None) for _ in range(3)]
+    assert macro.hauntlet_strafe(frame(macro), [macro.HauntletDoor(0, 0, None)], 0) == (None, 0.0)           # a single doorway ahead
+    unlocated = [macro.HauntletDoor(0, 0, None) for _ in range(3)]                                          # (not made up any more, but still no crash)
     assert [macro.hauntlet_strafe(frame(macro), unlocated, i) for i in range(3)] == [
         (cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_STRAFE_DURATION), (None, 0.0), (cfg.HAUNTLET_RIGHT_KEY, cfg.HAUNTLET_STRAFE_DURATION)]
 
@@ -324,16 +325,29 @@ def test_a_fork_is_two_doorways_when_its_hall_has_no_tvs(macro):
     assert doors is not None and len(doors) == 2
 
 
-def test_a_room_without_tvs_that_is_no_fork_is_walked_as_three_doors_after_the_timeout(macro):
+def not_a_fork_or_the_hall(macro):
+    return next(n for n in range(2, 30) if n % macro.cfg.HAUNTLET_FORK_EVERY)
+
+
+def test_a_room_without_tvs_that_is_no_fork_is_one_doorway_ahead_after_the_timeout(macro):
     cfg = macro.cfg
-    number = next(n for n in range(1, 30) if n % cfg.HAUNTLET_FORK_EVERY)
     run = macro.HauntletRun()
-    nothing = frame(macro, 82, room=number)
+    nothing = frame(macro, 82, room=not_a_fork_or_the_hall(macro))
     run.look(nothing, 100.0)
     for part in (0.3, 0.5, 0.9):
         assert run.look(nothing, 100.0 + part * cfg.HAUNTLET_DOORS_TIMEOUT) is None
     doors = run.look(nothing, 100.0 + cfg.HAUNTLET_DOORS_TIMEOUT + 0.1)
-    assert doors is not None and len(doors) == 3 and not run.fork
+    assert doors is not None and len(doors) == 1 and not run.fork
+
+
+def test_room_1_is_the_entrance_hall_a_single_doorway_found_as_soon_as_it_has_settled(macro):
+    cfg = macro.cfg
+    run = macro.HauntletRun()
+    hall = frame(macro, 82, room=1)
+    assert run.look(hall, 100.0) is None
+    assert run.look(hall, 100.0 + cfg.HAUNTLET_ROOM_SETTLE + 0.1) is None             # one look without TVs is not enough
+    doors = run.look(hall, 100.0 + cfg.HAUNTLET_ROOM_SETTLE + 0.5)
+    assert doors is not None and len(doors) == 1 and 100.0 + cfg.HAUNTLET_ROOM_SETTLE + 0.5 < 100.0 + cfg.HAUNTLET_DOORS_TIMEOUT
 
 
 # --- the whole loop ---
@@ -393,13 +407,35 @@ def test_the_loop_uses_no_item_when_there_is_none(macro, world, monkeypatch, cap
     assert macro.clicks == [] and "using" not in capsys.readouterr().out
 
 
-def test_a_room_whose_doors_are_never_found_is_walked_anyway_and_the_screenshot_kept_once(macro, world, monkeypatch):
+def test_a_room_whose_doors_are_never_found_is_walked_straight_on_and_the_screenshot_kept_once(macro, world, monkeypatch):
     cfg = macro.cfg
-    number = next(n for n in range(1, 30) if n % cfg.HAUNTLET_FORK_EVERY)
+    number = not_a_fork_or_the_hall(macro)
     failures = []
     monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: failures.append(reason))
     monkeypatch.setattr(macro, "log_run_event", lambda text: None)
     world.screens = [frame(macro, room=number)]                                # the timer and the room, but no TVs at all
     macro.play_hauntlet_2(world.clock.now + cfg.MINIGAME_START_WAIT + 3 * (cfg.HAUNTLET_DOORS_TIMEOUT + cfg.HAUNTLET_ROOM_TIMEOUT + cfg.HAUNTLET_WALK_MAX), watch_of(macro))
-    assert [kind for kind, key, _ in world.keys if key == "w"].count("down") >= 2        # it walked, more than once
+    keys = [key for _, key, _ in world.keys]
+    assert keys.count("w") >= 4 and set(keys) == {"w"}                         # walked more than once, forward only
     assert failures == [f"hauntlet 2: no doors found in room {number}"]        # reported once, not every try
+
+
+def test_the_entrance_hall_is_walked_through_until_the_doors_show_without_a_failure(macro, world, monkeypatch, capsys):
+    """Room 1 of a real run: a hall with one doorway, then the room with three doors, both numbered 1."""
+    cfg = macro.cfg
+    failures = []
+    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: failures.append(reason))
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    hall, room = frame(macro, 82, room=1), frame(macro, 97, room=1)
+    # the hall until the walk has been under way a moment, then the room with its doors
+    world.screens = lambda: room if world.keys and world.clock.now > world.keys[0][2] + 2 * cfg.HAUNTLET_LOOK_INTERVAL else hall
+    start = world.clock.now
+    macro.play_hauntlet_2(start + cfg.MINIGAME_START_WAIT + 3 * (cfg.HAUNTLET_ROOM_SETTLE + cfg.HAUNTLET_DOORS_TIMEOUT + cfg.HAUNTLET_WALK_MAX), watch_of(macro))
+    out = capsys.readouterr().out
+    assert "going ahead" in out and failures == []
+    first_walk = [(kind, key, at) for kind, key, at in world.keys][:2]
+    assert [(kind, key) for kind, key, _ in first_walk] == [("down", "w"), ("up", "w")]
+    assert first_walk[1][2] - first_walk[0][2] < cfg.HAUNTLET_WALK_MAX          # it stopped at the doors, not after the full walk time
+    assert "doors: boarded, boarded, locked" in out                              # and went on to choose among the three
+    second_walk = [at for kind, key, at in world.keys if kind == "down" and key == "w"][1]
+    assert second_walk - first_walk[1][2] < cfg.HAUNTLET_ROOM_TIMEOUT / 2        # at once, not after waiting out a walk that "failed"

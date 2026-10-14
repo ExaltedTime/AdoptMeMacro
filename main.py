@@ -3932,6 +3932,17 @@ def mark_run_capture(reason: str) -> None:
     except Exception as error:
         print(f"[!] couldn't mark the recording: {error}")
 
+def run_capture_suffix(outcome: str, result: dict[str, Any]) -> str:
+    """What is added to a recording's folder name when the run is over, to tell it from the others: the candy corn earned (`_2105cc`, or
+    `_cc-unread`), the room reached in Hauntlet 2 (`_room10`) and `_failed` for a run that did not finish."""
+    earned = result.get("earned")
+    parts = [f"{earned}cc" if earned is not None else "cc-unread"]
+    if result.get("room") is not None:
+        parts.append(f"room{result['room']}")
+    if not outcome.startswith("finished"):
+        parts.append("failed")
+    return "_" + "_".join(parts)
+
 def finish_run_capture(capture: Optional[InputCapture], outcome: str, result: Optional[dict[str, Any]] = None) -> None:
     """Stop a run capture (if there is one), note how the run ended in its info.json (with the fields of `result`, what the run earned, see
     minigame_result()), and zip it for sending."""
@@ -3950,6 +3961,12 @@ def finish_run_capture(capture: Optional[InputCapture], outcome: str, result: Op
         info.update(result or {})
         with open(path, "w") as f:
             json.dump(info, f, indent=1)
+        renamed = capture.folder + run_capture_suffix(outcome, result or {})
+        try:
+            os.rename(capture.folder, renamed)                      # (before the zips are made: they are named after the folder)
+            capture.folder = renamed
+        except OSError as error:
+            print(f"[!] Couldn't rename the recording: {error}")
         zip_capture_in_background(capture.folder)
     except Exception as error:
         print(f"[!] Couldn't finish recording the minigame: {error}")
@@ -3985,7 +4002,7 @@ def prune_run_captures(label: str) -> None:
             except (OSError, ValueError):
                 info = {}
             try:
-                started = time.mktime(time.strptime(name[len(label) + 1:], "%Y%m%d_%H%M%S"))     # (the folder's name says when; its time changes as files go in and out)
+                started = time.mktime(time.strptime(name[len(label) + 1:][:15], "%Y%m%d_%H%M%S"))     # (the folder's name says when; its time changes as files go in and out)
             except ValueError:
                 started = os.path.getmtime(folder)
             runs.append((folder, info.get("earned"), started))

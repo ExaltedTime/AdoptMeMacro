@@ -359,11 +359,13 @@ def test_a_minigame_run_is_recorded_with_a_budget_and_finished_with_its_outcome_
     assert recorder is not None and recorder.max_zips == macro.cfg.RUN_CAPTURE_ZIPS and recorder.running
     assert os.path.dirname(recorder.folder) == macro.cfg.RUN_CAPTURES_DIR and os.path.basename(recorder.folder).startswith("hauntlet_2_")
     assert wait_for(lambda: recorder.frames >= 1)
-    macro.finish_run_capture(recorder, "won", {"earned": 2500, "room": 7})
+    macro.finish_run_capture(recorder, "finished (the game over screen)", {"earned": 2500, "room": 7})
     assert not recorder.running and macro.state.run_capture is None
     info = json.load(open(os.path.join(recorder.folder, "info.json")))
-    assert info["outcome"] == "won" and info["stopped_because"] == "the minigame ended"
+    assert info["outcome"].startswith("finished") and info["stopped_because"] == "the minigame ended"
     assert info["earned"] == 2500 and info["room"] == 7                       # what the run came to is in its info.json
+    assert os.path.basename(recorder.folder).endswith("_2500cc_room7")        # and in the folder's name, to tell it from the others (the zips are named after it)
+    assert wait_for(lambda: any(n.startswith(os.path.basename(recorder.folder)) for n in os.listdir(os.path.join(recorder.folder, "zips"))) if os.path.isdir(os.path.join(recorder.folder, "zips")) else False)
     assert wait_for(lambda: os.path.isdir(os.path.join(recorder.folder, "zips")) and os.listdir(os.path.join(recorder.folder, "zips")))
 
 
@@ -528,12 +530,12 @@ def test_of_each_minigame_the_best_the_worst_and_the_latest_recordings_are_kept(
 def test_tidying_with_no_recordings_folder_is_nothing_and_the_latest_is_the_one_whose_name_is_latest(macro, run_folder, capsys):
     macro.prune_run_captures("hauntlet_2")                                      # (recording was never on: no folder, no message)
     assert capsys.readouterr().out == ""
-    runs_dir_with(macro, "hauntlet_2", {"20261014_100000": 10, "20261014_110000": 9, "20261014_120000": 8, "20261014_090000": 7, "20261014_080000": 6, "20261014_070000": 5})
+    runs_dir_with(macro, "hauntlet_2", {"20261014_100000_10cc_room3": 10, "20261014_110000": 9, "20261014_120000_8cc": 8, "20261014_090000": 7, "20261014_080000": 6, "20261014_070000": 5})
     for i, name in enumerate(sorted(os.listdir(macro.cfg.RUN_CAPTURES_DIR), reverse=True)):
         os.utime(os.path.join(macro.cfg.RUN_CAPTURES_DIR, name), (1000 + i, 1000 + i))      # (the folders' own times say the opposite of their names)
     macro.prune_run_captures("hauntlet_2")
     kept = {n[len("hauntlet_2_"):] for n in os.listdir(macro.cfg.RUN_CAPTURES_DIR)}
-    assert kept == {"20261014_070000", "20261014_080000", "20261014_100000", "20261014_110000", "20261014_120000"}      # the one named latest is kept though it is neither among the two best nor the two worst
+    assert kept == {"20261014_070000", "20261014_080000", "20261014_100000_10cc_room3", "20261014_110000", "20261014_120000_8cc"}      # the one named latest is kept though it is neither among the two best nor the two worst
 
 
 def test_a_recording_whose_candy_corn_was_not_read_counts_as_one_of_the_worst_but_a_few_are_all_kept(macro, run_folder):
@@ -555,3 +557,10 @@ def test_only_a_run_that_did_not_finish_keeps_the_frames_of_its_last_seconds(mac
         kept[outcome.split()[0]] = set(recorder.protected)
         time.sleep(1.1)                                                        # (the next folder has a time of its own in its name)
     assert kept["left"] and not kept["finished"]
+
+
+def test_the_name_added_to_a_recording_says_what_the_run_earned_and_how_it_ended(macro):
+    assert macro.run_capture_suffix("finished (the game over screen)", {"earned": 2105, "room": 10}) == "_2105cc_room10"
+    assert macro.run_capture_suffix("finished (the game over screen)", {"earned": 2540}) == "_2540cc"
+    assert macro.run_capture_suffix("left the minigame (its overlay was gone for 10s)", {"earned": None, "room": 1}) == "_cc-unread_room1_failed"
+    assert macro.run_capture_suffix("interrupted", {}) == "_cc-unread_failed"

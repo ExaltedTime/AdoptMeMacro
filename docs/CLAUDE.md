@@ -3,3 +3,6 @@ Claude, you are not allowed to touch this file, the README.md or LINKS.md, and o
 
 # Checks
 Don't run tools/retune_check.py unless the user asks for it - it takes far too long (about 15 minutes for its ~30 variants).
+
+# Writing
+I don't need rhetorical questions in my docs

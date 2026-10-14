@@ -277,7 +277,7 @@ def watch_of(macro):
     return types.SimpleNamespace(problem=None, start_wait_over=lambda: None, last_seen=1.0)       # (the game's overlay has been seen)
 
 
-def test_a_walk_holds_forward_and_the_strafe_key_for_the_strafe_then_stops_when_the_room_changes(macro, world, monkeypatch):
+def test_a_walk_strafes_first_and_then_holds_forward_until_the_room_changes(macro, world, monkeypatch):
     cfg = macro.cfg
     room_to_look_around(macro, monkeypatch)
     run = macro.HauntletRun()
@@ -285,10 +285,11 @@ def test_a_walk_holds_forward_and_the_strafe_key_for_the_strafe_then_stops_when_
     world.screens = [frame(macro, room=5)] * 3 + [frame(macro, room=6)]
     start = world.clock.now
     assert macro.hauntlet_walk(cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_STRAFE_DURATION, run, watch_of(macro)) is False
-    assert [(kind, key) for kind, key, _ in world.keys] == [("down", "w"), ("down", cfg.HAUNTLET_LEFT_KEY), ("up", cfg.HAUNTLET_LEFT_KEY), ("up", "w")]
-    assert world.keys[2][2] - start == pytest.approx(cfg.HAUNTLET_STRAFE_DURATION)
+    assert [(kind, key) for kind, key, _ in world.keys] == [("down", cfg.HAUNTLET_LEFT_KEY), ("up", cfg.HAUNTLET_LEFT_KEY), ("down", "w"), ("up", "w")]     # one key at a time
+    assert world.keys[1][2] - start == pytest.approx(cfg.HAUNTLET_STRAFE_DURATION)
+    assert world.keys[2][2] == world.keys[1][2]                                      # forward at once after the strafe
     assert world.looks == 4                                                          # it stopped for the new room, not the time...
-    assert world.keys[3][2] - start == pytest.approx(cfg.HAUNTLET_STRAFE_DURATION + 3 * cfg.HAUNTLET_LOOK_INTERVAL + cfg.HAUNTLET_WALK_PAST_DURATION)   # ...and walked on past the doorway
+    assert world.keys[3][2] - world.keys[2][2] == pytest.approx(3 * cfg.HAUNTLET_LOOK_INTERVAL + cfg.HAUNTLET_WALK_PAST_DURATION)   # ...and walked on past the doorway
     assert run.walked_at == world.keys[3][2] and run.stuck == 0                          # the walk's end is noted, and it got somewhere
 
 
@@ -310,8 +311,7 @@ def test_a_walk_lets_go_of_its_keys_when_stopped(macro, world, monkeypatch):
     run = macro.HauntletRun()
     with pytest.raises(macro.StopRequested):
         macro.hauntlet_walk(macro.cfg.HAUNTLET_RIGHT_KEY, macro.cfg.HAUNTLET_STRAFE_DURATION, run, watch_of(macro))
-    assert [(kind, key) for kind, key, _ in world.keys] == [("down", "w"), ("down", macro.cfg.HAUNTLET_RIGHT_KEY),
-                                                              ("up", macro.cfg.HAUNTLET_RIGHT_KEY), ("up", "w")]
+    assert [(kind, key) for kind, key, _ in world.keys] == [("down", macro.cfg.HAUNTLET_RIGHT_KEY), ("up", macro.cfg.HAUNTLET_RIGHT_KEY)]      # (forward was never pressed)
 
 
 def test_a_walk_reports_the_victory_screen(macro, world, monkeypatch):
@@ -569,7 +569,7 @@ def test_the_entrance_hall_is_walked_through_until_the_doors_show_without_a_fail
     assert [(kind, key) for kind, key, _ in first_walk] == [("down", "w"), ("up", "w")]
     assert first_walk[1][2] - first_walk[0][2] < cfg.HAUNTLET_WALK_MAX          # it stopped at the doors, not after the full walk time
     assert "doors: boarded, boarded, locked" in out                              # and went on to choose among the three
-    second_walk = [at for kind, key, at in world.keys if kind == "down" and key == "w"][1]
+    second_walk = next(at for kind, key, at in world.keys[2:] if kind == "down")                  # its first key, the strafe or forward
     assert second_walk - first_walk[1][2] < 0.9 * cfg.HAUNTLET_RETRY_WAIT        # at once, not after the wait that follows a walk that "failed"
 
 
@@ -769,3 +769,73 @@ def test_a_fork_stays_a_fork_after_a_walk_even_past_the_doors_timeout(macro):
     run.walked_at = None
     assert run.look(hall, late + cfg.HAUNTLET_RETRY_WAIT) is None                          # ...the first one of them is not one doorway, as it was
     assert len(run.look(hall, late + cfg.HAUNTLET_RETRY_WAIT + 0.5) or []) == 2
+
+
+# --- a fork's two doorways ---
+
+def fork_screen(macro, name):
+    """A fork hall of tests/hauntlet_2/forks/ (rows 160-850 of a real frame) on a blank screen with the timer and the room panel."""
+    screen = frame(macro, None, room=fork_room(macro))
+    crop = cv2.imread(os.path.join(HERE, "forks", f"{name}.png"))
+    screen[160:160 + crop.shape[0], 300:300 + crop.shape[1]] = crop
+    return screen
+
+
+@pytest.mark.parametrize("name, left, right", [("near_wall_a", 750, 1324), ("near_wall_b", 757, 1366)])
+def test_a_forks_two_doorways_are_found_when_the_camera_is_near_the_wall(macro, name, left, right):
+    found = macro.find_fork_doorways(fork_screen(macro, name))
+    assert found is not None and abs(found[0] - left) <= 20 and abs(found[1] - right) <= 20
+
+
+def test_no_two_doorways_are_found_from_the_forks_entrance_in_a_crowded_view_or_in_another_room(macro):
+    for name in ("from_entrance", "near_wall_crowded"):                 # (one doorway in sight; one that is much too wide)
+        assert macro.find_fork_doorways(fork_screen(macro, name)) is None
+    assert macro.find_fork_doorways(frame(macro, 97, room=12)) is None
+    assert macro.find_fork_doorways(frame(macro)) is None
+
+
+def test_the_strafe_to_a_forks_doorway_is_measured_from_where_the_player_stands(macro):
+    cfg = macro.cfg
+    screen = fork_screen(macro, "near_wall_a")
+    left, right = macro.find_fork_doorways(screen)
+    hearts = macro.read_hauntlet_hearts(screen)
+    doors = [macro.HauntletDoor(left, 0, None), macro.HauntletDoor(right, 0, None)]
+    (left_key, left_seconds), (right_key, right_seconds) = (macro.hauntlet_strafe(screen, doors, i) for i in range(2))
+    assert (left_key, right_key) == (cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_RIGHT_KEY)
+    assert left_seconds / right_seconds == pytest.approx((hearts.center_x - left) / (right - hearts.center_x), rel=0.01)    # the player stands nearer the left one
+
+
+def test_a_stuck_walk_in_a_fork_steps_towards_its_doorway(macro, world):
+    screen = fork_screen(macro, "near_wall_a")
+    assert macro.hauntlet_unstick(screen, 0, 0, None) == macro.cfg.HAUNTLET_LEFT_KEY
+    assert macro.hauntlet_unstick(screen, 1, 0, None) == macro.cfg.HAUNTLET_RIGHT_KEY
+
+
+def play_a_fork(macro, world, monkeypatch, near_after):
+    """play_hauntlet_2 in a fork whose hall is seen from its entrance, and from `near_after` seconds after the first key (None: never) near the wall."""
+    cfg = macro.cfg
+    far, near = fork_screen(macro, "from_entrance"), fork_screen(macro, "near_wall_a")
+    world.screens = lambda: near if near_after is not None and world.keys and world.clock.now >= world.keys[0][2] + near_after else far
+    monkeypatch.setattr(macro.random, "choice", lambda options: options[0])           # the left doorway
+    macro.play_hauntlet_2(world.clock.now + cfg.MINIGAME_START_WAIT + cfg.HAUNTLET_ROOM_SETTLE + 3 * cfg.HAUNTLET_LOOK_INTERVAL + 2 * cfg.HAUNTLET_WALK_MAX, watch_of(macro))
+    return [(kind, key, at) for kind, key, at in world.keys]
+
+
+def test_a_fork_is_walked_towards_until_both_doorways_are_seen_and_then_strafed_to_the_chosen_one(macro, world, monkeypatch):
+    cfg = macro.cfg
+    keys = play_a_fork(macro, world, monkeypatch, near_after=1.0)
+    assert [(kind, key) for kind, key, _ in keys[:5]] == [("down", "w"), ("up", "w"), ("down", cfg.HAUNTLET_LEFT_KEY), ("up", cfg.HAUNTLET_LEFT_KEY), ("down", "w")]
+    assert keys[1][2] - keys[0][2] < cfg.HAUNTLET_WALK_MAX                        # it stopped when the doorways showed, not after the full walk time
+    screen = fork_screen(macro, "near_wall_a")
+    left, right = macro.find_fork_doorways(screen)
+    doors = [macro.HauntletDoor(left, 0, None), macro.HauntletDoor(right, 0, None)]
+    assert keys[3][2] - keys[2][2] == pytest.approx(macro.hauntlet_strafe(screen, doors, 0)[1])      # and the strafe is the measured one
+
+
+def test_a_fork_whose_doorways_are_never_seen_gets_the_fixed_strafe(macro, world, monkeypatch):
+    cfg = macro.cfg
+    monkeypatch.setattr(cfg, "HAUNTLET_STILL_AFTER", 10 ** 6)                       # (the made-up screen never changes: it is not about unsticking)
+    keys = play_a_fork(macro, world, monkeypatch, near_after=None)
+    assert keys[0][1:2] == ("w",) and keys[1][1:2] == ("w",) and keys[1][2] - keys[0][2] >= cfg.HAUNTLET_WALK_MAX      # it walked ahead for the full time, found nothing...
+    strafe = [at for kind, key, at in keys if key == cfg.HAUNTLET_LEFT_KEY]
+    assert strafe[1] - strafe[0] == pytest.approx(cfg.HAUNTLET_STRAFE_DURATION)     # ...and strafed for the fixed time

@@ -376,10 +376,10 @@ HAUNTLET_PLANK_FRACTION = 0.103
 # changes as the player passes through a door, while the last room's doors are still on screen (open, the camera
 # following the player), so a room is only looked at HAUNTLET_ROOM_SETTLE seconds after its number changed, with the
 # timer showing and the row of TVs still where it was on the look before (within HAUNTLET_TV_STABLE px: the camera
-# has stopped). Then a door is chosen and walked to - W held, with A or D held to bring the player in front of the
+# has stopped). Then a door is chosen and walked to - first A or D alone, to bring the player in front of the
 # door: HAUNTLET_STRAFE_DURATION seconds per door spacing (the distance between neighbouring doors) of distance, measured
 # from the player's hearts to the door's TV, no strafe under HAUNTLET_STRAFE_MIN spacings and never more than
-# HAUNTLET_STRAFE_MAX (a human's runs, from the middle: left door 1.0-1.1 s, right 0.9-1.3 s) - until the room number
+# HAUNTLET_STRAFE_MAX (a human's runs, from the middle: left door 1.0-1.1 s, right 0.9-1.3 s), then W alone until the room number
 # changes, at most HAUNTLET_WALK_MAX seconds (a human's room: W held 3-4.8 s), and then HAUNTLET_WALK_PAST_DURATION longer: the
 # number changes with the player still in the doorway, the camera close on the door, and the next room's doors can't be seen from there. If the number still hasn't changed
 # HAUNTLET_RETRY_WAIT seconds after the walk, a door is chosen again (a walk that gets nowhere is followed by a step back, a different door and wiggling).
@@ -422,6 +422,21 @@ HAUNTLET_SHADOW_WHITE = 225                  # the glowing eyes: all channels at
 HAUNTLET_SHADOW_AREA = (6, 500)              # ...px each
 HAUNTLET_SHADOW_RING = 60                    # ...in dark smoke: the mean brightness of the ring around them at most this (screws and lights: 73 and more; the eyes: 46-49)
 HAUNTLET_FORK_EVERY = 10
+# A fork's doorways have no TV to find them by. Each opening is dark inside (grey, little colour: HAUNTLET_OPENING_HSV) and begins right
+# under the wall's pale stripes (HAUNTLET_WALL_HSV) - while everywhere else between the wall and the floor there is the gold wainscot, about
+# 60 px of it. So in each column of HAUNTLET_FORK_BAND (rows) the first dark pixel, of a run of HAUNTLET_OPENING_RUN rows, with at least
+# HAUNTLET_OPENING_WALL wall pixels HAUNTLET_OPENING_ABOVE rows (nearest, furthest) above it is a column of an opening; columns less than HAUNTLET_OPENING_JOIN px
+# apart are one opening. Two openings HAUNTLET_OPENING_WIDTH px wide and HAUNTLET_OPENING_GAP px apart (middle to middle) are the fork's doorways (seen with the
+# camera near the wall: 124-170 wide, 574-609 apart; from the room's entrance only one is seen, so the walk goes on until both are).
+HAUNTLET_FORK_BAND = (160, 850)
+HAUNTLET_WALL_HSV = ((0, 85, 205), (40, 145, 255))
+HAUNTLET_OPENING_HSV = ((0, 0, 70), (40, 104, 164))
+HAUNTLET_OPENING_RUN = 6
+HAUNTLET_OPENING_ABOVE = (4, 45)
+HAUNTLET_OPENING_WALL = 10
+HAUNTLET_OPENING_JOIN = 12
+HAUNTLET_OPENING_WIDTH = (100, 260)
+HAUNTLET_OPENING_GAP = (400, 800)
 HAUNTLET_DOORS_TIMEOUT = 8.0
 # The items (their folder names in HAUNTLET_ITEM_DIR) and what each is for: the grey key opens a locked door; a cyan potion makes a heart
 # that lasts one room, for a boarded door; the red potion refills the hearts, used when only HAUNTLET_LOW_HEARTS or fewer are left; a

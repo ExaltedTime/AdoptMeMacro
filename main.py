@@ -2592,6 +2592,35 @@ def find_door_circles(img: Image) -> list[tuple[int, int, int, int]]:
             found.append((x + w // 2, y + h // 2, w, h))
     return sorted(found)
 
+def find_fork_doorways(img: Image) -> Optional[tuple[int, int]]:
+    """The x of the middle of a fork's two doorways, left and right, or None unless exactly two openings of the right size and
+    distance are seen (HAUNTLET_OPENING_*): each opening is dark inside and starts right under the wall's pale stripes, where the wall
+    elsewhere has the gold wainscot below it. Only seen with the camera near the wall - from the room's entrance one is, or none."""
+    top, bottom = cfg.HAUNTLET_FORK_BAND
+    hsv = cv2.cvtColor(img[top:bottom], cv2.COLOR_BGR2HSV)
+    wall = cv2.inRange(hsv, cfg.HAUNTLET_WALL_HSV[0], cfg.HAUNTLET_WALL_HSV[1]) > 0
+    dark = cv2.inRange(hsv, cfg.HAUNTLET_OPENING_HSV[0], cfg.HAUNTLET_OPENING_HSV[1]) > 0
+    run = dark.copy()
+    for rows in range(1, cfg.HAUNTLET_OPENING_RUN):                       # a row that starts a run of HAUNTLET_OPENING_RUN dark ones
+        run[:-rows] &= dark[rows:]
+    first = run.argmax(axis=0)                                            # the first such row of each column (0 if none)
+    near, far = cfg.HAUNTLET_OPENING_ABOVE
+    wall_above = np.vstack([np.zeros((1, wall.shape[1]), int), np.cumsum(wall, axis=0)])
+    columns = np.arange(wall.shape[1])
+    walled = wall_above[np.maximum(first - near, 0), columns] - wall_above[np.maximum(first - far, 0), columns]
+    openings = run.any(axis=0) & (walled >= cfg.HAUNTLET_OPENING_WALL)
+    spans: list[list[int]] = []
+    for x in np.flatnonzero(openings):
+        if spans and x - spans[-1][1] <= cfg.HAUNTLET_OPENING_JOIN:
+            spans[-1][1] = int(x)
+        else:
+            spans.append([int(x), int(x)])
+    spans = [span for span in spans if cfg.HAUNTLET_OPENING_WIDTH[0] <= span[1] - span[0] + 1 <= cfg.HAUNTLET_OPENING_WIDTH[1]]
+    if len(spans) != 2:
+        return None
+    left, right = ((a + b) // 2 for a, b in spans)
+    return (left, right) if cfg.HAUNTLET_OPENING_GAP[0] <= right - left <= cfg.HAUNTLET_OPENING_GAP[1] else None
+
 def player_in_circle(img: Image, circles: list[tuple[int, int, int, int]]) -> bool:
     """Whether the player stands in one of the three circles - and so has picked that door, and is locked in place for a few moments:
     two circles are seen, the third being hidden under the player, whose place (where the hearts are, else mid-screen) is where
@@ -2613,8 +2642,9 @@ def hauntlet_strafe(img: Image, doors: list[HauntletDoor], index: int) -> tuple[
     it is measured (the hearts above the head); not seen, it is taken to be in the middle of the screen (the camera follows the player; the
     middle door is not always in front of it - in a captured room 3 the player stood 350 px right of the middle door, hearts unread, and walked into the wall). Doors that
     aren't located have no distance to go: a fork's two doorways are the left key or the right one for one spacing, a
-    single doorway ahead (an entrance hall) none."""
-    spacing = (doors[2].x - doors[0].x) / 2 if len(doors) == 3 else 0
+    single doorway ahead (an entrance hall) none. A fork's doorways that were found (find_fork_doorways(): the two x are
+    in `doors`) are two door spacings apart, like a room's outer doors, and are walked to like a room's."""
+    spacing = (doors[-1].x - doors[0].x) / 2 if len(doors) in (2, 3) else 0
     if spacing <= 0:
         if len(doors) == 1 or (len(doors) == 3 and index == 1):
             return None, 0.0
@@ -2692,14 +2722,16 @@ def hauntlet_unstick(img: Image, target_index: Optional[int], tries: int, last_k
     """Get off whatever the player is caught on while holding forward: a step sideways (the forward key stays held, so it slides
     along) and a jump. The way is towards the door being walked to (its TV against where the player stands, HAUNTLET_UNSTICK_MARGIN
     px or more off), the other way each time after that, and when the way isn't known a random one first; the step is
-    HAUNTLET_UNSTICK_STEP seconds longer for each try, up to HAUNTLET_UNSTICK_MAX. The key used."""
+    HAUNTLET_UNSTICK_STEP seconds longer for each try, up to HAUNTLET_UNSTICK_MAX. The key used. In a fork the door's place is the doorway
+    (find_fork_doorways()), when both are in sight."""
     tvs = find_door_tvs(img)
+    where = [x for x, _ in tvs] if len(tvs) == 3 else list(find_fork_doorways(img) or ())
     key: Optional[str] = None
     if last_key is not None:
         key = cfg.HAUNTLET_RIGHT_KEY if last_key == cfg.HAUNTLET_LEFT_KEY else cfg.HAUNTLET_LEFT_KEY
-    elif target_index is not None and len(tvs) == 3:
+    elif target_index is not None and target_index < len(where):
         hearts = read_hauntlet_hearts(img)
-        dx = tvs[target_index][0] - (hearts.center_x if hearts else cfg.REFERENCE_CENTER_X)
+        dx = where[target_index] - (hearts.center_x if hearts else cfg.REFERENCE_CENTER_X)
         if abs(dx) >= cfg.HAUNTLET_UNSTICK_MARGIN:
             key = cfg.HAUNTLET_RIGHT_KEY if dx > 0 else cfg.HAUNTLET_LEFT_KEY
     if key is None:
@@ -2710,26 +2742,24 @@ def hauntlet_unstick(img: Image, target_index: Optional[int], tries: int, last_k
     return key
 
 def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, watch: MinigameWatch, until_doors: bool = False,
-                  target_index: Optional[int] = None) -> bool:
-    """Walk to a door: hold forward, with `direction` (a strafe key, or None) held for the first `duration` seconds,
+                  target_index: Optional[int] = None, until_doorways: bool = False) -> bool:
+    """Walk to a door: first strafe, `direction` (a strafe key, or None) held for `duration` seconds on its own, then hold forward
     until the room number changes (at most HAUNTLET_WALK_MAX seconds) and then HAUNTLET_WALK_PAST_DURATION longer, as
     the number changes with the player still in the doorway - or, with `until_doors`, until a row of TVs is
-    on screen (a hall's doorway leads into a room whose number is the same). The view is looked at every HAUNTLET_LOOK_INTERVAL
+    on screen (a hall's doorway leads into a room whose number is the same), or, with `until_doorways`, until both of a
+    fork's doorways can be seen (find_fork_doorways()). The view is looked at every HAUNTLET_LOOK_INTERVAL
     seconds: if it hasn't moved (hauntlet_view(), HAUNTLET_STILL_LEVEL) for HAUNTLET_STILL_AFTER seconds the player is caught
-    on something and hauntlet_unstick() steps sideways, towards door `target_index` of the three. A walk that doesn't get
+    on something and hauntlet_unstick() steps sideways, towards door `target_index` of the three (or the fork's two). A walk that doesn't get
     anywhere counts in `run.stuck`; the next one steps back first (HAUNTLET_BACKUP_DURATION). True if the victory screen showed."""
-    run.walked_at = started = time.time()
+    run.walked_at = time.time()
     if run.stuck > 0:
         hold_key(cfg.HAUNTLET_BACK_KEY, cfg.HAUNTLET_BACKUP_DURATION)
+    if direction and duration > 0:
+        hold_key(direction, duration)                                           # one key at a time: the strafe, then the walk
     arrived = False
+    started = time.time()
     pydirectinput.keyDown(cfg.HAUNTLET_2_FORWARD_KEY)
     try:
-        if direction:
-            pydirectinput.keyDown(direction)
-            try:
-                wait_interruptible(duration)
-            finally:
-                pydirectinput.keyUp(direction)
         last_view: Optional[np.ndarray] = None
         still_since: Optional[float] = None
         tries, last_key = 0, None
@@ -2745,7 +2775,7 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
                 break
             if watch.problem:
                 break
-            if until_doors and find_door_tvs(img):
+            if (until_doors and find_door_tvs(img)) or (until_doorways and find_fork_doorways(img)):
                 arrived = True
                 break
             now = time.time()
@@ -2812,8 +2842,19 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
                 run.turns += 1
                 continue
             index, img = hauntlet_choose(img, doors, run, watch)
+            if len(doors) == 2:
+                doorways = find_fork_doorways(img)
+                if doorways is None:                                            # the doorways are too far to be seen from the entrance: walk on until both are
+                    if hauntlet_walk(None, 0.0, run, watch, until_doorways=True):
+                        return True
+                    img = minigame_look(watch)
+                    if read_hauntlet_room(img) not in (None, run.room):         # (the walk went through one)
+                        continue
+                    doorways = find_fork_doorways(img)
+                if doorways is not None:
+                    doors = [HauntletDoor(x, 0, None) for x in doorways]
             direction, duration = hauntlet_strafe(img, doors, index)
-            if hauntlet_walk(direction, duration, run, watch, until_doors=len(doors) == 1, target_index=index if len(doors) == 3 else None):
+            if hauntlet_walk(direction, duration, run, watch, until_doors=len(doors) == 1, target_index=index if len(doors) >= 2 else None):
                 return True
             if len(doors) == 1:
                 run.walked_at = None                                            # whatever is past the doorway is looked at at once

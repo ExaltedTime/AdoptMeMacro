@@ -86,6 +86,7 @@ CANDY_CORN_PITCH = (12, 26)                  # px between the left edges of two 
 CANDY_CORN_DIGIT_SIZE = (12, 20)
 CANDY_CORN_MAX_DIFF = 25
 CANDY_CORN_MAX_DIGITS = 9
+CANDY_CORN_BEFORE_TRIES = 12                 # looks (CANDY_CORN_SETTLE apart) at most for the total before a run: the lobby shows after the white screen of the teleport
 CANDY_CORN_SETTLE = 0.5                      # seconds between the looks of read_candy_corn_settled(): two in a row must agree
 MINIGAME_RESULT_BOX = (450, 130, 1500, 880)  # the GAME OVER! screen: the card with the candy corn earned (seen: x3606 for a Ghost Gallery score of 61600, x7560 for Hauntlet 2's room 18) and the score or the room
 MAX_RESULT_SHOTS = 200                      # the newest this many result screens are kept in RUNS_DIR/results

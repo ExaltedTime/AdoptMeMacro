@@ -3361,7 +3361,7 @@ def play_minigame(name: str) -> bool:
     started = time.time()
     watch = MinigameWatch(name)
     state.minigame_detail = {}
-    before = read_candy_corn_settled()           # in the lobby the total is on screen: what the run earned is the difference
+    before = read_candy_corn_settled(cfg.CANDY_CORN_BEFORE_TRIES)      # in the lobby the total is on screen (after the white of the teleport): what the run earned is the difference
     capture = start_run_capture(name)
     outcome = "interrupted"
     finished = False
@@ -3972,6 +3972,8 @@ def prune_run_captures(label: str) -> None:
     """Delete the recordings of minigame `label` in RUN_CAPTURES_DIR that captures_to_keep() doesn't keep, going by the `earned` and
     `started` that record_minigame_result() wrote into each one's info.json. Never raises."""
     try:
+        if not os.path.isdir(cfg.RUN_CAPTURES_DIR):
+            return                                                  # (recording is off, or nothing has been recorded yet)
         runs = []
         for name in os.listdir(cfg.RUN_CAPTURES_DIR):
             folder = os.path.join(cfg.RUN_CAPTURES_DIR, name)
@@ -3982,7 +3984,11 @@ def prune_run_captures(label: str) -> None:
                     info = json.load(f)
             except (OSError, ValueError):
                 info = {}
-            runs.append((folder, info.get("earned"), os.path.getmtime(folder)))
+            try:
+                started = time.mktime(time.strptime(name[len(label) + 1:], "%Y%m%d_%H%M%S"))     # (the folder's name says when; its time changes as files go in and out)
+            except ValueError:
+                started = os.path.getmtime(folder)
+            runs.append((folder, info.get("earned"), started))
         for folder in {run[0] for run in runs} - captures_to_keep(runs):
             shutil.rmtree(folder, ignore_errors=True)
     except Exception as error:
@@ -4011,17 +4017,17 @@ def record_minigame_result(result: dict[str, Any]) -> None:
         print(f"[!] couldn't note the result: {error}")
 
 def read_candy_corn_settled(tries: int = 4) -> Optional[int]:
-    """read_candy_corn() of the screen once two looks half a second apart agree (the total counts up for a moment after a run); None if it
-    never reads. Costs a second or so."""
-    last: Optional[int] = None
+    """read_candy_corn() of the screen once two looks half a second apart agree (the total counts up for a moment after a run); if they
+    never do, the last total read, and None if none was. Costs a second or so, up to `tries` looks of CANDY_CORN_SETTLE apart."""
+    seen: Optional[int] = None
     for attempt in range(tries):
         now = read_candy_corn(grab_screen())
-        if now is not None and now == last:
+        if now is not None and now == seen:
             return now
-        last = now
+        seen = now if now is not None else seen                     # (a look that reads nothing - a white flash - doesn't forget the one before)
         if attempt < tries - 1:
             wait_interruptible(cfg.CANDY_CORN_SETTLE)
-    return last
+    return seen
 
 def toggle_input_capture() -> Optional[InputCapture]:
     """Start a capture (a fresh folder in CAPTURES_DIR, the oldest beyond MAX_CAPTURES deleted) or, if one is

@@ -82,11 +82,14 @@ def test_a_settled_reading_waits_until_two_looks_agree(macro, world, monkeypatch
     totals = iter([None, None, None, None])
     monkeypatch.setattr(macro, "read_candy_corn", lambda img: next(totals))
     assert macro.read_candy_corn_settled() is None
+    totals = iter([1000, None, None, None])                                                # one real look, then white flashes: that one
+    monkeypatch.setattr(macro, "read_candy_corn", lambda img: next(totals))
+    assert macro.read_candy_corn_settled() == 1000
 
 
 def test_play_minigame_notes_the_total_before_and_after_the_run(macro, monkeypatch):
     totals = iter([1000, 3500])
-    monkeypatch.setattr(macro, "read_candy_corn_settled", lambda: next(totals))
+    monkeypatch.setattr(macro, "read_candy_corn_settled", lambda tries=4: next(totals))
     noted, finished = [], []
     monkeypatch.setattr(macro, "record_minigame_result", noted.append)
     monkeypatch.setattr(macro, "start_run_capture", lambda label: "the capture")

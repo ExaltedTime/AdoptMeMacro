@@ -401,7 +401,7 @@ def test_play_minigame_records_the_run_and_says_how_it_ended(macro, monkeypatch,
     started, finished, order = [], [], []
     monkeypatch.setattr(macro, "start_run_capture", lambda label: started.append(label) or "the capture")
     monkeypatch.setattr(macro, "finish_run_capture", lambda capture, how, result=None: finished.append((capture, how)) or order.append("finished"))
-    monkeypatch.setattr(macro, "read_candy_corn_settled", lambda: None)
+    monkeypatch.setattr(macro, "read_candy_corn_settled", lambda tries=4: None)
     monkeypatch.setattr(macro, "record_minigame_result", lambda result: None)
     monkeypatch.setattr(macro, "send_macro_window_to_back", lambda: order.append("window back"))
     monkeypatch.setattr(macro, "bring_macro_window_to_front", lambda: order.append("window front"))
@@ -523,6 +523,17 @@ def test_of_each_minigame_the_best_the_worst_and_the_latest_recordings_are_kept(
     kept = {n.split("_", 2)[2] for n in os.listdir(cfg.RUN_CAPTURES_DIR) if n.startswith("hauntlet_2_")}
     assert kept == {"b", "e", "c", "f", "latest"}                              # the two best, the two worst and the latest
     assert any(n.startswith("ghost_gallery_") for n in os.listdir(cfg.RUN_CAPTURES_DIR))     # another minigame's are not touched
+
+
+def test_tidying_with_no_recordings_folder_is_nothing_and_the_latest_is_the_one_whose_name_is_latest(macro, run_folder, capsys):
+    macro.prune_run_captures("hauntlet_2")                                      # (recording was never on: no folder, no message)
+    assert capsys.readouterr().out == ""
+    runs_dir_with(macro, "hauntlet_2", {"20261014_100000": 10, "20261014_110000": 9, "20261014_120000": 8, "20261014_090000": 7, "20261014_080000": 6, "20261014_070000": 5})
+    for i, name in enumerate(sorted(os.listdir(macro.cfg.RUN_CAPTURES_DIR), reverse=True)):
+        os.utime(os.path.join(macro.cfg.RUN_CAPTURES_DIR, name), (1000 + i, 1000 + i))      # (the folders' own times say the opposite of their names)
+    macro.prune_run_captures("hauntlet_2")
+    kept = {n[len("hauntlet_2_"):] for n in os.listdir(macro.cfg.RUN_CAPTURES_DIR)}
+    assert kept == {"20261014_070000", "20261014_080000", "20261014_100000", "20261014_110000", "20261014_120000"}      # the one named latest is kept though it is neither among the two best nor the two worst
 
 
 def test_a_recording_whose_candy_corn_was_not_read_counts_as_one_of_the_worst_but_a_few_are_all_kept(macro, run_folder):

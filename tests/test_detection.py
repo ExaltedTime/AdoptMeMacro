@@ -257,23 +257,27 @@ def test_backpack_title_marks_the_normal_backpack(macro):
     assert not macro.detect_backpack_open(blank())
 
 
-def test_minigame_popup_is_a_green_yes_with_a_red_no_beside_it(macro):
+def with_popup_text(macro, img):
+    return put(img, reference(macro, "minigame_popup"), macro.cfg.POPUP_TEMPLATES["minigame_popup"]["box"])
+
+
+def test_minigame_popup_is_a_green_yes_with_a_red_no_beside_it_under_its_teleport_text(macro):
     yes, no = macro.cfg.GREEN_BUTTON_COLOR, macro.cfg.MINIGAME_POPUP_NO_COLOR
-    img = blank()
+    img = with_popup_text(macro, blank())
     img[600:640, 1000:1140] = yes[::-1]          # the colours are RGB, the image BGR
     assert not macro.detect_minigame_popup(img)  # Yes alone (a paycheck's button, say) isn't one
     img[600:640, 800:940] = no[::-1]
     assert macro.detect_minigame_popup(img)
-    elsewhere = blank()                                                         # another dialog with the same two colours, somewhere else: not the popup
-    elsewhere[300:340, 1500:1640] = yes[::-1]
-    elsewhere[300:340, 1300:1440] = no[::-1]
+    elsewhere = blank()                          # another dialog with the same two colours and no "Teleport there now?": not the popup
+    elsewhere[600:640, 1000:1140] = yes[::-1]
+    elsewhere[600:640, 800:940] = no[::-1]
     assert not macro.detect_minigame_popup(elsewhere)
 
 
 def test_sick_dialog_is_not_a_minigame_popup(macro):
     """The doctor's Yes/No dialog has the same two colours, but it is the sick handler's to answer."""
     yes, no = macro.cfg.GREEN_BUTTON_COLOR, macro.cfg.MINIGAME_POPUP_NO_COLOR
-    screen = blank()
+    screen = with_popup_text(macro, blank())
     screen[600:640, 1000:1140] = yes[::-1]
     screen[600:640, 800:940] = no[::-1]
     assert macro.detect_minigame_popup(screen)                          # without the dialog's title it is a popup...

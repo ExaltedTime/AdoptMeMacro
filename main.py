@@ -2318,20 +2318,19 @@ def detect_sick_dialog(img: Image) -> bool:
 
 def detect_minigame_popup(img: Image) -> bool:
     """True if a Halloween minigame popup is on screen: a button of the Yes green (a piece of it of at least
-    MINIGAME_POPUP_MIN_BUTTON_PIXELS px, where the popup's Yes is, within MINIGAME_POPUP_YES_TOLERANCE) with the No red close to its left (neither colour is unique alone). Each green piece
+    MINIGAME_POPUP_MIN_BUTTON_PIXELS px) with the No red close to its left (neither colour is unique alone), under the popup's own "Teleport there now?" line (a crop,
+    POPUP_TEMPLATES["minigame_popup"]). Each green piece
     is looked at on its own: a popup over the open backpack, whose buttons are green too, was missed when all the green on the
     screen was taken together. See docs/ARCHITECTURE.md#need-handlers.
     """
-    if detect_sick_dialog(img):
-        return False
+    if detect_sick_dialog(img) or not popup_visible(img, "minigame_popup"):
+        return False                                                  # (another dialog with a green and a red button is not the popup: it has its "Teleport there now?")
     green = (exact_color_mask(img, cfg.GREEN_BUTTON_COLOR) > 0).astype(np.uint8)
     count, _, stats, centres = cv2.connectedComponentsWithStats(green)
     for i in range(1, count):
         if stats[i, cv2.CC_STAT_AREA] < cfg.MINIGAME_POPUP_MIN_BUTTON_PIXELS:
             continue
         yes_x, yes_y = int(centres[i][0]), int(centres[i][1])
-        if abs(yes_x - cfg.MINIGAME_POPUP_YES_POS[0]) > cfg.MINIGAME_POPUP_YES_TOLERANCE or abs(yes_y - cfg.MINIGAME_POPUP_YES_POS[1]) > cfg.MINIGAME_POPUP_YES_TOLERANCE:
-            continue                                                  # (the popup is always in the same place: another dialog with a green and a red button is not it)
         near_no = img[max(0, yes_y - cfg.MINIGAME_POPUP_NO_MAX_DY):yes_y + cfg.MINIGAME_POPUP_NO_MAX_DY,
                       max(0, yes_x - cfg.MINIGAME_POPUP_NO_MAX_DX):yes_x]
         if int(np.count_nonzero(exact_color_mask(near_no, cfg.MINIGAME_POPUP_NO_COLOR))) >= cfg.MINIGAME_POPUP_MIN_BUTTON_PIXELS:

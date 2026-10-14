@@ -43,7 +43,6 @@ MINIGAME_POPUP_NO_MAX_DY = 40               # ...and this many px above/below it
 MINIGAME_POPUP_DONT_SHOW_POS = (826, 666)
 MINIGAME_POPUP_NO_POS = (879, 618)
 MINIGAME_POPUP_YES_POS = (1049, 612)
-MINIGAME_POPUP_YES_TOLERANCE = 40            # the middle of the popup's Yes button is within this of MINIGAME_POPUP_YES_POS (the real one was at (1048, 611) every time): a run's 30 'unknown' popups were other dialogs (a green and a red button), clicked at the popup's places
 
 # Which minigame a popup is for: the first line of its title ("Ghost Gallery", "Hauntlet 2") is matched
 # against the crops in MINIGAME_TEMPLATE_DIR, searched for within MINIGAME_TITLE_BOX. A minigame is the
@@ -140,6 +139,8 @@ STRAY_WINDOWS: dict[str, dict[str, Any]] = {
 POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     # The paycheck popup's bank-card header ("BANK of Adopt Me!").
     "paycheck":        {"box": (740, 400, 1180, 490), "threshold": 0.8},
+    # The minigame popup's "Teleport there now?" line (the same in every minigame's popup; the popup is always in the same place).
+    "minigame_popup":  {"box": (780, 515, 1160, 585), "threshold": 0.8},
     # The sick need's Yes/No dialog.
     "sick_dialog":     {"box": (700, 400, 1220, 700), "threshold": 0.8},
     # The normal backpack's "BACKPACK" title, and the expanded one's BACK button.

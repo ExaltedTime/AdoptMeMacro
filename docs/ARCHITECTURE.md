@@ -675,7 +675,10 @@ losing it for `MINIGAME_OVERLAY_LOST_TIMEOUT` means the minigame was left
 seeing it within `MINIGAME_OVERLAY_START_GRACE` of the start wait means it
 never started. Either is a logged failure with that reason, instead of waiting
 out `MINIGAME_MAX_DURATION`.
-- `play_hauntlet_2()` waits until the game's overlay shows (at most `MINIGAME_START_WAIT`: the lobby's countdown varies, and a fixed wait of 50 s let the first room's timer run out in one run, the macro still waiting), then goes through the rooms - reads the screen, picks a door
+- **The start is the overlay, not a time.** Rounds start at fixed times of the hour (in the captured day Hauntlet 2 at about :03:07, :23:07 and :43:07, Ghost Gallery at :12:46, :32:46 and :52:46, a round every 20 minutes each) and the popup's Yes is clicked
+  12-52 s before one, depending on what the macro was doing (a need's end wait holds it back by up to `MINIGAME_POPUP_END_WAIT`). A fixed wait from the click is therefore wrong most of the time: in Hauntlet 2's first room the timer is 30 s and crossing the hall takes about 20, and of 21 runs with a fixed 50 s wait the 11 whose Yes came 40 s or less before the round
+  were thrown out of room 1 (the macro still waiting) and the 10 that came 43 s or more before it played on. So each player looks for its game's overlay every 0.5 s and acts the moment it shows; `MINIGAME_START_WAIT` is only the most it waits (the overlay came 50.5 s after the Yes in one run), after which it acts regardless.
+- `play_hauntlet_2()` waits until the game's overlay shows (at most `MINIGAME_START_WAIT`), then goes through the rooms - reads the screen, picks a door
   and walks to it, room after room - until victory or until the overlay says it's over. See
   [Playing Hauntlet 2](#playing-hauntlet-2).
 - `play_ghost_gallery()` waits until the game's overlay shows (at most `MINIGAME_START_WAIT`), then finds the ghosts on screen, aims the

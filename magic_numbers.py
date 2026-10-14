@@ -83,8 +83,9 @@ MINIGAME_MAX_DURATION = 600.0       # gives up (and logs a failure) if the victo
 MINIGAME_ZOOM_OUT_DURATION = 3.0    # both minigames hold KEY_ZOOM_OUT this long when they begin (Hauntlet 2 again where it can't find the doors)
 MINIGAME_FINISH_WAIT = 5.0          # after clicking NICE!, before carrying on
 MINIGAME_VICTORY_CLICK_TRIES = 3      # NICE! clicks before giving up on the win screen closing
-MINIGAME_START_WAIT = 50.0          # Hauntlet 2 waits this long after teleporting, before it acts; Ghost Gallery waits until its overlay
-                                    # shows, but at most this long
+MINIGAME_START_WAIT = 90.0          # both minigames wait for their overlay (the game has begun: the lobby's countdown to a round that starts at a fixed time) and act
+                                    # when it shows - this is the most they wait for it, a limit that must outlast the longest queue (the overlay came 50.5 s after the Yes in one run;
+                                    # the Yes comes 12-52 s before the round, and a need's end wait holds it back by up to MINIGAME_POPUP_END_WAIT)
 HAUNTLET_2_FORWARD_KEY = "w"
 
 # ============================================================================

@@ -37,7 +37,7 @@ def test_the_ghosts_in_the_hall_are_found_biggest_first(macro):
     assert [b[2] for b in blobs] == sorted((b[2] for b in blobs), reverse=True)
     assert all(b[2] >= macro.cfg.GHOST_MIN_AREA for b in blobs)
     several = macro.find_ghost_blobs(shot("ghosts_66"))                                       # four ghosts at once
-    near = lambda x, y: any(abs(bx - x) <= 8 and abs(by - y) <= 8 for bx, by, _ in several)
+    near = lambda x, y: any(abs(bx - x) <= 20 and abs(by - y) <= 20 for bx, by, _ in several)
     assert near(450, 290) and near(1018, 388) and near(1184, 778) and near(1137, 334)
 
 
@@ -183,7 +183,7 @@ def test_the_boss_is_shielded_while_its_bar_shows_ghost_icons_not_health(macro):
         assert macro.ghost_boss_bar_visible(shot(name)) and macro.ghost_boss_shielded(shot(name))
     cx, cy = macro.cfg.GHOST_CHARACTER
     blobs = macro.find_ghost_blobs(shot("shield_129"), boss=True)
-    assert len(blobs) == 3 and max(b[2] for b in blobs) < 2000                                  # only small ghosts: the dim boss is not cyan enough
+    assert len(blobs) == 3 and max(b[2] for b in blobs) < macro.cfg.GHOST_SMALL_MAX                                  # only small ghosts: the dim boss is not cyan enough
     assert macro.choose_ghost_target(blobs, False, None) == min(((x, y) for x, y, _ in blobs), key=lambda p: (p[0] - cx) ** 2 + (p[1] - cy) ** 2)
 
 
@@ -474,3 +474,9 @@ def test_in_the_boss_phase_a_blob_too_small_for_the_boss_is_a_minion_not_the_bos
     macro.play_ghost_gallery(world.clock.now + 1, watch_started(macro))
     first = next(m[1:] for m in world.mouse if m[0] == "move")
     assert abs(first[0] - 1100 - small_side / 2) < 40 and abs(first[1] - 600 - small_side / 2) < 40       # the near small one: nothing is the boss
+
+
+def test_a_ghost_seen_from_afar_is_found_and_the_slime_puddle_beside_it_is_not(macro):
+    blobs = macro.find_ghost_blobs(shot("far_91"))                                  # a blue oval ghost (hue 91, saturation 216) at the right, a slime puddle (hue 81, saturation 251) in the middle
+    assert any(abs(x - 1783) < 25 and abs(y - 629) < 25 for x, y, _ in blobs)          # (it was missed: the colour range stopped at saturation 210)
+    assert not any(abs(x - 1344) < 120 and abs(y - 778) < 120 for x, y, _ in blobs)

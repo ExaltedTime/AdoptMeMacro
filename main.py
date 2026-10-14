@@ -359,13 +359,21 @@ def migrate_debug_layout() -> None:
     subfolders (see IMAGES_DIR / LOGS_DIR), if it isn't there already. Never
     raises."""
     moves = [(name, cfg.LOGS_DIR) for name in ("run_log.txt", "run_counter.txt", "output.log", "output.log.old", "status.json")]
-    moves += [(name, cfg.IMAGES_DIR) for name in ("failures", "reports")]
+    moves += [(name, cfg.IMAGES_DIR) for name in ("failures",)]
     try:
         moves += [(name, cfg.IMAGES_DIR) for name in os.listdir(cfg.DEBUG_DIR) if name.startswith("debug_") and name.endswith(".png")]
         for name, folder in moves:
             source, target = os.path.join(cfg.DEBUG_DIR, name), os.path.join(folder, name)
             if os.path.exists(source) and not os.path.exists(target):
                 os.replace(source, target)
+        for old_folder in (os.path.join(cfg.LOGS_DIR, "runs"), os.path.join(cfg.IMAGES_DIR, "reports"), os.path.join(cfg.DEBUG_DIR, "reports")):       # run logs and run charts: now together in RUNS_DIR
+            if os.path.isdir(old_folder):
+                os.makedirs(cfg.RUNS_DIR, exist_ok=True)
+                for name in os.listdir(old_folder):
+                    if not os.path.exists(os.path.join(cfg.RUNS_DIR, name)):
+                        os.replace(os.path.join(old_folder, name), os.path.join(cfg.RUNS_DIR, name))
+                if not os.listdir(old_folder):
+                    os.rmdir(old_folder)
     except OSError as error:
         print(f"[!] couldn't move the old debug files: {error}")
 
@@ -387,7 +395,7 @@ def refresh_debug() -> int:
             removed += 1
         except OSError as error:   # a locked file (a video still open, say): leave it, carry on with the rest
             print(f"[!] couldn't delete {name}: {error}")
-    for directory in (cfg.IMAGES_DIR, cfg.LOGS_DIR):
+    for directory in (cfg.IMAGES_DIR, cfg.LOGS_DIR, cfg.RUNS_DIR):
         os.makedirs(directory, exist_ok=True)
     return removed
 
@@ -455,8 +463,8 @@ def log_run_event(message: str) -> None:
         f.write(line)
     if state.run_number is not None:
         try:
-            os.makedirs(cfg.RUN_LOGS_DIR, exist_ok=True)
-            with open(os.path.join(cfg.RUN_LOGS_DIR, f"run{state.run_number}.txt"), "a") as f:
+            os.makedirs(cfg.RUNS_DIR, exist_ok=True)
+            with open(os.path.join(cfg.RUNS_DIR, f"run{state.run_number}.txt"), "a") as f:
                 f.write(line)
         except OSError:
             pass   # the combined log above has it
@@ -2835,9 +2843,8 @@ def find_ghost_blobs(img: Image, boss: bool = False) -> list[tuple[int, int, int
     """(x, y, area) of every ghost in `img`, biggest first: the connected pieces of the translucent cyan the ghosts and the
     boss are drawn in (GHOST_COLOR), at least GHOST_MIN_AREA px, not in the HUD (GHOST_IGNORE_BOXES) or on the character -
     and, in the boss phase (`boss`), not on the boss's health bar, whose crest and icons are cyan too."""
-    low, high = cfg.GHOST_COLOR
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, low, high)
+    mask = cv2.bitwise_or(cv2.inRange(hsv, *cfg.GHOST_COLOR), cv2.inRange(hsv, *cfg.GHOST_COLOR_FAR))
     closeup = ghost_character_box(hsv)
     for left, top, right, bottom in cfg.GHOST_IGNORE_BOXES + ((cfg.GHOST_BOSS_BAR_IGNORE,) if boss else ()) + ((closeup,) if closeup else ()):
         mask[max(0, top):bottom, max(0, left):right] = 0
@@ -3041,7 +3048,8 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 rotate_camera(cfg.GHOST_BOSS_TURN_DRAG, 0, turn)
                 last_turn = time.time()
             elif now - max(last_turn, last_seen) >= cfg.GHOST_CAMERA_PERIOD:
-                rotate_camera()
+                turn = turn or random.choice((-1, 1))                       # one way round, not back and forth: a sweep sees the whole hall
+                rotate_camera(direction=turn)
                 last_turn = time.time()
             chase = ghost_chase_key(target) if target is not None else None   # always towards the ghost or the boss, until it is near
             if chase != chasing:
@@ -4651,11 +4659,11 @@ def generate_run_report(log_path: str, run: Union[int, str], out_dir: str, basic
 # GUI
 # ============================================================================
 
-def keep_newest_files(directory: str, keep: int) -> None:
-    """Delete the oldest files in `directory` beyond the newest `keep`. Never raises. (A pruned run report can be
-    drawn again from the logs, which are kept - see generate_run_report().)"""
+def keep_newest_files(directory: str, keep: int, suffix: str = "") -> None:
+    """Delete the oldest files in `directory` (only those ending in `suffix`) beyond the newest `keep`. Never raises. (A pruned run
+    report can be drawn again from the logs, which are kept - see generate_run_report().)"""
     try:
-        files = sorted((os.path.join(directory, f) for f in os.listdir(directory)), key=os.path.getmtime)
+        files = sorted((os.path.join(directory, f) for f in os.listdir(directory) if f.endswith(suffix)), key=os.path.getmtime)
         for old in files[:max(0, len(files) - keep)]:
             if os.path.isfile(old):
                 os.remove(old)
@@ -4663,12 +4671,12 @@ def keep_newest_files(directory: str, keep: int) -> None:
         pass
 
 def write_run_report(run: Union[int, str]) -> Optional[str]:
-    """Chart run `run` from the log into REPORTS_DIR (see RUN REPORT above) and print
+    """Chart run `run` from the log into RUNS_DIR, beside the run's own log (see RUN REPORT above) and print
     where it went. Returns the path, or None. Never raises."""
-    path = generate_run_report(cfg.RUN_LOG_PATH, run, cfg.REPORTS_DIR, cfg.BUTTON_NAMES, cfg.TELEPORT_WALK_NEEDS)
+    path = generate_run_report(cfg.RUN_LOG_PATH, run, cfg.RUNS_DIR, cfg.BUTTON_NAMES, cfg.TELEPORT_WALK_NEEDS)
     if path:
         print(f"[debug] run report: {path}")
-        keep_newest_files(cfg.REPORTS_DIR, cfg.MAX_REPORTS)
+        keep_newest_files(cfg.RUNS_DIR, cfg.MAX_REPORTS, ".png")
     return path
 
 def run_all_need_handlers(handlers: Optional[dict[str, Callable[[], NeedHandler]]] = None) -> dict[str, str]:

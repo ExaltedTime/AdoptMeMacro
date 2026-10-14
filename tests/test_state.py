@@ -323,7 +323,7 @@ def test_every_run_gets_its_own_log_file_and_the_combined_log_keeps_everything(m
     macro.state.run_number = 8
     macro.log_run_event("detected: pizza")
     macro.log_run_event("resolved: pizza (80s)")
-    own = os.path.join(macro.cfg.RUN_LOGS_DIR)
+    own = os.path.join(macro.cfg.RUNS_DIR)
     assert sorted(os.listdir(own)) == ["run7.txt", "run8.txt"]
     assert open(os.path.join(own, "run7.txt")).read().count("\n") == 1
     eight = open(os.path.join(own, "run8.txt")).read().splitlines()
@@ -335,7 +335,7 @@ def test_every_run_gets_its_own_log_file_and_the_combined_log_keeps_everything(m
 
 def test_a_run_log_that_cannot_be_written_does_not_lose_the_combined_line(macro, monkeypatch):
     macro.state.run_number = 3
-    monkeypatch.setattr(macro.cfg, "RUN_LOGS_DIR", os.path.join(macro.cfg.RUN_LOG_PATH, "not-a-folder"))   # a path under a file
+    monkeypatch.setattr(macro.cfg, "RUNS_DIR", os.path.join(macro.cfg.RUN_LOG_PATH, "not-a-folder"))   # a path under a file
     macro.log_run_event("resolved: hungry (28s)")
     assert "resolved: hungry" in open(macro.cfg.RUN_LOG_PATH).read()
 
@@ -584,8 +584,11 @@ def test_only_the_newest_run_reports_are_kept(macro, tmp_path):
         path = tmp_path / f"run{i}.png"
         path.write_text("x")
         os.utime(path, (1000 + i, 1000 + i))
-    macro.keep_newest_files(str(tmp_path), 3)
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["run3.png", "run4.png", "run5.png"]
+    for i in range(6):                                              # (the runs' own logs are in the same folder, and are kept)
+        (tmp_path / f"run{i}.txt").write_text("x")
+    macro.keep_newest_files(str(tmp_path), 3, ".png")
+    assert sorted(p.name for p in tmp_path.iterdir() if p.suffix == ".png") == ["run3.png", "run4.png", "run5.png"]
+    assert len([p for p in tmp_path.iterdir() if p.suffix == ".txt"]) == 6
     macro.keep_newest_files(str(tmp_path / "missing"), 3)       # never raises
 
 
@@ -1182,3 +1185,17 @@ def test_the_end_wait_is_marked_while_a_need_is_waited_for_and_a_held_popup_is_n
     monkeypatch.setattr(macro, "detect_paycheck", lambda: checked.append(1) or True)
     monkeypatch.setattr(macro.cfg, "HALLOWEEN", True)
     assert macro.unscrew(in_task=True) is None and checked == []                         # the paycheck check, which clicks, is skipped
+
+
+def test_the_run_logs_and_charts_of_an_older_layout_are_moved_into_the_runs_folder(macro, tmp_path, monkeypatch):
+    cfg = macro.cfg
+    for name, folder in (("run1.txt", "logs/runs"), ("run1.png", "images/reports"), ("run2.png", "reports")):
+        path = tmp_path / "old" / folder / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x")
+    old = tmp_path / "old"
+    for name, value in (("DEBUG_DIR", old), ("LOGS_DIR", old / "logs"), ("IMAGES_DIR", old / "images"), ("RUNS_DIR", old / "runs")):
+        monkeypatch.setattr(cfg, name, str(value))
+    macro.migrate_debug_layout()
+    assert sorted(os.listdir(old / "runs")) == ["run1.png", "run1.txt", "run2.png"]
+    assert not (old / "logs" / "runs").exists() and not (old / "images" / "reports").exists() and not (old / "reports").exists()

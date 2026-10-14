@@ -159,26 +159,25 @@ HAUNTLET_DIGIT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "digits")   #
 HAUNTLET_ITEM_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "items")      # a folder per item (phone/, key/, ...) of pictures of its slot; see read_hauntlet_items()
 HAUNTLET_COUNT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "counts")    # x/, 1/, 2/: the glyphs of an item's "x2" badge
 DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
-# debug/ holds two subfolders - images/ for every png (the debug_*.png views, failures/, reports/) and logs/ for
-# every text and json file - plus the game config, which stays in debug/ itself so "Refresh debug" (which
-# empties everything else) leaves it alone, and recordings/ for the run videos.
+# debug/ holds images/ for every png (the debug_*.png views, failures/), logs/ for every text and json file, runs/ for
+# what belongs to one run (its log lines, run<N>.txt, and its chart, run<N>.png) and recordings/ for the run videos - plus
+# the game config, which stays in debug/ itself so "Refresh debug" (which empties everything else) leaves it alone.
 IMAGES_DIR = os.path.join(DEBUG_DIR, "images")
 LOGS_DIR = os.path.join(DEBUG_DIR, "logs")
-for _directory in (NEEDS_DIR, DEBUG_DIR, IMAGES_DIR, LOGS_DIR):
+RUNS_DIR = os.path.join(DEBUG_DIR, "runs")                    # run<N>.txt (this run's lines of the log on their own, see log_run_event()) and run<N>.png (its chart, see the RUN REPORT section of main.py)
+for _directory in (NEEDS_DIR, DEBUG_DIR, IMAGES_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
 RUN_LOG_PATH = os.path.join(LOGS_DIR, "run_log.txt")        # appended to, never overwritten
-RUN_LOGS_DIR = os.path.join(LOGS_DIR, "runs")                 # run<N>.txt: this run's lines of the log on their own - see log_run_event()
 RUN_COUNTER_PATH = os.path.join(LOGS_DIR, "run_counter.txt")  # holds the last-used run number
 GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")       # persisted game state - see load_game_config()
 OUTPUT_LOG_PATH = os.path.join(LOGS_DIR, "output.log")      # everything the macro prints, timestamped - see log_output()
 STATUS_PATH = os.path.join(LOGS_DIR, "status.json")         # live "is it alive and what's it doing" summary - see write_status()
 FAILURE_DIR = os.path.join(IMAGES_DIR, "failures")          # a folder per failure (screenshot, need icons, info) - see log_failure()
-REPORTS_DIR = os.path.join(IMAGES_DIR, "reports")           # run<N>.png charts of a run - see the RUN REPORT section of main.py
 RECORDINGS_DIR = os.path.join(DEBUG_DIR, "recordings")      # run videos - see RunRecorder
 OUTPUT_LOG_MAX_BYTES = 5 * 1024 * 1024   # output.log moves to output.log.old (replacing the last one) past this size
 MAX_FAILURE_FOLDERS = 100                # oldest failure folders are deleted beyond this many
-MAX_REPORTS = 50                         # oldest run report images are deleted beyond this many (the logs they are drawn from are kept)
+MAX_REPORTS = 50                         # oldest run report images (run<N>.png in RUNS_DIR) are deleted beyond this many (the run logs they are drawn from are kept)
 CONSOLE_MAX_LINES = 2000                 # the GUI's output box keeps its last this many lines (output.log keeps them all)
 
 # Recording a run ("Record the next run" on the Options tab): low quality on purpose, a video of a whole
@@ -223,6 +222,10 @@ CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into
 # and is told by the boss's health bar, a gold frame (15800-16800 gold pixels in GHOST_BOSS_BAR_BOX; 0-230 before). The player is aimed
 # with the mouse: the beam goes to the cursor. The ghost aimed at is followed while a ghost is within GHOST_STICK px of where it was.
 GHOST_COLOR = ((78, 90, 200), (100, 210, 255))
+# The ghosts of a view from afar (the hall seen from above, the character tiny) are more saturated: blue-cyan ovals of hue 88-96 and
+# saturation 170-240 (GHOST_COLOR stops at 210, and found none of them: in a run's first 120 s it aimed at a ghost 4 times). The slime
+# puddles, which look alike, are hue 80-83 and saturation 245 and over; the haunted paintings' glow is hue 100 and over; both are outside.
+GHOST_COLOR_FAR = ((84, 100, 200), (98, 240, 255))
 GHOST_CLOSE = 7
 GHOST_EMBLEM_HSV = ((140, 40, 200), (175, 255, 255))   # the pink glow of the emblem on the character's backpack: with the camera close it is 750-10000 px, far away there is none seen
 GHOST_EMBLEM_BOX = (500, 250, 1400, 950)
@@ -256,7 +259,7 @@ GHOST_FURNITURE_MIN_DISTANCE = 300           # px: the place is at least this fa
 GHOST_FURNITURE_PERIOD = 1.0
 GHOST_CAMERA_PERIOD = 1.5
 GHOST_CAMERA_DRAG = (150, 450)
-GHOST_CAMERA_TILT = 60
+GHOST_CAMERA_TILT = 0                        # px up or down in a turn of the camera: none - the pitch was a random walk, and ended on the ceiling, the floor, a wall (the start's tilt sets it)
 GHOST_CAMERA_DRAG_DURATION = 0.15
 GHOST_CAMERA_DRAG_STEPS = 6
 GHOST_START_TILT = 200                       # px of mouse drag down, right button held, at the start (after zooming out): a view from above

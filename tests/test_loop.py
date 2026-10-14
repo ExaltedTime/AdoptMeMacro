@@ -51,7 +51,7 @@ def test_the_loop_respawns_when_idle_logs_resources_stops_and_writes_the_report(
     assert macro.run_stats.cycles > 5
     assert macro.state.last_progress is not None
     assert time.time() - macro.state.last_progress > cfg.NO_DETECTION_RESPAWN_INTERVAL   # nothing resolved: the respawns left the progress clock alone
-    assert os.path.exists(os.path.join(cfg.REPORTS_DIR, f"run{macro.state.run_number}.png"))
+    assert os.path.exists(os.path.join(cfg.RUNS_DIR, f"run{macro.state.run_number}.png"))
     time.sleep(0.5)
     lines_after = open(cfg.RUN_LOG_PATH).read().count("resources: cpu")
     time.sleep(0.5)

@@ -295,6 +295,8 @@ class State:
     white_since: Optional[float] = None
     # The input capture that is running, if any (see toggle_input_capture()). A State field only so snapshot() sees it as text.
     capture: Optional[Any] = None
+    run_capture: Optional[Any] = None                    # the recording of the minigame being played, see start_run_capture()
+    minigame_detail: dict = field(default_factory=dict)  # what the player of the minigame being played says about it ("room")
     # The needs named by the last "detected:" line, and how many checks since then found exactly the same with no
     # handler run in between (not yet written to the run log - see note_repeat_check()).
     last_detected_body: Optional[str] = None
@@ -322,6 +324,8 @@ class State:
     # How many in-task checks in a row have seen the backpack open (see
     # close_backpack_if_stuck()).
     backpack_strikes: int = 0
+    # Above 0 while a handler has the backpack open on purpose and closes it itself (see backpack_on_purpose()).
+    backpack_wanted: int = 0
     # True while a handler that wants the pet focused runs (see wanting_pet_focus()).
     pet_focus_wanted: bool = False
     # When the minigame popup checks last ran, and how many "quiet:" lines have
@@ -359,13 +363,21 @@ def migrate_debug_layout() -> None:
     subfolders (see IMAGES_DIR / LOGS_DIR), if it isn't there already. Never
     raises."""
     moves = [(name, cfg.LOGS_DIR) for name in ("run_log.txt", "run_counter.txt", "output.log", "output.log.old", "status.json")]
-    moves += [(name, cfg.IMAGES_DIR) for name in ("failures", "reports")]
+    moves += [(name, cfg.IMAGES_DIR) for name in ("failures",)]
     try:
         moves += [(name, cfg.IMAGES_DIR) for name in os.listdir(cfg.DEBUG_DIR) if name.startswith("debug_") and name.endswith(".png")]
         for name, folder in moves:
             source, target = os.path.join(cfg.DEBUG_DIR, name), os.path.join(folder, name)
             if os.path.exists(source) and not os.path.exists(target):
                 os.replace(source, target)
+        for old_folder in (os.path.join(cfg.LOGS_DIR, "runs"), os.path.join(cfg.IMAGES_DIR, "reports"), os.path.join(cfg.DEBUG_DIR, "reports")):       # run logs and run charts: now together in RUNS_DIR
+            if os.path.isdir(old_folder):
+                os.makedirs(cfg.RUNS_DIR, exist_ok=True)
+                for name in os.listdir(old_folder):
+                    if not os.path.exists(os.path.join(cfg.RUNS_DIR, name)):
+                        os.replace(os.path.join(old_folder, name), os.path.join(cfg.RUNS_DIR, name))
+                if not os.listdir(old_folder):
+                    os.rmdir(old_folder)
     except OSError as error:
         print(f"[!] couldn't move the old debug files: {error}")
 
@@ -387,7 +399,7 @@ def refresh_debug() -> int:
             removed += 1
         except OSError as error:   # a locked file (a video still open, say): leave it, carry on with the rest
             print(f"[!] couldn't delete {name}: {error}")
-    for directory in (cfg.IMAGES_DIR, cfg.LOGS_DIR):
+    for directory in (cfg.IMAGES_DIR, cfg.LOGS_DIR, cfg.RUNS_DIR):
         os.makedirs(directory, exist_ok=True)
     return removed
 
@@ -455,8 +467,8 @@ def log_run_event(message: str) -> None:
         f.write(line)
     if state.run_number is not None:
         try:
-            os.makedirs(cfg.RUN_LOGS_DIR, exist_ok=True)
-            with open(os.path.join(cfg.RUN_LOGS_DIR, f"run{state.run_number}.txt"), "a") as f:
+            os.makedirs(cfg.RUNS_DIR, exist_ok=True)
+            with open(os.path.join(cfg.RUNS_DIR, f"run{state.run_number}.txt"), "a") as f:
                 f.write(line)
         except OSError:
             pass   # the combined log above has it
@@ -578,6 +590,7 @@ def log_failure(reason: str, screenshot: bool = True) -> None:
     """Record that something went wrong: print it, add it to the run log,
     save a screenshot of what was on screen, and note it in the status
     file. Doesn't change what the macro does next."""
+    mark_run_capture(f"failure: {reason}")
     shot = save_failure_report(reason) if screenshot else None
     detail = f"{reason}" + (f" (screenshot: failures/{shot})" if shot else "")
     print(f"[!] FAILURE: {detail}")
@@ -1619,28 +1632,41 @@ def select_backpack_tab(pos: Point) -> None:
         return
     hover_click(*pos)
 
+@contextlib.contextmanager
+def backpack_on_purpose() -> Iterator[None]:
+    """Within this block a handler has the backpack open on purpose and closes it itself: the in-task check (close_backpack_if_stuck())
+    leaves it alone and forgets any sighting from before. (Two sightings UNSCREW_TASK_INTERVAL apart used to count as stuck open, and an
+    equip sequence keeps it open for longer than that: the check closed it in the middle, and the final key press opened it again.)"""
+    state.backpack_wanted += 1
+    state.backpack_strikes = 0
+    try:
+        yield
+    finally:
+        state.backpack_wanted -= 1
+
 def equip_favorite_vehicle() -> None:
     """Open the backpack, equip the first vehicle (the favorite) and close it. Shared by
     ride and the helicopter needs. See docs/ARCHITECTURE.md#need-handlers.
     """
-    print("[debug] opening backpack...")
-    pydirectinput.press(cfg.KEY_BACKPACK)
-    wait_interruptible(cfg.UI_SETTLE)
+    with backpack_on_purpose():
+        print("[debug] opening backpack...")
+        pydirectinput.press(cfg.KEY_BACKPACK)
+        wait_interruptible(cfg.UI_SETTLE)
 
-    print("[debug] opening vehicles...")
-    select_backpack_tab(cfg.RIDE_VEHICLES_POS)
-    wait_interruptible(cfg.UI_SETTLE)
+        print("[debug] opening vehicles...")
+        select_backpack_tab(cfg.RIDE_VEHICLES_POS)
+        wait_interruptible(cfg.UI_SETTLE)
 
-    print("[debug] selecting first vehicle...")
-    hover_click(*cfg.RIDE_FIRST_VEHICLE_POS)
-    wait_interruptible(cfg.UI_SETTLE)
+        print("[debug] selecting first vehicle...")
+        hover_click(*cfg.RIDE_FIRST_VEHICLE_POS)
+        wait_interruptible(cfg.UI_SETTLE)
 
-    print("[debug] equipping vehicle...")
-    hover_click(*cfg.RIDE_EQUIP_POS)
-    wait_interruptible(cfg.UI_SETTLE)
+        print("[debug] equipping vehicle...")
+        hover_click(*cfg.RIDE_EQUIP_POS)
+        wait_interruptible(cfg.UI_SETTLE)
 
-    print("[debug] closing backpack...")
-    close_backpack("equipping the vehicle")
+        print("[debug] closing backpack...")
+        close_backpack("equipping the vehicle")
 
 class NeedHandler(ABC):
     """Reacts to one detected need. Subclass this to add a new need."""
@@ -1681,29 +1707,30 @@ class CatchNeedHandler(NeedHandler):
         if not focus_roblox():
             return False
 
-        # Open backpack with 'b' key
-        print("[debug] opening backpack...")
-        pydirectinput.press(cfg.KEY_BACKPACK)
-        wait_interruptible(cfg.UI_SETTLE)
+        with backpack_on_purpose():
+            # Open backpack with 'b' key
+            print("[debug] opening backpack...")
+            pydirectinput.press(cfg.KEY_BACKPACK)
+            wait_interruptible(cfg.UI_SETTLE)
 
-        # Navigate to toys
-        print("[debug] opening toys...")
-        select_backpack_tab(cfg.CATCH_TOYS_POS)
-        wait_interruptible(cfg.UI_SETTLE)
+            # Navigate to toys
+            print("[debug] opening toys...")
+            select_backpack_tab(cfg.CATCH_TOYS_POS)
+            wait_interruptible(cfg.UI_SETTLE)
 
-        # Click squeaky toy
-        print("[debug] selecting squeaky toy...")
-        hover_click(*cfg.CATCH_SQUEAKY_TOY_POS)
-        wait_interruptible(cfg.UI_SETTLE)
+            # Click squeaky toy
+            print("[debug] selecting squeaky toy...")
+            hover_click(*cfg.CATCH_SQUEAKY_TOY_POS)
+            wait_interruptible(cfg.UI_SETTLE)
 
-        # Equip the toy
-        print("[debug] equipping toy...")
-        hover_click(*cfg.CATCH_EQUIP_POS)
-        wait_interruptible(cfg.UI_SETTLE)
+            # Equip the toy
+            print("[debug] equipping toy...")
+            hover_click(*cfg.CATCH_EQUIP_POS)
+            wait_interruptible(cfg.UI_SETTLE)
 
-        # Close backpack with 'b' key
-        print("[debug] closing backpack...")
-        close_backpack("equipping the toy")
+            # Close backpack with 'b' key
+            print("[debug] closing backpack...")
+            close_backpack("equipping the toy")
 
         # Wait before throwing
         print(f"[debug] waiting {cfg.CATCH_WAIT_AFTER_EQUIP}s before throwing...")
@@ -1842,16 +1869,17 @@ def teleport_to(category_pos: Point) -> None:
     """Open the backpack, teleport via the category tab, walk back to clear the landing
     spot. Shared by the teleport-walk needs. See docs/ARCHITECTURE.md#need-handlers.
     """
-    print("[debug] opening backpack...")
-    pydirectinput.press(cfg.KEY_BACKPACK)
-    wait_interruptible(cfg.UI_SETTLE)
+    with backpack_on_purpose():
+        print("[debug] opening backpack...")
+        pydirectinput.press(cfg.KEY_BACKPACK)
+        wait_interruptible(cfg.UI_SETTLE)
 
-    print("[debug] selecting category...")
-    hover_click(*category_pos)
-    wait_interruptible(cfg.UI_SETTLE)
-    hover_click(*cfg.GENERAL_TELEPORT_POS_2)
-    wait_interruptible(cfg.UI_SETTLE)
-    hover_click(*cfg.GENERAL_TELEPORT_POS_3)
+        print("[debug] selecting category...")
+        hover_click(*category_pos)
+        wait_interruptible(cfg.UI_SETTLE)
+        hover_click(*cfg.GENERAL_TELEPORT_POS_2)
+        wait_interruptible(cfg.UI_SETTLE)
+        hover_click(*cfg.GENERAL_TELEPORT_POS_3)
     wait_interruptible(cfg.TELEPORT_WAIT)
     print("[debug] walking backward...")
     hold_key("s", cfg.TELEPORT_BACK_DURATION)
@@ -2185,10 +2213,18 @@ def close_backpack_if_stuck(in_task: bool) -> bool:
     if not in_task:
         close_backpack_if_open()
         return False
-    if not is_roblox_focused() or not detect_backpack_open(grab_screen()):
+    img = grab_screen() if is_roblox_focused() else None
+    seen = img is not None and detect_backpack_open(img)
+    if state.backpack_wanted:                                   # a handler has it open on purpose (backpack_on_purpose()) and closes it itself
+        state.backpack_strikes = 0
+        return seen
+    if img is None or not seen:
         state.backpack_strikes = 0
         return False
     state.backpack_strikes += 1
+    if state.backpack_strikes == 1:                             # the sighting that may be a false one: keep what the screen looked like
+        print("[debug] the backpack was seen open (the first of the sightings that count as stuck)")
+        cv2.imwrite(os.path.join(cfg.IMAGES_DIR, "debug_backpack_first_sighting.png"), img)
     if state.backpack_strikes < cfg.BACKPACK_CLOSE_CONFIRMATIONS:
         return True
     state.backpack_strikes = 0
@@ -2281,18 +2317,24 @@ def detect_sick_dialog(img: Image) -> bool:
     return popup_visible(img, "sick_dialog")
 
 def detect_minigame_popup(img: Image) -> bool:
-    """True if a Halloween minigame popup is on screen: the Yes green with the No red close
-    to its left (neither colour is unique alone). See docs/ARCHITECTURE.md#need-handlers.
+    """True if a Halloween minigame popup is on screen: a button of the Yes green (a piece of it of at least
+    MINIGAME_POPUP_MIN_BUTTON_PIXELS px) with the No red close to its left (neither colour is unique alone). Each green piece
+    is looked at on its own: a popup over the open backpack, whose buttons are green too, was missed when all the green on the
+    screen was taken together. See docs/ARCHITECTURE.md#need-handlers.
     """
     if detect_sick_dialog(img):
         return False
-    ys, xs = np.where(exact_color_mask(img, cfg.GREEN_BUTTON_COLOR) > 0)
-    if len(xs) < cfg.MINIGAME_POPUP_MIN_BUTTON_PIXELS:
-        return False
-    yes_x, yes_y = int(xs.mean()), int(ys.mean())
-    near_no = img[max(0, yes_y - cfg.MINIGAME_POPUP_NO_MAX_DY):yes_y + cfg.MINIGAME_POPUP_NO_MAX_DY,
-                  max(0, yes_x - cfg.MINIGAME_POPUP_NO_MAX_DX):yes_x]
-    return int(np.count_nonzero(exact_color_mask(near_no, cfg.MINIGAME_POPUP_NO_COLOR))) >= cfg.MINIGAME_POPUP_MIN_BUTTON_PIXELS
+    green = (exact_color_mask(img, cfg.GREEN_BUTTON_COLOR) > 0).astype(np.uint8)
+    count, _, stats, centres = cv2.connectedComponentsWithStats(green)
+    for i in range(1, count):
+        if stats[i, cv2.CC_STAT_AREA] < cfg.MINIGAME_POPUP_MIN_BUTTON_PIXELS:
+            continue
+        yes_x, yes_y = int(centres[i][0]), int(centres[i][1])
+        near_no = img[max(0, yes_y - cfg.MINIGAME_POPUP_NO_MAX_DY):yes_y + cfg.MINIGAME_POPUP_NO_MAX_DY,
+                      max(0, yes_x - cfg.MINIGAME_POPUP_NO_MAX_DX):yes_x]
+        if int(np.count_nonzero(exact_color_mask(near_no, cfg.MINIGAME_POPUP_NO_COLOR))) >= cfg.MINIGAME_POPUP_MIN_BUTTON_PIXELS:
+            return True
+    return False
 
 # directory -> (the files' names and modification times, {name: image}) - see load_templates().
 _TEMPLATE_CACHE: dict[str, tuple[Any, dict[str, Image]]] = {}
@@ -2456,8 +2498,10 @@ def minigame_popup_checks() -> None:
     if time.time() - state.last_minigame_popup_check < cfg.MINIGAME_POPUP_CHECK_INTERVAL:
         return
     state.last_minigame_popup_check = time.time()
-    if not dismiss_stray_windows():
-        detect_paycheck()
+    if dismiss_stray_windows():
+        mark_run_capture("a stray window was closed")
+    elif detect_paycheck():
+        mark_run_capture("the paycheck popup was closed")
 
 def minigame_look(watch: MinigameWatch) -> Image:
     """Run the popup checks if they're due, then take a fresh screenshot, which `watch` is told about."""
@@ -2534,7 +2578,7 @@ class HauntletRun:
         self.empty_looks += 1
         if self.fork and self.empty_looks >= 2:
             return [HauntletDoor(0, 0, None), HauntletDoor(0, 0, None)]       # two doorways, not located
-        if age >= cfg.HAUNTLET_DOORS_TIMEOUT or (self.room == 1 and self.empty_looks >= 2):       # room 1 is the entrance hall
+        if not self.fork and (age >= cfg.HAUNTLET_DOORS_TIMEOUT or (self.room == 1 and self.empty_looks >= 2)):       # room 1 is the entrance hall (a fork waits for its second empty look: after a walk the looks start again, and a fork past the timeout was taken for one doorway and the camera was turned)
             return [HauntletDoor(0, 0, None)]                                  # one doorway, straight ahead
         return None
 
@@ -2578,6 +2622,35 @@ def find_door_circles(img: Image) -> list[tuple[int, int, int, int]]:
             found.append((x + w // 2, y + h // 2, w, h))
     return sorted(found)
 
+def find_fork_doorways(img: Image) -> Optional[tuple[int, int]]:
+    """The x of the middle of a fork's two doorways, left and right, or None unless exactly two openings of the right size and
+    distance are seen (HAUNTLET_OPENING_*): each opening is dark inside and starts right under the wall's pale stripes, where the wall
+    elsewhere has the gold wainscot below it. Only seen with the camera near the wall - from the room's entrance one is, or none."""
+    top, bottom = cfg.HAUNTLET_FORK_BAND
+    hsv = cv2.cvtColor(img[top:bottom], cv2.COLOR_BGR2HSV)
+    wall = cv2.inRange(hsv, cfg.HAUNTLET_WALL_HSV[0], cfg.HAUNTLET_WALL_HSV[1]) > 0
+    dark = cv2.inRange(hsv, cfg.HAUNTLET_OPENING_HSV[0], cfg.HAUNTLET_OPENING_HSV[1]) > 0
+    run = dark.copy()
+    for rows in range(1, cfg.HAUNTLET_OPENING_RUN):                       # a row that starts a run of HAUNTLET_OPENING_RUN dark ones
+        run[:-rows] &= dark[rows:]
+    first = run.argmax(axis=0)                                            # the first such row of each column (0 if none)
+    near, far = cfg.HAUNTLET_OPENING_ABOVE
+    wall_above = np.vstack([np.zeros((1, wall.shape[1]), int), np.cumsum(wall, axis=0)])
+    columns = np.arange(wall.shape[1])
+    walled = wall_above[np.maximum(first - near, 0), columns] - wall_above[np.maximum(first - far, 0), columns]
+    openings = run.any(axis=0) & (walled >= cfg.HAUNTLET_OPENING_WALL)
+    spans: list[list[int]] = []
+    for x in np.flatnonzero(openings):
+        if spans and x - spans[-1][1] <= cfg.HAUNTLET_OPENING_JOIN:
+            spans[-1][1] = int(x)
+        else:
+            spans.append([int(x), int(x)])
+    spans = [span for span in spans if cfg.HAUNTLET_OPENING_WIDTH[0] <= span[1] - span[0] + 1 <= cfg.HAUNTLET_OPENING_WIDTH[1]]
+    if len(spans) != 2:
+        return None
+    left, right = ((a + b) // 2 for a, b in spans)
+    return (left, right) if cfg.HAUNTLET_OPENING_GAP[0] <= right - left <= cfg.HAUNTLET_OPENING_GAP[1] else None
+
 def player_in_circle(img: Image, circles: list[tuple[int, int, int, int]]) -> bool:
     """Whether the player stands in one of the three circles - and so has picked that door, and is locked in place for a few moments:
     two circles are seen, the third being hidden under the player, whose place (where the hearts are, else mid-screen) is where
@@ -2599,8 +2672,9 @@ def hauntlet_strafe(img: Image, doors: list[HauntletDoor], index: int) -> tuple[
     it is measured (the hearts above the head); not seen, it is taken to be in the middle of the screen (the camera follows the player; the
     middle door is not always in front of it - in a captured room 3 the player stood 350 px right of the middle door, hearts unread, and walked into the wall). Doors that
     aren't located have no distance to go: a fork's two doorways are the left key or the right one for one spacing, a
-    single doorway ahead (an entrance hall) none."""
-    spacing = (doors[2].x - doors[0].x) / 2 if len(doors) == 3 else 0
+    single doorway ahead (an entrance hall) none. A fork's doorways that were found (find_fork_doorways(): the two x are
+    in `doors`) are two door spacings apart, like a room's outer doors, and are walked to like a room's."""
+    spacing = (doors[-1].x - doors[0].x) / 2 if len(doors) in (2, 3) else 0
     if spacing <= 0:
         if len(doors) == 1 or (len(doors) == 3 and index == 1):
             return None, 0.0
@@ -2678,44 +2752,45 @@ def hauntlet_unstick(img: Image, target_index: Optional[int], tries: int, last_k
     """Get off whatever the player is caught on while holding forward: a step sideways (the forward key stays held, so it slides
     along) and a jump. The way is towards the door being walked to (its TV against where the player stands, HAUNTLET_UNSTICK_MARGIN
     px or more off), the other way each time after that, and when the way isn't known a random one first; the step is
-    HAUNTLET_UNSTICK_STEP seconds longer for each try, up to HAUNTLET_UNSTICK_MAX. The key used."""
+    HAUNTLET_UNSTICK_STEP seconds longer for each try, up to HAUNTLET_UNSTICK_MAX. The key used. In a fork the door's place is the doorway
+    (find_fork_doorways()), when both are in sight."""
     tvs = find_door_tvs(img)
+    where = [x for x, _ in tvs] if len(tvs) == 3 else list(find_fork_doorways(img) or ())
     key: Optional[str] = None
     if last_key is not None:
         key = cfg.HAUNTLET_RIGHT_KEY if last_key == cfg.HAUNTLET_LEFT_KEY else cfg.HAUNTLET_LEFT_KEY
-    elif target_index is not None and len(tvs) == 3:
+    elif target_index is not None and target_index < len(where):
         hearts = read_hauntlet_hearts(img)
-        dx = tvs[target_index][0] - (hearts.center_x if hearts else cfg.REFERENCE_CENTER_X)
+        dx = where[target_index] - (hearts.center_x if hearts else cfg.REFERENCE_CENTER_X)
         if abs(dx) >= cfg.HAUNTLET_UNSTICK_MARGIN:
             key = cfg.HAUNTLET_RIGHT_KEY if dx > 0 else cfg.HAUNTLET_LEFT_KEY
     if key is None:
         key = random.choice((cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_RIGHT_KEY))
     print(f"[debug] Hauntlet 2: not moving - a step {key}")
+    mark_run_capture("Hauntlet 2: not moving")
     pydirectinput.press(cfg.KEY_JUMP)
     hold_key(key, min(cfg.HAUNTLET_UNSTICK_STEP * (tries + 1), cfg.HAUNTLET_UNSTICK_MAX))
     return key
 
 def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, watch: MinigameWatch, until_doors: bool = False,
-                  target_index: Optional[int] = None) -> bool:
-    """Walk to a door: hold forward, with `direction` (a strafe key, or None) held for the first `duration` seconds,
+                  target_index: Optional[int] = None, until_doorways: bool = False) -> bool:
+    """Walk to a door: first strafe, `direction` (a strafe key, or None) held for `duration` seconds on its own, then hold forward
     until the room number changes (at most HAUNTLET_WALK_MAX seconds) and then HAUNTLET_WALK_PAST_DURATION longer, as
     the number changes with the player still in the doorway - or, with `until_doors`, until a row of TVs is
-    on screen (a hall's doorway leads into a room whose number is the same). The view is looked at every HAUNTLET_LOOK_INTERVAL
+    on screen (a hall's doorway leads into a room whose number is the same), or, with `until_doorways`, until both of a
+    fork's doorways can be seen (find_fork_doorways()). The view is looked at every HAUNTLET_LOOK_INTERVAL
     seconds: if it hasn't moved (hauntlet_view(), HAUNTLET_STILL_LEVEL) for HAUNTLET_STILL_AFTER seconds the player is caught
-    on something and hauntlet_unstick() steps sideways, towards door `target_index` of the three. A walk that doesn't get
+    on something and hauntlet_unstick() steps sideways, towards door `target_index` of the three (or the fork's two). A walk that doesn't get
     anywhere counts in `run.stuck`; the next one steps back first (HAUNTLET_BACKUP_DURATION). True if the victory screen showed."""
-    run.walked_at = started = time.time()
+    run.walked_at = time.time()
     if run.stuck > 0:
         hold_key(cfg.HAUNTLET_BACK_KEY, cfg.HAUNTLET_BACKUP_DURATION)
+    if direction and duration > 0:
+        hold_key(direction, duration)                                           # one key at a time: the strafe, then the walk
     arrived = False
+    started = time.time()
     pydirectinput.keyDown(cfg.HAUNTLET_2_FORWARD_KEY)
     try:
-        if direction:
-            pydirectinput.keyDown(direction)
-            try:
-                wait_interruptible(duration)
-            finally:
-                pydirectinput.keyUp(direction)
         last_view: Optional[np.ndarray] = None
         still_since: Optional[float] = None
         tries, last_key = 0, None
@@ -2731,7 +2806,7 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
                 break
             if watch.problem:
                 break
-            if until_doors and find_door_tvs(img):
+            if (until_doors and find_door_tvs(img)) or (until_doorways and find_fork_doorways(img)):
                 arrived = True
                 break
             now = time.time()
@@ -2762,6 +2837,8 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
         pydirectinput.keyUp(cfg.HAUNTLET_2_FORWARD_KEY)
         run.walked_at = time.time()
         run.stuck = 0 if arrived else run.stuck + 1
+    if not arrived:
+        mark_run_capture(f"Hauntlet 2: the walk in room {run.room} got nowhere")
     return False
 
 def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
@@ -2798,14 +2875,28 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
                 run.turns += 1
                 continue
             index, img = hauntlet_choose(img, doors, run, watch)
+            if len(doors) == 2:
+                doorways = find_fork_doorways(img)
+                if doorways is None:                                            # the doorways are too far to be seen from the entrance: walk on until both are
+                    if hauntlet_walk(None, 0.0, run, watch, until_doorways=True):
+                        return True
+                    img = minigame_look(watch)
+                    if read_hauntlet_room(img) not in (None, run.room):         # (the walk went through one)
+                        continue
+                    doorways = find_fork_doorways(img)
+                if doorways is not None:
+                    doors = [HauntletDoor(x, 0, None) for x in doorways]
+                else:
+                    mark_run_capture(f"Hauntlet 2: the fork's doorways of room {run.room} were not seen")
             direction, duration = hauntlet_strafe(img, doors, index)
-            if hauntlet_walk(direction, duration, run, watch, until_doors=len(doors) == 1, target_index=index if len(doors) == 3 else None):
+            if hauntlet_walk(direction, duration, run, watch, until_doors=len(doors) == 1, target_index=index if len(doors) >= 2 else None):
                 return True
             if len(doors) == 1:
                 run.walked_at = None                                            # whatever is past the doorway is looked at at once
     finally:
         if run.room is not None:
             log_run_event(f"Hauntlet 2: got as far as room {run.room}")
+            state.minigame_detail["room"] = run.room
     return False
 
 def ghost_character_box(hsv: Image) -> Optional[tuple[int, int, int, int]]:
@@ -2829,9 +2920,8 @@ def find_ghost_blobs(img: Image, boss: bool = False) -> list[tuple[int, int, int
     """(x, y, area) of every ghost in `img`, biggest first: the connected pieces of the translucent cyan the ghosts and the
     boss are drawn in (GHOST_COLOR), at least GHOST_MIN_AREA px, not in the HUD (GHOST_IGNORE_BOXES) or on the character -
     and, in the boss phase (`boss`), not on the boss's health bar, whose crest and icons are cyan too."""
-    low, high = cfg.GHOST_COLOR
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, low, high)
+    mask = cv2.bitwise_or(cv2.inRange(hsv, *cfg.GHOST_COLOR), cv2.inRange(hsv, *cfg.GHOST_COLOR_FAR))
     closeup = ghost_character_box(hsv)
     for left, top, right, bottom in cfg.GHOST_IGNORE_BOXES + ((cfg.GHOST_BOSS_BAR_IGNORE,) if boss else ()) + ((closeup,) if closeup else ()):
         mask[max(0, top):bottom, max(0, left):right] = 0
@@ -2935,15 +3025,30 @@ def furniture_outlined(before: Image, after: Image, point: Point) -> bool:
     new = now & (cv2.dilate(was, np.ones((5, 5), np.uint8)) == 0)
     return int(np.count_nonzero(new)) >= cfg.GHOST_OUTLINE_MIN
 
-def find_furniture(watch: MinigameWatch) -> Point:
-    """Somewhere the beam can be held on furniture: the mouse is moved to up to GHOST_FURNITURE_PROBES random places in
-    GHOST_FURNITURE_BOX (far from the character, far_from_character()), a look at each (furniture_outlined()), and the first
-    one that gets the white outline is it; none did, the last place tried."""
-    point = far_from_character(cfg.GHOST_FURNITURE_BOX, cfg.GHOST_FURNITURE_MIN_DISTANCE)
+def ring_point(centre: Point, box: tuple[int, int, int, int], radii: tuple[int, int]) -> Point:
+    """A random point GHOST_RING-ish px (`radii`, nearest and farthest) from `centre`, pulled into `box`."""
+    angle, radius = random.uniform(0, 2 * np.pi), random.uniform(*radii)
+    left, top, right, bottom = box
+    return (min(max(int(centre[0] + radius * np.cos(angle)), left), right), min(max(int(centre[1] + radius * np.sin(angle)), top), bottom))
+
+def find_furniture(watch: MinigameWatch, around: Optional[Point] = None, avoid: Sequence[Point] = ()) -> Point:
+    """Somewhere the beam can be held on furniture: the mouse is moved to up to GHOST_FURNITURE_PROBES places - random ones in
+    GHOST_FURNITURE_BOX far from the character (far_from_character()), or, with `around`, ones in a ring of GHOST_RING px around that point
+    (a ghost that is hiding in furniture) - none within GHOST_BAD_SPOT_RADIUS px of any of `avoid`, a look at each (furniture_outlined()),
+    and the first one that gets the white outline is it; none did, the last place tried."""
+    def place() -> Point:
+        point = (0, 0)
+        for _ in range(50):
+            point = (ring_point(around, cfg.GHOST_FURNITURE_BOX, cfg.GHOST_RING) if around is not None
+                     else far_from_character(cfg.GHOST_FURNITURE_BOX, cfg.GHOST_FURNITURE_MIN_DISTANCE))
+            if all((point[0] - x) ** 2 + (point[1] - y) ** 2 >= cfg.GHOST_BAD_SPOT_RADIUS ** 2 for x, y in avoid):
+                break
+        return point
+    point = place()
     before = minigame_look(watch)
     for probe in range(cfg.GHOST_FURNITURE_PROBES):
         if probe:
-            point = far_from_character(cfg.GHOST_FURNITURE_BOX, cfg.GHOST_FURNITURE_MIN_DISTANCE)
+            point = place()
         pydirectinput.moveTo(*to_screen(*point))
         wait_interruptible(cfg.GHOST_OUTLINE_WAIT)
         after = minigame_look(watch)
@@ -2952,13 +3057,63 @@ def find_furniture(watch: MinigameWatch) -> Point:
         before = after
     return point
 
+class GhostFeedback:
+    """What the score says about where the beam is held, fed one screenshot at a time (look()): the digits of the score pill, as a mask of
+    their white pixels, differ from the last look's when the score changed - which means the beam is on a ghost. Nothing is concluded
+    while the banner isn't on screen (`visible`). See docs/ARCHITECTURE.md#playing-ghost-gallery."""
+
+    def __init__(self, now: float) -> None:
+        self.digits: Optional[np.ndarray] = None            # the white pixels of the score at the last look; None if the banner wasn't there
+        self.visible = False
+        self.scored_at = now                                # the last time the score changed (or the start)
+        self.spot_since = now                               # since when the beam has been on what it is on
+        self.bad: list[tuple[Point, float]] = []            # places that scored nothing, and until when to keep away from them
+
+    def look(self, img: Image, now: float) -> bool:
+        """Take in a screenshot. True if the score changed since the look before."""
+        left, top, right, bottom = cfg.GHOST_SCORE_BOX
+        box = img[top:bottom, left:right]
+        pill = cv2.inRange(cv2.cvtColor(box, cv2.COLOR_BGR2HSV), cfg.GHOST_SCORE_PILL[0], cfg.GHOST_SCORE_PILL[1])
+        self.visible = int(np.count_nonzero(pill)) >= cfg.GHOST_SCORE_PILL_MIN
+        if not self.visible:
+            self.digits = None
+            return False
+        digits = box.min(axis=2) >= cfg.GHOST_SCORE_WHITE
+        changed = self.digits is not None and int(np.count_nonzero(digits ^ self.digits)) >= cfg.GHOST_SCORE_CHANGE
+        self.digits = digits
+        if changed:
+            self.scored_at = self.spot_since = now
+        return changed
+
+    def new_spot(self, now: float) -> None:
+        """The beam goes somewhere else: it has a trial of its own."""
+        self.spot_since = now
+
+    def trial_over(self, now: float) -> bool:
+        """The beam has been where it is for GHOST_SPOT_TRIAL seconds without a score."""
+        return self.visible and now - max(self.scored_at, self.spot_since) >= cfg.GHOST_SPOT_TRIAL
+
+    def stalled(self, now: float) -> bool:
+        """No score for GHOST_STALL seconds."""
+        return self.visible and now - self.scored_at >= cfg.GHOST_STALL
+
+    def mark_bad(self, point: Point, now: float) -> None:
+        self.bad.append((point, now + cfg.GHOST_BAD_SPOT_TIME))
+
+    def avoid(self, now: float) -> list[Point]:
+        """The places to keep away from for now."""
+        self.bad = [(point, until) for point, until in self.bad if until > now]
+        return [point for point, _ in self.bad]
+
 def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     """Ghost Gallery: once its overlay shows (or the start wait is over), look at the screen every GHOST_LOOK_INTERVAL,
     aim the mouse at a ghost (choose_ghost_target()) and hold the button down on it, until the victory screen shows or the
     overlay says it's over. It begins by zooming the camera out and tilting it down for a better view. In the boss phase it is the boss, but while the boss's bar shows ghost icons it can't be hurt
     (ghost_boss_shielded()) and the small ghosts are aimed at instead. With no ghost in sight, before the boss phase the beam
     is held on random furniture (ghosts hide there), and the camera is turned every GHOST_CAMERA_PERIOD to find some;
-    it jumps now and then, and walks about a step at a time. True if won before `deadline`. See docs/ARCHITECTURE.md#playing-ghost-gallery.
+    it jumps now and then, and walks about a step at a time. The score is watched (GhostFeedback): a ghost the beam scores nothing on is
+    taken to hide, and the furniture around it is tried; no score for GHOST_STALL seconds moves the player and turns the camera.
+    True if won before `deadline`. See docs/ARCHITECTURE.md#playing-ghost-gallery.
     """
     print(f"[debug] Ghost Gallery: waiting for it to start (at most {cfg.MINIGAME_START_WAIT:g}s)...")
     waited_until = time.time() + cfg.MINIGAME_START_WAIT
@@ -2980,6 +3135,10 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     phase = "ghosts"
     furniture: Optional[Point] = None
     furniture_until = 0.0
+    feedback = GhostFeedback(time.time())            # what the score says about where the beam is
+    hide_spot: Optional[Point] = None                # furniture near a ghost the score says is hiding, which the beam is held on until `hide_until`
+    hide_until = 0.0
+    last_target: Optional[Point] = None
     last_turn = last_seen = time.time()
     next_jump = time.time() + random.uniform(cfg.GHOST_JUMP_MIN, cfg.GHOST_JUMP_MAX)
 
@@ -3007,6 +3166,8 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
             img = minigame_look(watch)
             if detect_minigame_victory(img):
                 return True
+            if feedback.look(img, time.time()):
+                hide_spot, hide_until = None, 0.0                           # it scored: whatever the beam is on is right
             bar = ghost_boss_bar_visible(img)
             if held and time.time() >= regrab_at:                           # knocked down, the player lets go of the beam and has to press again: do both now and then
                 let_go()
@@ -3020,9 +3181,33 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 blobs = [blob for blob in blobs if blob[2] <= cfg.GHOST_SMALL_MAX]
             target = choose_ghost_target(blobs, phase == "boss" and bool(blobs) and blobs[0][2] >= cfg.GHOST_BOSS_MIN, target)   # (the boss is a big one, else it's the ghosts that are there)
             now = time.time()
+            if target is not None and (last_target is None or (target[0] - last_target[0]) ** 2 + (target[1] - last_target[1]) ** 2 > cfg.GHOST_STICK ** 2):
+                feedback.new_spot(now)                                      # another ghost: it has a trial of its own
+            last_target = target
+            if phase == "ghosts" and feedback.stalled(now):                 # nothing has scored for a long time (a view blocked by a pillar, a beam on the floor): somewhere else, looking another way
+                print(f"[debug] Ghost Gallery: no score for {cfg.GHOST_STALL:g}s - moving and turning the camera")
+                mark_run_capture(f"Ghost Gallery: no score for {cfg.GHOST_STALL:g}s")
+                let_go()
+                stop_walking()
+                chasing = None
+                hold_key(random.choice(cfg.MOVE_KEYS), cfg.GHOST_STALL_WALK)
+                pydirectinput.press(cfg.KEY_JUMP)
+                rotate_camera(cfg.GHOST_STALL_TURN, 0, random.choice((-1, 1)))
+                feedback.scored_at = last_turn = time.time()
+                feedback.new_spot(last_turn)
+                furniture, hide_spot, hide_until = None, None, 0.0
+                now = time.time()
+            elif phase == "ghosts" and target is not None and feedback.trial_over(now):   # a ghost the beam on it doesn't score: it is hiding in furniture, which is somewhere around it
+                mark_run_capture("Ghost Gallery: the beam on a ghost scores nothing")
+                if hide_spot is not None:
+                    feedback.mark_bad(hide_spot, now)                       # (the furniture tried last scored nothing either)
+                hide_spot = find_furniture(watch, around=target, avoid=feedback.avoid(now))
+                hide_until = time.time() + cfg.GHOST_SPOT_TRIAL
+                feedback.new_spot(time.time())
+                now = time.time()
             if target is not None:
                 last_seen = now
-                aim(target)
+                aim(hide_spot if hide_spot is not None and now < hide_until else target)
             elif phase == "ghosts":                                         # nothing to be seen before the boss: try the furniture
                 if furniture is None or now >= furniture_until:
                     furniture = find_furniture(watch)                       # (the mouse is moved around with the beam down)
@@ -3035,7 +3220,8 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 rotate_camera(cfg.GHOST_BOSS_TURN_DRAG, 0, turn)
                 last_turn = time.time()
             elif now - max(last_turn, last_seen) >= cfg.GHOST_CAMERA_PERIOD:
-                rotate_camera()
+                turn = turn or random.choice((-1, 1))                       # one way round, not back and forth: a sweep sees the whole hall
+                rotate_camera(direction=turn)
                 last_turn = time.time()
             chase = ghost_chase_key(target) if target is not None else None   # always towards the ghost or the boss, until it is near
             if chase != chasing:
@@ -3110,10 +3296,56 @@ def accept_minigame_popup() -> bool:
         print(f"[debug] the popup is still up after click {attempt + 1}")
     return False
 
+def candy_corn_digit_templates() -> dict[int, Image]:
+    """{digit: picture} for the saved HUD digits (CANDY_CORN_DIGIT_DIR), re-read when the folder changes."""
+    directory = cfg.CANDY_CORN_DIGIT_DIR
+    return _digit_templates(directory, os.path.getmtime(directory)) if os.path.isdir(directory) else {}
+
+def read_candy_corn(img: Image) -> Optional[int]:
+    """The candy corn total in the HUD of `img`, or None when it isn't readable: no counter on screen (at home, in a minigame), or a
+    digit that matches none of the saved ones. See docs/ARCHITECTURE.md#candy-corn."""
+    left, top, right, bottom = cfg.CANDY_CORN_BOX
+    mask = cv2.inRange(img[top:bottom, left:right], cfg.CANDY_CORN_RED[0], cfg.CANDY_CORN_RED[1])
+    count, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    tall = sorted((int(stats[i, 0]), int(stats[i, 1]), int(stats[i, 2]), int(stats[i, 3])) for i in range(1, count)
+                  if cfg.CANDY_CORN_DIGIT_HEIGHT[0] <= stats[i, 3] <= cfg.CANDY_CORN_DIGIT_HEIGHT[1])
+    boxes = [box for box in tall if box[2] <= cfg.CANDY_CORN_DIGIT_MAX_WIDTH]
+    templates = candy_corn_digit_templates()
+    if not 1 <= len(boxes) <= cfg.CANDY_CORN_MAX_DIGITS or len(boxes) != len(tall) or not templates:
+        return None
+    if any(not cfg.CANDY_CORN_PITCH[0] <= b[0] - a[0] <= cfg.CANDY_CORN_PITCH[1] for a, b in zip(boxes, boxes[1:])):
+        return None                                                          # a digit is missing, or something is between them
+    total = 0
+    for x, y, w, h in boxes:
+        picture = cv2.resize(mask[y:y + h, x:x + w], cfg.CANDY_CORN_DIGIT_SIZE, interpolation=cv2.INTER_AREA)
+        diffs = {digit: float(np.abs(picture.astype(int) - template.astype(int)).mean()) for digit, template in templates.items()}
+        digit = min(diffs, key=lambda d: diffs[d])
+        if diffs[digit] > cfg.CANDY_CORN_MAX_DIFF:
+            return None
+        total = total * 10 + digit
+    return total
+
+def save_minigame_result(name: str) -> Optional[str]:
+    """Save the GAME OVER! screen of the minigame `name` (the card with what the run earned, in candy corn, and its score) as
+    RUNS_DIR/results/run<N>_<name>_<time>.png, the newest MAX_RESULT_SHOTS kept. The path, or None. Never raises."""
+    try:
+        folder = os.path.join(cfg.RUNS_DIR, "results")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, f"run{state.run_number}_{name}_{time.strftime('%H%M%S')}.png")
+        left, top, right, bottom = cfg.MINIGAME_RESULT_BOX
+        if not cv2.imwrite(path, grab_screen()[top:bottom, left:right]):
+            return None
+        keep_newest_files(folder, cfg.MAX_RESULT_SHOTS, ".png")
+        return path
+    except Exception as error:
+        print(f"[!] couldn't save the result screen: {error}")
+        return None
+
 def play_minigame(name: str) -> bool:
-    """Take the popup's Yes, play `name` until its victory screen, click NICE!, respawn. Gives
-    up (a logged failure) if the overlay shows it over or never started, or after
-    MINIGAME_MAX_DURATION. Counts as progress only if won. See docs/ARCHITECTURE.md#need-handlers.
+    """Take the popup's Yes, play `name` until its GAME OVER! screen (which every run ends on: it is not a win, which would
+    give a crypt key, and the macro can't tell - what a run earned is the candy corn on that screen, which is saved, see
+    save_minigame_result()), click NICE!, respawn. Gives up (a logged failure) if the overlay shows it over or never
+    started, or after MINIGAME_MAX_DURATION. Counts as progress only if it ran to the end. See docs/ARCHITECTURE.md#need-handlers.
     """
     label = cfg.MINIGAME_LABELS.get(name, name)
     print(f"[!] playing {label}")
@@ -3128,27 +3360,35 @@ def play_minigame(name: str) -> bool:
         return False
     started = time.time()
     watch = MinigameWatch(name)
+    state.minigame_detail = {}
+    before = read_candy_corn_settled(cfg.CANDY_CORN_BEFORE_TRIES)      # in the lobby the total is on screen (after the white of the teleport): what the run earned is the difference
     capture = start_run_capture(name)
     outcome = "interrupted"
+    finished = False
+    after: Optional[int] = None
     send_macro_window_to_back()                 # it covers part of the game's screen, and would be in the recording and the readers' way
     try:
-        won = MINIGAME_PLAYERS[name](started + cfg.MINIGAME_MAX_DURATION, watch)
-        outcome = "won" if won else (watch.problem or "did not reach the victory screen in time")
+        finished = MINIGAME_PLAYERS[name](started + cfg.MINIGAME_MAX_DURATION, watch)
+        outcome = "finished (the game over screen)" if finished else (watch.problem or "did not reach the game over screen in time")
+        after = read_candy_corn_settled()        # (the game over screen has the total too, counting up for a moment)
     finally:
         release_all_inputs()
         bring_macro_window_to_front()
-        finish_run_capture(capture, outcome)
-    if won:
+        result = minigame_result(name, outcome, finished, time.time() - started, before, after)
+        finish_run_capture(capture, outcome, result)
+    record_minigame_result(result)
+    if finished:
         log_run_event(f"minigame finished: {label} ({time.time() - started:.0f}s)")
+        save_minigame_result(name)
         click_nice_until_gone()
     else:
         reason = watch.problem or f"did not reach the victory screen within {cfg.MINIGAME_MAX_DURATION:g}s"
         log_failure(f"{label} {reason}")
     state.last_detection = time.time()      # no needs could be seen while it ran
-    if won:
+    if finished:
         state.last_progress = time.time()   # a failed one (never started, left early) must not reset the no-progress rejoin
     respawn_character()
-    return won
+    return finished
 
 def close_minigame_win_screen(abandon: bool = True) -> bool:
     """If the win screen is up, click NICE!; with `abandon` also count it as progress and
@@ -3429,6 +3669,8 @@ class InputCapture:
         self.dropped = 0
         self._kept: list[tuple[str, int]] = []          # the frames on disk, oldest first, with their sizes
         self._gap = cfg.CAPTURE_FRAME_INTERVAL if max_zips else 0.0     # least seconds between two saved frames
+        self.protected: set[str] = set()                # frames the thinning leaves alone: saved around a mark(), or in the tail of a run that went wrong
+        self._burst_until = 0.0                         # until then every look saves a frame, however far apart the thinning has put them
         self.stop_event = threading.Event()
         self.shot_now = threading.Event()
         self.stopped_because: Optional[str] = None
@@ -3483,6 +3725,22 @@ class InputCapture:
         except (OSError, ValueError):
             pass
         return summary
+
+    def mark(self, reason: str) -> None:
+        """Something went wrong just now: note it in events.jsonl (a "mark" line with the `reason`), save a frame at once and every
+        look for the next RUN_CAPTURE_BURST seconds - frames the thinning keeps (see `protected`). Only on a capture with a budget."""
+        if not self.running or not self.max_zips:
+            return
+        self._emit("mark", reason=reason)
+        self._burst_until = time.time() + cfg.RUN_CAPTURE_BURST
+        self.shot_now.set()
+
+    def protect_tail(self, seconds: float) -> None:
+        """Keep the frames of the last `seconds` of the run from being thinned out - where a run that went wrong shows why."""
+        horizon = time.time() - self.started - seconds
+        for name, _ in self._kept:
+            if len(self.protected) < cfg.RUN_CAPTURE_PROTECTED and float(name[:-len(".png")].rsplit("_", 1)[1]) >= horizon:
+                self.protected.add(name)
 
     def _emit(self, kind: str, **fields: Any) -> None:
         line = json.dumps({"t": round(time.time() - self.started, 3), "type": kind, **fields})
@@ -3543,7 +3801,8 @@ class InputCapture:
                 seconds = time.time() - self.started
                 screen = grab_screen()
                 small = cv2.resize(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY), (320, 180), interpolation=cv2.INTER_AREA)
-                if seconds - last_saved >= self._gap and (
+                bursting = time.time() < self._burst_until and len(self.protected) < cfg.RUN_CAPTURE_PROTECTED     # (around a mark(): every look)
+                if bursting or seconds - last_saved >= self._gap and (
                         clicked or last_small is None or seconds - last_saved >= max(cfg.CAPTURE_MAX_SKIP, self._gap)
                         or np.count_nonzero(cv2.absdiff(small, last_small) > cfg.CAPTURE_CHANGE_LEVEL) / small.size >= cfg.CAPTURE_CHANGE_FRACTION):
                     name = f"frame_{self.frames + 1:06d}_{seconds:.3f}.png"
@@ -3552,6 +3811,8 @@ class InputCapture:
                         self._emit("frame", file=name)
                         last_small, last_saved = small, seconds
                         self._kept.append((name, os.path.getsize(os.path.join(self.folder, name))))
+                        if bursting:
+                            self.protected.add(name)
                         self._keep_within_budget()
                 else:
                     self.skipped += 1
@@ -3567,9 +3828,12 @@ class InputCapture:
         events = os.path.join(self.folder, "events.jsonl")
         while self.max_zips and len(self._kept) > 1 and len(plan_zip_parts(
                 [size for _, size in self._kept], os.path.getsize(events) if os.path.exists(events) else 0)) > self.max_zips:
-            keep = [frame for i, frame in enumerate(self._kept) if i % 2 == 0 or i == len(self._kept) - 1]
-            if len(keep) == len(self._kept):            # two frames, and the second is the newest: the older one goes
-                keep = keep[1:]
+            keep = [frame for i, frame in enumerate(self._kept) if i % 2 == 0 or i == len(self._kept) - 1 or frame[0] in self.protected]
+            if len(keep) == len(self._kept):            # nothing went: the oldest frame that isn't protected (or the newest) goes
+                loose = [frame for frame in self._kept[:-1] if frame[0] not in self.protected]
+                if not loose:
+                    break                               # only frames that must stay are left
+                keep = [frame for frame in self._kept if frame != loose[0]]
             for name, size in self._kept:
                 if (name, size) not in keep:
                     try:
@@ -3647,31 +3911,123 @@ def start_run_capture(label: str) -> Optional[InputCapture]:
     if not cfg.MINIGAME_CAPTURE or (state.capture is not None and state.capture.running):
         return None
     try:
-        make_room_for_capture(cfg.RUN_CAPTURES_DIR, cfg.MAX_RUN_CAPTURES)
+        os.makedirs(cfg.RUN_CAPTURES_DIR, exist_ok=True)
         capture = InputCapture(os.path.join(cfg.RUN_CAPTURES_DIR, f"{label}_{time.strftime('%Y%m%d_%H%M%S')}"), max_zips=cfg.RUN_CAPTURE_ZIPS)
         capture.start()
     except Exception as error:
         print(f"[!] Couldn't start recording the minigame: {error}")
         return None
+    state.run_capture = capture
     print(f"[debug] recording the minigame: {capture.folder}")
     return capture
 
-def finish_run_capture(capture: Optional[InputCapture], outcome: str) -> None:
-    """Stop a run capture (if there is one), note how the run ended in its info.json, and zip it for sending."""
+def mark_run_capture(reason: str) -> None:
+    """Say to the recording of the minigame being played, if there is one, that something went wrong now (InputCapture.mark()): frames of
+    this moment are saved and kept. Never raises."""
+    capture = state.run_capture
     if capture is None:
         return
     try:
+        capture.mark(reason)
+    except Exception as error:
+        print(f"[!] couldn't mark the recording: {error}")
+
+def finish_run_capture(capture: Optional[InputCapture], outcome: str, result: Optional[dict[str, Any]] = None) -> None:
+    """Stop a run capture (if there is one), note how the run ended in its info.json (with the fields of `result`, what the run earned, see
+    minigame_result()), and zip it for sending."""
+    if capture is None:
+        return
+    try:
+        state.run_capture = None                                # (one at a time)
+        if not outcome.startswith("finished"):
+            capture.protect_tail(cfg.RUN_CAPTURE_TAIL)          # a run that went wrong: its last moments are what shows why
         capture.stopped_because = capture.stopped_because or "the minigame ended"
         print(f"[debug] minigame recording stopped: {capture.stop()}")
         path = os.path.join(capture.folder, "info.json")
         with open(path) as f:
             info = json.load(f)
         info["outcome"] = outcome
+        info.update(result or {})
         with open(path, "w") as f:
             json.dump(info, f, indent=1)
         zip_capture_in_background(capture.folder)
     except Exception as error:
         print(f"[!] Couldn't finish recording the minigame: {error}")
+
+def captures_to_keep(runs: list[tuple[str, Optional[int], float]]) -> set[str]:
+    """Of the recordings of one minigame, `runs` = (folder, candy corn earned or None, when it started), the ones to keep: the
+    latest, the RUN_CAPTURES_BEST that earned most and the RUN_CAPTURES_WORST that earned least (a run whose candy corn wasn't read
+    counts as the worst)."""
+    if not runs:
+        return set()
+    def earned(run: tuple[str, Optional[int], float]) -> tuple[int, float]:
+        return (-1 if run[1] is None else run[1], run[2])
+    ranked = sorted(runs, key=earned)
+    keep = {max(runs, key=lambda run: run[2])[0]}
+    keep |= {run[0] for run in ranked[:cfg.RUN_CAPTURES_WORST]}
+    keep |= {run[0] for run in ranked[len(ranked) - cfg.RUN_CAPTURES_BEST:]}
+    return keep
+
+def prune_run_captures(label: str) -> None:
+    """Delete the recordings of minigame `label` in RUN_CAPTURES_DIR that captures_to_keep() doesn't keep, going by the `earned` and
+    `started` that record_minigame_result() wrote into each one's info.json. Never raises."""
+    try:
+        if not os.path.isdir(cfg.RUN_CAPTURES_DIR):
+            return                                                  # (recording is off, or nothing has been recorded yet)
+        runs = []
+        for name in os.listdir(cfg.RUN_CAPTURES_DIR):
+            folder = os.path.join(cfg.RUN_CAPTURES_DIR, name)
+            if not (name.startswith(label + "_") and os.path.isdir(folder)):
+                continue
+            try:
+                with open(os.path.join(folder, "info.json")) as f:
+                    info = json.load(f)
+            except (OSError, ValueError):
+                info = {}
+            try:
+                started = time.mktime(time.strptime(name[len(label) + 1:], "%Y%m%d_%H%M%S"))     # (the folder's name says when; its time changes as files go in and out)
+            except ValueError:
+                started = os.path.getmtime(folder)
+            runs.append((folder, info.get("earned"), started))
+        for folder in {run[0] for run in runs} - captures_to_keep(runs):
+            shutil.rmtree(folder, ignore_errors=True)
+    except Exception as error:
+        print(f"[!] couldn't tidy the recordings: {error}")
+
+def minigame_result(name: str, outcome: str, finished: bool, seconds: float, before: Optional[int], after: Optional[int]) -> dict[str, Any]:
+    """What a minigame run came to: how it ended, and the candy corn it earned - the HUD total after less the total before, None when either
+    wasn't read - plus what its player noted (state.minigame_detail: the room reached in Hauntlet 2)."""
+    earned = after - before if before is not None and after is not None and after >= before else None
+    return {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "run": state.run_number, "minigame": name, "outcome": outcome, "finished": finished,
+            "seconds": round(seconds), "candy_corn_before": before, "candy_corn_after": after, "earned": earned, **state.minigame_detail}
+
+def record_minigame_result(result: dict[str, Any]) -> None:
+    """Note a finished minigame run's `result` (minigame_result()): a line of RUNS_DIR/results/results.jsonl and one in the run log - then the
+    recordings of that minigame that are not among its best, its worst and its latest are deleted (prune_run_captures()). Never raises."""
+    try:
+        folder = os.path.join(cfg.RUNS_DIR, "results")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "results.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps(result) + "\n")
+        name, earned = result["minigame"], result["earned"]
+        extra = "".join(f", {key} {value}" for key, value in state.minigame_detail.items())
+        log_run_event(f"minigame result: {cfg.MINIGAME_LABELS.get(name, name)}: " + (f"{earned} candy corn" if earned is not None else "candy corn not read") + extra)
+        prune_run_captures(name)
+    except Exception as error:
+        print(f"[!] couldn't note the result: {error}")
+
+def read_candy_corn_settled(tries: int = 4) -> Optional[int]:
+    """read_candy_corn() of the screen once two looks half a second apart agree (the total counts up for a moment after a run); if they
+    never do, the last total read, and None if none was. Costs a second or so, up to `tries` looks of CANDY_CORN_SETTLE apart."""
+    seen: Optional[int] = None
+    for attempt in range(tries):
+        now = read_candy_corn(grab_screen())
+        if now is not None and now == seen:
+            return now
+        seen = now if now is not None else seen                     # (a look that reads nothing - a white flash - doesn't forget the one before)
+        if attempt < tries - 1:
+            wait_interruptible(cfg.CANDY_CORN_SETTLE)
+    return seen
 
 def toggle_input_capture() -> Optional[InputCapture]:
     """Start a capture (a fresh folder in CAPTURES_DIR, the oldest beyond MAX_CAPTURES deleted) or, if one is
@@ -4376,7 +4732,7 @@ def parse_run(log_path: str, run: Union[int, str]) -> Optional[dict[str, Any]]:
             data["events"]["minigame popups declined"] += 1
         elif m := MINIGAME_RE.match(text):
             if m.group(1) == "finished":
-                data["events"]["minigames won"] += 1
+                data["events"]["minigames finished"] += 1
         elif " interrupted by " in text:
             data["events"]["needs interrupted"] += 1
     return data
@@ -4645,11 +5001,11 @@ def generate_run_report(log_path: str, run: Union[int, str], out_dir: str, basic
 # GUI
 # ============================================================================
 
-def keep_newest_files(directory: str, keep: int) -> None:
-    """Delete the oldest files in `directory` beyond the newest `keep`. Never raises. (A pruned run report can be
-    drawn again from the logs, which are kept - see generate_run_report().)"""
+def keep_newest_files(directory: str, keep: int, suffix: str = "") -> None:
+    """Delete the oldest files in `directory` (only those ending in `suffix`) beyond the newest `keep`. Never raises. (A pruned run
+    report can be drawn again from the logs, which are kept - see generate_run_report().)"""
     try:
-        files = sorted((os.path.join(directory, f) for f in os.listdir(directory)), key=os.path.getmtime)
+        files = sorted((os.path.join(directory, f) for f in os.listdir(directory) if f.endswith(suffix)), key=os.path.getmtime)
         for old in files[:max(0, len(files) - keep)]:
             if os.path.isfile(old):
                 os.remove(old)
@@ -4657,12 +5013,12 @@ def keep_newest_files(directory: str, keep: int) -> None:
         pass
 
 def write_run_report(run: Union[int, str]) -> Optional[str]:
-    """Chart run `run` from the log into REPORTS_DIR (see RUN REPORT above) and print
+    """Chart run `run` from the log into RUNS_DIR, beside the run's own log (see RUN REPORT above) and print
     where it went. Returns the path, or None. Never raises."""
-    path = generate_run_report(cfg.RUN_LOG_PATH, run, cfg.REPORTS_DIR, cfg.BUTTON_NAMES, cfg.TELEPORT_WALK_NEEDS)
+    path = generate_run_report(cfg.RUN_LOG_PATH, run, cfg.RUNS_DIR, cfg.BUTTON_NAMES, cfg.TELEPORT_WALK_NEEDS)
     if path:
         print(f"[debug] run report: {path}")
-        keep_newest_files(cfg.REPORTS_DIR, cfg.MAX_REPORTS)
+        keep_newest_files(cfg.RUNS_DIR, cfg.MAX_REPORTS, ".png")
     return path
 
 def run_all_need_handlers(handlers: Optional[dict[str, Callable[[], NeedHandler]]] = None) -> dict[str, str]:

@@ -73,6 +73,23 @@ MINIGAME_OVERLAY_START_GRACE = 60.0
 MINIGAME_VICTORY_CHECK_INTERVAL = 1.0
 MINIGAME_POPUP_CHECK_INTERVAL = 4.0   # the popup checks (stray windows, paycheck) run this often while a minigame is played
 MINIGAME_POPUP_END_WAIT = 30.0        # a popup of a minigame to be played waits this long, at most, while a need is in its end wait (the need can clear first)
+# The candy corn total in the HUD (top right, red digits on a white flag, shown in the lobby and in the world - not at home - and in the
+# game over screen) is read by read_candy_corn(): the red pixels (CANDY_CORN_RED, BGR) of CANDY_CORN_BOX that make up pieces CANDY_CORN_DIGIT_HEIGHT
+# tall (the commas are about half that) are the digits, each shrunk to CANDY_CORN_DIGIT_SIZE and compared with the saved ones; the best must differ
+# by less than CANDY_CORN_MAX_DIFF (0-255; the closest two saved digits differ by 50, and a digit not seen before by 11 at most in a leave-one-out test).
+# A piece that is as tall as a digit but wider, or digits further apart than CANDY_CORN_PITCH, mean something is in the way: not read.
+CANDY_CORN_BOX = (1495, 58, 1635, 88)
+CANDY_CORN_RED = ((0, 0, 180), (110, 110, 255))
+CANDY_CORN_DIGIT_HEIGHT = (15, 25)
+CANDY_CORN_DIGIT_MAX_WIDTH = 16
+CANDY_CORN_PITCH = (12, 26)                  # px between the left edges of two digits next to each other (15, 23-24 across a comma): more means one is missing
+CANDY_CORN_DIGIT_SIZE = (12, 20)
+CANDY_CORN_MAX_DIFF = 25
+CANDY_CORN_MAX_DIGITS = 9
+CANDY_CORN_BEFORE_TRIES = 12                 # looks (CANDY_CORN_SETTLE apart) at most for the total before a run: the lobby shows after the white screen of the teleport
+CANDY_CORN_SETTLE = 0.5                      # seconds between the looks of read_candy_corn_settled(): two in a row must agree
+MINIGAME_RESULT_BOX = (450, 130, 1500, 880)  # the GAME OVER! screen: the card with the candy corn earned (seen: x3606 for a Ghost Gallery score of 61600, x7560 for Hauntlet 2's room 18) and the score or the room
+MAX_RESULT_SHOTS = 200                      # the newest this many result screens are kept in RUNS_DIR/results
 MINIGAME_YES_TRIES = 3              # the popup's Yes is clicked this often at most, if it did not teleport the character...
 MINIGAME_TELEPORT_WAIT = 6.0        # ...which is looked for this long after each click: a white screen, or the whole view changing
 MINIGAME_TELEPORT_POLL = 0.1
@@ -81,8 +98,9 @@ MINIGAME_MAX_DURATION = 600.0       # gives up (and logs a failure) if the victo
 MINIGAME_ZOOM_OUT_DURATION = 3.0    # both minigames hold KEY_ZOOM_OUT this long when they begin (Hauntlet 2 again where it can't find the doors)
 MINIGAME_FINISH_WAIT = 5.0          # after clicking NICE!, before carrying on
 MINIGAME_VICTORY_CLICK_TRIES = 3      # NICE! clicks before giving up on the win screen closing
-MINIGAME_START_WAIT = 50.0          # Hauntlet 2 waits this long after teleporting, before it acts; Ghost Gallery waits until its overlay
-                                    # shows, but at most this long
+MINIGAME_START_WAIT = 90.0          # both minigames wait for their overlay (the game has begun: the lobby's countdown to a round that starts at a fixed time) and act
+                                    # when it shows - this is the most they wait for it, a limit that must outlast the longest queue (the overlay came 50.5 s after the Yes in one run;
+                                    # the Yes comes 12-52 s before the round, and a need's end wait holds it back by up to MINIGAME_POPUP_END_WAIT)
 HAUNTLET_2_FORWARD_KEY = "w"
 
 # ============================================================================
@@ -158,27 +176,27 @@ NEEDS_DIR = os.path.join(SCRIPT_DIR, "ref", "needs")      # the learned need ico
 HAUNTLET_DIGIT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "digits")   # 0.png ... 9.png: the digits of the ROOM panel, see read_hauntlet_room()
 HAUNTLET_ITEM_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "items")      # a folder per item (phone/, key/, ...) of pictures of its slot; see read_hauntlet_items()
 HAUNTLET_COUNT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "counts")    # x/, 1/, 2/: the glyphs of an item's "x2" badge
+CANDY_CORN_DIGIT_DIR = os.path.join(SCRIPT_DIR, "ref", "candy_corn_digits")      # 0.png ... 9.png: the digits of the candy corn total in the HUD, see read_candy_corn()
 DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
-# debug/ holds two subfolders - images/ for every png (the debug_*.png views, failures/, reports/) and logs/ for
-# every text and json file - plus the game config, which stays in debug/ itself so "Refresh debug" (which
-# empties everything else) leaves it alone, and recordings/ for the run videos.
+# debug/ holds images/ for every png (the debug_*.png views, failures/), logs/ for every text and json file, runs/ for
+# what belongs to one run (its log lines, run<N>.txt, and its chart, run<N>.png) and recordings/ for the run videos - plus
+# the game config, which stays in debug/ itself so "Refresh debug" (which empties everything else) leaves it alone.
 IMAGES_DIR = os.path.join(DEBUG_DIR, "images")
 LOGS_DIR = os.path.join(DEBUG_DIR, "logs")
-for _directory in (NEEDS_DIR, DEBUG_DIR, IMAGES_DIR, LOGS_DIR):
+RUNS_DIR = os.path.join(DEBUG_DIR, "runs")                    # run<N>.txt (this run's lines of the log on their own, see log_run_event()) and run<N>.png (its chart, see the RUN REPORT section of main.py)
+for _directory in (NEEDS_DIR, DEBUG_DIR, IMAGES_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
 RUN_LOG_PATH = os.path.join(LOGS_DIR, "run_log.txt")        # appended to, never overwritten
-RUN_LOGS_DIR = os.path.join(LOGS_DIR, "runs")                 # run<N>.txt: this run's lines of the log on their own - see log_run_event()
 RUN_COUNTER_PATH = os.path.join(LOGS_DIR, "run_counter.txt")  # holds the last-used run number
 GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")       # persisted game state - see load_game_config()
 OUTPUT_LOG_PATH = os.path.join(LOGS_DIR, "output.log")      # everything the macro prints, timestamped - see log_output()
 STATUS_PATH = os.path.join(LOGS_DIR, "status.json")         # live "is it alive and what's it doing" summary - see write_status()
 FAILURE_DIR = os.path.join(IMAGES_DIR, "failures")          # a folder per failure (screenshot, need icons, info) - see log_failure()
-REPORTS_DIR = os.path.join(IMAGES_DIR, "reports")           # run<N>.png charts of a run - see the RUN REPORT section of main.py
 RECORDINGS_DIR = os.path.join(DEBUG_DIR, "recordings")      # run videos - see RunRecorder
 OUTPUT_LOG_MAX_BYTES = 5 * 1024 * 1024   # output.log moves to output.log.old (replacing the last one) past this size
 MAX_FAILURE_FOLDERS = 100                # oldest failure folders are deleted beyond this many
-MAX_REPORTS = 50                         # oldest run report images are deleted beyond this many (the logs they are drawn from are kept)
+MAX_REPORTS = 50                         # oldest run report images (run<N>.png in RUNS_DIR) are deleted beyond this many (the run logs they are drawn from are kept)
 CONSOLE_MAX_LINES = 2000                 # the GUI's output box keeps its last this many lines (output.log keeps them all)
 
 # Recording a run ("Record the next run" on the Options tab): low quality on purpose, a video of a whole
@@ -208,12 +226,20 @@ CAPTURE_MAX_MINUTES = 15                 # a capture stops by itself after this 
 CAPTURE_MIN_FREE_MB = 3000               # ...or when less than this much disk is free
 MAX_CAPTURES = 5                         # oldest captures are deleted beyond this many
 # Every minigame played is recorded the same way, automatically (MINIGAME_CAPTURE; not while a capture of the hotkey's is
-# running), into a folder of RUN_CAPTURES_DIR, the newest MAX_RUN_CAPTURES kept. A lossless frame is 1-3 MB, so a run
-# is kept to RUN_CAPTURE_ZIPS zips of CAPTURE_ZIP_MB by thinning its frames out evenly (see InputCapture).
+# running), into a folder of RUN_CAPTURES_DIR. Of each minigame the captures of its RUN_CAPTURES_BEST best runs (the most candy corn
+# earned), its RUN_CAPTURES_WORST worst and its latest are kept (prune_run_captures()). A lossless frame is 1-3 MB, so a run
+# is kept to RUN_CAPTURE_ZIPS zips of CAPTURE_ZIP_MB by thinning its frames out evenly (see InputCapture) - except frames of
+# when things went wrong: at a mark() (a walk that got nowhere, a failure, a stall...) a frame is saved at once and every look for
+# the next RUN_CAPTURE_BURST seconds, and a run that didn't finish keeps the frames of its last RUN_CAPTURE_TAIL seconds; such
+# frames are not thinned out (up to RUN_CAPTURE_PROTECTED of them, or they would use up the budget).
 MINIGAME_CAPTURE = True
 RUN_CAPTURES_DIR = os.path.join(DEBUG_DIR, "minigame_captures")
 RUN_CAPTURE_ZIPS = 5
-MAX_RUN_CAPTURES = 5
+RUN_CAPTURES_BEST = 2
+RUN_CAPTURES_WORST = 2
+RUN_CAPTURE_BURST = 4.0
+RUN_CAPTURE_TAIL = 15.0
+RUN_CAPTURE_PROTECTED = 25
 CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into zips of at most this size (chat attachments are limited to 30 MB)
 
 # Playing Ghost Gallery (from a human's 162 s run). The ghosts and the boss are drawn in a translucent cyan, HSV (85, 140, 250) under the
@@ -223,6 +249,10 @@ CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into
 # and is told by the boss's health bar, a gold frame (15800-16800 gold pixels in GHOST_BOSS_BAR_BOX; 0-230 before). The player is aimed
 # with the mouse: the beam goes to the cursor. The ghost aimed at is followed while a ghost is within GHOST_STICK px of where it was.
 GHOST_COLOR = ((78, 90, 200), (100, 210, 255))
+# The ghosts of a view from afar (the hall seen from above, the character tiny) are more saturated: blue-cyan ovals of hue 88-96 and
+# saturation 170-240 (GHOST_COLOR stops at 210, and found none of them: in a run's first 120 s it aimed at a ghost 4 times). The slime
+# puddles, which look alike, are hue 80-83 and saturation 245 and over; the haunted paintings' glow is hue 100 and over; both are outside.
+GHOST_COLOR_FAR = ((84, 100, 200), (98, 240, 255))
 GHOST_CLOSE = 7
 GHOST_EMBLEM_HSV = ((140, 40, 200), (175, 255, 255))   # the pink glow of the emblem on the character's backpack: with the camera close it is 750-10000 px, far away there is none seen
 GHOST_EMBLEM_BOX = (500, 250, 1400, 950)
@@ -256,7 +286,7 @@ GHOST_FURNITURE_MIN_DISTANCE = 300           # px: the place is at least this fa
 GHOST_FURNITURE_PERIOD = 1.0
 GHOST_CAMERA_PERIOD = 1.5
 GHOST_CAMERA_DRAG = (150, 450)
-GHOST_CAMERA_TILT = 60
+GHOST_CAMERA_TILT = 0                        # px up or down in a turn of the camera: none - the pitch was a random walk, and ended on the ceiling, the floor, a wall (the start's tilt sets it)
 GHOST_CAMERA_DRAG_DURATION = 0.15
 GHOST_CAMERA_DRAG_STEPS = 6
 GHOST_START_TILT = 200                       # px of mouse drag down, right button held, at the start (after zooming out): a view from above
@@ -274,6 +304,24 @@ GHOST_START_FORWARD = 3.0                    # seconds of W after the camera is 
 GHOST_TOWARD_MARGIN = 130                    # px: a ghost or the boss farther than this from the character (GHOST_CHARACTER) on an axis is walked towards along it, the key held until it is nearer
 GHOST_JUMP_MIN = 3.0
 GHOST_JUMP_MAX = 7.0
+# Score feedback. The score (the purple pill of the banner, GHOST_SCORE_BOX, its colour GHOST_SCORE_PILL, at least GHOST_SCORE_PILL_MIN px of it when the banner is
+# there) says whether what the beam is held on is a ghost: its white digits (every channel at least GHOST_SCORE_WHITE) change by GHOST_SCORE_CHANGE px or more when it
+# moves (unchanged digits differ by 0 px, a changed score by 160 and more). Before the boss, a spot the beam has been on for GHOST_SPOT_TRIAL seconds without a score is
+# no use: furniture is put aside (places within GHOST_BAD_SPOT_RADIUS px of it aren't tried for GHOST_BAD_SPOT_TIME seconds) and another looked for; a ghost in sight
+# that scores nothing is hiding in furniture, which is looked for GHOST_RING px (nearest, farthest) around it. No score at all for GHOST_STALL seconds (a view blocked by a
+# pillar, a beam on the floor) is a stall: the beam is let go of, a random key held GHOST_STALL_WALK seconds, a jump, and the camera turned by GHOST_STALL_TURN px of drag.
+GHOST_SCORE_BOX = (1050, 56, 1170, 88)
+GHOST_SCORE_PILL = ((128, 150, 240), (134, 200, 255))
+GHOST_SCORE_PILL_MIN = 1500
+GHOST_SCORE_WHITE = 230
+GHOST_SCORE_CHANGE = 60
+GHOST_SPOT_TRIAL = 3.0
+GHOST_BAD_SPOT_RADIUS = 150
+GHOST_BAD_SPOT_TIME = 20.0
+GHOST_RING = (60, 220)
+GHOST_STALL = 12.0
+GHOST_STALL_WALK = 1.0
+GHOST_STALL_TURN = (450, 700)
 
 # Hauntlet 2, read from the screen (see the HAUNTLET 2 READER section of main.py).
 # The ROOM panel's number: white digits on a dark panel, always in the same place, at most HAUNTLET_ROOM_MAX_DIGITS long.
@@ -371,10 +419,10 @@ HAUNTLET_PLANK_FRACTION = 0.103
 # changes as the player passes through a door, while the last room's doors are still on screen (open, the camera
 # following the player), so a room is only looked at HAUNTLET_ROOM_SETTLE seconds after its number changed, with the
 # timer showing and the row of TVs still where it was on the look before (within HAUNTLET_TV_STABLE px: the camera
-# has stopped). Then a door is chosen and walked to - W held, with A or D held to bring the player in front of the
+# has stopped). Then a door is chosen and walked to - first A or D alone, to bring the player in front of the
 # door: HAUNTLET_STRAFE_DURATION seconds per door spacing (the distance between neighbouring doors) of distance, measured
 # from the player's hearts to the door's TV, no strafe under HAUNTLET_STRAFE_MIN spacings and never more than
-# HAUNTLET_STRAFE_MAX (a human's runs, from the middle: left door 1.0-1.1 s, right 0.9-1.3 s) - until the room number
+# HAUNTLET_STRAFE_MAX (a human's runs, from the middle: left door 1.0-1.1 s, right 0.9-1.3 s), then W alone until the room number
 # changes, at most HAUNTLET_WALK_MAX seconds (a human's room: W held 3-4.8 s), and then HAUNTLET_WALK_PAST_DURATION longer: the
 # number changes with the player still in the doorway, the camera close on the door, and the next room's doors can't be seen from there. If the number still hasn't changed
 # HAUNTLET_RETRY_WAIT seconds after the walk, a door is chosen again (a walk that gets nowhere is followed by a step back, a different door and wiggling).
@@ -395,7 +443,7 @@ HAUNTLET_LOOK_INTERVAL = 0.25
 HAUNTLET_ROOM_SETTLE = 2.0
 HAUNTLET_TV_STABLE = 4
 HAUNTLET_RETRY_WAIT = 1.0                    # after a walk that didn't change the room, this long before the doors are chosen from again
-HAUNTLET_SEARCH_TURNS = 3                    # times the camera is turned, in a room whose doors can't be found, before walking straight ahead
+HAUNTLET_SEARCH_TURNS = 0                    # times the camera is turned, in a room whose doors can't be found, before walking straight ahead (0: never - turning it changes where the keys take the player: in a captured fork the doorway was a step away until the camera was turned, and the player then stood against the wall for 20 s)
 HAUNTLET_CAMERA_DRAG = (200, 500)            # px of mouse drag (right button held) for such a turn
 HAUNTLET_BACK_KEY = "s"
 HAUNTLET_BACKUP_DURATION = 0.5               # a walk after one that got nowhere begins with a step back this long
@@ -417,6 +465,21 @@ HAUNTLET_SHADOW_WHITE = 225                  # the glowing eyes: all channels at
 HAUNTLET_SHADOW_AREA = (6, 500)              # ...px each
 HAUNTLET_SHADOW_RING = 60                    # ...in dark smoke: the mean brightness of the ring around them at most this (screws and lights: 73 and more; the eyes: 46-49)
 HAUNTLET_FORK_EVERY = 10
+# A fork's doorways have no TV to find them by. Each opening is dark inside (grey, little colour: HAUNTLET_OPENING_HSV) and begins right
+# under the wall's pale stripes (HAUNTLET_WALL_HSV) - while everywhere else between the wall and the floor there is the gold wainscot, about
+# 60 px of it. So in each column of HAUNTLET_FORK_BAND (rows) the first dark pixel, of a run of HAUNTLET_OPENING_RUN rows, with at least
+# HAUNTLET_OPENING_WALL wall pixels HAUNTLET_OPENING_ABOVE rows (nearest, furthest) above it is a column of an opening; columns less than HAUNTLET_OPENING_JOIN px
+# apart are one opening. Two openings HAUNTLET_OPENING_WIDTH px wide and HAUNTLET_OPENING_GAP px apart (middle to middle) are the fork's doorways (seen with the
+# camera near the wall: 124-170 wide, 574-609 apart; from the room's entrance only one is seen, so the walk goes on until both are).
+HAUNTLET_FORK_BAND = (160, 850)
+HAUNTLET_WALL_HSV = ((0, 85, 205), (40, 145, 255))
+HAUNTLET_OPENING_HSV = ((0, 0, 70), (40, 104, 164))
+HAUNTLET_OPENING_RUN = 6
+HAUNTLET_OPENING_ABOVE = (4, 45)
+HAUNTLET_OPENING_WALL = 10
+HAUNTLET_OPENING_JOIN = 12
+HAUNTLET_OPENING_WIDTH = (100, 260)
+HAUNTLET_OPENING_GAP = (400, 800)
 HAUNTLET_DOORS_TIMEOUT = 8.0
 # The items (their folder names in HAUNTLET_ITEM_DIR) and what each is for: the grey key opens a locked door; a cyan potion makes a heart
 # that lasts one room, for a boarded door; the red potion refills the hearts, used when only HAUNTLET_LOW_HEARTS or fewer are left; a
@@ -592,7 +655,7 @@ SICK_PROMPT_POS = (963, 488)             # the doctor's prompt button (an E; a h
 # and camping entries turn it on.
 HELICOPTER_REQUIRED = False
 HELICOPTER_FORWARD_DURATION = 1.0  # step forward this long after teleporting, before equipping
-HELICOPTER_HOLD_DURATION = 4.0     # then hold KEY_HELICOPTER this long
+HELICOPTER_HOLD_DURATION = 4.5     # then hold KEY_HELICOPTER this long (it was 0.5 s less, and the helicopter could be caught on a tree)
 
 # Needs that teleport somewhere and walk (see TeleportWalkNeedHandler), then
 # wait for the need to clear. Each entry: where to teleport, the

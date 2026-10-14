@@ -61,7 +61,7 @@ def test_parse_run_counts_detections_failures_rejoins_and_resources(macro, tmp_p
 
 def test_parse_run_event_counts(macro, tmp_path):
     events = macro.parse_run(write_log(tmp_path), 328)["events"]
-    assert dict(events) == {"rejoins": 1, "minigames won": 1, "needs interrupted": 1, "paycheck popups": 1,
+    assert dict(events) == {"rejoins": 1, "minigames finished": 1, "needs interrupted": 1, "paycheck popups": 1,
                             "stray windows closed": 1, "backpacks closed": 1, "minigame popups declined": 1,
                             "quiet periods logged": 1, "idle respawns": 1}
 

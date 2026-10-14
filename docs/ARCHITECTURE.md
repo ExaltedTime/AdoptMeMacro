@@ -554,10 +554,17 @@ started the task, and never from inside `unscrew()` itself). It's the same
 `unscrew()`, with two differences: the rejoin check only acts on a disconnect or a
 white screen (`rejoin_game(kinds=("disconnect", "white_screen"))`; the stuck, scheduled and stalled rejoins wait
 for the top of a cycle), and the backpack is only closed once it has been seen
-open on `BACKPACK_CLOSE_CONFIRMATIONS` checks in a row - a handler opens the
-normal backpack for a few seconds on purpose, so one sighting could be a
-handler in the middle of its steps, but two `UNSCREW_TASK_INTERVAL` apart is a
-backpack open for longer than any handler needs. The paycheck check is skipped
+open on `BACKPACK_CLOSE_CONFIRMATIONS` checks in a row - so one sighting, which could be a
+handler in the middle of its steps, isn't enough. That was not enough either: an equip sequence keeps the backpack open for about
+6 s, longer than two checks apart, and in a run's log 10 of 13 rides had the check close the backpack in the middle of the
+sequence (a plain "backpack was left open - closed it" 2-3 s before the "... after equipping the vehicle" of the sequence's own close) - given one
+earlier sighting that wasn't real, the next check, inside the sequence, was the second; the key that ends the sequence then opened the backpack
+again and it was closed a second time. (A simulation of the real handler and check on a fake clock gives the same pair of lines; what the
+first, false sighting is is not known - the screen of the first sighting of a count is now saved as `debug_backpack_first_sighting.png`.)
+So **a handler that opens the backpack on purpose says so**: `backpack_on_purpose()` (used by `equip_favorite_vehicle()`, the catch
+need's toy sequence and `teleport_to()` up to the click that teleports) makes `close_backpack_if_stuck()` leave the backpack alone, forget any
+sighting from before, and say whether it is open (so the paycheck check is still skipped). Setup, which keeps it open for ~8 s, is
+exempt in its own way (`play_minigames=False`). The paycheck check is skipped
 while the backpack is still open. If a minigame is played, or a disconnect made
 it rejoin, `TaskInterrupted` is raised: the handler is abandoned (a minigame and
 a rejoin both respawn the character; for the popup abort below,
@@ -617,7 +624,7 @@ sighting in a row (see above).
 **Minigame popups.** Halloween has two minigames that offer to teleport you -
 "Ghost Gallery is starting soon! Teleport there now?" and "Hauntlet 2 is
 starting soon!..." - in the same popup layout.
-`detect_minigame_popup()` recognises that layout by its two buttons: neither
+`detect_minigame_popup()` recognises that layout by its two buttons (each piece of the Yes green looked at on its own, with the red beside *it*: a popup over the open backpack, whose buttons are green too, was missed when all the green on the screen was averaged - `tests/popups/` has real screenshots of popups and of other green buttons): neither
 color is unique alone (Yes green = `GREEN_BUTTON_COLOR`, No red = the
 Exit Home button), so it needs the Yes green (`GREEN_BUTTON_COLOR`, at
 least `MINIGAME_POPUP_MIN_BUTTON_PIXELS` px) with the No red
@@ -653,15 +660,15 @@ Options tab). `minigame_popup()`:
 
 *Playing.* The macro's own window is sent to the back while a minigame is played and brought back after it, whichever way it ends (it covers part of the screen, and would be in
 the recording and in the readers' way). No needs can be seen while a minigame runs, so both end on the
-victory screen instead - a red GAME OVER! banner over a green NICE! button,
+GAME OVER! screen instead - a red GAME OVER! banner over a green NICE! button,
 found by exact color (`detect_minigame_victory()`, checked every
-`MINIGAME_VICTORY_CHECK_INTERVAL`), which is the same for both. While it plays, `minigame_popup_checks()` runs `dismiss_stray_windows()` (and `detect_paycheck()` if it closed nothing) at most every `MINIGAME_POPUP_CHECK_INTERVAL`, including during the start waits (`minigame_wait()`) - the in-task `unscrew()` can't, since the minigame is played from it. Then NICE!
+`MINIGAME_VICTORY_CHECK_INTERVAL`), which is the same for both. Every run ends on it, so reaching it is *finishing*, not winning (a real win, which gives a crypt key, shows the same screen; the macro can't tell them apart): what a run earned is the candy corn on the card. `save_minigame_result()` saves that card (`MINIGAME_RESULT_BOX` of the screen) as `runs/results/run<N>_<minigame>_<time>.png`, the newest `MAX_RESULT_SHOTS` kept, before NICE! is clicked. While it plays, `minigame_popup_checks()` runs `dismiss_stray_windows()` (and `detect_paycheck()` if it closed nothing) at most every `MINIGAME_POPUP_CHECK_INTERVAL`, including during the start waits (`minigame_wait()`) - the in-task `unscrew()` can't, since the minigame is played from it. Then NICE!
 (`MINIGAME_VICTORY_BUTTON_POS`) is clicked and `MINIGAME_FINISH_WAIT` waited
 out (`click_nice_until_gone()`, which looks again and clicks up to
 `MINIGAME_VICTORY_CLICK_TRIES` times while the win screen is still up, logging a
 failure if it never closes), and the character respawns. If the victory screen hasn't shown after
 `MINIGAME_MAX_DURATION` it gives up with a logged failure (and releases every
-input). A minigame that was won counts as progress for the no-progress rejoin (`state.last_progress`); one that failed - never started, left early, timed out - does not, or a popup every few minutes would keep the 20-minute rejoin clock from ever running out. Either way it counts as a detection (no needs can be seen while it runs).
+input). A minigame that ran to the GAME OVER! screen counts as progress for the no-progress rejoin (`state.last_progress`); one that failed - never started, left early, timed out - does not, or a popup every few minutes would keep the 20-minute rejoin clock from ever running out. Either way it counts as a detection (no needs can be seen while it runs).
 
 *Telling whether it is on.* Each minigame has an overlay along the top of the
 screen while it runs (Hauntlet 2: the ROOM counter; Ghost Gallery: the TIME
@@ -675,7 +682,10 @@ losing it for `MINIGAME_OVERLAY_LOST_TIMEOUT` means the minigame was left
 seeing it within `MINIGAME_OVERLAY_START_GRACE` of the start wait means it
 never started. Either is a logged failure with that reason, instead of waiting
 out `MINIGAME_MAX_DURATION`.
-- `play_hauntlet_2()` waits until the game's overlay shows (at most `MINIGAME_START_WAIT`: the lobby's countdown varies, and a fixed wait of 50 s let the first room's timer run out in one run, the macro still waiting), then goes through the rooms - reads the screen, picks a door
+- **The start is the overlay, not a time.** Rounds start at fixed times of the hour (in the captured day Hauntlet 2 at about :03:07, :23:07 and :43:07, Ghost Gallery at :12:46, :32:46 and :52:46, a round every 20 minutes each) and the popup's Yes is clicked
+  12-52 s before one, depending on what the macro was doing (a need's end wait holds it back by up to `MINIGAME_POPUP_END_WAIT`). A fixed wait from the click is therefore wrong most of the time: in Hauntlet 2's first room the timer is 30 s and crossing the hall takes about 20, and of 21 runs with a fixed 50 s wait the 11 whose Yes came 40 s or less before the round
+  were thrown out of room 1 (the macro still waiting) and the 10 that came 43 s or more before it played on. So each player looks for its game's overlay every 0.5 s and acts the moment it shows; `MINIGAME_START_WAIT` is only the most it waits (the overlay came 50.5 s after the Yes in one run), after which it acts regardless.
+- `play_hauntlet_2()` waits until the game's overlay shows (at most `MINIGAME_START_WAIT`), then goes through the rooms - reads the screen, picks a door
   and walks to it, room after room - until victory or until the overlay says it's over. See
   [Playing Hauntlet 2](#playing-hauntlet-2).
 - `play_ghost_gallery()` waits until the game's overlay shows (at most `MINIGAME_START_WAIT`), then finds the ghosts on screen, aims the
@@ -1131,10 +1141,10 @@ is recompressed. For a zip that already exists (a capture zipped by hand, say) `
   counts and why it stopped.
 
 **Minigame runs are recorded automatically.** `play_minigame()` starts a capture of its own after the teleport that the popup's Yes brought
-(`start_run_capture()`) and stops it when the run is over, whichever way it ends - won, left, timed out or stopped
+(`start_run_capture()`) and stops it when the run is over, whichever way it ends - finished, left, timed out or stopped
 (`finish_run_capture()`, which also writes `outcome` into `info.json` and zips the capture as above). It is the same recorder, so it
 has the macro's own key presses and clicks and the frames on the same clock, but in `debug/minigame_captures/`
-(`RUN_CAPTURES_DIR`, the newest `MAX_RUN_CAPTURES` kept, named `<minigame>_<date>_<time>`) so the hotkey's captures and these
+(`RUN_CAPTURES_DIR`, named `<minigame>_<date>_<time>`) so the hotkey's captures and these
 never delete each other, and with a **budget of `RUN_CAPTURE_ZIPS` zips**, spread over the whole run: the
 zips are counted as `zip_capture()` will make them (`plan_zip_parts()`, the events in the first). A lossless frame is 1-3 MB, so
 the budget buys some tens of frames; when a run would need more zips, `InputCapture._keep_within_budget()` deletes
@@ -1142,7 +1152,14 @@ every other saved frame - never the newest, and the first stays - and from then 
 left is spread evenly over the run however long it is. It is checked after every saved frame and once more when the capture
 stops (the events have grown by then). The events of the deleted frames stay in `events.jsonl`, followed by a `frame_dropped`
 line naming the file, so a reader can tell; `info.json` has `frames_dropped` and `max_zips`, and `stopped_because` is "the minigame
-ended". The folders are big (the frames and then the same again as zips), hence only the newest `MAX_RUN_CAPTURES` are kept. Switch it off with `MINIGAME_CAPTURE`; it isn't started while the
+ended". The folders are big (the frames and then the same again as zips), hence **only some are kept**: after each run `prune_run_captures()` keeps, of each minigame, the
+`RUN_CAPTURES_BEST` runs that earned the most candy corn (see [Candy corn](#candy-corn)), the `RUN_CAPTURES_WORST` that earned the least (a run whose total wasn't read counts as the worst)
+and the latest - five at most, going by the `earned` that `finish_run_capture()` wrote into each `info.json`.
+**Frames of when things went wrong are kept and not thinned out.** `mark_run_capture(reason)` (`InputCapture.mark()`) writes a `mark` line with the reason into `events.jsonl`, saves a frame at once and then every look for
+`RUN_CAPTURE_BURST` seconds, however far apart the thinning has put the others - and those frames are `protected`, which `_keep_within_budget()` leaves alone (at most `RUN_CAPTURE_PROTECTED` of them, or they would use up the zips).
+It is called when a failure is logged (`log_failure()`), when a Hauntlet 2 walk gets nowhere, when the player is found not to be moving (`hauntlet_unstick()`) or a fork's doorways aren't seen, when a Ghost Gallery
+beam on a ghost scores nothing or the score stalls, and when a stray window or the paycheck popup is closed mid-minigame. A run that did not finish also keeps the frames of its last `RUN_CAPTURE_TAIL` seconds
+(`protect_tail()`), where the end of a run that went wrong is. Switch it off with `MINIGAME_CAPTURE`; it isn't started while the
 hotkey's capture is running (two recorders would only get in each other's way), and a capture that can't be started or finished is a
 message, never a reason not to play. If more frames per run are wanted the choice is more zips or lossy frames (which would no
 longer be the exact pixels the readers are tuned on).
@@ -1255,16 +1272,18 @@ logged once per run as a failure, which keeps a screenshot of what the TVs were 
 
 **The circles.** In front of every door there is a **purple circle** on the floor (a lilac ring, `find_door_circles()`: the ring-shaped pieces of `HAUNTLET_CIRCLE_HSV`, `HAUNTLET_CIRCLE_*`; badges and labels are smaller and don't count): **stepping into one picks that door**, and the player is then **held in place for a few moments**. `hauntlet_strafe()` therefore walks to the circle's middle, not to the TV above the door (in an angled room the two are far apart), when all three are seen. The circle the player stands on is mostly hidden: two circles seen and the player (the hearts) where the third would be is **standing in it** (`player_in_circle()`, `HAUNTLET_IN_CIRCLE`). `hauntlet_walk()` then notes the door as picked (`HauntletRun.picked`, until the room changes), and for `HAUNTLET_LOCK_WAIT` seconds does not take the still view for being stuck - a step sideways after the lock would take the player out of the doorway. A retry in a room with a door picked goes to that same door (`hauntlet_choose()` returns it at once, with no items used and no other door avoided): the choice was made when the circle was stepped in.
 
+**A fork's doorways.** A fork has no TVs to find its doorways by. `find_fork_doorways()` finds their openings: each is dark inside (`HAUNTLET_OPENING_HSV`) and begins right under the wall's pale stripes (`HAUNTLET_WALL_HSV`), where everywhere else between the wall and the floor there is the gold wainscot, so in each column the first dark pixel with wall just above it is a column of an opening (`HAUNTLET_OPENING_*`); exactly two openings of the right width, the right distance apart, are the doorways. That only works with the camera near the wall: from the room's entrance at most one is seen (the other shows the next hall's gold panelling, not a dark inside). Over the two captured room 10s it found both doorways in 8 of 25 frames - those from the wall; the others were from the entrance or with the player pushed about - and nowhere else but a frame of the lobby of the ordinary game, over 350 frames. So a fork is walked in two parts: `play_hauntlet_2()` holds forward until both doorways are seen (`hauntlet_walk(until_doorways=True)`, at most `HAUNTLET_WALK_MAX` seconds), then strafes by `hauntlet_strafe()` as in a room, the two doorways being taken for two door spacings apart (a room's outer doors) and the player's place the hearts; if they are never seen, what is left is the fixed strafe below.
+
 **Getting stuck.** The room timer runs out after a while and the run is over, so a stuck player has to do something else, quickly. A walk that ended with the
 number unchanged counts in `HauntletRun.stuck`; the next one (`hauntlet_walk()`) steps back first (`HAUNTLET_BACK_KEY`, `HAUNTLET_BACKUP_DURATION`) and avoids the door that
 got the player stuck when there is another (`choose_hauntlet_door(avoid=...)`). Within a walk, **a view that doesn't move is the sign of being caught on something**: the camera follows the player, so a walking
 player makes the whole picture move (`hauntlet_view()`: the screen shrunk to grey, without the room panel and the item bar). In the captured run the mean change between two looks was 0.1-1.1 grey levels while the player stood against a door's
 leaf for 14 s and 11-44 while it walked, so under `HAUNTLET_STILL_LEVEL` for `HAUNTLET_STILL_AFTER` seconds with forward held is stuck, and `hauntlet_unstick()` steps sideways (forward stays held, so it
-slides along) with a jump: towards the door being walked to (its TV against where the player stands, `HAUNTLET_UNSTICK_MARGIN`), the other way at every try, and a random way if the
+slides along) with a jump: towards the door being walked to (its TV - in a fork its doorway, when both are seen - against where the player stands, `HAUNTLET_UNSTICK_MARGIN`), the other way at every try, and a random way if the
 doors can't be seen; each step `HAUNTLET_UNSTICK_STEP` seconds longer than the last, up to `HAUNTLET_UNSTICK_MAX`. Where the player stands is read from the hearts above its head; if they can't be read it is the middle of the
 screen (the camera follows the player; in that run's room 3 the player stood 350 px right of the middle door, the hearts unread, and the macro, taking it to be in front of the middle door, walked into the wall for 14 s). When the doors can't be found at all - the camera zoomed in too far, turned away (room 8 of a macro-played run was seen from an angle, and the macro held W for 25 s against
-a wall until the timer ran out), or a TV hidden - the camera is dragged round with the right button (`rotate_camera()`, `HAUNTLET_CAMERA_DRAG`) up to `HAUNTLET_SEARCH_TURNS` times, a look
-after each, before walking ahead. A TV showing a "1" (the player stands before that door) is a thin stroke, much smaller than the "0"s of the others, hence the low end of
+a wall until the timer ran out), or a TV hidden - the camera can be dragged round with the right button (`rotate_camera()`, `HAUNTLET_CAMERA_DRAG`) up to `HAUNTLET_SEARCH_TURNS` times, a look
+after each, before walking ahead - but that is **0, off**: turning the camera changes where the keys take the player, and in a captured fork (room 10, two doorways under signs, "Power Station" and "Spider Den") the player stood in front of its doorway until the camera was turned, then against the wall for 20 s. (That turn was a bug of its own: a fork whose looks had started over after a walk, past `HAUNTLET_DOORS_TIMEOUT`, was taken for one doorway; a fork now waits for its two empty looks whatever the age.) A TV showing a "1" (the player stands before that door) is a thin stroke, much smaller than the "0"s of the others, hence the low end of
 `HAUNTLET_TV_AREA`; the real run's row was missed for 25 s because of one.
 
 `hauntlet_choose()` reads the hearts and the items off the same screenshot (new items are saved, at most
@@ -1279,8 +1298,8 @@ red arrow - a big red triangle with a ghost on it, `HAUNTLET_ARROW_*` - over the
 takes a moment to show, so it is looked for `HAUNTLET_ARROW_LOOKS` times) and says which door it belongs to; over the captured runs it fired on 9 frames, all of the hand-played run (the one that used the phone), and where the doors were
 found (6 of them) always within a few percent of a door spacing of a door's TV; it fired on none of the ~700 frames of the macro-played runs, which used no phone. `hauntlet_use_item()` clicks an item's slot, as the capture shows a human doing, and waits
 `HAUNTLET_ITEM_WAIT`; the slots close up when an item is used up, so it looks for the slot on a fresh screenshot each time. The items are used before the walk starts. Whether an item
-worked is not looked at, and the gold key and the wand have no use yet. `hauntlet_strafe()` works out how far to go sideways and `hauntlet_walk()` then holds `HAUNTLET_2_FORWARD_KEY` - plus
-`HAUNTLET_LEFT_KEY` or `HAUNTLET_RIGHT_KEY` for the strafe - until the number changes (or `HAUNTLET_WALK_MAX` seconds), and then `HAUNTLET_WALK_PAST_DURATION` longer. **The number changes while the
+worked is not looked at, and the gold key and the wand have no use yet. `hauntlet_strafe()` works out how far to go sideways and `hauntlet_walk()` then holds `HAUNTLET_LEFT_KEY` or `HAUNTLET_RIGHT_KEY` for that long, on its own,
+and only then `HAUNTLET_2_FORWARD_KEY` - never the two at once - until the number changes (or `HAUNTLET_WALK_MAX` seconds), and then `HAUNTLET_WALK_PAST_DURATION` longer. **The number changes while the
 player is still in the doorway** (the camera close on the door, its TV filling the screen, the next room's doors out of sight); a human keeps walking
 1.0-2.0 s more (median 1.4 s in the capture) and a macro that let go at once stood there for the rest of the run - which is how the
 macro's own captures showed it. The
@@ -1289,10 +1308,10 @@ also takes the camera's zoom out of it) times `HAUNTLET_STRAFE_DURATION` seconds
 spacings, never more than `HAUNTLET_STRAFE_MAX`. The player's place is measured, not assumed, because where a room is entered may
 depend on the door it came through (a player who came in at the left door has further to go to the right one): it is the middle of the
 row of hearts above the head (`HauntletHearts.center_x`), and where the hearts aren't seen, in front of the middle door. A fork's
-two doorways aren't located, so each is the left or the right key for one spacing. The seconds per spacing are from a human's run (the
+two doorways, when they aren't located, are the left or the right key for one spacing, wherever the player stands (in a captured fork it stood nearer the left doorway). The seconds per spacing are from a human's run (the
 capture's keys against its room numbers, from the middle: left door 1.0-1.1 s, right 0.9-1.3 s; W held 3-4.8 s in all); that a key held by the macro
 carries the character as far as one pressed by hand is **not yet checked in the game**, and neither is the strafe in a fork's hall
-(its doorways were seen at other distances in rooms 10 and 20) - both are the first things to tune. The keys are always released,
+(that its doorways are two door spacings apart is read from a human's run and the captured frames, not tried) - both are the first things to tune. The keys are always released,
 also when the macro is stopped. When the run ends, `got as far as room N` goes in the run log.
 
 ### Playing Ghost Gallery
@@ -1310,7 +1329,9 @@ the character while the camera followed it.
 under the human's cursor), at least `GHOST_MIN_AREA` px (ghosts 880-7200 px in the run, the boss 9500-41000), biggest first, leaving out the
 HUD, the character's own glow and the bottom of the screen (`GHOST_IGNORE_BOXES`: a player's pet, in the macro-played run a cyan one - the same cyan as the ghosts to a few units of hue and brightness, so it can't be told apart by colour -
 was aimed at for 20 s of a run, the camera being close, and a cyan costume was taken for a ghost for much longer) and, in the boss phase, the boss's health bar (its crest and its ghost icons are the
-same cyan). **Things that are not ghosts.** In the last 40 s of a macro-played run (the camera pulled in against a wall in the dark of the boss fight) the macro was stuck, aiming at and walking towards its own hoodie, its pet and its beam, and so never turned the camera to look for the boss. Three rules came out of that capture. (1) **The character's box follows the camera**: the glowing pink emblem on its backpack (`GHOST_EMBLEM_HSV`, at least `GHOST_EMBLEM_MIN` px in `GHOST_EMBLEM_BOX` - none is seen with the camera far away, 750-10000 px close up) gives the place and, by its size, how close the camera is, and `ghost_character_box()` ignores a box of `GHOST_SELF_SCALE` times that size (pet below included) on top of the small fixed one. (2) **In the shielded phase only small ghosts count** (at most `GHOST_SMALL_MAX` px: the beam's glow, which turns cyan where it ends, was 9500, the boss's fog 400000). (3) **In the boss phase a blob is the boss only if it is at least `GHOST_BOSS_MIN` px** (9500-41000 seen); a smaller one is a minion or a bit of fog and is aimed at like the ghosts are, the nearest. The top 150 px of the screen are not looked at, where bits of fog under the HUD were found.
+same cyan). **Ghosts from afar.** In a macro-played run's first two minutes the score stayed at 450: from the high camera the ghosts are small blue-cyan ovals (hue 88-96, saturation 170-240, 1200-3500 px) and `GHOST_COLOR`, taken from a close-up human run, stopped at saturation 210 - ghosts were found in 12 of 27 looks, most of them the character itself. `GHOST_COLOR_FAR` (hue 84-98, saturation 100-240, value from 200) is looked for as well. What looks alike and is outside it: the slime puddles (hue 80-83, saturation 245 and over, up to 10000 px), the glow of the haunted paintings (hue 100 and over), the ghosts' own purple trail (hue 100). The dim boss of the shielded phase stays out by its value. Ghosts really are rare in view in that stretch (about a third of the looks have one), so the camera is turned **one way round** until one is seen (`GHOST_CAMERA_PERIOD`; the way is chosen at random and kept, as in the boss phase) and `GHOST_CAMERA_TILT` is 0: a random up-and-down in every turn made the pitch a random walk, and the view ended on the ceiling, the floor or a wall.
+
+**Things that are not ghosts.** In the last 40 s of a macro-played run (the camera pulled in against a wall in the dark of the boss fight) the macro was stuck, aiming at and walking towards its own hoodie, its pet and its beam, and so never turned the camera to look for the boss. Three rules came out of that capture. (1) **The character's box follows the camera**: the glowing pink emblem on its backpack (`GHOST_EMBLEM_HSV`, at least `GHOST_EMBLEM_MIN` px in `GHOST_EMBLEM_BOX` - none is seen with the camera far away, 750-10000 px close up) gives the place and, by its size, how close the camera is, and `ghost_character_box()` ignores a box of `GHOST_SELF_SCALE` times that size (pet below included) on top of the small fixed one. (2) **In the shielded phase only small ghosts count** (at most `GHOST_SMALL_MAX` px: the beam's glow, which turns cyan where it ends, was 9500, the boss's fog 400000). (3) **In the boss phase a blob is the boss only if it is at least `GHOST_BOSS_MIN` px** (9500-41000 seen); a smaller one is a minion or a bit of fog and is aimed at like the ghosts are, the nearest. The top 150 px of the screen are not looked at, where bits of fog under the HUD were found.
 
 `ghost_boss_bar_visible()` is the boss phase: 13,000-17,000 gold pixels in `GHOST_BOSS_BAR_BOX` against none (at most 230) before it, right on
 every frame of the run but the ones at the very start and end of the boss's bar. `choose_ghost_target()` picks where to aim: the biggest blob
@@ -1325,6 +1346,10 @@ boss can be hurt, 0 in the icon phases (a sliver, 470-2000, in the last seconds 
 is dim enough then to fall under `GHOST_COLOR`'s brightness, so `find_ghost_blobs()` finds only the small ghosts, and they are aimed at like any ghosts
 (nearest the character). Replaying the run, the three phases come out at 110.4-115.8 s, 127.2-133.5 s and 139.8-147.1 s of the capture, with the boss
 phase before, between and after them, as in the frames.
+
+**Score feedback.** The score says whether what the beam is on is a ghost, and `GhostFeedback` reads it: the digits of the banner's score pill (`GHOST_SCORE_BOX`, found by the pill's colour, `GHOST_SCORE_PILL`) as a mask of their white pixels. Over the four captured runs two looks at an unchanged score differed by 0 px and at a changed one by 160 px or more (`GHOST_SCORE_CHANGE` is between), so a changed mask is a score; nothing is concluded while the pill isn't on screen (a loading screen, a transition). It is used before the boss only (in the boss phase the score rises all the time, and while the boss is shielded it legitimately doesn't):
+(1) **A ghost in sight that the beam scores nothing on** for `GHOST_SPOT_TRIAL` seconds is taken to be hiding in furniture: the beam moves to furniture found in a ring of `GHOST_RING` px around it (`find_furniture(around=...)`, by the same hover outline), stays there for the trial while the player keeps walking towards the ghost, and a place that scored nothing is kept away from for `GHOST_BAD_SPOT_TIME` seconds (`GHOST_BAD_SPOT_RADIUS` px) when the next one is looked for; a score puts the beam back on the ghost at once, and another ghost starts a trial of its own. With no ghost in sight the furniture search is as it was (a new place every `GHOST_FURNITURE_PERIOD`, shorter than a trial).
+(2) **No score at all for `GHOST_STALL` seconds is a stall**: the beam is let go of, a random key held `GHOST_STALL_WALK` seconds, a jump made and the camera turned by `GHOST_STALL_TURN` px of drag, and another stall period passes before it happens again. This is what a view blocked by a pillar and a beam held on bare floor have in common (in one captured run a big orange pillar covered part of the screen at 59 s, and at 75 s the view was clear with the beam on the floor; the score was 0 for the first 64 s and 450 for 36 s after that). **Not yet checked in the game:** the ring's size, that the walk and turn get the player out from behind a pillar, and how long a real gap between scores is.
 
 `play_ghost_gallery()` waits until the overlay (TIME LEFT, the score) has been seen - the game starts well before `MINIGAME_START_WAIT` would be over - and then for
 `GHOST_INTRO_WAIT` more, while the game's own intro camera (a look at the ceiling) runs: a zoom made during it is undone when the play camera takes over, as it was in both macro-played runs.
@@ -1343,6 +1368,19 @@ The buttons and the walking key are always let go, also when the macro is stoppe
 the start's tilt, where the furniture is (the box is a guess), and the walking's and jumping's use; nor whether the character's own colours (a cyan costume) are kept out of the ghost finder
 once the camera is out (`GHOST_IGNORE_BOXES` has the character's place in a human's zoomed-out run). **What it does not do:** dodge, react to being knocked down, or choose between ghosts
 by anything but distance (the human often picked the second or third nearest); it can't tell furniture from floor.
+
+### Candy corn
+
+What a minigame run earns is read, not guessed. **The HUD's candy corn total** (top right, red digits on a white flag - on screen in the lobby, in the world and on the GAME OVER! screen, not at home or in a minigame) is read by `read_candy_corn()`:
+the red pixels of `CANDY_CORN_BOX` that make up pieces as tall as a digit (`CANDY_CORN_DIGIT_HEIGHT`; the commas are half that) are the digits, each shrunk to `CANDY_CORN_DIGIT_SIZE` and compared with the saved ones (`ref/candy_corn_digits/`, cut from six real screens
+that between them have every digit; `CANDY_CORN_MAX_DIFF`). It returns None rather than a wrong number: no counter, a digit that matches none, digits further apart than `CANDY_CORN_PITCH` (one is missing) or a piece as tall as a digit but too wide
+(something over the first or last digit, which would leave a number that looks right). The six screens are read right, a leave-one-out test of the digits (each read with templates cut from the other screens) 41 of 41, and over 553 captured frames it
+read only totals that were plausible, in the lobby and game over frames. `read_candy_corn_settled()` reads until two looks half a second apart agree, as the total counts up for a moment after a run.
+
+`play_minigame()` reads it in the lobby after the popup's Yes (the total before) and again on the GAME OVER! screen (after): **the candy corn a run earned is the difference** (`minigame_result()`; None if either wasn't read or the total fell). In the captured Ghost Gallery run
+(score 46418) it rose by 2540, in a Hauntlet 2 run that reached room 10 by 2105. Each run's result - when, run number, minigame, how it ended, the totals, `earned`, and the room reached in Hauntlet 2 (`state.minigame_detail`, filled by `play_hauntlet_2()`) - is
+appended as a line of `debug/runs/results/results.jsonl` (`record_minigame_result()`, which also logs `minigame result: <minigame>: N candy corn` in the run log), written into the recording's `info.json`, and used to decide which recordings to keep (see above).
+The GAME OVER! card itself is also saved as a picture beside it (`save_minigame_result()`). A run's limit of candy corn differs by minigame - 5000 for Ghost Gallery, a good deal more for Hauntlet 2 (about 20000 by the player's account; the macro doesn't know it).
 
 ### Recording a run
 
@@ -1384,12 +1422,13 @@ exact values and rationale):
 | Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN/MAX_RADIUS`, `NEED_ICON_HOUGH_*`, `NEED_STRIP_*` (when the circle search is skipped) |
 | Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_MATCH_RADIUS_FRACTION`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
-| Debug logging | `OUTPUT_LOG_PATH`, `RUN_LOGS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
+| Debug logging | `OUTPUT_LOG_PATH`, `RUNS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
 | Hauntlet 2 reader | `HAUNTLET_ROOM_BOX`, `HAUNTLET_DIGIT_*`, `HAUNTLET_ROOM_MAX_DIGITS`, `HAUNTLET_SLOT_*`, `HAUNTLET_ITEM_*`, `HAUNTLET_BADGE_*`, `HAUNTLET_COUNT_*`, `HAUNTLET_NOT_ITEMS`, `HAUNTLET_HEART_*`, `HAUNTLET_*_DIR` |
-| Ghost Gallery play | `GHOST_COLOR`, `GHOST_CLOSE`, `GHOST_MIN_AREA`, `GHOST_IGNORE_BOXES`, `GHOST_CHARACTER`, `GHOST_STICK`, `GHOST_BOSS_BAR_*`, `GHOST_BOSS_FILL*`, `GHOST_LOOK_INTERVAL`, `GHOST_START_LOOK_INTERVAL`, `GHOST_FURNITURE_*`, `GHOST_CAMERA_*`, `GHOST_START_TILT`, `GHOST_MOVE_*`, `GHOST_START_FORWARD`, `GHOST_TOWARD_MARGIN`, `GHOST_BOSS_TURN_DRAG`, `GHOST_EMBLEM_*`, `GHOST_SELF_*`, `GHOST_SMALL_MAX`, `GHOST_BOSS_MIN`, `GHOST_REGRAB_PERIOD`, `GHOST_OUTLINE_*`, `GHOST_JUMP_*`, `KEY_ZOOM_OUT`, `MINIGAME_ZOOM_OUT_DURATION` |
+| Ghost Gallery play | `GHOST_COLOR`, `GHOST_COLOR_FAR`, `GHOST_CLOSE`, `GHOST_MIN_AREA`, `GHOST_IGNORE_BOXES`, `GHOST_CHARACTER`, `GHOST_STICK`, `GHOST_BOSS_BAR_*`, `GHOST_BOSS_FILL*`, `GHOST_LOOK_INTERVAL`, `GHOST_START_LOOK_INTERVAL`, `GHOST_FURNITURE_*`, `GHOST_CAMERA_*`, `GHOST_START_TILT`, `GHOST_MOVE_*`, `GHOST_START_FORWARD`, `GHOST_TOWARD_MARGIN`, `GHOST_BOSS_TURN_DRAG`, `GHOST_EMBLEM_*`, `GHOST_SELF_*`, `GHOST_SMALL_MAX`, `GHOST_BOSS_MIN`, `GHOST_REGRAB_PERIOD`, `GHOST_OUTLINE_*`, `GHOST_JUMP_*`, `GHOST_SCORE_*`, `GHOST_SPOT_TRIAL`, `GHOST_BAD_SPOT_*`, `GHOST_RING`, `GHOST_STALL*`, `KEY_ZOOM_OUT`, `MINIGAME_ZOOM_OUT_DURATION` |
 | Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_SHADOW_*`, `HAUNTLET_CIRCLE_*`, `HAUNTLET_IN_CIRCLE`, `HAUNTLET_LOCK_WAIT`, `HAUNTLET_STILL_*`, `HAUNTLET_UNSTICK_*`, `HAUNTLET_START_*`, `HAUNTLET_DARK_*`, `HAUNTLET_PLANK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_*`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_ITEM_*`, `HAUNTLET_LOW_HEARTS`, `HAUNTLET_PHONE_CHANCE`, `HAUNTLET_ARROW_*`, `HAUNTLET_LEARN_LIMIT` |
-| Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `MINIGAME_CAPTURE`, `RUN_CAPTURES_DIR`, `RUN_CAPTURE_ZIPS`, `MAX_RUN_CAPTURES`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
+| Candy corn | `CANDY_CORN_*`, `MINIGAME_RESULT_BOX`, `MAX_RESULT_SHOTS` |
+| Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `MINIGAME_CAPTURE`, `RUN_CAPTURES_DIR`, `RUN_CAPTURE_ZIPS`, `RUN_CAPTURES_BEST`, `RUN_CAPTURES_WORST`, `RUN_CAPTURE_BURST`, `RUN_CAPTURE_TAIL`, `RUN_CAPTURE_PROTECTED`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
@@ -1398,12 +1437,11 @@ exact values and rationale):
 ## Debugging an unattended run
 
 Everything below is in `debug/` (git-ignored) so a run that broke while you
-were away can be read back afterwards. The folder has two subfolders -
-`images/` (`IMAGES_DIR`: every png - the `debug_*.png` views, `failures/`,
-`reports/`) and `logs/` (`LOGS_DIR`: every text and json file - `output.log`,
-`run_log.txt`, `run_counter.txt`, `status.json`, and `runs/`, one `run<N>.txt` per run) - plus `recordings/` for the
+were away can be read back afterwards. The folder has `images/` (`IMAGES_DIR`: every png - the `debug_*.png` views and
+`failures/`), `logs/` (`LOGS_DIR`: every text and json file - `output.log`, `run_log.txt` (all runs, the whole log),
+`run_counter.txt`, `status.json`), **`runs/`** (`RUNS_DIR`: what belongs to one run - its own log, `run<N>.txt`, and its chart, `run<N>.png`, side by side, and the GAME OVER! cards of the minigames in `runs/results/`) and `recordings/` for the
 videos, and the game config (`.config`) in `debug/` itself. An older layout is
-moved into place at startup (`migrate_debug_layout()`). The Debug tab's
+moved into place at startup (`migrate_debug_layout()`, which also moves the old `logs/runs/` and `reports/` files into `runs/`). The Debug tab's
 Other subtab's **Refresh debug** button (`refresh_debug()`, after a confirmation, not while a
 run is going) empties all of it except `.config`; run numbers start from 1
 again, since the counter goes with the logs.
@@ -1416,8 +1454,8 @@ again, since the counter goes with the logs.
 - **`run_log.txt`** - the short version: one tagged line per notable event
   (needs detected, resolved with how long they took, popups dismissed,
   recoveries, stops, failures). Start here to see roughly what happened.
-  Every line is also written to its own run's file, `logs/runs/run<N>.txt`
-  (`RUN_LOGS_DIR`, by `log_run_event()`), so one run can be read or shared on
+  Every line is also written to its own run's file, `runs/run<N>.txt`
+  (`RUNS_DIR`, by `log_run_event()`), so one run can be read or shared on
   its own; lines logged before any run has started (`RUN None`) are only in
   the combined file, and the run report still reads the combined one.
   Two kinds of line are written on a timer while the loop runs:
@@ -1431,10 +1469,10 @@ again, since the counter goes with the logs.
   `GlobalMemoryStatusEx` on Windows, `/proc` elsewhere) - the whole PC's CPU
   and memory use; older logs lack the last two). A need switched off as stuck
   logs `disabled: <need>`. The run report charts the resources.
-- **`reports/run<N>.png`** - a chart of one run, drawn from `run_log.txt` by
+- **`runs/run<N>.png`** - a chart of one run, beside the run's own log, drawn from `run_log.txt` by
   `generate_run_report()` in `main.py` with OpenCV (no extra dependency). Written automatically when a
   run stops (`write_run_report()`, in the `finally` of `run_workflow_loop()`)
-  (so there is no button for it); the oldest reports beyond `MAX_REPORTS` are deleted then (`keep_newest_files()`) - the logs they are drawn from are kept, so one can be drawn again. Five panels: needs resolved per unit of time (the unit is picked
+  (so there is no button for it); the oldest reports beyond `MAX_REPORTS` are deleted then (`keep_newest_files()`, pngs only) - the logs they are drawn from, `run_log.txt` and the runs' own `run<N>.txt`, are kept, so one can be drawn again. Five panels: needs resolved per unit of time (the unit is picked
   from `BUCKET_STEPS` so the run fills about `TARGET_BUCKETS` bars, stacked by
   basic / teleport / other need, with failures and rejoins marked); needs
   detected per check; average seconds per resolved need with how many there

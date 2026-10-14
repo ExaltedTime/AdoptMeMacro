@@ -16,6 +16,7 @@ def no_intro_wait(macro, monkeypatch):
     don't look at those skip the time (the walk stays, as a hold of no length)."""
     monkeypatch.setattr(macro.cfg, "GHOST_INTRO_WAIT", 0.0)
     monkeypatch.setattr(macro.cfg, "GHOST_START_FORWARD", 0.0)
+    monkeypatch.setattr(macro.cfg, "GHOST_REGRAB_PERIOD", 10 ** 6)                  # (the tests that look at it set it)
     monkeypatch.setattr(macro.cfg, "MINIGAME_START_WAIT", 6.0)                       # (the fake clock still has every look of it to do)
 
 
@@ -430,10 +431,46 @@ def test_it_stands_still_while_the_ghost_is_near_enough_and_never_wanders_while_
     assert not [k for k in world.keys if k[0] == "down" and k[1] in cfg.MOVE_KEYS][1:]    # (after the start's walk)
 
 
-def test_the_beam_is_let_go_of_and_pressed_again_every_regrab_period(macro, world):
+def test_the_beam_is_let_go_of_and_pressed_again_every_regrab_period(macro, world, monkeypatch):
     cfg = macro.cfg
+    monkeypatch.setattr(cfg, "GHOST_REGRAB_PERIOD", 4.0)
     world.screens = [shot("ghosts_50")]
     start = world.clock.now
     macro.play_ghost_gallery(start + cfg.GHOST_REGRAB_PERIOD * 2.5, watch_started(macro))
     beam = [(e, i) for i, e in enumerate(world.mouse) if e in (("down",), ("up",))]
     assert [e for e, _ in beam[:5]] == [("down",), ("up",), ("down",), ("up",), ("down",)]     # held, let go and held again, twice
+
+
+def test_a_close_camera_does_not_make_the_characters_own_clothes_and_pet_ghosts(macro, world):
+    img = shot("closeup_189")                                                      # a shielded boss fight, the camera pulled in against a wall
+    assert macro.ghost_character_box(cv2.cvtColor(img, cv2.COLOR_BGR2HSV)) is not None
+    assert macro.find_ghost_blobs(img, True) == []                                 # the hoodie, the pet and the beam are not targets (they were, and it was chased)
+    assert macro.ghost_character_box(cv2.cvtColor(blank(), cv2.COLOR_BGR2HSV)) is None and macro.ghost_character_box(cv2.cvtColor(shot("ghosts_50"), cv2.COLOR_BGR2HSV)) is None
+
+
+def test_in_the_shielded_phase_a_blob_too_big_for_a_small_ghost_is_not_aimed_at(macro, world, monkeypatch):
+    cfg = macro.cfg
+    img = shot("shield_175")                                                       # the bar with the ghost icons: shielded; the beam's glow was 9500 px
+    assert macro.ghost_boss_shielded(img) and any(area > cfg.GHOST_SMALL_MAX for _, _, area in macro.find_ghost_blobs(img, True))
+    glow, small = (1000, 700, cfg.GHOST_SMALL_MAX + 1000), (1500, 845, 1121)       # (the glow nearer the character than the small ghost)
+    monkeypatch.setattr(macro, "find_ghost_blobs", lambda image, boss=False: [glow, small])
+    world.screens = [img]
+    macro.play_ghost_gallery(world.clock.now + 1, watch_started(macro))
+    assert world.mouse[0] == ("move", small[0], small[1])                          # the small ghost, not the glow
+
+
+def test_in_the_boss_phase_a_blob_too_small_for_the_boss_is_a_minion_not_the_boss(macro, world):
+    cfg = macro.cfg
+    boss = shot("boss_100")
+    screen = np.zeros((1080, 1920, 3), np.uint8)
+    left, top, right, bottom = cfg.GHOST_BOSS_BAR_BOX
+    screen[top:270, left:right] = boss[top:270, left:right]                        # the bar of the boss phase, the boss able to be hurt
+    ghost = (244, 234, 56)                                                         # (BGR) a ghost's cyan
+    limit = cfg.GHOST_BOSS_MIN
+    big_side, small_side = int((limit * 0.8) ** 0.5), int(1200 ** 0.5)
+    screen[400:400 + big_side, 300:300 + big_side] = ghost                         # bigger than the other, smaller than a boss, far from the character
+    screen[600:600 + small_side, 1100:1100 + small_side] = ghost                   # a small one near the character
+    world.screens = [screen]
+    macro.play_ghost_gallery(world.clock.now + 1, watch_started(macro))
+    first = next(m[1:] for m in world.mouse if m[0] == "move")
+    assert abs(first[0] - 1100 - small_side / 2) < 40 and abs(first[1] - 600 - small_side / 2) < 40       # the near small one: nothing is the boss

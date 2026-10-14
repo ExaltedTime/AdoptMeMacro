@@ -15,6 +15,13 @@ PANEL_AT = (1060, 60)
 BAR_AT = (640, 930)                        # where the item bar crops were cut from
 
 
+@pytest.fixture(autouse=True)
+def no_first_step(macro, monkeypatch):
+    """The first step out of the entrance hall (HAUNTLET_START_FORWARD, 0: none) is looked at by a test of its own."""
+    monkeypatch.setattr(macro.cfg, "HAUNTLET_START_FORWARD", 0.0)
+    monkeypatch.setattr(macro.cfg, "MINIGAME_START_WAIT", 2.0)                    # (the tests' deadlines have it in them, and the fake clock lives through all of it)
+
+
 def frame(macro, doors=None, room=None, timer=True, bar=None):
     """A screen: the doors fixture (a number, a name, or None for a blank one), with the timer, the room panel and the item bar
     (a number of tests/hauntlet_2/item_bars/) on it."""
@@ -267,7 +274,7 @@ def moving(macro, world, room):
 
 
 def watch_of(macro):
-    return types.SimpleNamespace(problem=None, start_wait_over=lambda: None)
+    return types.SimpleNamespace(problem=None, start_wait_over=lambda: None, last_seen=1.0)       # (the game's overlay has been seen)
 
 
 def test_a_walk_holds_forward_and_the_strafe_key_for_the_strafe_then_stops_when_the_room_changes(macro, world, monkeypatch):
@@ -443,7 +450,7 @@ def test_the_loop_returns_true_on_the_victory_screen(macro, world, monkeypatch):
 
 
 def test_the_loop_stops_when_the_overlay_says_the_minigame_is_over(macro, world):
-    watch = types.SimpleNamespace(problem="left the minigame", start_wait_over=lambda: None)
+    watch = types.SimpleNamespace(problem="left the minigame", start_wait_over=lambda: None, last_seen=1.0)
     world.screens = [frame(macro, 97, room=12)]
     assert macro.play_hauntlet_2(world.clock.now + 1000, watch) is False
     assert world.keys == [] and world.looks == 0
@@ -712,3 +719,26 @@ def test_a_player_in_a_circle_is_held_so_it_is_not_unstuck_and_the_door_stays_pi
     assert index == 1 and used == []                                                          # the retry goes to the same door, with nothing more used
     run.look(frame(macro, 16, room=6), world.clock.now)
     assert run.picked is None                                                                 # a new room is a new choice
+
+
+def test_it_waits_for_the_games_overlay_then_after_a_delay_steps_forward_once_so_the_doors_can_open(macro, world, monkeypatch):
+    cfg = macro.cfg
+    monkeypatch.setattr(cfg, "HAUNTLET_START_FORWARD", 1.4)
+    monkeypatch.setattr(cfg, "MINIGAME_START_WAIT", 50.0)
+    looks = []
+    watch = types.SimpleNamespace(problem=None, start_wait_over=lambda: None, last_seen=None)
+
+    def wait(duration, w):
+        looks.append(world.clock.now)
+        world.clock.now += duration
+        if len(looks) == 4:                                                     # the overlay shows after a few looks, long before MINIGAME_START_WAIT
+            w.last_seen = 1.0
+    monkeypatch.setattr(macro, "minigame_wait", wait)
+    world.screens = [frame(macro, room=1)]
+    start = world.clock.now
+    macro.play_hauntlet_2(start + cfg.HAUNTLET_START_DELAY + 10, watch)
+    assert len(looks) == 4 and looks[-1] - start < cfg.MINIGAME_START_WAIT / 2          # it did not wait out the whole start wait
+    first = [(kind, key, at) for kind, key, at in world.keys if key == cfg.HAUNTLET_2_FORWARD_KEY][:2]
+    assert [k[:2] for k in first] == [("down", "w"), ("up", "w")]
+    assert first[1][2] - first[0][2] == pytest.approx(cfg.HAUNTLET_START_FORWARD)
+    assert world.zooms and first[0][2] - world.zooms[0] >= cfg.HAUNTLET_START_DELAY - 1e-6   # after the zoom and the delay

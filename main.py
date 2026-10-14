@@ -2769,10 +2769,15 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
     hauntlet_choose(), hauntlet_walk()) until the victory screen shows or the overlay says it's over. True if won
     before `deadline`. See docs/ARCHITECTURE.md#playing-hauntlet-2.
     """
-    print(f"[debug] Hauntlet 2: waiting {cfg.MINIGAME_START_WAIT:g}s for it to start...")
-    minigame_wait(cfg.MINIGAME_START_WAIT, watch)
+    print(f"[debug] Hauntlet 2: waiting for it to start (at most {cfg.MINIGAME_START_WAIT:g}s)...")
+    waited_until = time.time() + cfg.MINIGAME_START_WAIT
+    while time.time() < waited_until and watch.last_seen is None:       # its overlay (the room panel) shows when the game has begun - the lobby's countdown varies
+        minigame_wait(cfg.HAUNTLET_START_LOOK_INTERVAL, watch)
     watch.start_wait_over()
     zoom_out()
+    if cfg.HAUNTLET_START_FORWARD > 0:
+        wait_interruptible(cfg.HAUNTLET_START_DELAY)                   # the doors of the entrance hall open after a moment...
+        hold_key(cfg.HAUNTLET_2_FORWARD_KEY, cfg.HAUNTLET_START_FORWARD)    # ...and the way out is a step or two ahead
     run = HauntletRun()
     try:
         while time.time() < deadline and not watch.problem:
@@ -2803,14 +2808,33 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
             log_run_event(f"Hauntlet 2: got as far as room {run.room}")
     return False
 
+def ghost_character_box(hsv: Image) -> Optional[tuple[int, int, int, int]]:
+    """Where the character (and its pet, hoodie and beam) is when the camera is close to it - pulled in by a wall, as it is in the
+    dark of the boss fight - and its cyan clothes are blobs as big as ghosts: the glowing pink emblem of its backpack
+    (GHOST_EMBLEM_HSV, at least GHOST_EMBLEM_MIN px, in GHOST_EMBLEM_BOX) gives the place and, by its size, how close the camera is;
+    the box is GHOST_SELF_SCALE times the emblem's size (its side's square root, at least GHOST_SELF_MIN_UNIT) to the sides, up and down.
+    None when the emblem isn't seen: the camera is far, and GHOST_IGNORE_BOXES' small box does."""
+    left, top, right, bottom = cfg.GHOST_EMBLEM_BOX
+    mask = cv2.inRange(hsv[top:bottom, left:right], cfg.GHOST_EMBLEM_HSV[0], cfg.GHOST_EMBLEM_HSV[1])
+    count, _, stats, centres = cv2.connectedComponentsWithStats(mask)
+    best = max(range(1, count), key=lambda i: stats[i, cv2.CC_STAT_AREA], default=None)
+    if best is None or stats[best, cv2.CC_STAT_AREA] < cfg.GHOST_EMBLEM_MIN:
+        return None
+    x, y = left + int(centres[best][0]), top + int(centres[best][1])
+    unit = max(float(np.sqrt(stats[best, cv2.CC_STAT_AREA])), cfg.GHOST_SELF_MIN_UNIT)
+    side, up, down = cfg.GHOST_SELF_SCALE
+    return int(x - side * unit), int(y - up * unit), int(x + side * unit), int(y + down * unit)
+
 def find_ghost_blobs(img: Image, boss: bool = False) -> list[tuple[int, int, int]]:
     """(x, y, area) of every ghost in `img`, biggest first: the connected pieces of the translucent cyan the ghosts and the
     boss are drawn in (GHOST_COLOR), at least GHOST_MIN_AREA px, not in the HUD (GHOST_IGNORE_BOXES) or on the character -
     and, in the boss phase (`boss`), not on the boss's health bar, whose crest and icons are cyan too."""
     low, high = cfg.GHOST_COLOR
-    mask = cv2.inRange(cv2.cvtColor(img, cv2.COLOR_BGR2HSV), low, high)
-    for left, top, right, bottom in cfg.GHOST_IGNORE_BOXES + ((cfg.GHOST_BOSS_BAR_IGNORE,) if boss else ()):
-        mask[top:bottom, left:right] = 0
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, low, high)
+    closeup = ghost_character_box(hsv)
+    for left, top, right, bottom in cfg.GHOST_IGNORE_BOXES + ((cfg.GHOST_BOSS_BAR_IGNORE,) if boss else ()) + ((closeup,) if closeup else ()):
+        mask[max(0, top):bottom, max(0, left):right] = 0
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((cfg.GHOST_CLOSE, cfg.GHOST_CLOSE), np.uint8))
     count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
     blobs = [(int(centres[i][0]), int(centres[i][1]), int(stats[i, cv2.CC_STAT_AREA])) for i in range(1, count)
@@ -2991,7 +3015,10 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
             if now_phase != phase:
                 print(f"[debug] Ghost Gallery: {dict(ghosts='the boss phase is over', boss='the boss can be hurt', shielded='the boss is shielded: after the small ghosts')[now_phase]}")
                 phase = now_phase
-            target = choose_ghost_target(find_ghost_blobs(img, bar), phase == "boss", target)
+            blobs = find_ghost_blobs(img, bar)
+            if phase == "shielded":                                         # only the small ghosts count: what is bigger is the beam's glow or the boss's fog
+                blobs = [blob for blob in blobs if blob[2] <= cfg.GHOST_SMALL_MAX]
+            target = choose_ghost_target(blobs, phase == "boss" and bool(blobs) and blobs[0][2] >= cfg.GHOST_BOSS_MIN, target)   # (the boss is a big one, else it's the ghosts that are there)
             now = time.time()
             if target is not None:
                 last_seen = now

@@ -43,6 +43,7 @@ MINIGAME_POPUP_NO_MAX_DY = 40               # ...and this many px above/below it
 MINIGAME_POPUP_DONT_SHOW_POS = (826, 666)
 MINIGAME_POPUP_NO_POS = (879, 618)
 MINIGAME_POPUP_YES_POS = (1049, 612)
+MINIGAME_POPUP_YES_TOLERANCE = 40            # the middle of the popup's Yes button is within this of MINIGAME_POPUP_YES_POS (the real one was at (1048, 611) every time): a run's 30 'unknown' popups were other dialogs (a green and a red button), clicked at the popup's places
 
 # Which minigame a popup is for: the first line of its title ("Ghost Gallery", "Hauntlet 2") is matched
 # against the crops in MINIGAME_TEMPLATE_DIR, searched for within MINIGAME_TITLE_BOX. A minigame is the
@@ -435,6 +436,12 @@ HAUNTLET_STRAFE_DURATION = 1.1
 HAUNTLET_STRAFE_MIN = 0.15
 HAUNTLET_STRAFE_MAX = 2.5
 HAUNTLET_WALK_MAX = 6.0
+# While walking to a door the player is steered: every HAUNTLET_STEER_EVERY seconds, with the three TVs in sight, a player HAUNTLET_STEER_MIN door spacings or more
+# off the door (hauntlet_strafe()'s measure) lets go of W, strafes for what that is (at most HAUNTLET_STEER_MAX seconds) and walks on. A room seen at an angle
+# (the camera turned) takes W along its wall, away from the doors, and the first strafe alone can't make up for it.
+HAUNTLET_STEER_EVERY = 1.0
+HAUNTLET_STEER_MIN = 0.4
+HAUNTLET_STEER_MAX = 1.2
 HAUNTLET_WALK_PAST_DURATION = 1.5            # more of W after the number changed (a human's: 1.0-2.0 s, median 1.4)
 HAUNTLET_START_LOOK_INTERVAL = 0.5            # while waiting for the game to begin (its overlay to show)
 HAUNTLET_START_DELAY = 1.5                    # after the view is set up, before the first step: the entrance hall's doors open on their own (a macro-played run that had not moved by the 45 s the room's timer gave it was thrown out)

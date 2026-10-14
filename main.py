@@ -2318,7 +2318,7 @@ def detect_sick_dialog(img: Image) -> bool:
 
 def detect_minigame_popup(img: Image) -> bool:
     """True if a Halloween minigame popup is on screen: a button of the Yes green (a piece of it of at least
-    MINIGAME_POPUP_MIN_BUTTON_PIXELS px) with the No red close to its left (neither colour is unique alone). Each green piece
+    MINIGAME_POPUP_MIN_BUTTON_PIXELS px, where the popup's Yes is, within MINIGAME_POPUP_YES_TOLERANCE) with the No red close to its left (neither colour is unique alone). Each green piece
     is looked at on its own: a popup over the open backpack, whose buttons are green too, was missed when all the green on the
     screen was taken together. See docs/ARCHITECTURE.md#need-handlers.
     """
@@ -2330,6 +2330,8 @@ def detect_minigame_popup(img: Image) -> bool:
         if stats[i, cv2.CC_STAT_AREA] < cfg.MINIGAME_POPUP_MIN_BUTTON_PIXELS:
             continue
         yes_x, yes_y = int(centres[i][0]), int(centres[i][1])
+        if abs(yes_x - cfg.MINIGAME_POPUP_YES_POS[0]) > cfg.MINIGAME_POPUP_YES_TOLERANCE or abs(yes_y - cfg.MINIGAME_POPUP_YES_POS[1]) > cfg.MINIGAME_POPUP_YES_TOLERANCE:
+            continue                                                  # (the popup is always in the same place: another dialog with a green and a red button is not it)
         near_no = img[max(0, yes_y - cfg.MINIGAME_POPUP_NO_MAX_DY):yes_y + cfg.MINIGAME_POPUP_NO_MAX_DY,
                       max(0, yes_x - cfg.MINIGAME_POPUP_NO_MAX_DX):yes_x]
         if int(np.count_nonzero(exact_color_mask(near_no, cfg.MINIGAME_POPUP_NO_COLOR))) >= cfg.MINIGAME_POPUP_MIN_BUTTON_PIXELS:
@@ -2772,6 +2774,18 @@ def hauntlet_unstick(img: Image, target_index: Optional[int], tries: int, last_k
     hold_key(key, min(cfg.HAUNTLET_UNSTICK_STEP * (tries + 1), cfg.HAUNTLET_UNSTICK_MAX))
     return key
 
+def hauntlet_steer(img: Image, target_index: int) -> Optional[tuple[str, float]]:
+    """While walking to door `target_index`: the key to strafe with and for how long, if the player has drifted off the door (as hauntlet_strafe()
+    measures it: the three TVs, the circle in front of the door, the hearts) by HAUNTLET_STEER_MIN door spacings or more, else None - also None when the
+    three TVs aren't all on screen (close to the doors they are cut off). At most HAUNTLET_STEER_MAX seconds."""
+    doors = find_hauntlet_doors(img)
+    if len(doors) != 3:
+        return None
+    key, seconds = hauntlet_strafe(img, doors, target_index)
+    if key is None or seconds < cfg.HAUNTLET_STEER_MIN * cfg.HAUNTLET_STRAFE_DURATION:
+        return None
+    return key, min(seconds, cfg.HAUNTLET_STEER_MAX)
+
 def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, watch: MinigameWatch, until_doors: bool = False,
                   target_index: Optional[int] = None, until_doorways: bool = False) -> bool:
     """Walk to a door: first strafe, `direction` (a strafe key, or None) held for `duration` seconds on its own, then hold forward
@@ -2795,6 +2809,7 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
         still_since: Optional[float] = None
         tries, last_key = 0, None
         locked_until, was_inside = 0.0, False
+        steer_at = started + cfg.HAUNTLET_STEER_EVERY
         while time.time() < started + cfg.HAUNTLET_WALK_MAX:
             img = minigame_look(watch)
             if detect_minigame_victory(img):
@@ -2821,6 +2836,16 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
                 still_since, last_view = None, None
                 wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
                 continue
+            if target_index is not None and not run.fork and now >= steer_at:      # the way forward isn't always towards the door (a room seen at an angle): steer
+                steer_at = now + cfg.HAUNTLET_STEER_EVERY
+                steer = hauntlet_steer(img, target_index)
+                if steer is not None:
+                    print(f"[debug] Hauntlet 2: off the door - a step {steer[0]} for {steer[1]:.2f}s")
+                    pydirectinput.keyUp(cfg.HAUNTLET_2_FORWARD_KEY)                # one key at a time
+                    hold_key(*steer)
+                    pydirectinput.keyDown(cfg.HAUNTLET_2_FORWARD_KEY)
+                    still_since, last_view = None, None
+                    continue
             view = hauntlet_view(img)
             if last_view is not None and float(np.abs(view - last_view).mean()) < cfg.HAUNTLET_STILL_LEVEL:
                 still_since = now if still_since is None else still_since

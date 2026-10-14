@@ -374,3 +374,22 @@ def test_the_only_pets_message_is_found_by_its_letters_over_any_background(macro
     assert not macro.only_pets_message_visible(blank())
     assert not macro.only_pets_message_visible(np.random.default_rng(4).integers(0, 255, BLACK, dtype=np.uint8))
     assert not macro.only_pets_message_visible(np.full(BLACK, 255, np.uint8))                 # nor is a white screen
+
+
+POPUP_SCREENSHOTS = {                    # real screenshots of a 1920x1080 window (tests/popups): name -> (is a minigame popup, which one)
+    "hauntlet_house": (True, "hauntlet_2"),
+    "ghost_house": (True, "ghost_gallery"),
+    "ghost_over_backpack": (True, "ghost_gallery"),      # the open backpack behind it has green buttons too: it was not found, with all the green taken together
+    "paycheck": (False, None),                           # the paycheck's green CASH OUT, a green Okay, the win screen's NICE!: no red No beside them
+    "star_rewards": (False, None),
+    "game_over": (False, None),
+}
+
+
+def test_minigame_popups_are_found_and_named_in_real_screenshots_and_other_green_buttons_are_not(macro):
+    import cv2
+    for name, (popup, which) in POPUP_SCREENSHOTS.items():
+        img = cv2.imread(os.path.join(os.path.dirname(__file__), "popups", f"{name}.png"))
+        assert macro.detect_minigame_popup(img) is popup, name
+        if popup:
+            assert macro.identify_minigame(img) == which, name

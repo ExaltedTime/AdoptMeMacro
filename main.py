@@ -2281,18 +2281,24 @@ def detect_sick_dialog(img: Image) -> bool:
     return popup_visible(img, "sick_dialog")
 
 def detect_minigame_popup(img: Image) -> bool:
-    """True if a Halloween minigame popup is on screen: the Yes green with the No red close
-    to its left (neither colour is unique alone). See docs/ARCHITECTURE.md#need-handlers.
+    """True if a Halloween minigame popup is on screen: a button of the Yes green (a piece of it of at least
+    MINIGAME_POPUP_MIN_BUTTON_PIXELS px) with the No red close to its left (neither colour is unique alone). Each green piece
+    is looked at on its own: a popup over the open backpack, whose buttons are green too, was missed when all the green on the
+    screen was taken together. See docs/ARCHITECTURE.md#need-handlers.
     """
     if detect_sick_dialog(img):
         return False
-    ys, xs = np.where(exact_color_mask(img, cfg.GREEN_BUTTON_COLOR) > 0)
-    if len(xs) < cfg.MINIGAME_POPUP_MIN_BUTTON_PIXELS:
-        return False
-    yes_x, yes_y = int(xs.mean()), int(ys.mean())
-    near_no = img[max(0, yes_y - cfg.MINIGAME_POPUP_NO_MAX_DY):yes_y + cfg.MINIGAME_POPUP_NO_MAX_DY,
-                  max(0, yes_x - cfg.MINIGAME_POPUP_NO_MAX_DX):yes_x]
-    return int(np.count_nonzero(exact_color_mask(near_no, cfg.MINIGAME_POPUP_NO_COLOR))) >= cfg.MINIGAME_POPUP_MIN_BUTTON_PIXELS
+    green = (exact_color_mask(img, cfg.GREEN_BUTTON_COLOR) > 0).astype(np.uint8)
+    count, _, stats, centres = cv2.connectedComponentsWithStats(green)
+    for i in range(1, count):
+        if stats[i, cv2.CC_STAT_AREA] < cfg.MINIGAME_POPUP_MIN_BUTTON_PIXELS:
+            continue
+        yes_x, yes_y = int(centres[i][0]), int(centres[i][1])
+        near_no = img[max(0, yes_y - cfg.MINIGAME_POPUP_NO_MAX_DY):yes_y + cfg.MINIGAME_POPUP_NO_MAX_DY,
+                      max(0, yes_x - cfg.MINIGAME_POPUP_NO_MAX_DX):yes_x]
+        if int(np.count_nonzero(exact_color_mask(near_no, cfg.MINIGAME_POPUP_NO_COLOR))) >= cfg.MINIGAME_POPUP_MIN_BUTTON_PIXELS:
+            return True
+    return False
 
 # directory -> (the files' names and modification times, {name: image}) - see load_templates().
 _TEMPLATE_CACHE: dict[str, tuple[Any, dict[str, Image]]] = {}

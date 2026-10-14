@@ -617,7 +617,7 @@ sighting in a row (see above).
 **Minigame popups.** Halloween has two minigames that offer to teleport you -
 "Ghost Gallery is starting soon! Teleport there now?" and "Hauntlet 2 is
 starting soon!..." - in the same popup layout.
-`detect_minigame_popup()` recognises that layout by its two buttons: neither
+`detect_minigame_popup()` recognises that layout by its two buttons (each piece of the Yes green looked at on its own, with the red beside *it*: a popup over the open backpack, whose buttons are green too, was missed when all the green on the screen was averaged - `tests/popups/` has real screenshots of popups and of other green buttons): neither
 color is unique alone (Yes green = `GREEN_BUTTON_COLOR`, No red = the
 Exit Home button), so it needs the Yes green (`GREEN_BUTTON_COLOR`, at
 least `MINIGAME_POPUP_MIN_BUTTON_PIXELS` px) with the No red

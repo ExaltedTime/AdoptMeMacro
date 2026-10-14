@@ -554,10 +554,17 @@ started the task, and never from inside `unscrew()` itself). It's the same
 `unscrew()`, with two differences: the rejoin check only acts on a disconnect or a
 white screen (`rejoin_game(kinds=("disconnect", "white_screen"))`; the stuck, scheduled and stalled rejoins wait
 for the top of a cycle), and the backpack is only closed once it has been seen
-open on `BACKPACK_CLOSE_CONFIRMATIONS` checks in a row - a handler opens the
-normal backpack for a few seconds on purpose, so one sighting could be a
-handler in the middle of its steps, but two `UNSCREW_TASK_INTERVAL` apart is a
-backpack open for longer than any handler needs. The paycheck check is skipped
+open on `BACKPACK_CLOSE_CONFIRMATIONS` checks in a row - so one sighting, which could be a
+handler in the middle of its steps, isn't enough. That was not enough either: an equip sequence keeps the backpack open for about
+6 s, longer than two checks apart, and in a run's log 10 of 13 rides had the check close the backpack in the middle of the
+sequence (a plain "backpack was left open - closed it" 2-3 s before the "... after equipping the vehicle" of the sequence's own close) - given one
+earlier sighting that wasn't real, the next check, inside the sequence, was the second; the key that ends the sequence then opened the backpack
+again and it was closed a second time. (A simulation of the real handler and check on a fake clock gives the same pair of lines; what the
+first, false sighting is is not known - the screen of the first sighting of a count is now saved as `debug_backpack_first_sighting.png`.)
+So **a handler that opens the backpack on purpose says so**: `backpack_on_purpose()` (used by `equip_favorite_vehicle()`, the catch
+need's toy sequence and `teleport_to()` up to the click that teleports) makes `close_backpack_if_stuck()` leave the backpack alone, forget any
+sighting from before, and say whether it is open (so the paycheck check is still skipped). Setup, which keeps it open for ~8 s, is
+exempt in its own way (`play_minigames=False`). The paycheck check is skipped
 while the backpack is still open. If a minigame is played, or a disconnect made
 it rejoin, `TaskInterrupted` is raised: the handler is abandoned (a minigame and
 a rejoin both respawn the character; for the popup abort below,

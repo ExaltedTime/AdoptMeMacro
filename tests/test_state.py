@@ -720,6 +720,81 @@ def test_setup_keeps_its_backpack_open_without_the_in_task_check_closing_it(macr
     assert macro.unscrew(in_task=True, play_minigames=False) is None
 
 
+def test_the_in_task_check_closes_a_backpack_seen_open_twice_but_not_one_a_handler_has_open_on_purpose(macro, monkeypatch, tmp_path):
+    import numpy as np
+    closed = []
+    monkeypatch.setattr(macro.cfg, "IMAGES_DIR", str(tmp_path))
+    monkeypatch.setattr(macro, "is_roblox_focused", lambda: True)
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((20, 20, 3), np.uint8))
+    monkeypatch.setattr(macro, "detect_backpack_open", lambda img: True)
+    monkeypatch.setattr(macro, "close_backpack_if_open", lambda step="": closed.append(step))
+    stuck = macro.close_backpack_if_stuck
+    assert stuck(True) is True and closed == []                                            # one sighting is not enough...
+    assert (tmp_path / "debug_backpack_first_sighting.png").exists()                       # ...but what the screen looked like is kept
+    assert stuck(True) is False and len(closed) == 1                                       # the second one closes it
+    closed.clear()
+    with macro.backpack_on_purpose():
+        assert [stuck(True) for _ in range(4)] == [True] * 4 and closed == []              # a handler has it open: never
+    assert stuck(True) is True and closed == []                                            # (and what it saw before doesn't count: a first sighting again)
+    macro.state.backpack_strikes = 1
+    with macro.backpack_on_purpose():
+        pass
+    assert stuck(True) is True and closed == []                                            # a sighting from before the block does not count after it either
+
+
+def test_an_equip_sequence_is_not_closed_in_the_middle_by_the_in_task_check(macro, monkeypatch):
+    """With a sighting already counted (a false one), the next check falls in the sequence, which keeps the backpack open longer than
+    the interval between checks: it used to close the backpack there, and the key that ends the sequence then opened it again."""
+    import numpy as np
+    now = [1000.0]
+    monkeypatch.setattr(macro.time, "time", lambda: now[0])
+    monkeypatch.setattr(macro.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(macro.time, "sleep", lambda duration: now.__setitem__(0, now[0] + duration))
+    monkeypatch.setattr(macro.STOP_EVENT, "wait", lambda timeout=None: now.__setitem__(0, now[0] + (timeout or 0)) or False)
+    monkeypatch.setattr(macro, "check_focus", lambda: None)
+    opened, presses, logged = [False], [], []
+
+    def press(key, **kwargs):
+        if key == macro.cfg.KEY_BACKPACK:
+            opened[0] = not opened[0]
+            presses.append(opened[0])
+    monkeypatch.setattr(macro.pydirectinput, "press", press, raising=False)
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: now.__setitem__(0, now[0] + 1.2))
+    monkeypatch.setattr(macro, "is_backpack_tab_selected", lambda pos: False)
+    monkeypatch.setattr(macro, "is_roblox_focused", lambda: True)
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((20, 20, 3), np.uint8))
+    monkeypatch.setattr(macro, "detect_backpack_open", lambda img: opened[0])
+    monkeypatch.setattr(macro, "detect_backpack_expanded", lambda img: False)
+    monkeypatch.setattr(macro.cv2, "imwrite", lambda *a, **k: True)
+    monkeypatch.setattr(macro, "rejoin_game", lambda kinds=None: False)
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: now.__setitem__(0, now[0] + 1.0))
+    monkeypatch.setattr(macro, "detect_paycheck", lambda: False)
+    monkeypatch.setattr(macro, "log_run_event", logged.append)
+    monkeypatch.setattr(macro.cfg, "HALLOWEEN", False)
+    with macro.task_unscrew():
+        macro.state.last_task_unscrew = now[0] - 100                                       # a check is due at once
+        macro.state.backpack_strikes = 1                                                   # and one sighting is already counted
+        macro.equip_favorite_vehicle()
+    assert presses == [True, False] and logged == []                                       # opened once, closed once, nothing closed it in between
+
+
+def test_the_teleport_and_the_toy_sequences_are_exempt_only_while_their_backpack_is_open(macro, monkeypatch):
+    wanted = []
+    note = lambda what: wanted.append((what, macro.state.backpack_wanted))
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "select_backpack_tab", lambda pos: note("tab"))
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: note("click"))
+    monkeypatch.setattr(macro, "close_backpack", lambda step: note("close"))
+    monkeypatch.setattr(macro, "hold_key", lambda key, duration: note("hold"))
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: note("wait"))
+    macro.teleport_to((100, 100))
+    assert [n for n, w in wanted if w] == ["wait", "click", "wait", "click", "wait", "click"]           # opening it, the category, the teleport: exempt
+    assert [w for n, w in wanted[6:]] == [0] * len(wanted[6:])                                          # the long wait after the teleport and the walk back: not
+    wanted.clear()
+    assert macro.CatchNeedHandler().handle() is True
+    assert [w for n, w in wanted if n in ("tab", "close")] == [1, 1] and wanted[-1][1] == 0 and macro.state.backpack_wanted == 0
+
+
 def test_the_recorder_does_not_spin_while_no_frame_can_be_grabbed(macro, monkeypatch):
     recorder = macro.RunRecorder("unused")
     recorder.writer = type("Writer", (), {"write": lambda self, frame: None})()

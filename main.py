@@ -324,6 +324,8 @@ class State:
     # How many in-task checks in a row have seen the backpack open (see
     # close_backpack_if_stuck()).
     backpack_strikes: int = 0
+    # Above 0 while a handler has the backpack open on purpose and closes it itself (see backpack_on_purpose()).
+    backpack_wanted: int = 0
     # True while a handler that wants the pet focused runs (see wanting_pet_focus()).
     pet_focus_wanted: bool = False
     # When the minigame popup checks last ran, and how many "quiet:" lines have
@@ -1630,28 +1632,41 @@ def select_backpack_tab(pos: Point) -> None:
         return
     hover_click(*pos)
 
+@contextlib.contextmanager
+def backpack_on_purpose() -> Iterator[None]:
+    """Within this block a handler has the backpack open on purpose and closes it itself: the in-task check (close_backpack_if_stuck())
+    leaves it alone and forgets any sighting from before. (Two sightings UNSCREW_TASK_INTERVAL apart used to count as stuck open, and an
+    equip sequence keeps it open for longer than that: the check closed it in the middle, and the final key press opened it again.)"""
+    state.backpack_wanted += 1
+    state.backpack_strikes = 0
+    try:
+        yield
+    finally:
+        state.backpack_wanted -= 1
+
 def equip_favorite_vehicle() -> None:
     """Open the backpack, equip the first vehicle (the favorite) and close it. Shared by
     ride and the helicopter needs. See docs/ARCHITECTURE.md#need-handlers.
     """
-    print("[debug] opening backpack...")
-    pydirectinput.press(cfg.KEY_BACKPACK)
-    wait_interruptible(cfg.UI_SETTLE)
+    with backpack_on_purpose():
+        print("[debug] opening backpack...")
+        pydirectinput.press(cfg.KEY_BACKPACK)
+        wait_interruptible(cfg.UI_SETTLE)
 
-    print("[debug] opening vehicles...")
-    select_backpack_tab(cfg.RIDE_VEHICLES_POS)
-    wait_interruptible(cfg.UI_SETTLE)
+        print("[debug] opening vehicles...")
+        select_backpack_tab(cfg.RIDE_VEHICLES_POS)
+        wait_interruptible(cfg.UI_SETTLE)
 
-    print("[debug] selecting first vehicle...")
-    hover_click(*cfg.RIDE_FIRST_VEHICLE_POS)
-    wait_interruptible(cfg.UI_SETTLE)
+        print("[debug] selecting first vehicle...")
+        hover_click(*cfg.RIDE_FIRST_VEHICLE_POS)
+        wait_interruptible(cfg.UI_SETTLE)
 
-    print("[debug] equipping vehicle...")
-    hover_click(*cfg.RIDE_EQUIP_POS)
-    wait_interruptible(cfg.UI_SETTLE)
+        print("[debug] equipping vehicle...")
+        hover_click(*cfg.RIDE_EQUIP_POS)
+        wait_interruptible(cfg.UI_SETTLE)
 
-    print("[debug] closing backpack...")
-    close_backpack("equipping the vehicle")
+        print("[debug] closing backpack...")
+        close_backpack("equipping the vehicle")
 
 class NeedHandler(ABC):
     """Reacts to one detected need. Subclass this to add a new need."""
@@ -1692,29 +1707,30 @@ class CatchNeedHandler(NeedHandler):
         if not focus_roblox():
             return False
 
-        # Open backpack with 'b' key
-        print("[debug] opening backpack...")
-        pydirectinput.press(cfg.KEY_BACKPACK)
-        wait_interruptible(cfg.UI_SETTLE)
+        with backpack_on_purpose():
+            # Open backpack with 'b' key
+            print("[debug] opening backpack...")
+            pydirectinput.press(cfg.KEY_BACKPACK)
+            wait_interruptible(cfg.UI_SETTLE)
 
-        # Navigate to toys
-        print("[debug] opening toys...")
-        select_backpack_tab(cfg.CATCH_TOYS_POS)
-        wait_interruptible(cfg.UI_SETTLE)
+            # Navigate to toys
+            print("[debug] opening toys...")
+            select_backpack_tab(cfg.CATCH_TOYS_POS)
+            wait_interruptible(cfg.UI_SETTLE)
 
-        # Click squeaky toy
-        print("[debug] selecting squeaky toy...")
-        hover_click(*cfg.CATCH_SQUEAKY_TOY_POS)
-        wait_interruptible(cfg.UI_SETTLE)
+            # Click squeaky toy
+            print("[debug] selecting squeaky toy...")
+            hover_click(*cfg.CATCH_SQUEAKY_TOY_POS)
+            wait_interruptible(cfg.UI_SETTLE)
 
-        # Equip the toy
-        print("[debug] equipping toy...")
-        hover_click(*cfg.CATCH_EQUIP_POS)
-        wait_interruptible(cfg.UI_SETTLE)
+            # Equip the toy
+            print("[debug] equipping toy...")
+            hover_click(*cfg.CATCH_EQUIP_POS)
+            wait_interruptible(cfg.UI_SETTLE)
 
-        # Close backpack with 'b' key
-        print("[debug] closing backpack...")
-        close_backpack("equipping the toy")
+            # Close backpack with 'b' key
+            print("[debug] closing backpack...")
+            close_backpack("equipping the toy")
 
         # Wait before throwing
         print(f"[debug] waiting {cfg.CATCH_WAIT_AFTER_EQUIP}s before throwing...")
@@ -1853,16 +1869,17 @@ def teleport_to(category_pos: Point) -> None:
     """Open the backpack, teleport via the category tab, walk back to clear the landing
     spot. Shared by the teleport-walk needs. See docs/ARCHITECTURE.md#need-handlers.
     """
-    print("[debug] opening backpack...")
-    pydirectinput.press(cfg.KEY_BACKPACK)
-    wait_interruptible(cfg.UI_SETTLE)
+    with backpack_on_purpose():
+        print("[debug] opening backpack...")
+        pydirectinput.press(cfg.KEY_BACKPACK)
+        wait_interruptible(cfg.UI_SETTLE)
 
-    print("[debug] selecting category...")
-    hover_click(*category_pos)
-    wait_interruptible(cfg.UI_SETTLE)
-    hover_click(*cfg.GENERAL_TELEPORT_POS_2)
-    wait_interruptible(cfg.UI_SETTLE)
-    hover_click(*cfg.GENERAL_TELEPORT_POS_3)
+        print("[debug] selecting category...")
+        hover_click(*category_pos)
+        wait_interruptible(cfg.UI_SETTLE)
+        hover_click(*cfg.GENERAL_TELEPORT_POS_2)
+        wait_interruptible(cfg.UI_SETTLE)
+        hover_click(*cfg.GENERAL_TELEPORT_POS_3)
     wait_interruptible(cfg.TELEPORT_WAIT)
     print("[debug] walking backward...")
     hold_key("s", cfg.TELEPORT_BACK_DURATION)
@@ -2196,10 +2213,18 @@ def close_backpack_if_stuck(in_task: bool) -> bool:
     if not in_task:
         close_backpack_if_open()
         return False
-    if not is_roblox_focused() or not detect_backpack_open(grab_screen()):
+    img = grab_screen() if is_roblox_focused() else None
+    seen = img is not None and detect_backpack_open(img)
+    if state.backpack_wanted:                                   # a handler has it open on purpose (backpack_on_purpose()) and closes it itself
+        state.backpack_strikes = 0
+        return seen
+    if img is None or not seen:
         state.backpack_strikes = 0
         return False
     state.backpack_strikes += 1
+    if state.backpack_strikes == 1:                             # the sighting that may be a false one: keep what the screen looked like
+        print("[debug] the backpack was seen open (the first of the sightings that count as stuck)")
+        cv2.imwrite(os.path.join(cfg.IMAGES_DIR, "debug_backpack_first_sighting.png"), img)
     if state.backpack_strikes < cfg.BACKPACK_CLOSE_CONFIRMATIONS:
         return True
     state.backpack_strikes = 0

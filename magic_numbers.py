@@ -654,7 +654,7 @@ SICK_PROMPT_POS = (963, 488)             # the doctor's prompt button (an E; a h
 # and camping entries turn it on.
 HELICOPTER_REQUIRED = False
 HELICOPTER_FORWARD_DURATION = 1.0  # step forward this long after teleporting, before equipping
-HELICOPTER_HOLD_DURATION = 4.0     # then hold KEY_HELICOPTER this long
+HELICOPTER_HOLD_DURATION = 4.5     # then hold KEY_HELICOPTER this long (it was 0.5 s less, and the helicopter could be caught on a tree)
 
 # Needs that teleport somewhere and walk (see TeleportWalkNeedHandler), then
 # wait for the need to clear. Each entry: where to teleport, the

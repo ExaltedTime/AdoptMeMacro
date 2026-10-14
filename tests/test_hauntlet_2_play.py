@@ -537,6 +537,7 @@ def test_without_the_arrow_every_door_is_still_a_choice_and_the_phone_is_only_us
 
 def test_a_room_whose_doors_are_never_found_is_walked_straight_on_and_the_screenshot_kept_once(macro, world, monkeypatch):
     cfg = macro.cfg
+    monkeypatch.setattr(cfg, "HAUNTLET_SEARCH_TURNS", 3)                                  # (it is 0 as shipped: see the test below)
     number = not_a_fork_or_the_hall(macro)
     failures = []
     monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: failures.append(reason))
@@ -665,6 +666,7 @@ def test_the_phone_is_used_more_when_the_hearts_are_low(macro, world, monkeypatc
 def test_a_room_whose_doors_cannot_be_found_is_looked_around_for_before_walking_ahead(macro, world, monkeypatch):
     """The camera can be turned away from them (room 8 of a macro-played run): it is dragged round and looked at again."""
     cfg = macro.cfg
+    monkeypatch.setattr(cfg, "HAUNTLET_SEARCH_TURNS", 3)
     number = not_a_fork_or_the_hall(macro)
     monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: None)
     monkeypatch.setattr(macro, "log_run_event", lambda text: None)
@@ -742,3 +744,28 @@ def test_it_waits_for_the_games_overlay_then_after_a_delay_steps_forward_once_so
     assert [k[:2] for k in first] == [("down", "w"), ("up", "w")]
     assert first[1][2] - first[0][2] == pytest.approx(cfg.HAUNTLET_START_FORWARD)
     assert world.zooms and first[0][2] - world.zooms[0] >= cfg.HAUNTLET_START_DELAY - 1e-6   # after the zoom and the delay
+
+
+def test_as_shipped_the_camera_is_never_turned_to_look_for_doors(macro, world, monkeypatch):
+    cfg = macro.cfg
+    assert cfg.HAUNTLET_SEARCH_TURNS == 0
+    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: None)
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    world.screens = [frame(macro, room=not_a_fork_or_the_hall(macro))]                    # no TVs at all
+    macro.play_hauntlet_2(world.clock.now + cfg.MINIGAME_START_WAIT + 3 * (cfg.HAUNTLET_DOORS_TIMEOUT + cfg.HAUNTLET_RETRY_WAIT + cfg.HAUNTLET_WALK_MAX), watch_of(macro))
+    assert not [e for e in world.mouse if e[1:2] == ("right",)] and len(world.zooms) == 1     # the camera stays as it is: it changes where the keys take the player
+    assert [key for _, key, _ in world.keys].count("w") >= 2                              # and the player walks straight on
+
+
+def test_a_fork_stays_a_fork_after_a_walk_even_past_the_doors_timeout(macro):
+    cfg = macro.cfg
+    run = macro.HauntletRun()
+    hall = frame(macro, 82, room=fork_room(macro))
+    run.look(hall, 100.0)
+    run.look(hall, 100.0 + cfg.HAUNTLET_ROOM_SETTLE + 0.5)                                 # (two looks: it is a fork)
+    late = 100.0 + cfg.HAUNTLET_DOORS_TIMEOUT + 5
+    run.walked_at = late - 0.1                                                             # a walk just ended: the looks start over...
+    assert run.look(hall, late) is None
+    run.walked_at = None
+    assert run.look(hall, late + cfg.HAUNTLET_RETRY_WAIT) is None                          # ...the first one of them is not one doorway, as it was
+    assert len(run.look(hall, late + cfg.HAUNTLET_RETRY_WAIT + 0.5) or []) == 2

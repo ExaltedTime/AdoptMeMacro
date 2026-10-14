@@ -2534,7 +2534,7 @@ class HauntletRun:
         self.empty_looks += 1
         if self.fork and self.empty_looks >= 2:
             return [HauntletDoor(0, 0, None), HauntletDoor(0, 0, None)]       # two doorways, not located
-        if age >= cfg.HAUNTLET_DOORS_TIMEOUT or (self.room == 1 and self.empty_looks >= 2):       # room 1 is the entrance hall
+        if not self.fork and (age >= cfg.HAUNTLET_DOORS_TIMEOUT or (self.room == 1 and self.empty_looks >= 2)):       # room 1 is the entrance hall (a fork waits for its second empty look: after a walk the looks start again, and a fork past the timeout was taken for one doorway and the camera was turned)
             return [HauntletDoor(0, 0, None)]                                  # one doorway, straight ahead
         return None
 

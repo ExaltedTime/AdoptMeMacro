@@ -2989,15 +2989,30 @@ def furniture_outlined(before: Image, after: Image, point: Point) -> bool:
     new = now & (cv2.dilate(was, np.ones((5, 5), np.uint8)) == 0)
     return int(np.count_nonzero(new)) >= cfg.GHOST_OUTLINE_MIN
 
-def find_furniture(watch: MinigameWatch) -> Point:
-    """Somewhere the beam can be held on furniture: the mouse is moved to up to GHOST_FURNITURE_PROBES random places in
-    GHOST_FURNITURE_BOX (far from the character, far_from_character()), a look at each (furniture_outlined()), and the first
-    one that gets the white outline is it; none did, the last place tried."""
-    point = far_from_character(cfg.GHOST_FURNITURE_BOX, cfg.GHOST_FURNITURE_MIN_DISTANCE)
+def ring_point(centre: Point, box: tuple[int, int, int, int], radii: tuple[int, int]) -> Point:
+    """A random point GHOST_RING-ish px (`radii`, nearest and farthest) from `centre`, pulled into `box`."""
+    angle, radius = random.uniform(0, 2 * np.pi), random.uniform(*radii)
+    left, top, right, bottom = box
+    return (min(max(int(centre[0] + radius * np.cos(angle)), left), right), min(max(int(centre[1] + radius * np.sin(angle)), top), bottom))
+
+def find_furniture(watch: MinigameWatch, around: Optional[Point] = None, avoid: Sequence[Point] = ()) -> Point:
+    """Somewhere the beam can be held on furniture: the mouse is moved to up to GHOST_FURNITURE_PROBES places - random ones in
+    GHOST_FURNITURE_BOX far from the character (far_from_character()), or, with `around`, ones in a ring of GHOST_RING px around that point
+    (a ghost that is hiding in furniture) - none within GHOST_BAD_SPOT_RADIUS px of any of `avoid`, a look at each (furniture_outlined()),
+    and the first one that gets the white outline is it; none did, the last place tried."""
+    def place() -> Point:
+        point = (0, 0)
+        for _ in range(50):
+            point = (ring_point(around, cfg.GHOST_FURNITURE_BOX, cfg.GHOST_RING) if around is not None
+                     else far_from_character(cfg.GHOST_FURNITURE_BOX, cfg.GHOST_FURNITURE_MIN_DISTANCE))
+            if all((point[0] - x) ** 2 + (point[1] - y) ** 2 >= cfg.GHOST_BAD_SPOT_RADIUS ** 2 for x, y in avoid):
+                break
+        return point
+    point = place()
     before = minigame_look(watch)
     for probe in range(cfg.GHOST_FURNITURE_PROBES):
         if probe:
-            point = far_from_character(cfg.GHOST_FURNITURE_BOX, cfg.GHOST_FURNITURE_MIN_DISTANCE)
+            point = place()
         pydirectinput.moveTo(*to_screen(*point))
         wait_interruptible(cfg.GHOST_OUTLINE_WAIT)
         after = minigame_look(watch)
@@ -3006,13 +3021,63 @@ def find_furniture(watch: MinigameWatch) -> Point:
         before = after
     return point
 
+class GhostFeedback:
+    """What the score says about where the beam is held, fed one screenshot at a time (look()): the digits of the score pill, as a mask of
+    their white pixels, differ from the last look's when the score changed - which means the beam is on a ghost. Nothing is concluded
+    while the banner isn't on screen (`visible`). See docs/ARCHITECTURE.md#playing-ghost-gallery."""
+
+    def __init__(self, now: float) -> None:
+        self.digits: Optional[np.ndarray] = None            # the white pixels of the score at the last look; None if the banner wasn't there
+        self.visible = False
+        self.scored_at = now                                # the last time the score changed (or the start)
+        self.spot_since = now                               # since when the beam has been on what it is on
+        self.bad: list[tuple[Point, float]] = []            # places that scored nothing, and until when to keep away from them
+
+    def look(self, img: Image, now: float) -> bool:
+        """Take in a screenshot. True if the score changed since the look before."""
+        left, top, right, bottom = cfg.GHOST_SCORE_BOX
+        box = img[top:bottom, left:right]
+        pill = cv2.inRange(cv2.cvtColor(box, cv2.COLOR_BGR2HSV), cfg.GHOST_SCORE_PILL[0], cfg.GHOST_SCORE_PILL[1])
+        self.visible = int(np.count_nonzero(pill)) >= cfg.GHOST_SCORE_PILL_MIN
+        if not self.visible:
+            self.digits = None
+            return False
+        digits = box.min(axis=2) >= cfg.GHOST_SCORE_WHITE
+        changed = self.digits is not None and int(np.count_nonzero(digits ^ self.digits)) >= cfg.GHOST_SCORE_CHANGE
+        self.digits = digits
+        if changed:
+            self.scored_at = self.spot_since = now
+        return changed
+
+    def new_spot(self, now: float) -> None:
+        """The beam goes somewhere else: it has a trial of its own."""
+        self.spot_since = now
+
+    def trial_over(self, now: float) -> bool:
+        """The beam has been where it is for GHOST_SPOT_TRIAL seconds without a score."""
+        return self.visible and now - max(self.scored_at, self.spot_since) >= cfg.GHOST_SPOT_TRIAL
+
+    def stalled(self, now: float) -> bool:
+        """No score for GHOST_STALL seconds."""
+        return self.visible and now - self.scored_at >= cfg.GHOST_STALL
+
+    def mark_bad(self, point: Point, now: float) -> None:
+        self.bad.append((point, now + cfg.GHOST_BAD_SPOT_TIME))
+
+    def avoid(self, now: float) -> list[Point]:
+        """The places to keep away from for now."""
+        self.bad = [(point, until) for point, until in self.bad if until > now]
+        return [point for point, _ in self.bad]
+
 def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     """Ghost Gallery: once its overlay shows (or the start wait is over), look at the screen every GHOST_LOOK_INTERVAL,
     aim the mouse at a ghost (choose_ghost_target()) and hold the button down on it, until the victory screen shows or the
     overlay says it's over. It begins by zooming the camera out and tilting it down for a better view. In the boss phase it is the boss, but while the boss's bar shows ghost icons it can't be hurt
     (ghost_boss_shielded()) and the small ghosts are aimed at instead. With no ghost in sight, before the boss phase the beam
     is held on random furniture (ghosts hide there), and the camera is turned every GHOST_CAMERA_PERIOD to find some;
-    it jumps now and then, and walks about a step at a time. True if won before `deadline`. See docs/ARCHITECTURE.md#playing-ghost-gallery.
+    it jumps now and then, and walks about a step at a time. The score is watched (GhostFeedback): a ghost the beam scores nothing on is
+    taken to hide, and the furniture around it is tried; no score for GHOST_STALL seconds moves the player and turns the camera.
+    True if won before `deadline`. See docs/ARCHITECTURE.md#playing-ghost-gallery.
     """
     print(f"[debug] Ghost Gallery: waiting for it to start (at most {cfg.MINIGAME_START_WAIT:g}s)...")
     waited_until = time.time() + cfg.MINIGAME_START_WAIT
@@ -3034,6 +3099,10 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     phase = "ghosts"
     furniture: Optional[Point] = None
     furniture_until = 0.0
+    feedback = GhostFeedback(time.time())            # what the score says about where the beam is
+    hide_spot: Optional[Point] = None                # furniture near a ghost the score says is hiding, which the beam is held on until `hide_until`
+    hide_until = 0.0
+    last_target: Optional[Point] = None
     last_turn = last_seen = time.time()
     next_jump = time.time() + random.uniform(cfg.GHOST_JUMP_MIN, cfg.GHOST_JUMP_MAX)
 
@@ -3061,6 +3130,8 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
             img = minigame_look(watch)
             if detect_minigame_victory(img):
                 return True
+            if feedback.look(img, time.time()):
+                hide_spot, hide_until = None, 0.0                           # it scored: whatever the beam is on is right
             bar = ghost_boss_bar_visible(img)
             if held and time.time() >= regrab_at:                           # knocked down, the player lets go of the beam and has to press again: do both now and then
                 let_go()
@@ -3074,9 +3145,31 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 blobs = [blob for blob in blobs if blob[2] <= cfg.GHOST_SMALL_MAX]
             target = choose_ghost_target(blobs, phase == "boss" and bool(blobs) and blobs[0][2] >= cfg.GHOST_BOSS_MIN, target)   # (the boss is a big one, else it's the ghosts that are there)
             now = time.time()
+            if target is not None and (last_target is None or (target[0] - last_target[0]) ** 2 + (target[1] - last_target[1]) ** 2 > cfg.GHOST_STICK ** 2):
+                feedback.new_spot(now)                                      # another ghost: it has a trial of its own
+            last_target = target
+            if phase == "ghosts" and feedback.stalled(now):                 # nothing has scored for a long time (a view blocked by a pillar, a beam on the floor): somewhere else, looking another way
+                print(f"[debug] Ghost Gallery: no score for {cfg.GHOST_STALL:g}s - moving and turning the camera")
+                let_go()
+                stop_walking()
+                chasing = None
+                hold_key(random.choice(cfg.MOVE_KEYS), cfg.GHOST_STALL_WALK)
+                pydirectinput.press(cfg.KEY_JUMP)
+                rotate_camera(cfg.GHOST_STALL_TURN, 0, random.choice((-1, 1)))
+                feedback.scored_at = last_turn = time.time()
+                feedback.new_spot(last_turn)
+                furniture, hide_spot, hide_until = None, None, 0.0
+                now = time.time()
+            elif phase == "ghosts" and target is not None and feedback.trial_over(now):   # a ghost the beam on it doesn't score: it is hiding in furniture, which is somewhere around it
+                if hide_spot is not None:
+                    feedback.mark_bad(hide_spot, now)                       # (the furniture tried last scored nothing either)
+                hide_spot = find_furniture(watch, around=target, avoid=feedback.avoid(now))
+                hide_until = time.time() + cfg.GHOST_SPOT_TRIAL
+                feedback.new_spot(time.time())
+                now = time.time()
             if target is not None:
                 last_seen = now
-                aim(target)
+                aim(hide_spot if hide_spot is not None and now < hide_until else target)
             elif phase == "ghosts":                                         # nothing to be seen before the boss: try the furniture
                 if furniture is None or now >= furniture_until:
                     furniture = find_furniture(watch)                       # (the mouse is moved around with the beam down)

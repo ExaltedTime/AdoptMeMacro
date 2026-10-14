@@ -480,3 +480,147 @@ def test_a_ghost_seen_from_afar_is_found_and_the_slime_puddle_beside_it_is_not(m
     blobs = macro.find_ghost_blobs(shot("far_91"))                                  # a blue oval ghost (hue 91, saturation 216) at the right, a slime puddle (hue 81, saturation 251) in the middle
     assert any(abs(x - 1783) < 25 and abs(y - 629) < 25 for x, y, _ in blobs)          # (it was missed: the colour range stopped at saturation 210)
     assert not any(abs(x - 1344) < 120 and abs(y - 778) < 120 for x, y, _ in blobs)
+
+
+# --- score feedback: the beam is on a ghost when the score goes up ---
+
+def with_banner(screen, name):
+    """`screen` with the banner of tests/ghost_gallery/ (rows 20-110, columns 700-1260 of a real frame) where it was taken from."""
+    screen = screen.copy()
+    crop = shot(name)
+    screen[20:20 + crop.shape[0], 700:700 + crop.shape[1]] = crop
+    return screen
+
+
+def distance(a, b):
+    return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** .5
+
+
+def test_a_changed_score_is_seen_in_the_banner_and_nothing_is_concluded_without_one(macro):
+    feedback = macro.GhostFeedback(0.0)
+    assert not feedback.look(with_banner(blank(), "banner_450"), 1.0) and feedback.visible    # (the first look has nothing to compare with)
+    assert not feedback.look(with_banner(blank(), "banner_450_later"), 2.0)                   # the same score, the time beside it is another
+    assert feedback.look(with_banner(blank(), "banner_1450"), 3.0) and feedback.scored_at == 3.0
+    for no_banner in (blank(), np.full((1080, 1920, 3), 255, np.uint8)):                      # nothing, or the white of a loading screen
+        assert not feedback.look(no_banner, 4.0) and not feedback.visible
+        assert not feedback.stalled(10 ** 6) and not feedback.trial_over(10 ** 6)             # however long it has been
+
+
+def test_a_spot_has_a_trial_a_stall_is_a_long_time_without_a_score_and_bad_places_are_forgotten(macro):
+    cfg = macro.cfg
+    feedback = macro.GhostFeedback(100.0)
+    feedback.look(with_banner(blank(), "banner_450"), 100.0)
+    assert not feedback.trial_over(100.0 + cfg.GHOST_SPOT_TRIAL - 0.1) and feedback.trial_over(100.0 + cfg.GHOST_SPOT_TRIAL)
+    feedback.new_spot(110.0)
+    assert not feedback.trial_over(110.0 + cfg.GHOST_SPOT_TRIAL - 0.1) and feedback.trial_over(110.0 + cfg.GHOST_SPOT_TRIAL)       # a new spot has a trial of its own
+    assert not feedback.stalled(100.0 + cfg.GHOST_STALL - 0.1) and feedback.stalled(100.0 + cfg.GHOST_STALL)                       # but the stall counts from the last score
+    feedback.mark_bad((5, 5), 100.0)
+    assert feedback.avoid(100.0 + cfg.GHOST_BAD_SPOT_TIME - 1) == [(5, 5)] and feedback.avoid(100.0 + cfg.GHOST_BAD_SPOT_TIME + 1) == []
+
+
+def test_furniture_is_looked_for_around_a_hiding_ghost_and_away_from_places_that_scored_nothing(macro, world):
+    cfg = macro.cfg
+    centre, bad = (900, 500), (1000, 500)
+    world.screens = [blank()]                                                                  # no outline anywhere: every probe is made
+    macro.find_furniture(watch_started(macro), around=centre, avoid=[bad])
+    probes = [m[1:] for m in world.mouse if m[0] == "move"]
+    near, far = cfg.GHOST_RING
+    assert len(probes) == cfg.GHOST_FURNITURE_PROBES
+    assert all(near - 1 <= distance(p, centre) <= far + 1 for p in probes)
+    assert all(distance(p, bad) >= cfg.GHOST_BAD_SPOT_RADIUS for p in probes)
+
+
+def ghost_with_banner(macro, name="banner_450"):
+    ghost = shot("ghosts_50")
+    return with_banner(ghost, name), macro.find_ghost_blobs(ghost)[0][:2]
+
+
+@pytest.fixture
+def short_trial(macro, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "GHOST_SPOT_TRIAL", 1.0)                                   # (less fake time to live through)
+
+
+def test_a_ghost_the_beam_scores_nothing_on_is_taken_to_hide_and_the_furniture_around_it_is_tried(macro, world, short_trial):
+    cfg = macro.cfg
+    screen, ghost = ghost_with_banner(macro)
+    world.screens = [screen]                                                                   # the score never changes
+    macro.play_ghost_gallery(world.clock.now + cfg.GHOST_SPOT_TRIAL * 2, watch_started(macro))
+    places = left_held_on(world)
+    near, far = cfg.GHOST_RING
+    assert places[0] == ghost                                                                  # first the ghost itself, for the trial...
+    around = [p for p in places if p != ghost]
+    assert around and all(near - 1 <= distance(p, ghost) <= far + 1 for p in around)           # ...then the furniture around it
+
+
+def test_the_beam_goes_back_to_the_ghost_when_the_score_goes_up(macro, world, short_trial):
+    cfg = macro.cfg
+    still, ghost = ghost_with_banner(macro)
+    scored, _ = ghost_with_banner(macro, "banner_1450")
+    on_furniture = lambda: any(p != ghost for p in left_held_on(world))
+    world.screens = lambda: (scored if world.looks % 2 else still) if on_furniture() else still     # the score goes up from the moment the beam is on the furniture
+    macro.play_ghost_gallery(world.clock.now + cfg.GHOST_SPOT_TRIAL * 4, watch_started(macro))
+    places = left_held_on(world)
+    last_furniture = max(i for i, p in enumerate(places) if p != ghost)
+    assert places[-1] == ghost and places.count(places[last_furniture]) <= 3                  # back at once, not after the furniture's time was up
+
+
+def test_each_try_for_a_hiding_ghost_keeps_away_from_the_furniture_that_scored_nothing(macro, world, short_trial, monkeypatch):
+    cfg = macro.cfg
+    screen, ghost = ghost_with_banner(macro)
+    world.screens = [screen]
+    tried = iter([(300, 300), (1500, 700), (400, 800), (1600, 200)])
+    calls = []
+
+    def find(watch, around=None, avoid=()):
+        calls.append((around, list(avoid)))
+        return next(tried)
+    monkeypatch.setattr(macro, "find_furniture", find)
+    macro.play_ghost_gallery(world.clock.now + cfg.GHOST_SPOT_TRIAL * 3.5, watch_started(macro))
+    assert len(calls) >= 3 and all(around == ghost for around, _ in calls)                    # looked for around the ghost, each time
+    assert calls[0][1] == [] and calls[1][1] == [(300, 300)] and calls[2][1] == [(300, 300), (1500, 700)]    # and not where it was tried before
+
+
+def test_a_new_ghost_gets_a_trial_of_its_own(macro, world, short_trial):
+    cfg = macro.cfg
+    first = shot("ghosts_50")
+    second = np.roll(first, 400, axis=1)                                                      # the same ghost somewhere else: another one
+    a = macro.choose_ghost_target(macro.find_ghost_blobs(first), False, None)
+    b = macro.choose_ghost_target(macro.find_ghost_blobs(second), False, None)
+    assert distance(a, b) > cfg.GHOST_STICK                                                   # (another ghost, not the one followed)
+    start = world.clock.now
+    world.screens = lambda: with_banner(first if world.clock.now - start < cfg.GHOST_SPOT_TRIAL * 0.8 else second, "banner_450")
+    macro.play_ghost_gallery(start + cfg.GHOST_SPOT_TRIAL * 1.3, watch_started(macro))        # the first one has had more than its trial by the end, the second less
+    assert set(left_held_on(world)) <= {a, b}
+
+
+@pytest.fixture
+def quiet_player(macro, monkeypatch):
+    """A player that does nothing of its own with no ghost in sight: no camera turns, walking about or jumping."""
+    for name, value in (("GHOST_CAMERA_PERIOD", 10 ** 6), ("GHOST_MOVE_PERIOD", 10 ** 6), ("GHOST_JUMP_MIN", 10 ** 6), ("GHOST_JUMP_MAX", 10 ** 6), ("GHOST_STALL", 2.0)):
+        monkeypatch.setattr(macro.cfg, name, value)
+
+
+def test_no_score_for_a_long_time_is_a_stall_the_player_walks_away_jumps_and_turns_the_camera(macro, world, quiet_player):
+    cfg = macro.cfg
+    world.screens = [with_banner(blank(), "banner_450")]
+    start = world.clock.now
+    macro.play_ghost_gallery(start + cfg.GHOST_STALL * 4, watch_started(macro))
+    walks = [(key, at) for kind, key, at in world.keys if kind == "down" and key in cfg.MOVE_KEYS][1:]        # (the first is the start's walk)
+    assert walks and walks[0][1] - start >= cfg.GHOST_STALL
+    ups = [at for kind, key, at in world.keys if kind == "up" and key == walks[0][0]]
+    assert ups[0] - walks[0][1] == pytest.approx(cfg.GHOST_STALL_WALK)
+    assert [k for k in world.keys if k[0] == "press" and k[1] == cfg.KEY_JUMP] != []
+    drags = [i for i, e in enumerate(world.mouse) if e == ("down", "right")]
+    assert len(drags) == len(walks)
+    turned = sum(abs(e[1]) for e in world.mouse[drags[0]:drags[0] + 1 + cfg.GHOST_CAMERA_DRAG_STEPS] if e[0] == "rel" and e[1])
+    assert turned >= cfg.GHOST_STALL_TURN[0] - cfg.GHOST_CAMERA_DRAG_STEPS                    # a big turn
+    assert len(walks) >= 2 and walks[1][1] - walks[0][1] >= cfg.GHOST_STALL                   # the next stall is a stall period after the last, not at once
+
+
+@pytest.mark.parametrize("banners", [("banner_450", "banner_1450"), (None,)])
+def test_no_stall_while_the_score_goes_up_or_when_the_banner_cannot_be_seen(macro, world, quiet_player, banners):
+    cfg = macro.cfg
+    screens = [with_banner(blank(), name) if name else blank() for name in banners]
+    world.screens = lambda: screens[world.looks % len(screens)]
+    macro.play_ghost_gallery(world.clock.now + cfg.GHOST_STALL * 1.5, watch_started(macro))
+    assert [k for k in world.keys if k[0] == "down" and k[1] in cfg.MOVE_KEYS][1:] == [] and ("down", "right") not in world.mouse

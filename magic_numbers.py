@@ -280,6 +280,24 @@ GHOST_START_FORWARD = 3.0                    # seconds of W after the camera is 
 GHOST_TOWARD_MARGIN = 130                    # px: a ghost or the boss farther than this from the character (GHOST_CHARACTER) on an axis is walked towards along it, the key held until it is nearer
 GHOST_JUMP_MIN = 3.0
 GHOST_JUMP_MAX = 7.0
+# Score feedback. The score (the purple pill of the banner, GHOST_SCORE_BOX, its colour GHOST_SCORE_PILL, at least GHOST_SCORE_PILL_MIN px of it when the banner is
+# there) says whether what the beam is held on is a ghost: its white digits (every channel at least GHOST_SCORE_WHITE) change by GHOST_SCORE_CHANGE px or more when it
+# moves (unchanged digits differ by 0 px, a changed score by 160 and more). Before the boss, a spot the beam has been on for GHOST_SPOT_TRIAL seconds without a score is
+# no use: furniture is put aside (places within GHOST_BAD_SPOT_RADIUS px of it aren't tried for GHOST_BAD_SPOT_TIME seconds) and another looked for; a ghost in sight
+# that scores nothing is hiding in furniture, which is looked for GHOST_RING px (nearest, farthest) around it. No score at all for GHOST_STALL seconds (a view blocked by a
+# pillar, a beam on the floor) is a stall: the beam is let go of, a random key held GHOST_STALL_WALK seconds, a jump, and the camera turned by GHOST_STALL_TURN px of drag.
+GHOST_SCORE_BOX = (1050, 56, 1170, 88)
+GHOST_SCORE_PILL = ((128, 150, 240), (134, 200, 255))
+GHOST_SCORE_PILL_MIN = 1500
+GHOST_SCORE_WHITE = 230
+GHOST_SCORE_CHANGE = 60
+GHOST_SPOT_TRIAL = 3.0
+GHOST_BAD_SPOT_RADIUS = 150
+GHOST_BAD_SPOT_TIME = 20.0
+GHOST_RING = (60, 220)
+GHOST_STALL = 12.0
+GHOST_STALL_WALK = 1.0
+GHOST_STALL_TURN = (450, 700)
 
 # Hauntlet 2, read from the screen (see the HAUNTLET 2 READER section of main.py).
 # The ROOM panel's number: white digits on a dark panel, always in the same place, at most HAUNTLET_ROOM_MAX_DIGITS long.

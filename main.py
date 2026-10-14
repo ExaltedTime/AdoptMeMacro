@@ -3124,10 +3124,27 @@ def accept_minigame_popup() -> bool:
         print(f"[debug] the popup is still up after click {attempt + 1}")
     return False
 
+def save_minigame_result(name: str) -> Optional[str]:
+    """Save the GAME OVER! screen of the minigame `name` (the card with what the run earned, in candy corn, and its score) as
+    RUNS_DIR/results/run<N>_<name>_<time>.png, the newest MAX_RESULT_SHOTS kept. The path, or None. Never raises."""
+    try:
+        folder = os.path.join(cfg.RUNS_DIR, "results")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, f"run{state.run_number}_{name}_{time.strftime('%H%M%S')}.png")
+        left, top, right, bottom = cfg.MINIGAME_RESULT_BOX
+        if not cv2.imwrite(path, grab_screen()[top:bottom, left:right]):
+            return None
+        keep_newest_files(folder, cfg.MAX_RESULT_SHOTS, ".png")
+        return path
+    except Exception as error:
+        print(f"[!] couldn't save the result screen: {error}")
+        return None
+
 def play_minigame(name: str) -> bool:
-    """Take the popup's Yes, play `name` until its victory screen, click NICE!, respawn. Gives
-    up (a logged failure) if the overlay shows it over or never started, or after
-    MINIGAME_MAX_DURATION. Counts as progress only if won. See docs/ARCHITECTURE.md#need-handlers.
+    """Take the popup's Yes, play `name` until its GAME OVER! screen (which every run ends on: it is not a win, which would
+    give a crypt key, and the macro can't tell - what a run earned is the candy corn on that screen, which is saved, see
+    save_minigame_result()), click NICE!, respawn. Gives up (a logged failure) if the overlay shows it over or never
+    started, or after MINIGAME_MAX_DURATION. Counts as progress only if it ran to the end. See docs/ARCHITECTURE.md#need-handlers.
     """
     label = cfg.MINIGAME_LABELS.get(name, name)
     print(f"[!] playing {label}")
@@ -3146,23 +3163,24 @@ def play_minigame(name: str) -> bool:
     outcome = "interrupted"
     send_macro_window_to_back()                 # it covers part of the game's screen, and would be in the recording and the readers' way
     try:
-        won = MINIGAME_PLAYERS[name](started + cfg.MINIGAME_MAX_DURATION, watch)
-        outcome = "won" if won else (watch.problem or "did not reach the victory screen in time")
+        finished = MINIGAME_PLAYERS[name](started + cfg.MINIGAME_MAX_DURATION, watch)
+        outcome = "finished (the game over screen)" if finished else (watch.problem or "did not reach the game over screen in time")
     finally:
         release_all_inputs()
         bring_macro_window_to_front()
         finish_run_capture(capture, outcome)
-    if won:
+    if finished:
         log_run_event(f"minigame finished: {label} ({time.time() - started:.0f}s)")
+        save_minigame_result(name)
         click_nice_until_gone()
     else:
         reason = watch.problem or f"did not reach the victory screen within {cfg.MINIGAME_MAX_DURATION:g}s"
         log_failure(f"{label} {reason}")
     state.last_detection = time.time()      # no needs could be seen while it ran
-    if won:
+    if finished:
         state.last_progress = time.time()   # a failed one (never started, left early) must not reset the no-progress rejoin
     respawn_character()
-    return won
+    return finished
 
 def close_minigame_win_screen(abandon: bool = True) -> bool:
     """If the win screen is up, click NICE!; with `abandon` also count it as progress and
@@ -4390,7 +4408,7 @@ def parse_run(log_path: str, run: Union[int, str]) -> Optional[dict[str, Any]]:
             data["events"]["minigame popups declined"] += 1
         elif m := MINIGAME_RE.match(text):
             if m.group(1) == "finished":
-                data["events"]["minigames won"] += 1
+                data["events"]["minigames finished"] += 1
         elif " interrupted by " in text:
             data["events"]["needs interrupted"] += 1
     return data

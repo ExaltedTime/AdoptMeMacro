@@ -408,7 +408,7 @@ def test_the_zip_plan_keeps_frames_whole_in_order_and_counts_the_events_in_the_f
     assert macro.plan_zip_parts([]) == [[]]
 
 
-@pytest.mark.parametrize("result, outcome", [(True, "won"), (False, "did not reach the victory screen in time"), ("raises", "interrupted")])
+@pytest.mark.parametrize("result, outcome", [(True, "finished (the game over screen)"), (False, "did not reach the game over screen in time"), ("raises", "interrupted")])
 def test_play_minigame_records_the_run_and_says_how_it_ended(macro, monkeypatch, result, outcome):
     started, finished, order = [], [], []
     monkeypatch.setattr(macro, "start_run_capture", lambda label: started.append(label) or "the capture")

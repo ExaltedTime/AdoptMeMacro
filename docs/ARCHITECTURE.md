@@ -1137,7 +1137,7 @@ is recompressed. For a zip that already exists (a capture zipped by hand, say) `
 (`start_run_capture()`) and stops it when the run is over, whichever way it ends - finished, left, timed out or stopped
 (`finish_run_capture()`, which also writes `outcome` into `info.json` and zips the capture as above). It is the same recorder, so it
 has the macro's own key presses and clicks and the frames on the same clock, but in `debug/minigame_captures/`
-(`RUN_CAPTURES_DIR`, the newest `MAX_RUN_CAPTURES` kept, named `<minigame>_<date>_<time>`) so the hotkey's captures and these
+(`RUN_CAPTURES_DIR`, named `<minigame>_<date>_<time>`) so the hotkey's captures and these
 never delete each other, and with a **budget of `RUN_CAPTURE_ZIPS` zips**, spread over the whole run: the
 zips are counted as `zip_capture()` will make them (`plan_zip_parts()`, the events in the first). A lossless frame is 1-3 MB, so
 the budget buys some tens of frames; when a run would need more zips, `InputCapture._keep_within_budget()` deletes
@@ -1145,7 +1145,14 @@ every other saved frame - never the newest, and the first stays - and from then 
 left is spread evenly over the run however long it is. It is checked after every saved frame and once more when the capture
 stops (the events have grown by then). The events of the deleted frames stay in `events.jsonl`, followed by a `frame_dropped`
 line naming the file, so a reader can tell; `info.json` has `frames_dropped` and `max_zips`, and `stopped_because` is "the minigame
-ended". The folders are big (the frames and then the same again as zips), hence only the newest `MAX_RUN_CAPTURES` are kept. Switch it off with `MINIGAME_CAPTURE`; it isn't started while the
+ended". The folders are big (the frames and then the same again as zips), hence **only some are kept**: after each run `prune_run_captures()` keeps, of each minigame, the
+`RUN_CAPTURES_BEST` runs that earned the most candy corn (see [Candy corn](#candy-corn)), the `RUN_CAPTURES_WORST` that earned the least (a run whose total wasn't read counts as the worst)
+and the latest - five at most, going by the `earned` that `finish_run_capture()` wrote into each `info.json`.
+**Frames of when things went wrong are kept and not thinned out.** `mark_run_capture(reason)` (`InputCapture.mark()`) writes a `mark` line with the reason into `events.jsonl`, saves a frame at once and then every look for
+`RUN_CAPTURE_BURST` seconds, however far apart the thinning has put the others - and those frames are `protected`, which `_keep_within_budget()` leaves alone (at most `RUN_CAPTURE_PROTECTED` of them, or they would use up the zips).
+It is called when a failure is logged (`log_failure()`), when a Hauntlet 2 walk gets nowhere, when the player is found not to be moving (`hauntlet_unstick()`) or a fork's doorways aren't seen, when a Ghost Gallery
+beam on a ghost scores nothing or the score stalls, and when a stray window or the paycheck popup is closed mid-minigame. A run that did not finish also keeps the frames of its last `RUN_CAPTURE_TAIL` seconds
+(`protect_tail()`), where the end of a run that went wrong is. Switch it off with `MINIGAME_CAPTURE`; it isn't started while the
 hotkey's capture is running (two recorders would only get in each other's way), and a capture that can't be started or finished is a
 message, never a reason not to play. If more frames per run are wanted the choice is more zips or lossy frames (which would no
 longer be the exact pixels the readers are tuned on).
@@ -1355,6 +1362,19 @@ the start's tilt, where the furniture is (the box is a guess), and the walking's
 once the camera is out (`GHOST_IGNORE_BOXES` has the character's place in a human's zoomed-out run). **What it does not do:** dodge, react to being knocked down, or choose between ghosts
 by anything but distance (the human often picked the second or third nearest); it can't tell furniture from floor.
 
+### Candy corn
+
+What a minigame run earns is read, not guessed. **The HUD's candy corn total** (top right, red digits on a white flag - on screen in the lobby, in the world and on the GAME OVER! screen, not at home or in a minigame) is read by `read_candy_corn()`:
+the red pixels of `CANDY_CORN_BOX` that make up pieces as tall as a digit (`CANDY_CORN_DIGIT_HEIGHT`; the commas are half that) are the digits, each shrunk to `CANDY_CORN_DIGIT_SIZE` and compared with the saved ones (`ref/candy_corn_digits/`, cut from six real screens
+that between them have every digit; `CANDY_CORN_MAX_DIFF`). It returns None rather than a wrong number: no counter, a digit that matches none, digits further apart than `CANDY_CORN_PITCH` (one is missing) or a piece as tall as a digit but too wide
+(something over the first or last digit, which would leave a number that looks right). The six screens are read right, a leave-one-out test of the digits (each read with templates cut from the other screens) 41 of 41, and over 553 captured frames it
+read only totals that were plausible, in 14 or so lobby and game over frames per run. `read_candy_corn_settled()` reads until two looks half a second apart agree, as the total counts up for a moment after a run.
+
+`play_minigame()` reads it in the lobby after the popup's Yes (the total before) and again on the GAME OVER! screen (after): **the candy corn a run earned is the difference** (`minigame_result()`; None if either wasn't read or the total fell). In the captured Ghost Gallery run
+(score 46418) it rose by 2540, in a Hauntlet 2 run that reached room 10 by 2105. Each run's result - when, run number, minigame, how it ended, the totals, `earned`, and the room reached in Hauntlet 2 (`state.minigame_detail`, filled by `play_hauntlet_2()`) - is
+appended as a line of `debug/runs/results/results.jsonl` (`record_minigame_result()`, which also logs `minigame result: <minigame>: N candy corn` in the run log), written into the recording's `info.json`, and used to decide which recordings to keep (see above).
+The GAME OVER! card itself is also saved as a picture beside it (`save_minigame_result()`). A run's limit of candy corn differs by minigame - 5000 for Ghost Gallery, a good deal more for Hauntlet 2 (about 20000 by the player's account; the macro doesn't know it).
+
 ### Recording a run
 
 Tick **Record the next run (low quality video)** on the Debug tab's Other subtab (the
@@ -1398,9 +1418,10 @@ exact values and rationale):
 | Debug logging | `OUTPUT_LOG_PATH`, `RUNS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
 | Hauntlet 2 reader | `HAUNTLET_ROOM_BOX`, `HAUNTLET_DIGIT_*`, `HAUNTLET_ROOM_MAX_DIGITS`, `HAUNTLET_SLOT_*`, `HAUNTLET_ITEM_*`, `HAUNTLET_BADGE_*`, `HAUNTLET_COUNT_*`, `HAUNTLET_NOT_ITEMS`, `HAUNTLET_HEART_*`, `HAUNTLET_*_DIR` |
-| Ghost Gallery play | `GHOST_COLOR`, `GHOST_COLOR_FAR`, `GHOST_CLOSE`, `GHOST_MIN_AREA`, `GHOST_IGNORE_BOXES`, `GHOST_CHARACTER`, `GHOST_STICK`, `GHOST_BOSS_BAR_*`, `GHOST_BOSS_FILL*`, `GHOST_LOOK_INTERVAL`, `GHOST_START_LOOK_INTERVAL`, `GHOST_FURNITURE_*`, `GHOST_CAMERA_*`, `GHOST_START_TILT`, `GHOST_MOVE_*`, `GHOST_START_FORWARD`, `GHOST_TOWARD_MARGIN`, `GHOST_BOSS_TURN_DRAG`, `GHOST_EMBLEM_*`, `GHOST_SELF_*`, `GHOST_SMALL_MAX`, `GHOST_BOSS_MIN`, `GHOST_REGRAB_PERIOD`, `GHOST_OUTLINE_*`, `GHOST_JUMP_*`, `KEY_ZOOM_OUT`, `MINIGAME_ZOOM_OUT_DURATION` |
+| Ghost Gallery play | `GHOST_COLOR`, `GHOST_COLOR_FAR`, `GHOST_CLOSE`, `GHOST_MIN_AREA`, `GHOST_IGNORE_BOXES`, `GHOST_CHARACTER`, `GHOST_STICK`, `GHOST_BOSS_BAR_*`, `GHOST_BOSS_FILL*`, `GHOST_LOOK_INTERVAL`, `GHOST_START_LOOK_INTERVAL`, `GHOST_FURNITURE_*`, `GHOST_CAMERA_*`, `GHOST_START_TILT`, `GHOST_MOVE_*`, `GHOST_START_FORWARD`, `GHOST_TOWARD_MARGIN`, `GHOST_BOSS_TURN_DRAG`, `GHOST_EMBLEM_*`, `GHOST_SELF_*`, `GHOST_SMALL_MAX`, `GHOST_BOSS_MIN`, `GHOST_REGRAB_PERIOD`, `GHOST_OUTLINE_*`, `GHOST_JUMP_*`, `GHOST_SCORE_*`, `GHOST_SPOT_TRIAL`, `GHOST_BAD_SPOT_*`, `GHOST_RING`, `GHOST_STALL*`, `KEY_ZOOM_OUT`, `MINIGAME_ZOOM_OUT_DURATION` |
 | Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_SHADOW_*`, `HAUNTLET_CIRCLE_*`, `HAUNTLET_IN_CIRCLE`, `HAUNTLET_LOCK_WAIT`, `HAUNTLET_STILL_*`, `HAUNTLET_UNSTICK_*`, `HAUNTLET_START_*`, `HAUNTLET_DARK_*`, `HAUNTLET_PLANK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_*`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_ITEM_*`, `HAUNTLET_LOW_HEARTS`, `HAUNTLET_PHONE_CHANCE`, `HAUNTLET_ARROW_*`, `HAUNTLET_LEARN_LIMIT` |
-| Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `MINIGAME_CAPTURE`, `RUN_CAPTURES_DIR`, `RUN_CAPTURE_ZIPS`, `MAX_RUN_CAPTURES`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
+| Candy corn | `CANDY_CORN_*`, `MINIGAME_RESULT_BOX`, `MAX_RESULT_SHOTS` |
+| Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `MINIGAME_CAPTURE`, `RUN_CAPTURES_DIR`, `RUN_CAPTURE_ZIPS`, `RUN_CAPTURES_BEST`, `RUN_CAPTURES_WORST`, `RUN_CAPTURE_BURST`, `RUN_CAPTURE_TAIL`, `RUN_CAPTURE_PROTECTED`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |

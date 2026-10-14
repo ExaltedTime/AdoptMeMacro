@@ -544,7 +544,10 @@ def test_a_ghost_the_beam_scores_nothing_on_is_taken_to_hide_and_the_furniture_a
     cfg = macro.cfg
     screen, ghost = ghost_with_banner(macro)
     world.screens = [screen]                                                                   # the score never changes
+    marks = []
+    macro.state.run_capture = types.SimpleNamespace(mark=marks.append)
     macro.play_ghost_gallery(world.clock.now + cfg.GHOST_SPOT_TRIAL * 2, watch_started(macro))
+    assert marks and all("scores nothing" in m for m in marks)
     places = left_held_on(world)
     near, far = cfg.GHOST_RING
     assert places[0] == ghost                                                                  # first the ghost itself, for the trial...
@@ -602,12 +605,14 @@ def quiet_player(macro, monkeypatch):
 
 def test_no_score_for_a_long_time_is_a_stall_the_player_walks_away_jumps_and_turns_the_camera(macro, world, quiet_player):
     cfg = macro.cfg
+    marks = []
+    macro.state.run_capture = types.SimpleNamespace(mark=marks.append)
     world.screens = [with_banner(blank(), "banner_450")]
     start = world.clock.now
     macro.play_ghost_gallery(start + cfg.GHOST_STALL * 4, watch_started(macro))
     walks = [(key, at) for kind, key, at in world.keys if kind == "down" and key in cfg.MOVE_KEYS][1:]        # (the first is the start's walk)
     assert walks and walks[0][1] - start >= cfg.GHOST_STALL
-    ups = [at for kind, key, at in world.keys if kind == "up" and key == walks[0][0]]
+    ups = [at for kind, key, at in world.keys if kind == "up" and key == walks[0][0] and at > walks[0][1]]      # (the start's walk may have been the same key)
     assert ups[0] - walks[0][1] == pytest.approx(cfg.GHOST_STALL_WALK)
     assert [k for k in world.keys if k[0] == "press" and k[1] == cfg.KEY_JUMP] != []
     drags = [i for i, e in enumerate(world.mouse) if e == ("down", "right")]
@@ -615,6 +620,7 @@ def test_no_score_for_a_long_time_is_a_stall_the_player_walks_away_jumps_and_tur
     turned = sum(abs(e[1]) for e in world.mouse[drags[0]:drags[0] + 1 + cfg.GHOST_CAMERA_DRAG_STEPS] if e[0] == "rel" and e[1])
     assert turned >= cfg.GHOST_STALL_TURN[0] - cfg.GHOST_CAMERA_DRAG_STEPS                    # a big turn
     assert len(walks) >= 2 and walks[1][1] - walks[0][1] >= cfg.GHOST_STALL                   # the next stall is a stall period after the last, not at once
+    assert len(marks) == len(walks) and all("no score" in m for m in marks)                    # each is marked in the recording
 
 
 @pytest.mark.parametrize("banners", [("banner_450", "banner_1450"), (None,)])

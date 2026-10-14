@@ -295,6 +295,8 @@ class State:
     white_since: Optional[float] = None
     # The input capture that is running, if any (see toggle_input_capture()). A State field only so snapshot() sees it as text.
     capture: Optional[Any] = None
+    run_capture: Optional[Any] = None                    # the recording of the minigame being played, see start_run_capture()
+    minigame_detail: dict = field(default_factory=dict)  # what the player of the minigame being played says about it ("room")
     # The needs named by the last "detected:" line, and how many checks since then found exactly the same with no
     # handler run in between (not yet written to the run log - see note_repeat_check()).
     last_detected_body: Optional[str] = None
@@ -586,6 +588,7 @@ def log_failure(reason: str, screenshot: bool = True) -> None:
     """Record that something went wrong: print it, add it to the run log,
     save a screenshot of what was on screen, and note it in the status
     file. Doesn't change what the macro does next."""
+    mark_run_capture(f"failure: {reason}")
     shot = save_failure_report(reason) if screenshot else None
     detail = f"{reason}" + (f" (screenshot: failures/{shot})" if shot else "")
     print(f"[!] FAILURE: {detail}")
@@ -2470,8 +2473,10 @@ def minigame_popup_checks() -> None:
     if time.time() - state.last_minigame_popup_check < cfg.MINIGAME_POPUP_CHECK_INTERVAL:
         return
     state.last_minigame_popup_check = time.time()
-    if not dismiss_stray_windows():
-        detect_paycheck()
+    if dismiss_stray_windows():
+        mark_run_capture("a stray window was closed")
+    elif detect_paycheck():
+        mark_run_capture("the paycheck popup was closed")
 
 def minigame_look(watch: MinigameWatch) -> Image:
     """Run the popup checks if they're due, then take a fresh screenshot, which `watch` is told about."""
@@ -2737,6 +2742,7 @@ def hauntlet_unstick(img: Image, target_index: Optional[int], tries: int, last_k
     if key is None:
         key = random.choice((cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_RIGHT_KEY))
     print(f"[debug] Hauntlet 2: not moving - a step {key}")
+    mark_run_capture("Hauntlet 2: not moving")
     pydirectinput.press(cfg.KEY_JUMP)
     hold_key(key, min(cfg.HAUNTLET_UNSTICK_STEP * (tries + 1), cfg.HAUNTLET_UNSTICK_MAX))
     return key
@@ -2806,6 +2812,8 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
         pydirectinput.keyUp(cfg.HAUNTLET_2_FORWARD_KEY)
         run.walked_at = time.time()
         run.stuck = 0 if arrived else run.stuck + 1
+    if not arrived:
+        mark_run_capture(f"Hauntlet 2: the walk in room {run.room} got nowhere")
     return False
 
 def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
@@ -2853,6 +2861,8 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
                     doorways = find_fork_doorways(img)
                 if doorways is not None:
                     doors = [HauntletDoor(x, 0, None) for x in doorways]
+                else:
+                    mark_run_capture(f"Hauntlet 2: the fork's doorways of room {run.room} were not seen")
             direction, duration = hauntlet_strafe(img, doors, index)
             if hauntlet_walk(direction, duration, run, watch, until_doors=len(doors) == 1, target_index=index if len(doors) >= 2 else None):
                 return True
@@ -2861,6 +2871,7 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
     finally:
         if run.room is not None:
             log_run_event(f"Hauntlet 2: got as far as room {run.room}")
+            state.minigame_detail["room"] = run.room
     return False
 
 def ghost_character_box(hsv: Image) -> Optional[tuple[int, int, int, int]]:
@@ -3150,6 +3161,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
             last_target = target
             if phase == "ghosts" and feedback.stalled(now):                 # nothing has scored for a long time (a view blocked by a pillar, a beam on the floor): somewhere else, looking another way
                 print(f"[debug] Ghost Gallery: no score for {cfg.GHOST_STALL:g}s - moving and turning the camera")
+                mark_run_capture(f"Ghost Gallery: no score for {cfg.GHOST_STALL:g}s")
                 let_go()
                 stop_walking()
                 chasing = None
@@ -3161,6 +3173,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 furniture, hide_spot, hide_until = None, None, 0.0
                 now = time.time()
             elif phase == "ghosts" and target is not None and feedback.trial_over(now):   # a ghost the beam on it doesn't score: it is hiding in furniture, which is somewhere around it
+                mark_run_capture("Ghost Gallery: the beam on a ghost scores nothing")
                 if hide_spot is not None:
                     feedback.mark_bad(hide_spot, now)                       # (the furniture tried last scored nothing either)
                 hide_spot = find_furniture(watch, around=target, avoid=feedback.avoid(now))
@@ -3258,6 +3271,35 @@ def accept_minigame_popup() -> bool:
         print(f"[debug] the popup is still up after click {attempt + 1}")
     return False
 
+def candy_corn_digit_templates() -> dict[int, Image]:
+    """{digit: picture} for the saved HUD digits (CANDY_CORN_DIGIT_DIR), re-read when the folder changes."""
+    directory = cfg.CANDY_CORN_DIGIT_DIR
+    return _digit_templates(directory, os.path.getmtime(directory)) if os.path.isdir(directory) else {}
+
+def read_candy_corn(img: Image) -> Optional[int]:
+    """The candy corn total in the HUD of `img`, or None when it isn't readable: no counter on screen (at home, in a minigame), or a
+    digit that matches none of the saved ones. See docs/ARCHITECTURE.md#candy-corn."""
+    left, top, right, bottom = cfg.CANDY_CORN_BOX
+    mask = cv2.inRange(img[top:bottom, left:right], cfg.CANDY_CORN_RED[0], cfg.CANDY_CORN_RED[1])
+    count, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    tall = sorted((int(stats[i, 0]), int(stats[i, 1]), int(stats[i, 2]), int(stats[i, 3])) for i in range(1, count)
+                  if cfg.CANDY_CORN_DIGIT_HEIGHT[0] <= stats[i, 3] <= cfg.CANDY_CORN_DIGIT_HEIGHT[1])
+    boxes = [box for box in tall if box[2] <= cfg.CANDY_CORN_DIGIT_MAX_WIDTH]
+    templates = candy_corn_digit_templates()
+    if not 1 <= len(boxes) <= cfg.CANDY_CORN_MAX_DIGITS or len(boxes) != len(tall) or not templates:
+        return None
+    if any(not cfg.CANDY_CORN_PITCH[0] <= b[0] - a[0] <= cfg.CANDY_CORN_PITCH[1] for a, b in zip(boxes, boxes[1:])):
+        return None                                                          # a digit is missing, or something is between them
+    total = 0
+    for x, y, w, h in boxes:
+        picture = cv2.resize(mask[y:y + h, x:x + w], cfg.CANDY_CORN_DIGIT_SIZE, interpolation=cv2.INTER_AREA)
+        diffs = {digit: float(np.abs(picture.astype(int) - template.astype(int)).mean()) for digit, template in templates.items()}
+        digit = min(diffs, key=lambda d: diffs[d])
+        if diffs[digit] > cfg.CANDY_CORN_MAX_DIFF:
+            return None
+        total = total * 10 + digit
+    return total
+
 def save_minigame_result(name: str) -> Optional[str]:
     """Save the GAME OVER! screen of the minigame `name` (the card with what the run earned, in candy corn, and its score) as
     RUNS_DIR/results/run<N>_<name>_<time>.png, the newest MAX_RESULT_SHOTS kept. The path, or None. Never raises."""
@@ -3293,16 +3335,23 @@ def play_minigame(name: str) -> bool:
         return False
     started = time.time()
     watch = MinigameWatch(name)
+    state.minigame_detail = {}
+    before = read_candy_corn_settled()           # in the lobby the total is on screen: what the run earned is the difference
     capture = start_run_capture(name)
     outcome = "interrupted"
+    finished = False
+    after: Optional[int] = None
     send_macro_window_to_back()                 # it covers part of the game's screen, and would be in the recording and the readers' way
     try:
         finished = MINIGAME_PLAYERS[name](started + cfg.MINIGAME_MAX_DURATION, watch)
         outcome = "finished (the game over screen)" if finished else (watch.problem or "did not reach the game over screen in time")
+        after = read_candy_corn_settled()        # (the game over screen has the total too, counting up for a moment)
     finally:
         release_all_inputs()
         bring_macro_window_to_front()
-        finish_run_capture(capture, outcome)
+        result = minigame_result(name, outcome, finished, time.time() - started, before, after)
+        finish_run_capture(capture, outcome, result)
+    record_minigame_result(result)
     if finished:
         log_run_event(f"minigame finished: {label} ({time.time() - started:.0f}s)")
         save_minigame_result(name)
@@ -3595,6 +3644,8 @@ class InputCapture:
         self.dropped = 0
         self._kept: list[tuple[str, int]] = []          # the frames on disk, oldest first, with their sizes
         self._gap = cfg.CAPTURE_FRAME_INTERVAL if max_zips else 0.0     # least seconds between two saved frames
+        self.protected: set[str] = set()                # frames the thinning leaves alone: saved around a mark(), or in the tail of a run that went wrong
+        self._burst_until = 0.0                         # until then every look saves a frame, however far apart the thinning has put them
         self.stop_event = threading.Event()
         self.shot_now = threading.Event()
         self.stopped_because: Optional[str] = None
@@ -3649,6 +3700,22 @@ class InputCapture:
         except (OSError, ValueError):
             pass
         return summary
+
+    def mark(self, reason: str) -> None:
+        """Something went wrong just now: note it in events.jsonl (a "mark" line with the `reason`), save a frame at once and every
+        look for the next RUN_CAPTURE_BURST seconds - frames the thinning keeps (see `protected`). Only on a capture with a budget."""
+        if not self.running or not self.max_zips:
+            return
+        self._emit("mark", reason=reason)
+        self._burst_until = time.time() + cfg.RUN_CAPTURE_BURST
+        self.shot_now.set()
+
+    def protect_tail(self, seconds: float) -> None:
+        """Keep the frames of the last `seconds` of the run from being thinned out - where a run that went wrong shows why."""
+        horizon = time.time() - self.started - seconds
+        for name, _ in self._kept:
+            if len(self.protected) < cfg.RUN_CAPTURE_PROTECTED and float(name[:-len(".png")].rsplit("_", 1)[1]) >= horizon:
+                self.protected.add(name)
 
     def _emit(self, kind: str, **fields: Any) -> None:
         line = json.dumps({"t": round(time.time() - self.started, 3), "type": kind, **fields})
@@ -3709,7 +3776,8 @@ class InputCapture:
                 seconds = time.time() - self.started
                 screen = grab_screen()
                 small = cv2.resize(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY), (320, 180), interpolation=cv2.INTER_AREA)
-                if seconds - last_saved >= self._gap and (
+                bursting = time.time() < self._burst_until and len(self.protected) < cfg.RUN_CAPTURE_PROTECTED     # (around a mark(): every look)
+                if bursting or seconds - last_saved >= self._gap and (
                         clicked or last_small is None or seconds - last_saved >= max(cfg.CAPTURE_MAX_SKIP, self._gap)
                         or np.count_nonzero(cv2.absdiff(small, last_small) > cfg.CAPTURE_CHANGE_LEVEL) / small.size >= cfg.CAPTURE_CHANGE_FRACTION):
                     name = f"frame_{self.frames + 1:06d}_{seconds:.3f}.png"
@@ -3718,6 +3786,8 @@ class InputCapture:
                         self._emit("frame", file=name)
                         last_small, last_saved = small, seconds
                         self._kept.append((name, os.path.getsize(os.path.join(self.folder, name))))
+                        if bursting:
+                            self.protected.add(name)
                         self._keep_within_budget()
                 else:
                     self.skipped += 1
@@ -3733,9 +3803,12 @@ class InputCapture:
         events = os.path.join(self.folder, "events.jsonl")
         while self.max_zips and len(self._kept) > 1 and len(plan_zip_parts(
                 [size for _, size in self._kept], os.path.getsize(events) if os.path.exists(events) else 0)) > self.max_zips:
-            keep = [frame for i, frame in enumerate(self._kept) if i % 2 == 0 or i == len(self._kept) - 1]
-            if len(keep) == len(self._kept):            # two frames, and the second is the newest: the older one goes
-                keep = keep[1:]
+            keep = [frame for i, frame in enumerate(self._kept) if i % 2 == 0 or i == len(self._kept) - 1 or frame[0] in self.protected]
+            if len(keep) == len(self._kept):            # nothing went: the oldest frame that isn't protected (or the newest) goes
+                loose = [frame for frame in self._kept[:-1] if frame[0] not in self.protected]
+                if not loose:
+                    break                               # only frames that must stay are left
+                keep = [frame for frame in self._kept if frame != loose[0]]
             for name, size in self._kept:
                 if (name, size) not in keep:
                     try:
@@ -3813,31 +3886,117 @@ def start_run_capture(label: str) -> Optional[InputCapture]:
     if not cfg.MINIGAME_CAPTURE or (state.capture is not None and state.capture.running):
         return None
     try:
-        make_room_for_capture(cfg.RUN_CAPTURES_DIR, cfg.MAX_RUN_CAPTURES)
+        os.makedirs(cfg.RUN_CAPTURES_DIR, exist_ok=True)
         capture = InputCapture(os.path.join(cfg.RUN_CAPTURES_DIR, f"{label}_{time.strftime('%Y%m%d_%H%M%S')}"), max_zips=cfg.RUN_CAPTURE_ZIPS)
         capture.start()
     except Exception as error:
         print(f"[!] Couldn't start recording the minigame: {error}")
         return None
+    state.run_capture = capture
     print(f"[debug] recording the minigame: {capture.folder}")
     return capture
 
-def finish_run_capture(capture: Optional[InputCapture], outcome: str) -> None:
-    """Stop a run capture (if there is one), note how the run ended in its info.json, and zip it for sending."""
+def mark_run_capture(reason: str) -> None:
+    """Say to the recording of the minigame being played, if there is one, that something went wrong now (InputCapture.mark()): frames of
+    this moment are saved and kept. Never raises."""
+    capture = state.run_capture
     if capture is None:
         return
     try:
+        capture.mark(reason)
+    except Exception as error:
+        print(f"[!] couldn't mark the recording: {error}")
+
+def finish_run_capture(capture: Optional[InputCapture], outcome: str, result: Optional[dict[str, Any]] = None) -> None:
+    """Stop a run capture (if there is one), note how the run ended in its info.json (with the fields of `result`, what the run earned, see
+    minigame_result()), and zip it for sending."""
+    if capture is None:
+        return
+    try:
+        state.run_capture = None                                # (one at a time)
+        if not outcome.startswith("finished"):
+            capture.protect_tail(cfg.RUN_CAPTURE_TAIL)          # a run that went wrong: its last moments are what shows why
         capture.stopped_because = capture.stopped_because or "the minigame ended"
         print(f"[debug] minigame recording stopped: {capture.stop()}")
         path = os.path.join(capture.folder, "info.json")
         with open(path) as f:
             info = json.load(f)
         info["outcome"] = outcome
+        info.update(result or {})
         with open(path, "w") as f:
             json.dump(info, f, indent=1)
         zip_capture_in_background(capture.folder)
     except Exception as error:
         print(f"[!] Couldn't finish recording the minigame: {error}")
+
+def captures_to_keep(runs: list[tuple[str, Optional[int], float]]) -> set[str]:
+    """Of the recordings of one minigame, `runs` = (folder, candy corn earned or None, when it started), the ones to keep: the
+    latest, the RUN_CAPTURES_BEST that earned most and the RUN_CAPTURES_WORST that earned least (a run whose candy corn wasn't read
+    counts as the worst)."""
+    if not runs:
+        return set()
+    def earned(run: tuple[str, Optional[int], float]) -> tuple[int, float]:
+        return (-1 if run[1] is None else run[1], run[2])
+    ranked = sorted(runs, key=earned)
+    keep = {max(runs, key=lambda run: run[2])[0]}
+    keep |= {run[0] for run in ranked[:cfg.RUN_CAPTURES_WORST]}
+    keep |= {run[0] for run in ranked[len(ranked) - cfg.RUN_CAPTURES_BEST:]}
+    return keep
+
+def prune_run_captures(label: str) -> None:
+    """Delete the recordings of minigame `label` in RUN_CAPTURES_DIR that captures_to_keep() doesn't keep, going by the `earned` and
+    `started` that record_minigame_result() wrote into each one's info.json. Never raises."""
+    try:
+        runs = []
+        for name in os.listdir(cfg.RUN_CAPTURES_DIR):
+            folder = os.path.join(cfg.RUN_CAPTURES_DIR, name)
+            if not (name.startswith(label + "_") and os.path.isdir(folder)):
+                continue
+            try:
+                with open(os.path.join(folder, "info.json")) as f:
+                    info = json.load(f)
+            except (OSError, ValueError):
+                info = {}
+            runs.append((folder, info.get("earned"), os.path.getmtime(folder)))
+        for folder in {run[0] for run in runs} - captures_to_keep(runs):
+            shutil.rmtree(folder, ignore_errors=True)
+    except Exception as error:
+        print(f"[!] couldn't tidy the recordings: {error}")
+
+def minigame_result(name: str, outcome: str, finished: bool, seconds: float, before: Optional[int], after: Optional[int]) -> dict[str, Any]:
+    """What a minigame run came to: how it ended, and the candy corn it earned - the HUD total after less the total before, None when either
+    wasn't read - plus what its player noted (state.minigame_detail: the room reached in Hauntlet 2)."""
+    earned = after - before if before is not None and after is not None and after >= before else None
+    return {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "run": state.run_number, "minigame": name, "outcome": outcome, "finished": finished,
+            "seconds": round(seconds), "candy_corn_before": before, "candy_corn_after": after, "earned": earned, **state.minigame_detail}
+
+def record_minigame_result(result: dict[str, Any]) -> None:
+    """Note a finished minigame run's `result` (minigame_result()): a line of RUNS_DIR/results/results.jsonl and one in the run log - then the
+    recordings of that minigame that are not among its best, its worst and its latest are deleted (prune_run_captures()). Never raises."""
+    try:
+        folder = os.path.join(cfg.RUNS_DIR, "results")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "results.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps(result) + "\n")
+        name, earned = result["minigame"], result["earned"]
+        extra = "".join(f", {key} {value}" for key, value in state.minigame_detail.items())
+        log_run_event(f"minigame result: {cfg.MINIGAME_LABELS.get(name, name)}: " + (f"{earned} candy corn" if earned is not None else "candy corn not read") + extra)
+        prune_run_captures(name)
+    except Exception as error:
+        print(f"[!] couldn't note the result: {error}")
+
+def read_candy_corn_settled(tries: int = 4) -> Optional[int]:
+    """read_candy_corn() of the screen once two looks half a second apart agree (the total counts up for a moment after a run); None if it
+    never reads. Costs a second or so."""
+    last: Optional[int] = None
+    for attempt in range(tries):
+        now = read_candy_corn(grab_screen())
+        if now is not None and now == last:
+            return now
+        last = now
+        if attempt < tries - 1:
+            wait_interruptible(cfg.CANDY_CORN_SETTLE)
+    return last
 
 def toggle_input_capture() -> Optional[InputCapture]:
     """Start a capture (a fresh folder in CAPTURES_DIR, the oldest beyond MAX_CAPTURES deleted) or, if one is

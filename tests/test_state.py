@@ -1067,6 +1067,7 @@ def test_a_failed_minigame_does_not_count_as_progress_but_a_won_one_does(macro, 
     monkeypatch.setattr(macro, "respawn_character", lambda: None)
     monkeypatch.setattr(macro, "click_nice_until_gone", lambda: True)
     monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: None)
+    monkeypatch.setattr(macro, "read_candy_corn_settled", lambda: None)                  # (no screen to read the total off)
     for won in (False, True):
         macro.state.last_progress = stalled
         monkeypatch.setitem(macro.MINIGAME_PLAYERS, "ghost_gallery", lambda deadline, watch, won=won: won)

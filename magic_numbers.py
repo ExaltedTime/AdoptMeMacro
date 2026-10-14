@@ -73,7 +73,21 @@ MINIGAME_OVERLAY_START_GRACE = 60.0
 MINIGAME_VICTORY_CHECK_INTERVAL = 1.0
 MINIGAME_POPUP_CHECK_INTERVAL = 4.0   # the popup checks (stray windows, paycheck) run this often while a minigame is played
 MINIGAME_POPUP_END_WAIT = 30.0        # a popup of a minigame to be played waits this long, at most, while a need is in its end wait (the need can clear first)
-MINIGAME_RESULT_BOX = (450, 130, 1500, 880)  # the GAME OVER! screen: the card with the candy corn earned (x3606 for a score of 61600; a Hauntlet 2 run: 420 for each room, 7560 for room 18) and the score or the room
+# The candy corn total in the HUD (top right, red digits on a white flag, shown in the lobby and in the world - not at home - and in the
+# game over screen) is read by read_candy_corn(): the red pixels (CANDY_CORN_RED, BGR) of CANDY_CORN_BOX that make up pieces CANDY_CORN_DIGIT_HEIGHT
+# tall (the commas are about half that) are the digits, each shrunk to CANDY_CORN_DIGIT_SIZE and compared with the saved ones; the best must differ
+# by less than CANDY_CORN_MAX_DIFF (0-255; the closest two saved digits differ by 50, and a digit not seen before by 11 at most in a leave-one-out test).
+# A piece that is as tall as a digit but wider, or digits further apart than CANDY_CORN_PITCH, mean something is in the way: not read.
+CANDY_CORN_BOX = (1495, 58, 1635, 88)
+CANDY_CORN_RED = ((0, 0, 180), (110, 110, 255))
+CANDY_CORN_DIGIT_HEIGHT = (15, 25)
+CANDY_CORN_DIGIT_MAX_WIDTH = 16
+CANDY_CORN_PITCH = (12, 26)                  # px between the left edges of two digits next to each other (15, 23-24 across a comma): more means one is missing
+CANDY_CORN_DIGIT_SIZE = (12, 20)
+CANDY_CORN_MAX_DIFF = 25
+CANDY_CORN_MAX_DIGITS = 9
+CANDY_CORN_SETTLE = 0.5                      # seconds between the looks of read_candy_corn_settled(): two in a row must agree
+MINIGAME_RESULT_BOX = (450, 130, 1500, 880)  # the GAME OVER! screen: the card with the candy corn earned (seen: x3606 for a Ghost Gallery score of 61600, x7560 for Hauntlet 2's room 18) and the score or the room
 MAX_RESULT_SHOTS = 200                      # the newest this many result screens are kept in RUNS_DIR/results
 MINIGAME_YES_TRIES = 3              # the popup's Yes is clicked this often at most, if it did not teleport the character...
 MINIGAME_TELEPORT_WAIT = 6.0        # ...which is looked for this long after each click: a white screen, or the whole view changing
@@ -161,6 +175,7 @@ NEEDS_DIR = os.path.join(SCRIPT_DIR, "ref", "needs")      # the learned need ico
 HAUNTLET_DIGIT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "digits")   # 0.png ... 9.png: the digits of the ROOM panel, see read_hauntlet_room()
 HAUNTLET_ITEM_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "items")      # a folder per item (phone/, key/, ...) of pictures of its slot; see read_hauntlet_items()
 HAUNTLET_COUNT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "counts")    # x/, 1/, 2/: the glyphs of an item's "x2" badge
+CANDY_CORN_DIGIT_DIR = os.path.join(SCRIPT_DIR, "ref", "candy_corn_digits")      # 0.png ... 9.png: the digits of the candy corn total in the HUD, see read_candy_corn()
 DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
 # debug/ holds images/ for every png (the debug_*.png views, failures/), logs/ for every text and json file, runs/ for
 # what belongs to one run (its log lines, run<N>.txt, and its chart, run<N>.png) and recordings/ for the run videos - plus
@@ -210,12 +225,20 @@ CAPTURE_MAX_MINUTES = 15                 # a capture stops by itself after this 
 CAPTURE_MIN_FREE_MB = 3000               # ...or when less than this much disk is free
 MAX_CAPTURES = 5                         # oldest captures are deleted beyond this many
 # Every minigame played is recorded the same way, automatically (MINIGAME_CAPTURE; not while a capture of the hotkey's is
-# running), into a folder of RUN_CAPTURES_DIR, the newest MAX_RUN_CAPTURES kept. A lossless frame is 1-3 MB, so a run
-# is kept to RUN_CAPTURE_ZIPS zips of CAPTURE_ZIP_MB by thinning its frames out evenly (see InputCapture).
+# running), into a folder of RUN_CAPTURES_DIR. Of each minigame the captures of its RUN_CAPTURES_BEST best runs (the most candy corn
+# earned), its RUN_CAPTURES_WORST worst and its latest are kept (prune_run_captures()). A lossless frame is 1-3 MB, so a run
+# is kept to RUN_CAPTURE_ZIPS zips of CAPTURE_ZIP_MB by thinning its frames out evenly (see InputCapture) - except frames of
+# when things went wrong: at a mark() (a walk that got nowhere, a failure, a stall...) a frame is saved at once and every look for
+# the next RUN_CAPTURE_BURST seconds, and a run that didn't finish keeps the frames of its last RUN_CAPTURE_TAIL seconds; such
+# frames are not thinned out (up to RUN_CAPTURE_PROTECTED of them, or they would use up the budget).
 MINIGAME_CAPTURE = True
 RUN_CAPTURES_DIR = os.path.join(DEBUG_DIR, "minigame_captures")
 RUN_CAPTURE_ZIPS = 5
-MAX_RUN_CAPTURES = 5
+RUN_CAPTURES_BEST = 2
+RUN_CAPTURES_WORST = 2
+RUN_CAPTURE_BURST = 4.0
+RUN_CAPTURE_TAIL = 15.0
+RUN_CAPTURE_PROTECTED = 25
 CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into zips of at most this size (chat attachments are limited to 30 MB)
 
 # Playing Ghost Gallery (from a human's 162 s run). The ghosts and the boss are drawn in a translucent cyan, HSV (85, 140, 250) under the

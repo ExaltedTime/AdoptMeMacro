@@ -304,6 +304,20 @@ def test_a_walk_to_the_middle_door_strafes_not_at_all_and_gives_up_after_the_wal
     assert world.keys[1][2] - start >= macro.cfg.HAUNTLET_WALK_MAX
 
 
+def test_a_walk_that_gets_nowhere_marks_the_recording_and_one_that_arrives_does_not(macro, world, monkeypatch):
+    marks = []
+    macro.state.run_capture = types.SimpleNamespace(mark=marks.append)
+    room_to_look_around(macro, monkeypatch)
+    run = macro.HauntletRun()
+    run.room = 5
+    world.screens = [frame(macro, room=5)] * 3 + [frame(macro, room=6)]
+    macro.hauntlet_walk(None, 0.0, run, watch_of(macro))
+    assert marks == []                                                             # the room changed
+    world.screens = moving(macro, world, 5)
+    macro.hauntlet_walk(None, 0.0, run, watch_of(macro))
+    assert len(marks) == 1 and "room 5" in marks[0] and "nowhere" in marks[0]
+
+
 def test_a_walk_lets_go_of_its_keys_when_stopped(macro, world, monkeypatch):
     def stop(duration):
         raise macro.StopRequested()
@@ -806,9 +820,12 @@ def test_the_strafe_to_a_forks_doorway_is_measured_from_where_the_player_stands(
 
 
 def test_a_stuck_walk_in_a_fork_steps_towards_its_doorway(macro, world):
+    marks = []
+    macro.state.run_capture = types.SimpleNamespace(mark=marks.append)
     screen = fork_screen(macro, "near_wall_a")
     assert macro.hauntlet_unstick(screen, 0, 0, None) == macro.cfg.HAUNTLET_LEFT_KEY
     assert macro.hauntlet_unstick(screen, 1, 0, None) == macro.cfg.HAUNTLET_RIGHT_KEY
+    assert len(marks) == 2 and "not moving" in marks[0]                                     # each is marked in the recording
 
 
 def play_a_fork(macro, world, monkeypatch, near_after):

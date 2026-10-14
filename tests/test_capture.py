@@ -359,10 +359,11 @@ def test_a_minigame_run_is_recorded_with_a_budget_and_finished_with_its_outcome_
     assert recorder is not None and recorder.max_zips == macro.cfg.RUN_CAPTURE_ZIPS and recorder.running
     assert os.path.dirname(recorder.folder) == macro.cfg.RUN_CAPTURES_DIR and os.path.basename(recorder.folder).startswith("hauntlet_2_")
     assert wait_for(lambda: recorder.frames >= 1)
-    macro.finish_run_capture(recorder, "won")
-    assert not recorder.running
+    macro.finish_run_capture(recorder, "won", {"earned": 2500, "room": 7})
+    assert not recorder.running and macro.state.run_capture is None
     info = json.load(open(os.path.join(recorder.folder, "info.json")))
     assert info["outcome"] == "won" and info["stopped_because"] == "the minigame ended"
+    assert info["earned"] == 2500 and info["room"] == 7                       # what the run came to is in its info.json
     assert wait_for(lambda: os.path.isdir(os.path.join(recorder.folder, "zips")) and os.listdir(os.path.join(recorder.folder, "zips")))
 
 
@@ -375,19 +376,6 @@ def test_no_run_is_recorded_when_it_is_switched_off_or_a_capture_is_already_runn
     assert macro.start_run_capture("hauntlet_2") is None                      # one capture at a time
     macro.toggle_input_capture()
     macro.finish_run_capture(None, "won")                                    # nothing to finish is no error
-
-
-def test_the_oldest_run_captures_are_deleted(macro, run_folder, monkeypatch):
-    monkeypatch.setattr(macro.cfg, "MAX_RUN_CAPTURES", 2)
-    os.makedirs(macro.cfg.RUN_CAPTURES_DIR)
-    for i in range(3):
-        old = os.path.join(macro.cfg.RUN_CAPTURES_DIR, f"old{i}")
-        os.makedirs(old)
-        os.utime(old, (1000 + i, 1000 + i))
-    recorder = macro.start_run_capture("ghost_gallery")
-    kept = os.listdir(macro.cfg.RUN_CAPTURES_DIR)
-    macro.finish_run_capture(recorder, "won")
-    assert len(kept) == 2 and "old2" in kept and os.path.basename(recorder.folder) in kept
 
 
 def test_a_recording_that_cannot_start_does_not_stop_the_minigame(macro, run_folder, monkeypatch, capsys):
@@ -412,7 +400,9 @@ def test_the_zip_plan_keeps_frames_whole_in_order_and_counts_the_events_in_the_f
 def test_play_minigame_records_the_run_and_says_how_it_ended(macro, monkeypatch, result, outcome):
     started, finished, order = [], [], []
     monkeypatch.setattr(macro, "start_run_capture", lambda label: started.append(label) or "the capture")
-    monkeypatch.setattr(macro, "finish_run_capture", lambda capture, how: finished.append((capture, how)) or order.append("finished"))
+    monkeypatch.setattr(macro, "finish_run_capture", lambda capture, how, result=None: finished.append((capture, how)) or order.append("finished"))
+    monkeypatch.setattr(macro, "read_candy_corn_settled", lambda: None)
+    monkeypatch.setattr(macro, "record_minigame_result", lambda result: None)
     monkeypatch.setattr(macro, "send_macro_window_to_back", lambda: order.append("window back"))
     monkeypatch.setattr(macro, "bring_macro_window_to_front", lambda: order.append("window front"))
     for name in ("release_all_inputs", "respawn_character"):
@@ -455,3 +445,102 @@ def test_stopping_checks_the_zips_once_more_because_the_events_grew_after_the_la
     kept = sorted(f for f in os.listdir(folder) if f.endswith(".png"))
     assert recorder.dropped > 0 and kept[0].startswith("frame_000001_") and kept[-1].startswith("frame_000005_")
     assert len(macro.zip_capture(folder)) == 1
+
+
+# --- frames of when things went wrong, and which recordings are kept ---
+
+def test_frames_around_a_mark_survive_the_thinning(macro, capture, monkeypatch):
+    rng = np.random.default_rng(5)
+    monkeypatch.setattr(macro, "grab_screen", lambda: rng.integers(0, 256, (90, 160, 3), dtype=np.uint8))
+    monkeypatch.setattr(macro.cfg, "CAPTURE_FRAME_INTERVAL", 0.01)
+    monkeypatch.setattr(macro.cfg, "CAPTURE_ZIP_MB", 0.15)
+    monkeypatch.setattr(macro.cfg, "RUN_CAPTURE_BURST", 0.2)
+    monkeypatch.setattr(macro.cfg, "RUN_CAPTURE_PROTECTED", 4)                 # (what the tiny budget can hold)
+    folder = capture["folder"]
+    recorder = macro.InputCapture(folder, max_zips=2)
+    recorder.start()
+    assert wait_for(lambda: recorder.frames >= 6)
+    recorder.mark("the walk got nowhere")
+    assert wait_for(lambda: len(recorder.protected) >= 3)
+    dropped = recorder.dropped
+    assert wait_for(lambda: recorder.dropped >= dropped + 3, seconds=20)       # more thinning after it
+    recorder.stop()
+    on_disk = {f for f in os.listdir(folder) if f.endswith(".png")}
+    assert recorder.protected and recorder.protected <= on_disk                # none of them thinned out
+    marked = [e["t"] for e in events_of(folder) if e["type"] == "mark"]
+    assert len(marked) == 1 and seen(folder, type="mark", reason="the walk got nowhere")
+    assert all(marked[0] - 0.1 <= float(f.split("_")[2][:-4]) <= marked[0] + 0.6 for f in recorder.protected)    # and they are of that moment
+
+
+def test_a_run_that_went_wrong_keeps_the_frames_of_its_last_seconds(macro, capture, monkeypatch):
+    recorder = macro.InputCapture(capture["folder"], max_zips=2)
+    recorder.started = time.time() - 100
+    recorder._kept = [(f"frame_{i + 1:06d}_{t:.3f}.png", 1) for i, t in enumerate((10.0, 50.0, 80.0, 90.0, 99.0))]
+    recorder.protect_tail(macro.cfg.RUN_CAPTURE_TAIL)
+    assert recorder.protected == {"frame_000004_90.000.png", "frame_000005_99.000.png"}
+
+
+def test_a_mark_with_no_recording_is_nothing(macro):
+    macro.state.run_capture = None
+    macro.mark_run_capture("anything")                                         # (no error)
+    macro.log_failure("something", screenshot=False)
+
+
+def test_a_failure_and_a_popup_in_the_middle_of_a_minigame_mark_the_recording(macro, monkeypatch):
+    import types
+    marks = []
+    macro.state.run_capture = types.SimpleNamespace(mark=marks.append)
+    macro.log_failure("the walk failed", screenshot=False)
+    assert marks == ["failure: the walk failed"]
+    marks.clear()
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: "profile")
+    macro.state.last_minigame_popup_check = 0.0
+    macro.minigame_popup_checks()
+    assert len(marks) == 1 and "stray window" in marks[0]
+    marks.clear()
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: None)
+    monkeypatch.setattr(macro, "detect_paycheck", lambda: True)
+    macro.state.last_minigame_popup_check = 0.0
+    macro.minigame_popup_checks()
+    assert len(marks) == 1 and "paycheck" in marks[0]
+
+
+def runs_dir_with(macro, label, earned_by_name):
+    os.makedirs(macro.cfg.RUN_CAPTURES_DIR, exist_ok=True)
+    for i, (name, earned) in enumerate(earned_by_name.items()):
+        folder = os.path.join(macro.cfg.RUN_CAPTURES_DIR, f"{label}_{name}")
+        os.makedirs(folder)
+        with open(os.path.join(folder, "info.json"), "w") as f:
+            json.dump({} if earned == "unknown" else {"earned": earned}, f)
+        os.utime(folder, (1000 + i, 1000 + i))                                 # in the order given: the last is the latest
+
+
+def test_of_each_minigame_the_best_the_worst_and_the_latest_recordings_are_kept(macro, run_folder):
+    cfg = macro.cfg
+    runs_dir_with(macro, "hauntlet_2", {"a": 500, "b": 9000, "c": 100, "d": 4000, "e": 7000, "f": 300, "g": 2000, "latest": 2500})
+    runs_dir_with(macro, "ghost_gallery", {"other": 1})
+    macro.prune_run_captures("hauntlet_2")
+    kept = {n.split("_", 2)[2] for n in os.listdir(cfg.RUN_CAPTURES_DIR) if n.startswith("hauntlet_2_")}
+    assert kept == {"b", "e", "c", "f", "latest"}                              # the two best, the two worst and the latest
+    assert any(n.startswith("ghost_gallery_") for n in os.listdir(cfg.RUN_CAPTURES_DIR))     # another minigame's are not touched
+
+
+def test_a_recording_whose_candy_corn_was_not_read_counts_as_one_of_the_worst_but_a_few_are_all_kept(macro, run_folder):
+    runs_dir_with(macro, "ghost_gallery", {"a": 800, "b": "unknown", "c": 1200})
+    macro.prune_run_captures("ghost_gallery")
+    assert len(os.listdir(macro.cfg.RUN_CAPTURES_DIR)) == 3                    # fewer than five: all of them
+    runs_dir_with(macro, "hauntlet_2", {"a": 800, "b": "unknown", "c": 1200, "d": 5, "e": 6, "f": 7, "g": 8, "h": 9})
+    macro.prune_run_captures("hauntlet_2")
+    kept = {n.split("_", 2)[2] for n in os.listdir(macro.cfg.RUN_CAPTURES_DIR) if n.startswith("hauntlet_2_")}
+    assert kept == {"b", "d", "c", "a", "h"}                                     # the unread and the 5 (worst two), the 1200 and the 800 (best two), the latest
+
+
+def test_only_a_run_that_did_not_finish_keeps_the_frames_of_its_last_seconds(macro, run_folder):
+    kept = {}
+    for outcome in ("left the minigame (its overlay was gone for 10s)", "finished (the game over screen)"):
+        recorder = macro.start_run_capture("hauntlet_2")
+        assert wait_for(lambda: recorder.frames >= 2)
+        macro.finish_run_capture(recorder, outcome)
+        kept[outcome.split()[0]] = set(recorder.protected)
+        time.sleep(1.1)                                                        # (the next folder has a time of its own in its name)
+    assert kept["left"] and not kept["finished"]

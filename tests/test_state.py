@@ -1253,27 +1253,28 @@ def test_a_hotkey_acts_on_a_new_press_only_when_its_conditions_hold(macro, monke
     assert not fires(True, False, False, False, True) and fires(True, False, False, False, False)             # M needs Roblox, P doesn't
 
 
-def test_a_button_the_game_refuses_is_clicked_again_after_a_wait_and_then_given_up(macro, world, monkeypatch):
+def test_a_button_the_game_refuses_is_clicked_again_after_a_wait_and_refused_again_it_is_given_up(macro, world, monkeypatch):
     cfg = macro.cfg
     waited, refusals = [], [1]
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
     monkeypatch.setattr(macro, "grab_screen", lambda: None)
     monkeypatch.setattr(macro, "only_pets_message_visible", lambda img: refusals[0] > 0 and (refusals.__setitem__(0, refusals[0] - 1) or True))
-    monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, **kw: waited.append(name))
+    monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=None, **kw: waited.append((name, max_wait)))
     macro.state.button_positions["potty"] = (100, 200)
-    assert macro.click_need_button("potty") is True                                    # refused once, then taken
-    assert macro.clicks.count((100, 200)) == 2 and waited == ["potty"]
-    assert cfg.BUTTON_RETRY_WAIT in world.waits and cfg.BUTTON_REFUSED_WAIT not in world.waits
+    assert macro.click_need_button("potty") is True                                    # refused once, then taken: the icon gets the shorter wait
+    assert macro.clicks.count((100, 200)) == 2 and waited == [("potty", cfg.BUTTON_RETRY_CLEAR_WAIT)]
+    assert world.waits.count(cfg.BUTTON_RETRY_WAIT) == 1
     del macro.clicks[:]
-    refusals[0] = 10 ** 6                                                              # always refused: waited for, then given up, the icon not waited for
+    refusals[0] = 10 ** 6                                                              # refused again: given up at once, the icon not waited for
     waited.clear()
     world.waits.clear()
     assert macro.click_need_button("potty") is False
     assert macro.clicks.count((100, 200)) == cfg.BUTTON_CLICK_TRIES and waited == []
-    assert world.waits.count(cfg.BUTTON_RETRY_WAIT) == cfg.BUTTON_CLICK_TRIES - 1 and world.waits[-1] == cfg.BUTTON_REFUSED_WAIT
+    assert world.waits.count(cfg.BUTTON_RETRY_WAIT) == cfg.BUTTON_CLICK_TRIES - 1 and world.waits[-1] == cfg.BUTTON_RETRY_WAIT
     del macro.clicks[:]
     refusals[0] = 0                                                                    # not refused: clicked once
-    assert macro.click_need_button("potty") is True and macro.clicks.count((100, 200)) == 1
+    waited.clear()
+    assert macro.click_need_button("potty") is True and macro.clicks.count((100, 200)) == 1 and waited == [("potty", None)]       # (the usual wait)
 
 
 def test_a_minigame_popup_waits_for_a_need_in_its_end_wait_but_not_for_ever(macro, world, monkeypatch):

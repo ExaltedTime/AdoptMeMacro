@@ -1098,7 +1098,7 @@ knowing if you're modifying it:
 - **`DebugCapture`** is a `logging.Handler` on `logger` for the lifetime of the GUI: every record logged anywhere in the macro shows up in
   the on-screen console (`self.debug_text`) - `emit()` only queues (from any thread) and the Tk thread puts the queue on the widget every
   `CONSOLE_DRAIN_INTERVAL_MS`, since Tk isn't thread-safe - each line starting with the time (`[HH:MM:SS]`), in the colour of its level
-  (`GUI_CONSOLE_LEVEL_COLORS`: the debug lines are dimmer). The **Debug lines** checkbox over the console raises the handler's level to INFO to
+  (`GUI_CONSOLE_LEVEL_COLORS`: the debug lines are dimmer). The **Show debug lines in the output** checkbox on the Debug tab's Other subtab raises the handler's level to INFO to
   leave them out (`output.log` keeps them either way). The widget keeps only its last `CONSOLE_MAX_LINES` lines (`trim()`) - it would otherwise
   hold everything logged, about 25 MB of memory per 100,000 lines - while `output.log` keeps all of it. A record with `extra={"status": True}` is a
   status line: it replaces the previous status line instead of adding one, and goes into `output.log` only the first time (this is the

@@ -5436,14 +5436,8 @@ class AdoptMeGUI:
         debug_frame = tk.Frame(self.root, bg=self.bg)
         debug_frame.pack(fill=tk.BOTH, expand=True, padx=cfg.GUI_OUTER_PADDING, pady=(0, cfg.GUI_OUTER_PADDING))
 
-        output_header = tk.Frame(debug_frame, bg=self.bg)
-        output_header.pack(fill=tk.X, pady=(0, cfg.GUI_LABEL_PADDING))
-        tk.Label(output_header, text="Output", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"),
-                 bg=self.bg, fg=self.accent).pack(side=tk.LEFT)
-        self.show_debug_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(output_header, text="Debug lines", variable=self.show_debug_var, command=self.set_debug_lines_shown,
-                       font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.fg, selectcolor=self.bg,
-                       activebackground=self.bg, activeforeground=self.fg, cursor="hand2").pack(side=tk.RIGHT)
+        tk.Label(debug_frame, text="Output", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"),
+                 bg=self.bg, fg=self.accent).pack(anchor=tk.W, pady=(0, cfg.GUI_LABEL_PADDING))
 
         self.debug_text = scrolledtext.ScrolledText(debug_frame, height=cfg.GUI_CONSOLE_HEIGHT, width=cfg.GUI_CONSOLE_WIDTH,
                                                      bg=cfg.GUI_CONSOLE_BG, fg=cfg.GUI_CONSOLE_FG,
@@ -5637,9 +5631,14 @@ class AdoptMeGUI:
         logger.info(f"{name} need {'on' if value else 'off'}")
 
     def build_other_tab(self, parent: Any) -> None:
-        """Fill the Other subtab: record the next run, refresh the debug
+        """Fill the Other subtab: record the next run, show the debug lines in the output or not, refresh the debug
         folder, reset the config."""
         self.add_config_checkbox(parent, "Record the next run (low quality video)", "record_next_run", load_game_config())
+        self.show_debug_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(parent, text="Show debug lines in the output", variable=self.show_debug_var, command=self.set_debug_lines_shown,
+                       font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.bg, fg=self.fg,
+                       selectcolor=self.bg, activebackground=self.bg, activeforeground=self.fg,
+                       anchor=tk.W, cursor="hand2").pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
         tk.Label(parent, text=f"Press {cfg.CAPTURE_HOTKEY.upper()} anywhere to start / stop capturing screenshots and input",
                  font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
         tk.Button(parent, text="Refresh debug", command=self.refresh_debug_folder,

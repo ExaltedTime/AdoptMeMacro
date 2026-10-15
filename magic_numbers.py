@@ -154,11 +154,14 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
 # "Only Pets, Babies, and Dolls can use this." - the game's answer to a need button clicked while the pet is too far from it (or
 # otherwise not taken). The text is found by the white of its letters (>= ONLY_PETS_WHITE in every channel) matched against the same of
 # the crop ref/popups/only_pets.png, whatever is behind it: a score of at least ONLY_PETS_THRESHOLD within ONLY_PETS_BOX. A need
-# button is clicked again, up to BUTTON_CLICK_TRIES clicks in all; after each, the message is looked for for BUTTON_REJECT_LOOK seconds.
+# button is clicked again after BUTTON_RETRY_WAIT seconds, up to BUTTON_CLICK_TRIES clicks in all (the pet needs time to come: three clicks 3 s apart all failed);
+# after each, the message is looked for for BUTTON_REJECT_LOOK seconds. When the last is refused too the need gets BUTTON_REFUSED_WAIT seconds more, then is given up.
 ONLY_PETS_BOX = (600, 830, 1320, 930)
 ONLY_PETS_WHITE = 235
 ONLY_PETS_THRESHOLD = 0.6
-BUTTON_CLICK_TRIES = 3
+BUTTON_CLICK_TRIES = 2
+BUTTON_RETRY_WAIT = 10.0
+BUTTON_REFUSED_WAIT = 15.0
 BUTTON_REJECT_LOOK = 1.5
 STRAY_OKAY_BOX = (800, 637, 1120, 680)
 STRAY_OKAY_MIN_PIXELS = 5000      # the button is ~11000 exact-color px in that box

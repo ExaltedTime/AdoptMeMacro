@@ -1171,7 +1171,7 @@ def button_click_refused() -> bool:
 
 def click_need_button(need_name: str) -> bool:
     """Click the button mapped to `need_name` - again if the game answers "Only Pets, Babies, and Dolls can use this.", up to
-    BUTTON_CLICK_TRIES clicks - then wait for its icon to clear. Returns False if no button was mapped or clicked (the need must
+    BUTTON_CLICK_TRIES clicks, BUTTON_RETRY_WAIT seconds apart (BUTTON_REFUSED_WAIT after the last) - then wait for its icon to clear. Returns False if no button was mapped or clicked (the need must
     not count as resolved). See docs/ARCHITECTURE.md#need-handlers.
     """
     if need_name not in state.button_positions:
@@ -1186,6 +1186,7 @@ def click_need_button(need_name: str) -> bool:
             wait_until_need_gone(need_name)
             return True
         log_run_event(f"{need_name}: the game said only pets can use it (click {attempt + 1})")
+        wait_interruptible(cfg.BUTTON_RETRY_WAIT if attempt + 1 < cfg.BUTTON_CLICK_TRIES else cfg.BUTTON_REFUSED_WAIT)    # the pet may be on its way; after the last, the need runs out
     return False
 
 # ============================================================================

@@ -862,85 +862,96 @@ def test_without_a_window_titled_exactly_roblox_any_roblox_title_still_counts(ma
     assert macro.is_roblox_focused() is True
 
 
+def sick_screen(name):
+    """A real screenshot from tests/sick/: at_the_doctor (the hand button over the player's head), dialog ("Ask Doctor Heart to heal
+    your family?") or pet_view (what pressing 'e' there brought up: the pet's menu)."""
+    import cv2
+    return cv2.imread(os.path.join(os.path.dirname(__file__), "sick", f"{name}.png"))
+
+
 @pytest.fixture
-def sick_run(macro, monkeypatch):
-    """The sick handler up to its press of 'e': run["dialog"] is what each look for the doctor's dialog sees, in order.
+def sick_run(macro, world, monkeypatch):
+    """The sick handler up to its Yes, on real screenshots (the detectors are the real ones): run["screen"] is what is on screen
+    now; the prompt's click changes it to run["after_prompt"], backing out of the pet view to run["after_back_out"].
     The need has an entry of its own here (positions made up), so none of this depends on how the real one is tuned
     or on HALLOWEEN, which decides whether the real one exists."""
-    import numpy as np
     from functools import partial
-    final, prompt = (610, 620), (630, 640)
+    final = (610, 620)
     monkeypatch.setitem(macro.cfg.TELEPORT_WALK_NEEDS, "sick", dict(teleport_pos=(1, 2), steps=(("w", 1.0),), helicopter=False,
-                                                                    final_click=final, prompt_pos=prompt))
+                                                                    final_click=final))
     monkeypatch.setitem(macro.NEED_HANDLER_CLASSES, "sick", partial(macro.TeleportWalkNeedHandler, "sick"))
-    run = {"dialog": [True], "waited": [], "respawns": 0, "events": [], "pet_focused": False, "final": final, "prompt": prompt}
+    run = {"screen": sick_screen("at_the_doctor"), "after_prompt": sick_screen("dialog"), "after_back_out": sick_screen("at_the_doctor"),
+           "events": [], "waited": [], "respawns": 0, "final": final, "world": world}
 
-    def dialog_up(img):
-        run["events"].append("look")
-        looks = run["dialog"]
-        return looks.pop(0) if len(looks) > 1 else looks[0]
+    def click(x, y, duration=0):
+        run["events"].append(("click", (x, y)))
+        if (x, y) != final:
+            run["screen"] = run["after_prompt"]
+
+    def back_out():
+        run["events"].append("back out")
+        run["screen"] = run["after_back_out"]
 
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
     monkeypatch.setattr(macro, "teleport_to", lambda pos: None)
     monkeypatch.setattr(macro, "hold_key", lambda key, duration: None)
-    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
-    monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((1080, 1920, 3), np.uint8))
-    monkeypatch.setattr(macro, "detect_sick_dialog", dialog_up)
-    monkeypatch.setattr(macro, "detect_pet_focus", lambda img: run["pet_focused"])
-    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: run["events"].append("back out") or None)
-    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: run["events"].append(("click", (x, y))))
+    monkeypatch.setattr(macro, "grab_screen", lambda: run["screen"])
+    monkeypatch.setattr(macro, "dismiss_stray_windows", back_out)
+    monkeypatch.setattr(macro, "hover_click", click)
     monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=60.0, **kw: run["waited"].append(name))
     monkeypatch.setattr(macro, "respawn_character", lambda: run.update(respawns=run["respawns"] + 1))
     return run
 
 
-def test_sick_clicks_yes_once_the_dialog_is_up(macro, sick_run):
+def prompt_click(run):
+    """The one click that is not the Yes."""
+    (_, pos), = [event for event in run["events"] if event != "back out" and event[1] != run["final"]]
+    return pos
+
+
+def test_sick_clicks_the_hand_button_where_it_is_and_then_yes(macro, sick_run):
     assert macro.TeleportWalkNeedHandler("sick").handle() is True
-    assert sick_run["events"] == ["look", ("click", sick_run["final"])]        # no prompt click needed
+    assert [event[0] for event in sick_run["events"]] == ["click", "click"] and sick_run["events"][-1] == ("click", sick_run["final"])
+    x, y = prompt_click(sick_run)
+    assert abs(x - 965) <= 3 and abs(y - 498) <= 3                       # the hand button of tests/sick/at_the_doctor.png
     assert sick_run["waited"] == ["sick"] and sick_run["respawns"] == 0
+    assert not [key for key in sick_run["world"].keys if key[:2] == ("press", "e")]       # 'e' focuses the pet
 
 
-def test_sick_backs_out_of_the_pet_view_and_clicks_the_prompt_when_e_brings_up_no_dialog(macro, sick_run):
-    sick_run["dialog"] = [False, True]                                   # nothing after e, the dialog after the click
-    sick_run["pet_focused"] = True
+def test_sick_backs_out_of_the_pet_view_before_it_looks_for_the_prompt(macro, sick_run):
+    sick_run["screen"] = sick_screen("pet_view")
     assert macro.TeleportWalkNeedHandler("sick").handle() is True
-    assert sick_run["events"] == ["look", "back out", ("click", sick_run["prompt"]), "look",
-                                  ("click", sick_run["final"])]
-    assert sick_run["waited"] == ["sick"] and sick_run["respawns"] == 0
-    log = open(macro.cfg.RUN_LOG_PATH).read()
-    assert "sick: no dialog after e (pet focused: True) - clicking the prompt" in log and "FAILURE" not in log
+    assert sick_run["events"][0] == "back out" and sick_run["events"][-1] == ("click", sick_run["final"])
+    assert len(sick_run["events"]) == 3 and sick_run["waited"] == ["sick"]
 
 
-def test_sick_goes_on_to_click_yes_when_the_dialog_is_not_recognised_and_the_pet_is_not_focused(macro, sick_run):
-    """Run 2: 27 sick attempts in a row found no dialog with the pet NOT focused (the recognition was failing; the
-    plain click had cleared sick every time in run 1). Not the pet view: click Yes as before."""
-    sick_run["dialog"] = [False]
-    assert macro.TeleportWalkNeedHandler("sick").handle() is True
-    assert sick_run["events"] == ["look", ("click", sick_run["final"])]            # no back-out, no prompt click
-    assert sick_run["waited"] == ["sick"] and sick_run["respawns"] == 0
-    assert "dialog not recognised after e (pet focused: False) - clicking Yes anyway" in open(macro.cfg.RUN_LOG_PATH).read()
-
-
-def test_sick_fails_at_once_when_the_prompt_click_brings_up_no_dialog_either(macro, sick_run):
-    sick_run["dialog"] = [False]
-    sick_run["pet_focused"] = True
+def test_sick_gives_up_at_once_when_the_prompt_is_not_on_screen(macro, sick_run):
+    sick_run["screen"] = sick_screen("dialog")                          # not at the doctor
     assert macro.TeleportWalkNeedHandler("sick").handle() is False
-    assert sick_run["events"] == ["look", "back out", ("click", sick_run["prompt"]), "look"]   # never the Yes click
+    assert sick_run["events"] == [] and sick_run["waited"] == [] and sick_run["respawns"] == 1
+    assert "sick: the doctor's prompt is not on screen" in open(macro.cfg.RUN_LOG_PATH).read()
+
+
+def test_sick_gives_up_at_once_when_the_dialog_does_not_come_up(macro, sick_run):
+    sick_run["after_prompt"] = sick_screen("at_the_doctor")             # the click did nothing
+    assert macro.TeleportWalkNeedHandler("sick").handle() is False
+    assert len(sick_run["events"]) == 1 and ("click", sick_run["final"]) not in sick_run["events"]     # never the Yes
     assert sick_run["waited"] == [] and sick_run["respawns"] == 1                                    # no waiting for the icon
+    assert "sick: no dialog after the prompt was clicked" in open(macro.cfg.RUN_LOG_PATH).read()
 
 
-def test_a_need_without_a_prompt_to_click_fails_after_the_first_look(macro, sick_run, monkeypatch):
-    monkeypatch.setitem(macro.cfg.TELEPORT_WALK_NEEDS["sick"], "prompt_pos", None)
-    sick_run["dialog"] = [False]
-    sick_run["pet_focused"] = True
-    assert macro.TeleportWalkNeedHandler("sick").handle() is False
-    assert sick_run["events"] == ["look"] and sick_run["respawns"] == 1
+def test_sick_looks_for_the_dialog_for_a_while_and_not_longer(macro, sick_run):
+    clock = sick_run["world"].clock
+    sick_run["after_prompt"] = sick_screen("at_the_doctor")
+    start = clock.now
+    macro.TeleportWalkNeedHandler("sick").handle()
+    spent = clock.now - start
+    assert macro.cfg.SICK_CONFIRM_WAIT <= spent <= macro.cfg.SICK_PRE_CLICK_WAIT + macro.cfg.SICK_CONFIRM_WAIT + 2 * macro.cfg.SICK_LOOK_INTERVAL
 
 
 def test_a_failed_sick_is_logged_as_a_failure_by_process_needs(macro, sick_run, monkeypatch):
     import numpy as np
-    sick_run["dialog"] = [False]
-    sick_run["pet_focused"] = True
+    sick_run["screen"] = sick_screen("dialog")                          # not at the doctor
     screen = np.zeros((1080, 1920, 3), np.uint8)
     monkeypatch.setattr(macro, "focus_roblox_click", lambda: True)
     monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([(100, 50, 30)], screen))

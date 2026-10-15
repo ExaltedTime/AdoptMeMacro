@@ -325,6 +325,25 @@ def test_the_sick_dialog_is_found_by_its_crop(macro):
     assert macro.detect_sick_dialog(screen)
 
 
+SICK_SCREENS = os.path.join(os.path.dirname(__file__), "sick")
+
+
+def sick_screen(name):
+    return cv2.imread(os.path.join(SICK_SCREENS, f"{name}.png"))
+
+
+@pytest.mark.parametrize("name, prompt, dialog", [("at_the_doctor", True, False), ("dialog", False, True), ("pet_view", False, False)])
+def test_the_doctors_prompt_and_dialog_are_told_apart_on_real_screenshots(macro, name, prompt, dialog):
+    """The three things seen at Doctor Heart: the hand button over the player's head, the dialog it brings up, and the pet's
+    menu that pressing 'e' there brought up instead."""
+    screen = sick_screen(name)
+    assert (macro.find_doctor_prompt(screen) is not None) == prompt
+    assert macro.detect_sick_dialog(screen) == dialog
+    if prompt:
+        x, y = macro.find_doctor_prompt(screen)
+        assert abs(x - 965) <= 3 and abs(y - 498) <= 3
+
+
 # --- popup_found() / popup_visible(): one lookup for every crop in ref/popups --------------------------------
 
 @pytest.mark.parametrize("name", ["paycheck", "sick_dialog", "backpack_normal", "backpack_back"])

@@ -1943,30 +1943,24 @@ class TeleportWalkNeedHandler(NeedHandler):
         return True
 
     def _open_dialog(self) -> bool:
-        """Press 'e' and wait for the need's dialog (sick); if it isn't recognised and the pet
-        view is open, back out and click the prompt, then look again. Returns whether to click
-        Yes. See docs/ARCHITECTURE.md#need-handlers.
+        """Click the doctor's prompt - the hand button over the player's head, found by its reference crop, not pressed with
+        'e' (that focuses the pet) - and wait for the dialog. Returns whether it came up (the Yes is next); False means
+        the need is given up at once. See docs/ARCHITECTURE.md#need-handlers.
         """
-        wait_interruptible(cfg.SICK_PRE_E_WAIT)
-        pydirectinput.press("e")
-        wait_interruptible(cfg.SICK_CONFIRM_WAIT)
-        if detect_sick_dialog(grab_screen()):
-            return True
-        if not detect_pet_focus(grab_screen()):
-            # Not the pet view. Most likely the dialog is up and just wasn't recognised: run 2 had 27 sick attempts in a
-            # row end here with the pet not focused, where the plain click on Yes had cleared sick every time in run 1.
-            # So carry on as before - click Yes, and the wait for the icon says whether it worked.
-            log_run_event(f"{self.name}: dialog not recognised after e (pet focused: False) - clicking Yes anyway")
-            return True
-        prompt_pos = self.config.get("prompt_pos")
-        if prompt_pos is None:
+        wait_interruptible(cfg.SICK_PRE_CLICK_WAIT)
+        if detect_pet_focus(grab_screen()):                      # (it hides the prompt)
+            log_run_event(f"{self.name}: the pet view is open - backing out of it")
+            dismiss_stray_windows()
+        prompt = look_until(find_doctor_prompt, cfg.SICK_PROMPT_LOOK)
+        if prompt is None:
+            log_run_event(f"{self.name}: the doctor's prompt is not on screen")
             return False
-        log_run_event(f"{self.name}: no dialog after e (pet focused: True) - clicking the prompt")
-        print(f"[debug] no {self.name} dialog after e - backing out of the pet view, clicking the prompt at {prompt_pos}...")
-        dismiss_stray_windows()                     # backs out of the pet focus view
-        hover_click(*prompt_pos)
-        wait_interruptible(cfg.SICK_CONFIRM_WAIT)
-        return detect_sick_dialog(grab_screen())
+        print(f"[debug] clicking the {self.name} prompt at {prompt}...")
+        hover_click(*prompt)
+        if look_until(detect_sick_dialog, cfg.SICK_CONFIRM_WAIT) is None:
+            log_run_event(f"{self.name}: no dialog after the prompt was clicked")
+            return False
+        return True
 
 # Handler factory (class, or partial of one) for each need.
 # get_need_handler() uses this plus the enabled needs (need_is_enabled()) to
@@ -2322,6 +2316,20 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
 def detect_sick_dialog(img: Image) -> bool:
     """True if the sick need's "Ask Doctor Heart to heal your family?" dialog is on screen in `img`."""
     return popup_visible(img, "sick_dialog")
+
+def find_doctor_prompt(img: Image) -> Optional[Point]:
+    """Where the hand button over the player's head is (its centre) when the player stands in front of Doctor Heart, else None."""
+    return popup_found(img, "doctor_prompt")
+
+def look_until(find: Callable[[Image], Any], seconds: float) -> Any:
+    """What `find` returns for a screenshot - one is taken every SICK_LOOK_INTERVAL - as soon as that is something (not None or False),
+    else None once `seconds` have gone by (there is always at least one look)."""
+    deadline = time.time() + seconds
+    while True:
+        found = find(grab_screen())
+        if found or time.time() >= deadline:
+            return found or None
+        wait_interruptible(cfg.SICK_LOOK_INTERVAL)
 
 def detect_minigame_popup(img: Image) -> bool:
     """True if a Halloween minigame popup is on screen: a button of the Yes green (a piece of it of at least
@@ -3269,7 +3277,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 elif moving is None and now >= next_move:
                     moving = random.choice(cfg.MOVE_KEYS)
                     pydirectinput.keyDown(moving)
-                    move_until = now + random.uniform(cfg.GHOST_MOVE_STEP_MIN, cfg.GHOST_MOVE_STEP_MAX)
+                    move_until = time.time() + random.uniform(cfg.GHOST_MOVE_STEP_MIN, cfg.GHOST_MOVE_STEP_MAX)      # (`now` is from before a search for furniture, which can take longer than a step)
             elif chasing is None:
                 stop_walking()
             if now >= next_jump:

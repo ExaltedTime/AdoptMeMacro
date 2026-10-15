@@ -291,8 +291,9 @@ def test_zooming_out_holds_the_zoom_out_key_and_the_tilt_drags_down_with_the_rig
     assert sum(dy for _, _, dy in drags) == pytest.approx(cfg.GHOST_START_TILT, abs=cfg.GHOST_CAMERA_DRAG_STEPS)
 
 
-def test_it_walks_about_a_step_at_a_time_without_stopping_the_aiming(macro, world):
+def test_it_walks_about_a_step_at_a_time_without_stopping_the_aiming(macro, world, monkeypatch):
     cfg = macro.cfg
+    monkeypatch.setattr(cfg, "GHOST_STALL", 1000.0)                                            # (a stall - nothing scored for a while - stops a step and walks one of its own)
     world.screens = [blank()]                                                                  # nothing in sight
     start = world.clock.now
     macro.play_ghost_gallery(start + cfg.GHOST_MOVE_PERIOD * 3.5, watch_started(macro))
@@ -304,8 +305,10 @@ def test_it_walks_about_a_step_at_a_time_without_stopping_the_aiming(macro, worl
         held += 1 if kind == "down" else -1
         assert held in (0, 1)
     assert held == 0
-    for (kind, _, at), (kind2, _, at2) in zip(steps[::2], steps[1::2]):
-        assert cfg.GHOST_MOVE_STEP_MIN - 0.3 <= at2 - at <= cfg.GHOST_MOVE_STEP_MAX + 0.3 + (cfg.GHOST_FURNITURE_PROBES + 1) * cfg.GHOST_OUTLINE_WAIT      # (a step ends at the next look, which can be after a search for furniture)
+    pairs = list(zip(steps[::2], steps[1::2]))
+    for number, ((kind, _, at), (kind2, _, at2)) in enumerate(pairs):
+        assert at2 - at <= cfg.GHOST_MOVE_STEP_MAX + 0.3 + (cfg.GHOST_FURNITURE_PROBES + 1) * cfg.GHOST_OUTLINE_WAIT      # (a step ends at the next look, which can be after a search for furniture)
+        assert number == len(pairs) - 1 or at2 - at >= cfg.GHOST_MOVE_STEP_MIN - 0.3                                       # (the last one can be cut short by the deadline)
     assert world.mouse.count(("down",)) >= 1 and len([m for m in world.mouse if m[0] == "move"]) > 20       # it kept aiming meanwhile
 
 

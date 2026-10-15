@@ -143,6 +143,7 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "minigame_popup":  {"box": (780, 515, 1160, 585), "threshold": 0.8},
     # The sick need's Yes/No dialog.
     "sick_dialog":     {"box": (700, 400, 1220, 700), "threshold": 0.8},
+    "doctor_prompt":   {"box": (880, 420, 1050, 580), "threshold": 0.8},
     # The normal backpack's "BACKPACK" title, and the expanded one's BACK button.
     "backpack_normal": {"box": (700, 600, 1000, 690), "threshold": 0.8},
     "backpack_back":   {"box": (700, 80, 1000, 200), "threshold": 0.8},
@@ -651,13 +652,14 @@ GENERAL_TELEPORT_POS_2 = (895, 705)
 GENERAL_TELEPORT_POS_3 = (1048, 658)
 TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing spot
 TELEPORT_WALK_STEP_GAP = 4.0      # pause between consecutive steps of a teleport-walk need's sequence
-SICK_PRE_E_WAIT = 2.0             # after the sick need's walk, before pressing 'e' (let the character come to rest)
-SICK_CONFIRM_WAIT = 7.0           # wait after pressing 'e' and before the sick need's final click
+SICK_PRE_CLICK_WAIT = 2.0         # after the sick need's walk, before the doctor's prompt is looked for (let the character come to rest)
+SICK_PROMPT_LOOK = 3.0            # how long the doctor's prompt (POPUP_TEMPLATES["doctor_prompt"]) is looked for before the need is given up
+SICK_CONFIRM_WAIT = 7.0           # how long the doctor's dialog (POPUP_TEMPLATES["sick_dialog"]) is looked for after the prompt was clicked (it took about 2.5 s) before the need is given up
+SICK_LOOK_INTERVAL = 0.4          # between two looks for either
 
 TELEPORT_PETS_TAB_POS = (817, 713)       # nursery: pets tab
 TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
 SICK_FINAL_CLICK_POS = (1045, 660)       # click after the sick need's walk
-SICK_PROMPT_POS = (963, 488)             # the doctor's prompt button (an E; a hand button when the pet is focused): below Doctor Heart, over the player's head. Clicked if e brought up no dialog
 
 # Whether a teleport-walk need flies by helicopter by default; an entry can
 # override it with `helicopter=True/False`. Only the Halloween bored, beach
@@ -668,8 +670,8 @@ HELICOPTER_HOLD_DURATION = 4.5     # then hold KEY_HELICOPTER this long (it was 
 
 # Needs that teleport somewhere and walk (see TeleportWalkNeedHandler), then
 # wait for the need to clear. Each entry: where to teleport, the
-# (key, seconds) holds to perform in order, optionally a `final_click`
-# position to click after the last hold (with a `prompt_pos`: the prompt button to click if pressing 'e' brought up no dialog), optionally `helicopter` (above) and optionally
+# (key, seconds) holds to perform in order, optionally a `final_click` (a need with one has a doctor's dialog to answer after the last hold:
+# its prompt is clicked, the dialog waited for and this is its Yes - sick; see TeleportWalkNeedHandler._open_dialog()), optionally `helicopter` (above) and optionally
 # `max_wait` (how long to wait for the need to clear afterwards; default NEED_GONE_MAX_WAIT).
 TELEPORT_WALK_NEEDS_NORMAL: dict[str, dict[str, Any]] = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
@@ -680,7 +682,7 @@ TELEPORT_WALK_NEEDS_NORMAL: dict[str, dict[str, Any]] = {
     "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 3.0), ("a", 7.2), ("s", 4.0))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 0.1), ("d", 3.0), ("s", 2.2), ("d", 15.0), ("w",20.0))),
     "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 3.0), ("w", 0.8)),
-                    final_click=SICK_FINAL_CLICK_POS, prompt_pos=SICK_PROMPT_POS),
+                    final_click=SICK_FINAL_CLICK_POS),
 }
 
 # Used instead of the entry of the same name above while HALLOWEEN is on (Halloween
@@ -692,7 +694,7 @@ TELEPORT_WALK_NEEDS_HALLOWEEN: dict[str, dict[str, Any]] = {
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 3), ("a", 10))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("s", 20),), helicopter=True),
     "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 4.0), ("w", 1.2)),
-                    final_click=SICK_FINAL_CLICK_POS, prompt_pos=SICK_PROMPT_POS),
+                    final_click=SICK_FINAL_CLICK_POS),
 }
 
 # The set actually used everywhere else (TeleportWalkNeedHandler and the

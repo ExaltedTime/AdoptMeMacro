@@ -772,19 +772,19 @@ def circles_screen(name):
     return cv2.imread(os.path.join(HERE, "circles", f"{name}.png"))
 
 
-def test_a_room_seen_with_the_camera_turned_is_steered_in_small_steps_not_one_long_strafe(macro):
-    """A real frame (tests/hauntlet_2/camera_turned.png, room 4 of a macro-played run): the camera had been turned to the right by an earlier strafe, so
-    the three doors are all to the left of the player. The strafe worked out in one go to the first door was 2.4 s of A in the recording, which turned the
-    camera on past the doors and left the player against the left wall."""
+def test_a_player_far_from_its_door_is_steered_in_steps_not_one_long_strafe(macro):
+    """A real frame (tests/hauntlet_2/player_at_the_wall.png, room 4 of a macro-played run): the player stands at the right of the room, in front of the last door,
+    with the first door two spacings to its left. The strafe worked out in one go to the first door was 2.4 s of A in the recording, which took the player
+    past it, against the left wall."""
     cfg = macro.cfg
-    screen = cv2.imread(os.path.join(HERE, "camera_turned.png"))
+    screen = cv2.imread(os.path.join(HERE, "player_at_the_wall.png"))
     doors = macro.find_hauntlet_doors(screen)
     assert len(doors) == 3 and doors[2].x < cfg.REFERENCE_CENTER_X + 100 and doors[0].x < doors[1].x < doors[2].x < cfg.REFERENCE_CENTER_X + 100
     key, whole = macro.hauntlet_strafe(screen, doors, 0)
     assert key == cfg.HAUNTLET_LEFT_KEY and whole > 2 * cfg.HAUNTLET_STEER_MAX                 # far to go...
     assert macro.hauntlet_steer(screen, 0) == (cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_STEER_MAX)    # ...a step of it
     assert macro.hauntlet_steer(screen, 1)[0] == cfg.HAUNTLET_LEFT_KEY
-    assert macro.hauntlet_steer(screen, 2) is None                                              # the player already faces the last one
+    assert macro.hauntlet_steer(screen, 2) is None                                              # the player is in front of the last one
 
 
 def test_the_circles_in_front_of_the_doors_are_found_and_one_hidden_under_the_player_means_it_stands_in_it(macro):

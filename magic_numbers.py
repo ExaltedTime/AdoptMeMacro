@@ -436,18 +436,18 @@ HAUNTLET_LEFT_KEY = "a"
 HAUNTLET_RIGHT_KEY = "d"
 HAUNTLET_STRAFE_DURATION = 1.1
 HAUNTLET_STRAFE_MIN = 0.15
-HAUNTLET_STRAFE_MAX = 1.2
+HAUNTLET_STRAFE_MAX = 2.5
 HAUNTLET_WALK_MAX = 6.0
-# A key A or D does not only strafe: the camera turns with it (about 13 degrees a second; the doors moved 280-340 px a second across the screen in the recordings), and
-# W then walks along the new heading, not along the room. A hold worked out in one go from where the doors were - a room seen at an angle makes them look farther
-# off than they are - overshoots, and W then walks into the wall beside the doors for the rest of the room's 30 s. So the player is aimed in small steps, a fresh
-# look at the doors before each: first (up to HAUNTLET_AIM_STEPS steps, none once the door is within HAUNTLET_STEER_MIN door spacings of the player), then while walking, every
-# HAUNTLET_STEER_EVERY seconds: a player HAUNTLET_STEER_MIN door spacings or more off its door (hauntlet_strafe()'s measure, with the three TVs in sight) lets go of W, holds the key
-# for HAUNTLET_STEER_GAIN of what that is (at most HAUNTLET_STEER_MAX seconds) and walks on.
+# A door is only as wide as a fraction of the distance between two doors, so a player that is a bit off its door stands against the wall beside it and W gets it nowhere
+# (room 5 of the room 8 run and room 4 of the room 15 run: 10-30 s of the room's 30 s timer, the player 0.3-0.4 door spacings off, which the old limit for steering, 0.4,
+# never corrected). A strafe worked out in one go from where the doors were also ends a little short or long (the room 15 run's 2.4 s of A moved the doors 20-30 % more than
+# the strafe's 1.1 s per spacing says, and the player stood against the left wall, beside its door). So the player is aimed in steps with a fresh look at the doors before each:
+# first, up to HAUNTLET_AIM_STEPS of them, each a hold of the key towards the door for HAUNTLET_STEER_GAIN of the strafe (at most HAUNTLET_STEER_MAX seconds), until the door is within
+# HAUNTLET_STEER_MIN door spacings of the player; then, with W held, the same every HAUNTLET_STEER_EVERY seconds while the three TVs are in sight.
 HAUNTLET_STEER_EVERY = 0.3
 HAUNTLET_STEER_MIN = 0.15
-HAUNTLET_STEER_MAX = 0.5
-HAUNTLET_STEER_GAIN = 0.6
+HAUNTLET_STEER_MAX = 0.8
+HAUNTLET_STEER_GAIN = 0.75
 HAUNTLET_AIM_STEPS = 8
 HAUNTLET_WALK_PAST_DURATION = 1.5            # more of W after the number changed (a human's: 1.0-2.0 s, median 1.4)
 HAUNTLET_START_LOOK_INTERVAL = 0.5            # while waiting for the game to begin (its overlay to show)

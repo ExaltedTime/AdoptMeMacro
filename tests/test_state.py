@@ -1235,7 +1235,7 @@ def test_the_real_white_transition_is_white_and_no_other_real_screenshot_is(macr
     folder = os.path.join(os.path.dirname(__file__), "icon_detection", "halloween1")
     white = [os.path.basename(f) for f in sorted(glob.glob(os.path.join(folder, "*.png")))
              if macro.detect_white_screen(cv2.imread(f))]
-    assert white == ["Screenshot (303).png"]
+    assert [name.split("__")[0] for name in white] == ["white_screen"]
 
 
 def test_a_failed_minigame_does_not_count_as_progress_but_a_won_one_does(macro, monkeypatch):

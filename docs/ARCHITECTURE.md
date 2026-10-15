@@ -1558,7 +1558,7 @@ clicks instead of making them. They cover:
   leaves the 20-minute rejoin clock alone), stopping, and the open `output.log`;
 - `test_detection.py` - the need-strip capture and its cache, and the
   popups and stray windows against the real crops in `ref/` (including that every `POPUP_TEMPLATES` entry has a crop that fits its box);
-- `test_icon_screenshots.py` - every real screenshot in `tests/icon_detection/<folder>/` (the need bar over dark, bright, busy and white scenes) run through the circle search and the matching; each must be listed in `EXPECTED` with the needs on its bar, so a screenshot added without a label fails;
+- `test_icon_screenshots.py` - every real screenshot in `tests/icon_detection/<folder>/` (named `<scene>__<needs>.png`, the needs being what the test expects) (the need bar over dark, bright, busy and white scenes) run through the circle search and the matching; each must be listed in `EXPECTED` with the needs on its bar, so a screenshot added without a label fails;
 - `test_loop.py` - the whole workflow loop run for a moment with the game stubbed out (idle respawns, the resource monitor starting and stopping, the report being written);
 - `test_capture.py` - the input capture against a made-up keyboard, mouse and screen (events, both coordinate systems, click frames, skipping unchanged frames, the summary, the zips, stopping by itself, the hotkey toggle and pruning, and the automatic recording of minigame runs: the frame budget, its thinning, the outcome, the zip);
 - `test_hauntlet_2.py` - reading the Hauntlet 2 screen against crops of a real run;
@@ -1572,6 +1572,12 @@ clicks instead of making them. They cover:
 
 Fixtures are synthetic images or the lossless crops in `ref/`; compressed
 screenshots (`.webp`) don't match exact colours, so they aren't used.
+
+**Screenshots are named for what they show**, not by the number the screenshot tool or a capture gave them, and where a test reads something off a
+picture the name says it, so a new file is checked against its own label: `tests/icon_detection/<folder>/<scene>__<needs>.png` (the needs on the bar,
+left to right, joined by hyphens), `tests/hauntlet_2/doors/<kind>-<kind>-<kind>[__note].png` (the three doors' kinds), `tests/hauntlet_2/item_bars/<item>[_x2]-...[__note].png`
+(the slots), `tests/hauntlet_2/room_panels/<NN>.png` (the room number), `tests/candy_corn/hud_<total>.png`. The pictures of `tests/halloween/hauntlet_2/with_others/` (rooms
+of a run with other players in them) are named `room<NN>_<what>.png`.
 
 **Tests don't pin tuned values.** `magic_numbers.py` is edited constantly (timings,
 routes, intervals, the `HALLOWEEN` flag), so a test must pass for any sensible

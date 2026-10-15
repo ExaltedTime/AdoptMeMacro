@@ -58,37 +58,38 @@ def test_a_digit_that_matches_none_of_them_is_not_guessed(macro):
 # --- the item slots ---
 
 BAR_AT = (640, 930)
-# what is in each slot of the fixture frames, left to right, as (item, count) - read off the pictures by eye
-BARS = {
-    16: [("phone", 1), ("key", 1), ("cyan_potion", 1), ("heart_potion", 1)],
-    29: [("phone", 1), ("key", 1), ("cyan_potion", 2), ("heart_potion", 1)],         # the cyan potion has just been picked up again (+1)
-    50: [("key", 1), ("cyan_potion", 1), ("heart_potion", 1)],
-    63: [("phone", 1), ("key", 1), ("heart_potion", 1)],
-    80: [("cyan_potion", 1)],
-    100: [("red_potion", 1)],
-    175: [("phone", 1), ("gold_key", 1)],
-    205: [("key", 2), ("gold_key", 1)],
-    230: [("gold_key", 1)],
-    5: [],                                                                           # the lobby: only the backpack button
-    141: [],                                                                         # a white transition
-}
+# A fixture in tests/hauntlet_2/item_bars/ is named for what is in its slots, left to right, joined by hyphens, with `_x2` after an item that
+# has a count of 2, then (after two underscores) what else it shows: `phone-key-cyan_potion-heart_potion.png`; `no_items__lobby.png` has only
+# the backpack button.
+THREE_ITEMS_AND_PHONE = "phone-key-cyan_potion-heart_potion"
+PHONE_KEY_HEART = "phone-key-heart_potion"
+KEY_CYAN_HEART = "key-cyan_potion-heart_potion"
 
 
-def bar(number):
-    return screen_with(cv2.imread(os.path.join(HERE, "item_bars", f"{number:03d}.png")), BAR_AT)
+def bar_fixtures():
+    found = {}
+    for path in sorted(glob.glob(os.path.join(HERE, "item_bars", "*.png"))):
+        name = os.path.basename(path)[:-4]
+        listed = name.split("__")[0]
+        found[name] = [] if listed == "no_items" else [(item.split("_x")[0], int(item.split("_x")[1]) if "_x" in item else 1) for item in listed.split("-")]
+    return found
+
+
+def bar(name):
+    return screen_with(cv2.imread(os.path.join(HERE, "item_bars", f"{name}.png")), BAR_AT)
 
 
 def test_the_items_and_counts_in_the_slots_are_read(macro):
     read = {}
-    for number in sorted(BARS):
-        items = macro.read_hauntlet_items(bar(number))
+    for name in bar_fixtures():
+        items = macro.read_hauntlet_items(bar(name))
         assert [item.pos[0] for item in items] == sorted(item.pos[0] for item in items)     # left to right
-        read[number] = [(item.name, item.count) for item in items]
-    assert read == BARS                                                                     # (a mismatch names its frame)
+        read[name] = [(item.name, item.count) for item in items]
+    assert len(read) >= 10 and read == bar_fixtures()                                       # (a mismatch names its fixture)
 
 
 def test_slot_positions_are_where_the_slots_are(macro):
-    items = macro.read_hauntlet_items(bar(16))
+    items = macro.read_hauntlet_items(bar(THREE_ITEMS_AND_PHONE))
     assert [item.pos[0] for item in items] == pytest.approx([788, 903, 1018, 1133], abs=3)
     assert all(abs(item.pos[1] - 1012) <= 3 for item in items)
 
@@ -99,25 +100,25 @@ def test_an_item_that_is_not_saved_is_unknown_and_learned_when_asked(macro, monk
     shutil.copytree(macro.cfg.HAUNTLET_ITEM_DIR, items_dir)
     shutil.rmtree(items_dir / "phone")                                               # forget the phone
     monkeypatch.setattr(macro.cfg, "HAUNTLET_ITEM_DIR", str(items_dir))
-    assert [i.name for i in macro.read_hauntlet_items(bar(63))] == ["unknown", "key", "heart_potion"]
+    assert [i.name for i in macro.read_hauntlet_items(bar(PHONE_KEY_HEART))] == ["unknown", "key", "heart_potion"]
     assert not any(n.startswith("unknown") for n in os.listdir(items_dir))              # looking doesn't save anything
-    learned = macro.read_hauntlet_items(bar(63), learn=True)
+    learned = macro.read_hauntlet_items(bar(PHONE_KEY_HEART), learn=True)
     assert [i.name for i in learned] == ["unknown_1", "key", "heart_potion"] and learned[0].count == 1
     assert os.path.isfile(items_dir / "unknown_1" / "1.png")
-    assert [i.name for i in macro.read_hauntlet_items(bar(63))] == ["unknown_1", "key", "heart_potion"]    # known now
+    assert [i.name for i in macro.read_hauntlet_items(bar(PHONE_KEY_HEART))] == ["unknown_1", "key", "heart_potion"]    # known now
     (items_dir / "unknown_1").rename(items_dir / "phone")                            # naming it is renaming the folder
-    assert [i.name for i in macro.read_hauntlet_items(bar(63))] == ["phone", "key", "heart_potion"]
+    assert [i.name for i in macro.read_hauntlet_items(bar(PHONE_KEY_HEART))] == ["phone", "key", "heart_potion"]
 
 
 def test_each_unknown_item_gets_the_next_number(macro, monkeypatch, tmp_path):
     monkeypatch.setattr(macro.cfg, "HAUNTLET_ITEM_DIR", str(tmp_path / "items"))              # nothing saved: all unknown
-    names = [i.name for i in macro.read_hauntlet_items(bar(50), learn=True)]
+    names = [i.name for i in macro.read_hauntlet_items(bar(KEY_CYAN_HEART), learn=True)]
     assert names == ["unknown_1", "unknown_2", "unknown_3"]
     assert sorted(os.listdir(tmp_path / "items")) == names
 
 
 def test_a_badge_that_cannot_be_read_gives_no_count_not_a_guess(macro):
-    screen = bar(16)
+    screen = bar(THREE_ITEMS_AND_PHONE)
     x, y = macro.find_item_slots(screen)[0][:2]
     left, top, right, bottom = macro.cfg.HAUNTLET_BADGE_BOX
     screen[y + top:y + bottom, x + left:x + right] = 0                                         # wipe the badge

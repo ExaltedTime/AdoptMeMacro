@@ -1879,7 +1879,14 @@ def teleport_to(category_pos: Point) -> None:
         wait_interruptible(cfg.UI_SETTLE)
         hover_click(*cfg.GENERAL_TELEPORT_POS_2)
         wait_interruptible(cfg.UI_SETTLE)
-        hover_click(*cfg.GENERAL_TELEPORT_POS_3)
+        for attempt in range(cfg.TELEPORT_YES_TRIES):            # the dialog's Yes: clicked again if nothing teleported (the click can be lost)
+            before = grab_screen()
+            hover_click(*cfg.GENERAL_TELEPORT_POS_3)
+            if minigame_teleported(before):
+                break
+            print(f"[debug] the teleport did not take after click {attempt + 1}")
+        else:
+            log_run_event("teleport: nothing happened after the dialog's Yes")
     wait_interruptible(cfg.TELEPORT_WAIT)
     print("[debug] walking backward...")
     hold_key("s", cfg.TELEPORT_BACK_DURATION)

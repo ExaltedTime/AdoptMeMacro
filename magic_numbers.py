@@ -644,6 +644,7 @@ RIDE_R_HOLD_DURATION = 1.5     # hold KEY_HELICOPTER this long after equipping, 
 # landing spot. Only the category tab differs per destination (passed into
 # teleport_to() as `category_pos`); everything else is always the same,
 # hence "general".
+TELEPORT_YES_TRIES = 2            # the teleport dialog's Yes is clicked this often at most, until the view changes or the screen goes white (as for a minigame popup)
 TELEPORT_WAIT = 5.0               # wait after the teleport click, for it to take effect
 TELEPORT_SETTLE_WAIT = 7.0         # wait after stepping back, for the landing to settle
 GENERAL_TELEPORT_POS_2 = (895, 705)

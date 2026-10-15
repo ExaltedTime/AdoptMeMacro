@@ -787,12 +787,31 @@ def test_the_teleport_and_the_toy_sequences_are_exempt_only_while_their_backpack
     monkeypatch.setattr(macro, "close_backpack", lambda step: note("close"))
     monkeypatch.setattr(macro, "hold_key", lambda key, duration: note("hold"))
     monkeypatch.setattr(macro, "wait_interruptible", lambda duration: note("wait"))
+    monkeypatch.setattr(macro, "grab_screen", lambda: None)
+    monkeypatch.setattr(macro, "minigame_teleported", lambda before: True)
     macro.teleport_to((100, 100))
     assert [n for n, w in wanted if w] == ["wait", "click", "wait", "click", "wait", "click"]           # opening it, the category, the teleport: exempt
     assert [w for n, w in wanted[6:]] == [0] * len(wanted[6:])                                          # the long wait after the teleport and the walk back: not
     wanted.clear()
     assert macro.CatchNeedHandler().handle() is True
     assert [w for n, w in wanted if n in ("tab", "close")] == [1, 1] and wanted[-1][1] == 0 and macro.state.backpack_wanted == 0
+
+
+def test_the_teleport_dialogs_yes_is_clicked_again_when_nothing_teleported(macro, monkeypatch):
+    clicks, logged = [], []
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: clicks.append((x, y)))
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
+    monkeypatch.setattr(macro, "grab_screen", lambda: None)
+    monkeypatch.setattr(macro, "hold_key", lambda key, duration: None)
+    monkeypatch.setattr(macro, "log_run_event", logged.append)
+    took = iter([False, True])
+    monkeypatch.setattr(macro, "minigame_teleported", lambda before: next(took))
+    macro.teleport_to((100, 100))
+    assert clicks.count(macro.cfg.GENERAL_TELEPORT_POS_3) == 2 and logged == []             # the first click was lost, the second took
+    clicks.clear()
+    monkeypatch.setattr(macro, "minigame_teleported", lambda before: False)
+    macro.teleport_to((100, 100))
+    assert clicks.count(macro.cfg.GENERAL_TELEPORT_POS_3) == macro.cfg.TELEPORT_YES_TRIES and len(logged) == 1      # never: tried as often as allowed, said so, went on
 
 
 def test_the_recorder_does_not_spin_while_no_frame_can_be_grabbed(macro, monkeypatch):

@@ -391,6 +391,10 @@ POPUP_SCREENSHOTS = {                    # real screenshots of a 1920x1080 windo
     "paycheck": (False, None),                           # the paycheck's green CASH OUT, a green Okay, the win screen's NICE!: no red No beside them
     "star_rewards": (False, None),
     "game_over": (False, None),
+    "teleport_nursery": (False, None),                   # the macro's own teleport dialogs (backpack -> category -> Yes) have a green Yes and a red No too: 30 of them were
+    "teleport_dealership": (False, None),                # taken for a minigame popup and "dismissed" in a run, which broke the teleports and the needs after them
+    "cant_spawn_vehicle": (False, None),                 # "You can't spawn a vehicle here." with its green Okay
+    "backpack_open": (False, None),
 }
 
 
@@ -401,3 +405,28 @@ def test_minigame_popups_are_found_and_named_in_real_screenshots_and_other_green
         assert macro.detect_minigame_popup(img) is popup, name
         if popup:
             assert macro.identify_minigame(img) == which, name
+
+
+def screenshot(name):
+    import cv2
+    return cv2.imread(os.path.join(os.path.dirname(__file__), "popups", f"{name}.png"))
+
+
+def test_an_open_backpack_is_seen_in_a_real_screenshot(macro):
+    assert macro.detect_backpack_open(screenshot("backpack_open"))
+    for name in ("teleport_nursery", "teleport_dealership", "cant_spawn_vehicle"):          # (these have the backpack's expanded grid behind them: the dialog is over it)
+        assert macro.detect_minigame_popup(screenshot(name)) is False
+
+
+def test_the_cant_spawn_a_vehicle_window_is_closed_where_its_okay_is(macro, monkeypatch):
+    clicks = []
+    monkeypatch.setattr(macro, "grab_screen", lambda: screenshot("cant_spawn_vehicle"))
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: clicks.append((x, y)))
+    monkeypatch.setattr(macro.time, "sleep", lambda d: None)
+    assert macro.dismiss_stray_windows() == "cant_spawn_vehicle"
+    assert clicks == [macro.cfg.STRAY_WINDOWS["cant_spawn_vehicle"]["close_pos"]]
+    clicks.clear()
+    for name in ("teleport_nursery", "teleport_dealership", "backpack_open"):                # the teleport dialogs are no stray windows: they are the teleport's to answer
+        monkeypatch.setattr(macro, "grab_screen", lambda name=name: screenshot(name))
+        assert macro.dismiss_stray_windows() is None
+    assert clicks == []

@@ -252,20 +252,22 @@ CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into
 # and is told by the boss's health bar, a gold frame (15800-16800 gold pixels in GHOST_BOSS_BAR_BOX; 0-230 before). The player is aimed
 # with the mouse: the beam goes to the cursor. The ghost aimed at is followed while a ghost is within GHOST_STICK px of where it was.
 GHOST_COLOR = ((78, 90, 200), (100, 210, 255))
-# The ghosts of a view from afar (the hall seen from above, the character tiny) are more saturated: blue-cyan ovals of hue 88-96 and
-# saturation 170-240 (GHOST_COLOR stops at 210, and found none of them: in a run's first 120 s it aimed at a ghost 4 times). The slime
-# puddles, which look alike, are hue 80-83 and saturation 245 and over; the haunted paintings' glow is hue 100 and over; both are outside.
-GHOST_COLOR_FAR = ((84, 100, 200), (98, 240, 255))
+# The ghosts of a view from afar (the hall seen from above, the character tiny) are small blue-cyan ovals, hue 92-99, and as saturated as 245-255 (the first version of
+# this range stopped at 240 and saw none of the ghosts of a run's first 100 s: its score stayed 0 until the camera was close). Hue from 90 keeps out the slime puddles
+# (hue 83-85, saturation 255, not as bright), the haunted paintings' glow (hue 100 and over) and the pet's cyan (hue 99 and over, value under 235).
+GHOST_COLOR_FAR = ((90, 100, 235), (99, 255, 255))
 GHOST_CLOSE = 7
 GHOST_EMBLEM_HSV = ((140, 40, 200), (175, 255, 255))   # the pink glow of the emblem on the character's backpack: with the camera close it is 750-10000 px, far away there is none seen
 GHOST_EMBLEM_BOX = (500, 250, 1400, 950)
 GHOST_EMBLEM_MIN = 500
 GHOST_SELF_SCALE = (4.5, 3.5, 6.0)           # the character's box with the camera close, in units of the emblem's size: to each side, up, down (the pet sits below)
+GHOST_SELF_RIGHT = (12.0, 700)               # ...but to the right (the pet is always to the right of the character, 6-10 units away) this many units, at most this many px
 GHOST_SELF_MIN_UNIT = 45
 GHOST_SMALL_MAX = 8500                       # in the shielded phase a blob bigger than this is no small ghost (the beam's glow was 9500, the boss's fog 400000)
 GHOST_BOSS_MIN = 6000                        # in the boss phase the boss is at least this big (9500-41000 seen); a smaller blob is a minion, or some fog
-GHOST_MIN_AREA = 600
-GHOST_IGNORE_BOXES = ((0, 0, 1920, 150), (900, 520, 1020, 680), (0, 860, 1920, 1080))
+GHOST_MIN_AREA = 250                         # ghosts from afar are 260-1500 px (their trails are white and don't count)
+GHOST_BOSS_BLOB_FILL = 0.58                  # in the boss phase a blob of at least GHOST_BOSS_MIN px fills this much of its bounding box, else it is fog, a light shaft (0.38-0.50: 5 seen) and not the boss (0.63-0.72: 6 seen)
+GHOST_IGNORE_BOXES = ((0, 0, 1920, 150), (900, 520, 1170, 780), (0, 860, 1920, 1080))
 GHOST_CHARACTER = (960, 540)
 GHOST_STICK = 120
 GHOST_BOSS_BAR_BOX = (680, 150, 1240, 290)

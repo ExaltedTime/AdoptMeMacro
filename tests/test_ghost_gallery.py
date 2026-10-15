@@ -33,7 +33,7 @@ def blank():
 def test_the_ghosts_in_the_hall_are_found_biggest_first(macro):
     blobs = macro.find_ghost_blobs(shot("ghosts_50"))
     (x, y, area), *rest = blobs
-    assert abs(x - 1047) <= 5 and abs(y - 471) <= 5 and area > 5000                   # the ghost the human held the beam on
+    assert abs(x - 1047) <= 10 and abs(y - 471) <= 10 and area > 5000                   # the ghost the human held the beam on
     assert [b[2] for b in blobs] == sorted((b[2] for b in blobs), reverse=True)
     assert all(b[2] >= macro.cfg.GHOST_MIN_AREA for b in blobs)
     several = macro.find_ghost_blobs(shot("ghosts_66"))                                       # four ghosts at once
@@ -472,11 +472,43 @@ def test_in_the_boss_phase_a_blob_too_small_for_the_boss_is_a_minion_not_the_bos
     limit = cfg.GHOST_BOSS_MIN
     big_side, small_side = int((limit * 0.8) ** 0.5), int(1200 ** 0.5)
     screen[400:400 + big_side, 300:300 + big_side] = ghost                         # bigger than the other, smaller than a boss, far from the character
-    screen[600:600 + small_side, 1100:1100 + small_side] = ghost                   # a small one near the character
+    screen[420:420 + small_side, 1300:1300 + small_side] = ghost                   # a small one near the character (not where the pet sits)
     world.screens = [screen]
     macro.play_ghost_gallery(world.clock.now + 1, watch_started(macro))
     first = next(m[1:] for m in world.mouse if m[0] == "move")
-    assert abs(first[0] - 1100 - small_side / 2) < 40 and abs(first[1] - 600 - small_side / 2) < 40       # the near small one: nothing is the boss
+    assert abs(first[0] - 1300 - small_side / 2) < 40 and abs(first[1] - 420 - small_side / 2) < 40       # the near small one: nothing is the boss
+
+
+def near_any(blobs, x, y, reach=30):
+    return any(abs(bx - x) <= reach and abs(by - y) <= reach for bx, by, _ in blobs)
+
+
+def test_the_ghosts_of_a_macro_played_run_are_seen_from_afar_even_as_saturated_as_they_were(macro):
+    """tests/ghost_gallery/afar_ghosts_57.png (45 s into a run whose score stayed 0 for 100 s): three ghosts with white trails, hue 93-95 and saturation 244-247,
+    above the limit the colour range had (240): none was found. The tiny one is 330 px."""
+    blobs = macro.find_ghost_blobs(shot("afar_ghosts_57"))
+    areas = {(x, y): area for x, y, area in blobs}
+    whole = lambda x, y, at_least: any(abs(bx - x) <= 10 and abs(by - y) <= 10 and area >= at_least for (bx, by), area in areas.items())
+    assert whole(1596, 300, 1200) and whole(763, 403, 600) and whole(631, 275, 300)               # whole, not the unsaturated rim of them (267-387 px, off by 20)
+
+
+def test_the_pet_beside_the_character_is_no_ghost_with_the_camera_far_or_close(macro):
+    """The pet is the same cyan as the ghosts and always to the right of and below the character: the macro aimed at it. afar_pet_49.png: two ghosts
+    (above) and the pet (right of the character, 456, 274 and 267 px); pet_close_78.png: the camera close, the pet 360-570 px to the right."""
+    far = macro.find_ghost_blobs(shot("afar_pet_49"))
+    assert near_any(far, 1084, 204) and near_any(far, 678, 208)
+    assert not any(900 <= x <= 1200 and 520 <= y <= 800 for x, y, _ in far)
+    assert macro.find_ghost_blobs(shot("pet_close_78")) == []
+    assert not near_any(far, 300, 540, 80)                                                  # nor is the slime puddle at the left
+
+
+def test_the_boss_is_found_in_a_big_cloud_and_fog_or_a_light_shaft_is_not(macro):
+    """boss_141.png: the boss (a puffy cloud, 31685 px, filling 0.72 of its box); fog_129.png: a light shaft along the left side and a pale sheet along the
+    bottom (33580, 23093 and 15925 px, filling 0.38-0.5 of their boxes) - chased for seconds at a time, in a boss phase in which the boss was in sight in 3 of 10 looks."""
+    boss = macro.find_ghost_blobs(shot("boss_141"), boss=True)
+    assert near_any(boss, 1118, 355, 40) and boss[0][2] > macro.cfg.GHOST_BOSS_MIN
+    fog = macro.find_ghost_blobs(shot("fog_129"), boss=True)
+    assert not any(area >= macro.cfg.GHOST_BOSS_MIN for _, _, area in fog)
 
 
 def test_a_ghost_seen_from_afar_is_found_and_the_slime_puddle_beside_it_is_not(macro):

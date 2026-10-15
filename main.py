@@ -2953,7 +2953,7 @@ def ghost_character_box(hsv: Image) -> Optional[tuple[int, int, int, int]]:
     """Where the character (and its pet, hoodie and beam) is when the camera is close to it - pulled in by a wall, as it is in the
     dark of the boss fight - and its cyan clothes are blobs as big as ghosts: the glowing pink emblem of its backpack
     (GHOST_EMBLEM_HSV, at least GHOST_EMBLEM_MIN px, in GHOST_EMBLEM_BOX) gives the place and, by its size, how close the camera is;
-    the box is GHOST_SELF_SCALE times the emblem's size (its side's square root, at least GHOST_SELF_MIN_UNIT) to the sides, up and down.
+    the box is GHOST_SELF_SCALE times the emblem's size (its side's square root, at least GHOST_SELF_MIN_UNIT) to the sides, up and down, and farther to the right (GHOST_SELF_RIGHT).
     None when the emblem isn't seen: the camera is far, and GHOST_IGNORE_BOXES' small box does."""
     left, top, right, bottom = cfg.GHOST_EMBLEM_BOX
     mask = cv2.inRange(hsv[top:bottom, left:right], cfg.GHOST_EMBLEM_HSV[0], cfg.GHOST_EMBLEM_HSV[1])
@@ -2964,12 +2964,14 @@ def ghost_character_box(hsv: Image) -> Optional[tuple[int, int, int, int]]:
     x, y = left + int(centres[best][0]), top + int(centres[best][1])
     unit = max(float(np.sqrt(stats[best, cv2.CC_STAT_AREA])), cfg.GHOST_SELF_MIN_UNIT)
     side, up, down = cfg.GHOST_SELF_SCALE
-    return int(x - side * unit), int(y - up * unit), int(x + side * unit), int(y + down * unit)
+    right_units, right_max = cfg.GHOST_SELF_RIGHT                   # the pet is to the right of the character
+    return int(x - side * unit), int(y - up * unit), int(x + min(max(side, right_units) * unit, right_max)), int(y + down * unit)
 
 def find_ghost_blobs(img: Image, boss: bool = False) -> list[tuple[int, int, int]]:
     """(x, y, area) of every ghost in `img`, biggest first: the connected pieces of the translucent cyan the ghosts and the
     boss are drawn in (GHOST_COLOR), at least GHOST_MIN_AREA px, not in the HUD (GHOST_IGNORE_BOXES) or on the character -
-    and, in the boss phase (`boss`), not on the boss's health bar, whose crest and icons are cyan too."""
+    and, in the boss phase (`boss`), not on the boss's health bar, whose crest and icons are cyan too, and no big blob that fills less
+    than GHOST_BOSS_BLOB_FILL of its bounding box (fog, a light shaft)."""
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     mask = cv2.bitwise_or(cv2.inRange(hsv, *cfg.GHOST_COLOR), cv2.inRange(hsv, *cfg.GHOST_COLOR_FAR))
     closeup = ghost_character_box(hsv)
@@ -2977,8 +2979,14 @@ def find_ghost_blobs(img: Image, boss: bool = False) -> list[tuple[int, int, int
         mask[max(0, top):bottom, max(0, left):right] = 0
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((cfg.GHOST_CLOSE, cfg.GHOST_CLOSE), np.uint8))
     count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    blobs = [(int(centres[i][0]), int(centres[i][1]), int(stats[i, cv2.CC_STAT_AREA])) for i in range(1, count)
-             if stats[i, cv2.CC_STAT_AREA] >= cfg.GHOST_MIN_AREA]
+    blobs = []
+    for i in range(1, count):
+        area, width, height = (int(stats[i, key]) for key in (cv2.CC_STAT_AREA, cv2.CC_STAT_WIDTH, cv2.CC_STAT_HEIGHT))
+        if area < cfg.GHOST_MIN_AREA:
+            continue
+        if boss and area >= cfg.GHOST_BOSS_MIN and area < cfg.GHOST_BOSS_BLOB_FILL * width * height:       # a big one that is thin or ragged is fog or a light shaft, not the boss
+            continue
+        blobs.append((int(centres[i][0]), int(centres[i][1]), area))
     return sorted(blobs, key=lambda blob: -blob[2])
 
 def ghost_boss_bar_visible(img: Image) -> bool:

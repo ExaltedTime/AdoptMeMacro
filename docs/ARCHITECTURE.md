@@ -1524,6 +1524,34 @@ resolution or Roblox's UI, check `debug/debug_needs.png` and
 pass and show exactly what the macro is looking at - before tuning any of
 these.
 
+## Discord bot
+
+`bot/` is a separate program, not part of `main.py`: a Discord bot that answers questions about the macro from anywhere (a phone, say). It is the first,
+read-only phase of the plan in `docs/planned/Discord.md`. It runs **on the PC the macro runs on**, in the same logged-in desktop session, because it reads the
+macro's files and grabs its screen; it connects out to Discord, so no port needs opening, and the Discord app itself is only on whatever device is used to type
+the commands. It is started by hand, next to the macro: `python bot/discord_bot.py [path to bot_config.json]`.
+
+- **`bot/bot_lib.py`** holds every decision that needs neither Discord nor Windows, as plain functions (`tests/test_bot.py` runs them anywhere, in CI too):
+  `load_config()` (a `ConfigError` saying what is wrong), `is_allowed()`, `status_text()`, `results_text()`, `tail_lines()`, `newest_report()`, `looks_blank()`,
+  `main_py_in()`. The paths it reads are the macro's own (`STATUS_PATH`, `RUN_LOG_PATH`, `RUNS_DIR` of `magic_numbers.py`), so a moved file moves for both.
+- **`bot/discord_bot.py`** is the glue that can't be tested away from Discord (discord.py, the screen grab, the process check): the commands below, registered
+  for the one guild if `guild_id` is set (instant) or globally (up to an hour to show).
+- **`bot_config.json`** (untracked; `bot_config.example.json` has the keys): `token`, `owner_id`, `channel_id`, optionally `guild_id`, `stale_status_minutes`
+  (how long `status.json` may go without an update before `/status` says it is not updating) and `log_lines_max` (what `/log` is capped at).
+- **Who is obeyed:** only `owner_id`, only in `channel_id`; anyone else's commands get no answer at all (`OwnerOnlyTree.interaction_check()`). The commands are a
+  fixed list whose only arguments are numbers - nothing is run, no path is read from a message. The bot is created private ("Public Bot" off) and the token
+  stays out of the repository (`.gitignore`).
+
+| Command | What it posts |
+| --- | --- |
+| `/status` | `status.json` as text - whether it is still being updated (flagged when not), whether `main.py` is running (psutil if installed, else PowerShell or `pgrep`), the run, resolved and failed per need, disabled needs, the last resolved need and failure, rejoins, CPU and memory |
+| `/screenshot` | the Roblox window (the whole monitor if there is none) as a PNG, with a note when it looks blank - a locked or sleeping PC |
+| `/log [lines]` | the last lines of `run_log.txt`, as a file when they don't fit a message |
+| `/report` | the newest run chart in `RUNS_DIR` |
+| `/results` | each minigame's runs, best, worst and average candy corn, the deepest Hauntlet 2 room and the latest, from `runs/results/results.jsonl` |
+
+Not built yet (the later phases of the plan): alerts, starting and stopping the macro, updating it, and copying the capture zips to OneDrive.
+
 ## Automated checks
 
 `.github/workflows/check.yml` runs on every push and pull request (GitHub
@@ -1553,6 +1581,7 @@ clicks instead of making them. They cover:
 
 - `test_pure.py` - the small pure functions (server link parsing, durations,
   colour masks, axis rounding, failure kinds);
+- `test_bot.py` - the Discord bot's logic (`bot/bot_lib.py`): the config, who is obeyed, and the messages made from the files `write_status()` and `record_minigame_result()` write;
 - `test_state.py` - the output log's levels, rotation and reopening, the console handler, stuck-need disabling, `process_needs()` (resolved, unresolvable and not-cleared cases), the sick handler on real screenshots (`tests/sick/`: the prompt, the dialog, the pet view), `RunStats`, `status.json`, the
   failure folders, the quiet and idle-respawn checks (including that a respawn
   leaves the 20-minute rejoin clock alone), stopping, and the open `output.log`;

@@ -82,7 +82,7 @@ every second instead of a line per check.
    each `need_name`, `get_need_handler(need_name)` looks it up in
    `NEED_HANDLER_CLASSES` and returns an instance, or `None` if that need
    is switched off (`need_is_enabled()`) or was disabled as stuck (see
-   [Stuck needs](#stuck-needs)) - a `None` result is printed and skipped
+   [Stuck needs](#stuck-needs)) - a `None` result is logged and skipped
    without doing anything. Every need is handled the same way from here: calling
    `.handle()` on whatever handler came back (see
    [Need handlers](#need-handlers)).
@@ -134,7 +134,7 @@ an extra walk from wherever the previous need left the character standing.
   config/tuning value lives in `magic_numbers.py` instead - see
   [Configuration reference](#configuration-reference).
 - **LOGGING** - `next_run_number()` / `log_run_event()`, plus the
-  unattended-run tools `log_output()`, `save_failure_report()`,
+  unattended-run tools (`logger` with its `OutputLog` handler, see below), `save_failure_report()`,
   `log_failure()` and `write_status()` - see
   [Debugging an unattended run](#debugging-an-unattended-run).
 - **GAME CONFIG** - `load_game_config()`/`save_game_config()`: the state
@@ -430,7 +430,7 @@ scrolls and flickers and used to be picked up as a huge "moving" blob. Pixels th
 since an up/down bob only changes the pet's top and bottom edges), blobs
 under `FOCUS_PET_MIN_AREA` are dropped as noise, and `focus_pet()` clicks
 the center of every remaining blob, largest first. It returns `False` (and
-the handler skips the need) if nothing moved. It prints what it saw (how many
+the handler skips the need) if nothing moved. It logs what it saw (how many
 blobs, each one's center, size and area) and writes
 `debug/debug_focus_pet.png` - the second frame with the changed pixels in
 red and a numbered box round every blob (the ignored area in blue) - plus
@@ -1095,15 +1095,14 @@ knowing if you're modifying it:
 - **`add_config_checkbox(key)`** makes a checkbox for a persisted switch. It is
   deliberately not in `action_buttons`: the switches stay usable while a
   workflow runs, which is safe because `update_game_config()` is locked.
-- **`DebugCapture`** redirects `sys.stdout` into the on-screen console
-  (`self.debug_text`) for the lifetime of the GUI, so every `print()`
-  anywhere in the macro shows up there automatically (`write()` only logs
-  and queues - from any thread - and the Tk thread puts the queue on the
-  widget every `CONSOLE_DRAIN_INTERVAL_MS`, since Tk isn't thread-safe), each line starting with
-  the time (`[HH:MM:SS]`). The widget keeps only its last `CONSOLE_MAX_LINES` lines (`trim()`) - it would otherwise hold everything printed, about 25 MB of memory per 100,000 lines - while `output.log` keeps all of it. A print starting with `\r` is a status line: it
-  replaces the previous status line instead of adding one, and goes into
-  `output.log` only the first time (this is the "Waiting for a need..."
-  counter).
+- **`DebugCapture`** is a `logging.Handler` on `logger` for the lifetime of the GUI: every record logged anywhere in the macro shows up in
+  the on-screen console (`self.debug_text`) - `emit()` only queues (from any thread) and the Tk thread puts the queue on the widget every
+  `CONSOLE_DRAIN_INTERVAL_MS`, since Tk isn't thread-safe - each line starting with the time (`[HH:MM:SS]`), in the colour of its level
+  (`GUI_CONSOLE_LEVEL_COLORS`: the debug lines are dimmer). The **Debug lines** checkbox over the console raises the handler's level to INFO to
+  leave them out (`output.log` keeps them either way). The widget keeps only its last `CONSOLE_MAX_LINES` lines (`trim()`) - it would otherwise
+  hold everything logged, about 25 MB of memory per 100,000 lines - while `output.log` keeps all of it. A record with `extra={"status": True}` is a
+  status line: it replaces the previous status line instead of adding one, and goes into `output.log` only the first time (this is the
+  "Waiting for a need..." counter).
 
 ### Input capture
 
@@ -1435,6 +1434,13 @@ exact values and rationale):
 
 ## Debugging an unattended run
 
+**How the macro says things.** Two logs, for two readers. `logger` (Python's `logging`, one logger for the whole macro, `main.py`'s `logger`) is
+for the person watching or debugging: the console and `output.log`. `log_run_event()` is the record the report is drawn from and its wording is
+parsed (`parse_run()`), so it only gets the events the report knows. The levels mean what they usually do: **debug** is how the macro got somewhere
+(positions, scores, what a look found), **info** what it is doing, **warning** something it couldn't do or that looks wrong but it carried on,
+**error** a failure (`log_failure()` logs at this level) or a crash. A message is a sentence in sentence case - no `[debug]` or `[!]` tags (the level
+says that), no capitals for emphasis, no exclamation marks, no blank lines. `print()` is only for a question put to someone at a terminal.
+
 Everything below is in `debug/` (git-ignored) so a run that broke while you
 were away can be read back afterwards. The folder has `images/` (`IMAGES_DIR`: every png - the `debug_*.png` views and
 `failures/`), `logs/` (`LOGS_DIR`: every text and json file - `output.log`, `run_log.txt` (all runs, the whole log),
@@ -1445,11 +1451,10 @@ Other subtab's **Refresh debug** button (`refresh_debug()`, after a confirmation
 run is going) empties all of it except `.config`; run numbers start from 1
 again, since the counter goes with the logs.
 
-- **`output.log`** - everything the macro prints (the same as the GUI
-  console), one timestamped line each, appended to across runs. `log_output()`
-  is called by `DebugCapture`, so this only exists while the GUI is up. The file stays open between writes (flushed after each one, so a crash loses nothing); `close_output_log()` closes it before **Refresh debug** deletes it, since Windows won't delete an open file. Past
-  `OUTPUT_LOG_MAX_BYTES` it moves to `output.log.old`, replacing the
-  previous one.
+- **`output.log`** - everything the macro logs (`logger`, the same lines as the GUI console, with the debug ones), one line each with its time
+  and level, appended to across runs, whether or not the GUI is up. The `OutputLog` handler opens the file with the first line (flushed by the
+  handler after each, so a crash loses nothing); `close_output_log()` closes it before **Refresh debug** deletes it, since Windows won't delete an
+  open file. Past `OUTPUT_LOG_MAX_BYTES` it moves to `output.log.old`, replacing the previous one (a `RotatingFileHandler` does that).
 - **`run_log.txt`** - the short version: one tagged line per notable event
   (needs detected, resolved with how long they took, popups dismissed,
   recoveries, stops, failures). Start here to see roughly what happened.
@@ -1486,7 +1491,7 @@ again, since the counter goes with the logs.
   and `info.txt` (the reason, the needs last detected, the disabled needs and
   how long ago a need was last resolved) and `state.json` (the whole `State`
   object and `run_stats` (a `RunStats` dataclass) as they were, for working out what the macro believed
-  at that moment). It also prints the reason, writes it
+  at that moment). It also logs the reason, writes it
   to `run_log.txt` and counts it in the status file. It's called when a handler
   can't resolve a need, a need is still showing after `NEED_GONE_MAX_WAIT`, a
   need is disabled as stuck, a recovery starts or fails, Roblox loses focus
@@ -1548,7 +1553,7 @@ clicks instead of making them. They cover:
 
 - `test_pure.py` - the small pure functions (server link parsing, durations,
   colour masks, axis rounding, failure kinds);
-- `test_state.py` - stuck-need disabling, `process_needs()` (resolved, unresolvable and not-cleared cases), the sick handler on real screenshots (`tests/sick/`: the prompt, the dialog, the pet view), `RunStats`, `status.json`, the
+- `test_state.py` - the output log's levels, rotation and reopening, the console handler, stuck-need disabling, `process_needs()` (resolved, unresolvable and not-cleared cases), the sick handler on real screenshots (`tests/sick/`: the prompt, the dialog, the pet view), `RunStats`, `status.json`, the
   failure folders, the quiet and idle-respawn checks (including that a respawn
   leaves the 20-minute rejoin clock alone), stopping, and the open `output.log`;
 - `test_detection.py` - the need-strip capture and its cache, and the

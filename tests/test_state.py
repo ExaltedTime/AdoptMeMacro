@@ -202,17 +202,27 @@ def test_stop_pressed_soon(macro, monkeypatch):
     assert macro.stop_pressed_soon() is True
 
 
-def test_output_log_stays_open_rotates_and_reopens(macro, monkeypatch):
+def test_output_log_has_every_line_with_its_level_rotates_and_reopens(macro, monkeypatch):
     monkeypatch.setattr(macro.cfg, "OUTPUT_LOG_MAX_BYTES", 300)
     for i in range(30):
-        macro.log_output(f"line {i}\n")
+        macro.logger.debug(f"line {i}")
+    macro.logger.warning("a warning")
     assert sorted(os.listdir(os.path.dirname(macro.cfg.OUTPUT_LOG_PATH))) >= ["output.log", "output.log.old"]
     text = open(macro.cfg.OUTPUT_LOG_PATH).read()
-    assert text.rstrip().endswith("line 29") and text.startswith("[20")
+    assert text.rstrip().endswith("WARNING: a warning") and text.startswith("[20") and "DEBUG: line 29" in text
     macro.close_output_log()
     os.remove(macro.cfg.OUTPUT_LOG_PATH)               # what Refresh debug does - must not be blocked
-    macro.log_output("after\n")
-    assert "after" in open(macro.cfg.OUTPUT_LOG_PATH).read()
+    macro.logger.info("after")
+    assert "INFO: after" in open(macro.cfg.OUTPUT_LOG_PATH).read()
+
+
+def test_a_status_line_is_written_to_output_log_once_in_a_row(macro):
+    for _ in range(3):
+        macro.logger.info("Waiting for a need... 0:05", extra={"status": True})
+    macro.logger.info("something else")
+    macro.logger.info("Waiting for a need... 0:10", extra={"status": True})
+    text = open(macro.cfg.OUTPUT_LOG_PATH).read()
+    assert text.count("Waiting for a need") == 2 and "something else" in text
 
 
 def test_log_run_event_tags_the_run(macro):
@@ -577,6 +587,58 @@ def test_the_console_keeps_only_its_last_lines(macro, monkeypatch):
     assert capture.text.lines == [f"line {i}" for i in range(7, 12)]
     capture.trim()                                   # already short enough: untouched
     assert len(capture.text.lines) == 5
+
+
+class _TypingText:
+    """A Tk Text that keeps what was put on it: `content`, with (text, tag) pieces; delete() takes the last line (what the status line replacement does)."""
+    def __init__(self):
+        self.pieces, self.tags = [], {}
+
+    def tag_config(self, tag, **options):
+        self.tags[tag] = options
+
+    def config(self, **options):
+        pass
+
+    def see(self, where):
+        pass
+
+    def insert(self, where, text, tag=None):
+        self.pieces.append((text, tag))
+
+    def delete(self, start, end):
+        assert (start, end) == ("end-1c linestart", "end-1c")
+        while self.pieces and not self.pieces[-1][0].endswith("\n"):
+            self.pieces.pop()
+
+    def index(self, where):
+        return "1.0"
+
+    @property
+    def content(self):
+        return "".join(text for text, _ in self.pieces)
+
+
+def test_the_console_shows_each_level_in_its_colour_a_status_line_replaced_and_debug_lines_can_be_hidden(macro):
+    import logging
+    text = _TypingText()
+    root = type("Root", (), {"after": lambda self, ms, fn: None})()
+    capture = macro.DebugCapture(root, text)
+    macro.logger.addHandler(capture)
+    try:
+        macro.logger.debug("how it got there")
+        macro.logger.warning("could not do it")
+        macro.logger.info("Waiting 1", extra={"status": True})
+        macro.logger.info("Waiting 2", extra={"status": True})
+        capture.setLevel(logging.INFO)                                    # the checkbox: no debug lines
+        macro.logger.debug("hidden")
+        macro.logger.info("done")
+        capture.drain()
+    finally:
+        macro.logger.removeHandler(capture)
+    lines = [line.split("] ", 1)[1] for line in text.content.splitlines()]
+    assert lines == ["how it got there", "could not do it", "Waiting 2", "done"]
+    assert {tag for _, tag in text.pieces if tag} == {"DEBUG", "WARNING", "INFO"} and set(text.tags) == set(macro.cfg.GUI_CONSOLE_LEVEL_COLORS)
 
 
 def test_only_the_newest_run_reports_are_kept(macro, tmp_path):

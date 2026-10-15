@@ -547,7 +547,7 @@ def test_a_blob_skipped_for_scoring_nothing_stays_skipped_wherever_it_flies_and_
     assert feedback.follow_skipped([again], 10.0 + cfg.GHOST_SKIP_TIME + 1) == [again]       # its time is up
 
 
-def test_what_scores_nothing_in_spite_of_the_furniture_around_it_is_left_alone_and_the_beam_moves_on(macro, world, short_trial, monkeypatch, capsys):
+def test_what_scores_nothing_in_spite_of_the_furniture_around_it_is_left_alone_and_the_beam_moves_on(macro, world, short_trial, monkeypatch, caplog):
     """The pet beside the character (afar_pet_49.png, the score never changes): first the nearest blob, then the furniture around it, then the next blob."""
     cfg = macro.cfg
     monkeypatch.setattr(macro, "find_furniture", lambda watch, around=None, avoid=(): (400, 800))
@@ -559,7 +559,7 @@ def test_what_scores_nothing_in_spite_of_the_furniture_around_it_is_left_alone_a
     held = left_held_on(world)
     near_the_pet = [distance(place, pet) < 40 for place in held]
     assert near_the_pet[0] and not any(near_the_pet[len(held) * 2 // 3:])                     # held on the pet at first, not in the last third
-    assert "left alone" in capsys.readouterr().out
+    assert "left alone" in caplog.text
 
 
 def test_in_the_boss_phase_what_scores_nothing_is_not_the_boss_but_what_scores_is(macro, world, monkeypatch):

@@ -15,8 +15,10 @@ from __future__ import annotations
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
-import os, sys, re, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib, shutil, zipfile
+import os, re, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib, shutil, zipfile
 import datetime
+import logging
+import logging.handlers
 import itertools
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field, fields
@@ -82,7 +84,7 @@ def check_focus() -> None:
     """Raise FocusLost if Roblox is running but is no longer the focused
     window. Prefer check_running() at most checkpoints."""
     if not is_roblox_focused():
-        print("\n[!] Roblox is no longer focused")
+        logger.warning("Roblox is no longer focused")
         raise FocusLost()
 
 def stop_pressed_soon() -> bool:
@@ -118,7 +120,7 @@ def focus_roblox() -> bool:
     global _ROBLOX_RECT
     w = roblox_window()
     if w is None:
-        print("[!] Roblox not found")
+        logger.warning("Roblox not found")
         return False
     if w.isMinimized:
         w.restore()
@@ -379,7 +381,7 @@ def migrate_debug_layout() -> None:
                 if not os.listdir(old_folder):
                     os.rmdir(old_folder)
     except OSError as error:
-        print(f"[!] couldn't move the old debug files: {error}")
+        logger.warning(f"Couldn't move the old debug files: {error}")
 
 migrate_debug_layout()
 
@@ -398,7 +400,7 @@ def refresh_debug() -> int:
             shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
             removed += 1
         except OSError as error:   # a locked file (a video still open, say): leave it, carry on with the rest
-            print(f"[!] couldn't delete {name}: {error}")
+            logger.warning(f"Couldn't delete {name}: {error}")
     for directory in (cfg.IMAGES_DIR, cfg.LOGS_DIR, cfg.RUNS_DIR):
         os.makedirs(directory, exist_ok=True)
     return removed
@@ -408,12 +410,12 @@ def next_run_number() -> int:
     stay unique across separate launches of the script, not just within one
     session."""
     try:
-        with open(cfg.RUN_COUNTER_PATH, "r") as f:
+        with open(cfg.RUN_COUNTER_PATH, "r", encoding="utf-8") as f:
             n = int(f.read().strip())
     except (FileNotFoundError, ValueError):
         n = 0
     n += 1
-    with open(cfg.RUN_COUNTER_PATH, "w") as f:
+    with open(cfg.RUN_COUNTER_PATH, "w", encoding="utf-8") as f:
         f.write(str(n))
     return n
 
@@ -463,12 +465,12 @@ def log_run_event(message: str) -> None:
     See docs/ARCHITECTURE.md#debugging-an-unattended-run.
     """
     line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [RUN {state.run_number}] {message}\n"
-    with open(cfg.RUN_LOG_PATH, "a") as f:
+    with open(cfg.RUN_LOG_PATH, "a", encoding="utf-8") as f:
         f.write(line)
     if state.run_number is not None:
         try:
             os.makedirs(cfg.RUNS_DIR, exist_ok=True)
-            with open(os.path.join(cfg.RUNS_DIR, f"run{state.run_number}.txt"), "a") as f:
+            with open(os.path.join(cfg.RUNS_DIR, f"run{state.run_number}.txt"), "a", encoding="utf-8") as f:
                 f.write(line)
         except OSError:
             pass   # the combined log above has it
@@ -506,41 +508,51 @@ class RunStats:
 
 run_stats = RunStats()
 
-OUTPUT_LOG_LOCK = threading.Lock()
-_output_at_line_start = True
-_output_log = None   # the open output.log, kept open between writes (see log_output())
+# Logging. Everything the macro says goes through `logger` (debug: how it got there; info: what it is doing; warning: something it
+# couldn't do; error: a crash). Where the lines go is decided by handlers: OUTPUT_LOG below (a file) and the GUI's DebugCapture (the
+# console, whose level can be raised to hide the debug lines). The run log (log_run_event()) is the record the report is drawn from and
+# is not part of this. See docs/ARCHITECTURE.md#debugging-an-unattended-run.
+logger = logging.getLogger("adoptme")
+logger.setLevel(logging.DEBUG)
+
+class OutputLog(logging.Handler):
+    """output.log (OUTPUT_LOG_PATH): every line logged, with its time and level, appended to across runs and kept to OUTPUT_LOG_MAX_BYTES
+    (past it the file moves to output.log.old, replacing the last one). The file is opened with the first line and again after
+    close_output_log(), which anything that deletes or moves it needs first (on Windows an open file can't be). A status line (a
+    record with `status`, "Waiting for a need...") is written the first time only. Never raises."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s: %(message)s", "%Y-%m-%d %H:%M:%S"))
+        self.file: Optional[logging.handlers.RotatingFileHandler] = None
+        self.status_written = False
+
+    def emit(self, record: logging.LogRecord) -> None:
+        status = bool(getattr(record, "status", False))
+        if status and self.status_written:
+            return
+        self.status_written = status
+        try:
+            if self.file is None:
+                self.file = logging.handlers.RotatingFileHandler(cfg.OUTPUT_LOG_PATH, maxBytes=cfg.OUTPUT_LOG_MAX_BYTES, backupCount=1, encoding="utf-8")
+                self.file.namer = lambda name: name[:-2] + ".old"          # output.log.1 -> output.log.old
+                self.file.setFormatter(self.formatter)
+            self.file.emit(record)
+        except (OSError, ValueError):
+            pass
+
+    def close_file(self) -> None:
+        if self.file is not None:
+            self.file.close()
+            self.file = None
+
+OUTPUT_LOG = OutputLog()
+logger.addHandler(OUTPUT_LOG)
 
 def close_output_log() -> None:
-    """Close output.log if it's open (it reopens on the next write). Needed
-    before anything deletes or moves the file - on Windows an open file can't
-    be - e.g. refresh_debug()."""
-    global _output_log
-    with OUTPUT_LOG_LOCK:
-        if _output_log is not None:
-            _output_log.close()
-            _output_log = None
-
-def log_output(text: str) -> None:
-    """Append printed `text` to OUTPUT_LOG_PATH with a timestamp per line (rotated past
-    OUTPUT_LOG_MAX_BYTES). Never raises. See docs/ARCHITECTURE.md#debugging-an-unattended-run.
-    """
-    global _output_at_line_start, _output_log
-    try:
-        with OUTPUT_LOG_LOCK:
-            if _output_log is None:
-                _output_log = open(cfg.OUTPUT_LOG_PATH, "a", encoding="utf-8")
-            for piece in text.splitlines(keepends=True):
-                if _output_at_line_start:
-                    _output_log.write(time.strftime("[%Y-%m-%d %H:%M:%S] "))
-                _output_log.write(piece)
-                _output_at_line_start = piece.endswith("\n")
-            _output_log.flush()
-            if _output_log.tell() > cfg.OUTPUT_LOG_MAX_BYTES:
-                _output_log.close()
-                _output_log = None
-                os.replace(cfg.OUTPUT_LOG_PATH, cfg.OUTPUT_LOG_PATH + ".old")
-    except OSError:
-        pass
+    """Close output.log if it's open (it reopens with the next line). Needed before anything deletes or moves the file - on Windows an
+    open file can't be - e.g. refresh_debug()."""
+    OUTPUT_LOG.close_file()
 
 def save_failure_report(reason: str) -> Optional[str]:
     """Save what was going on when `reason` went wrong as a folder in FAILURE_DIR
@@ -570,7 +582,7 @@ def save_failure_report(reason: str) -> Optional[str]:
             shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
         return f"{name}/screen.png"
     except Exception as e:
-        print(f"[!] couldn't save a failure report: {e}")
+        logger.warning(f"Couldn't save a failure report: {e}")
         return None
 
 def write_status() -> None:
@@ -580,7 +592,7 @@ def write_status() -> None:
         status = {**asdict(run_stats), "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
                   "disabled_needs": sorted(state.disabled_needs)}
         tmp = cfg.STATUS_PATH + ".tmp"
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(status, f, indent=2)
         os.replace(tmp, cfg.STATUS_PATH)
     except (OSError, TypeError):
@@ -593,7 +605,7 @@ def log_failure(reason: str, screenshot: bool = True) -> None:
     mark_run_capture(f"failure: {reason}")
     shot = save_failure_report(reason) if screenshot else None
     detail = f"{reason}" + (f" (screenshot: failures/{shot})" if shot else "")
-    print(f"[!] FAILURE: {detail}")
+    logger.error(detail)
     log_run_event(f"FAILURE: {detail}")
     run_stats.failures += 1
     run_stats.last_failure = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "reason": reason, "screenshot": shot}
@@ -632,7 +644,7 @@ def _read_game_config() -> dict[str, Any]:
         "private_server_link": "",  # used by leave_and_rejoin(); kept here, not in the source, since it's a join key
     }
     try:
-        with open(cfg.GAME_CONFIG_PATH, "r") as f:
+        with open(cfg.GAME_CONFIG_PATH, "r", encoding="utf-8") as f:
             config = json.load(f)
     except (FileNotFoundError, ValueError):
         return defaults
@@ -652,11 +664,11 @@ def save_game_config(config: dict[str, Any]) -> None:
     """
     tmp = cfg.GAME_CONFIG_PATH + ".tmp"
     try:
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(config, f)
         os.replace(tmp, cfg.GAME_CONFIG_PATH)
     except OSError:
-        with open(cfg.GAME_CONFIG_PATH, "w") as f:   # the move wasn't allowed (the file is open elsewhere): write it in place
+        with open(cfg.GAME_CONFIG_PATH, "w", encoding="utf-8") as f:   # the move wasn't allowed (the file is open elsewhere): write it in place
             json.dump(config, f)
 
 def update_game_config(mutate: Callable[[dict[str, Any]], Any]) -> dict[str, Any]:
@@ -828,7 +840,7 @@ def prompt_rename_need(icon_img: Image, idx: int) -> str:
     """Save a new need icon and ask for its name (dialog or console); a cancelled dialog saves
     it as unnamed_<idx>. See docs/ARCHITECTURE.md#process_needs-step-by-step.
     """
-    print("\n[!] NEW NEED DETECTED!")
+    logger.info("New need detected")
     temp_path = os.path.join(cfg.NEEDS_DIR, f"temp_{idx}.png")
     cv2.imwrite(temp_path, preprocess_icon(icon_img))
 
@@ -838,12 +850,12 @@ def prompt_rename_need(icon_img: Image, idx: int) -> str:
             lambda: simpledialog.askstring("New need", prompt, parent=state.macro_window.root), timeout=None)
         focus_roblox_click()   # the dialog took the focus
     else:
-        print(f"[!] {prompt} ", end="", flush=True)
+        print(f"{prompt} ", end="", flush=True)                           # (a question to the person at the terminal, not a log line)
         answer = input()
     need_name = (answer or "").strip().lower() or f"unnamed_{idx}"
 
     os.rename(temp_path, os.path.join(cfg.NEEDS_DIR, f"{need_name}.png"))
-    print(f"[!] Saved: {need_name}")
+    logger.info(f"Saved: {need_name}")
     return need_name
 
 def identify_icons(found_icons: list[tuple[int, int, int]], full_img: Image) -> Iterator[tuple[int, Image, Optional[str], float]]:
@@ -889,20 +901,20 @@ def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAI
     timeout is logged as a failure and sets state.need_cleared False.
     See docs/ARCHITECTURE.md#waiting-for-a-need-to-clear.
     """
-    print(f"[debug] waiting up to {max_wait}s for {need_name} to clear...")
+    logger.debug(f"Waiting up to {max_wait}s for {need_name} to clear...")
     state.need_cleared = True
     deadline = time.time() + max_wait
     with end_wait(need_name):
         while True:
             remaining = deadline - time.time()
             if remaining <= 0:
-                print(f"[debug] {need_name} still showing after {max_wait}s, moving on")
+                logger.debug(f"{need_name} still showing after {max_wait}s, moving on")
                 log_failure(f"{need_name} still showing after {max_wait}s")
                 state.need_cleared = False
                 return
             wait_interruptible(min(poll_interval, remaining))
             if _need_cleared(need_name):
-                print(f"[debug] {need_name} cleared")
+                logger.debug(f"{need_name} cleared")
                 return
 
 def _watch_need_gone(need_name: str, cleared_event: threading.Event, stop_event: threading.Event, answers: Optional[list] = None) -> None:
@@ -1057,7 +1069,7 @@ def detect_buttons(save_debug: bool = False) -> list[Point]:
     has_white = cv2.bitwise_and(outline_zone, white_mask)
 
     contours, _ = cv2.findContours(purple_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    print(f"[debug] button scan: {len(contours)} raw purple contour(s) in search band")
+    logger.debug(f"Button scan: {len(contours)} raw purple contour(s) in search band")
 
     candidates = []
     rejected_area, rejected_radius, rejected_circularity = 0, 0, 0
@@ -1087,7 +1099,7 @@ def detect_buttons(save_debug: bool = False) -> list[Point]:
         white_score = cv2.countNonZero(roi)
         candidates.append((cx + x0, cy + y0, area, white_score))
 
-    print(f"[debug] button scan: {len(candidates)} passed filters "
+    logger.debug(f"Button scan: {len(candidates)} passed filters "
           f"(rejected: {rejected_area} area, {rejected_radius} radius, {rejected_circularity} circularity)")
 
     # Prefer candidates with a white outline, then by size; final order is left-to-right
@@ -1106,7 +1118,7 @@ def detect_buttons(save_debug: bool = False) -> list[Point]:
         cv2.imwrite(os.path.join(cfg.IMAGES_DIR, "debug_buttons.png"), debug_img)
 
     if not positions:
-        print("[!] No buttons detected. Check debug_buttons.png in the debug/ folder to see "
+        logger.warning("No buttons detected. Check debug_buttons.png in the debug/ folder to see "
               "whether PURPLE_RANGE / BUTTON_BAND_X / BUTTON_BAND_Y need adjusting.")
 
     return positions
@@ -1116,7 +1128,7 @@ def click_button(button_x: float, button_y: float, need_name: str) -> bool:
     if not focus_roblox():
         return False
     time.sleep(cfg.FOCUS_DELAY)
-    print(f"[debug] clicking {need_name} at ({button_x}, {button_y})")
+    logger.debug(f"Clicking {need_name} at ({button_x}, {button_y})")
     hover_click(button_x, button_y)
     return True
 
@@ -1129,11 +1141,11 @@ def refresh_button_mapping() -> bool:
 
     positions = detect_buttons(save_debug=True)
     if not positions:
-        print("[!] ERROR: No buttons detected!")
+        logger.error("No buttons detected")
         respawn_character()
         return False
 
-    print(f"\n[!] DETECTED {len(positions)} BUTTON(S)")
+    logger.info(f"Detected {len(positions)} button(s)")
     if len(positions) != len(cfg.BUTTON_NAMES):
         # The buttons are named by their order left to right, so a missed one shifts every name after it.
         log_run_event(f"button scan found {len(positions)} of {len(cfg.BUTTON_NAMES)}: "
@@ -1142,9 +1154,9 @@ def refresh_button_mapping() -> bool:
         if i < len(cfg.BUTTON_NAMES):
             name = cfg.BUTTON_NAMES[i]
             state.button_positions[name] = (cx, cy)
-            print(f"[!] Button {i + 1}: '{name}' @ ({cx}, {cy})")
+            logger.info(f"Button {i + 1}: '{name}' @ ({cx}, {cy})")
 
-    print("\n[!] BUTTON MAPPING REFRESHED\n")
+    logger.info("Button mapping refreshed")
     return True
 
 def only_pets_message_visible(img: Image) -> bool:
@@ -1176,11 +1188,11 @@ def click_need_button(need_name: str) -> bool:
     not count as resolved). See docs/ARCHITECTURE.md#need-handlers.
     """
     if need_name not in state.button_positions:
-        print(f"[!] WARNING: no button mapped for '{need_name}'")
+        logger.warning(f"No button mapped for '{need_name}'")
         return False
     button_x, button_y = state.button_positions[need_name]
     for attempt in range(cfg.BUTTON_CLICK_TRIES):
-        print(f"[!] CLICKING: {need_name}")
+        logger.info(f"Clicking the {need_name} button")
         if not click_button(button_x, button_y, need_name):
             return False
         if not button_click_refused():
@@ -1201,7 +1213,7 @@ def click_need_button(need_name: str) -> bool:
 def respawn_character() -> None:
     """Respawn the character (ESC, R, ENTER), make sure the respawn dialog
     isn't left open (dismiss_stray_windows()), and wait for it to settle."""
-    print("[debug] respawning...")
+    logger.debug("Respawning...")
     if not focus_roblox_click():
         return
     for key in cfg.RESPAWN_KEYS:
@@ -1217,7 +1229,7 @@ def respawn_character() -> None:
         if dismiss_stray_windows() != "respawn_confirm":
             break
     wait_interruptible(cfg.RESPAWN_WAIT)
-    print("[debug] respawn complete")
+    logger.debug("Respawn complete")
 
 def hold_key(key: str, duration: float) -> None:
     """Hold `key` down for `duration` seconds (interruptibly). Always
@@ -1233,10 +1245,10 @@ def walk_to_buttons() -> None:
     """Walk forward from the respawn spot to where the action buttons are."""
     if not focus_roblox():
         return
-    print("[debug] walking to buttons...")
+    logger.debug("Walking to buttons...")
     hold_key("w", cfg.WALK_TO_BUTTONS_DURATION)
     wait_interruptible(cfg.UI_SETTLE)
-    print("[debug] arrived at buttons")
+    logger.debug("Arrived at buttons")
 
 def walk_alternating(direction_pair: tuple[str, str], total_duration: float, step_duration: float = cfg.WALK_ALTERNATING_STEP, need_name: Optional[str] = None) -> None:
     """Alternate the two keys, each held `step_duration`, for `total_duration` - or until
@@ -1244,7 +1256,7 @@ def walk_alternating(direction_pair: tuple[str, str], total_duration: float, ste
     showing is logged and sets state.need_cleared False.
     See docs/ARCHITECTURE.md#checking-a-need-in-parallel-with-movement.
     """
-    print(f"[debug] walking alternating {direction_pair} pattern for {total_duration}s...")
+    logger.debug(f"Walking alternating {direction_pair} pattern for {total_duration}s...")
     if not focus_roblox():
         return
 
@@ -1265,7 +1277,7 @@ def walk_alternating(direction_pair: tuple[str, str], total_duration: float, ste
 
         while elapsed < total_duration and not cleared_event.is_set():
             direction = direction_pair[direction_idx % 2]
-            print(f"[debug] step {direction_idx + 1}: {direction} for {step_duration}s...")
+            logger.debug(f"Step {direction_idx + 1}: {direction} for {step_duration}s...")
             hold_key(direction, step_duration)
             wait_interruptible(cfg.KEY_STEP_GAP)
 
@@ -1278,12 +1290,12 @@ def walk_alternating(direction_pair: tuple[str, str], total_duration: float, ste
             watcher.join(timeout=cfg.NEED_WATCH_JOIN_TIMEOUT)
 
     if cleared_event.is_set():
-        print(f"[debug] {need_name} cleared, stopping early")
+        logger.debug(f"{need_name} cleared, stopping early")
     elif need_name is not None and answers and not answers[-1]:
-        print(f"[debug] {need_name} still showing after {total_duration}s")
+        logger.debug(f"{need_name} still showing after {total_duration}s")
         log_failure(f"{need_name} still showing after {total_duration}s")
         state.need_cleared = False
-    print("[debug] alternating walk complete")
+    logger.debug("Alternating walk complete")
 
 # ============================================================================
 # SIDE ACTIONS
@@ -1298,7 +1310,7 @@ def lure_collect() -> bool:
     (set_new_lure())."""
     if not focus_roblox():
         return False
-    print(f"[debug] walking to the lure for {cfg.LURE_COLLECT_WALK_DURATION}s...")
+    logger.debug(f"Walking to the lure for {cfg.LURE_COLLECT_WALK_DURATION}s...")
     hold_key("a", cfg.LURE_COLLECT_WALK_DURATION)
     pydirectinput.press(cfg.KEY_INTERACT)
     wait_interruptible(cfg.LURE_COLLECT_SETTLE_DELAY)
@@ -1307,7 +1319,7 @@ def lure_collect() -> bool:
     if not set_new_lure():
         return False
     respawn_character()
-    print("[!] Lure collect complete!")
+    logger.info("Lure collect complete")
     return True
 
 def set_new_lure() -> bool:
@@ -1320,20 +1332,20 @@ def set_new_lure() -> bool:
     wait_interruptible(cfg.UI_SETTLE)
     hover_click(*cfg.LURE_NEW_POS_2)
     wait_interruptible(cfg.UI_SETTLE)
-    print("[!] New lure set!")
+    logger.info("New lure set")
     return True
 
 def tree_collect() -> bool:
     """Walk to the money tree, step back to line up with it, then harvest it."""
     if not focus_roblox():
         return False
-    print(f"[debug] walking to the money tree for {cfg.TREE_COLLECT_WALK_DURATION}s...")
+    logger.debug(f"Walking to the money tree for {cfg.TREE_COLLECT_WALK_DURATION}s...")
     hold_key("d", cfg.TREE_COLLECT_WALK_DURATION)
-    print(f"[debug] stepping back for {cfg.TREE_COLLECT_BACKWARD_DURATION}s...")
+    logger.debug(f"Stepping back for {cfg.TREE_COLLECT_BACKWARD_DURATION}s...")
     hold_key("s", cfg.TREE_COLLECT_BACKWARD_DURATION)
     pydirectinput.press(cfg.KEY_INTERACT)
     respawn_character()
-    print("[!] Tree collect complete!")
+    logger.info("Tree collect complete")
     return True
 
 def setup_game() -> bool:
@@ -1348,30 +1360,30 @@ def _setup_steps() -> bool:
         if not dismiss_stray_windows():
             break
     respawn_character()
-    print("[debug] locking house...")
+    logger.debug("Locking house...")
     hover_click(*cfg.SETUP_LOCK_HOUSE_POS)
 
-    print("[debug] opening backpack...")
+    logger.debug("Opening backpack...")
     pydirectinput.press(cfg.KEY_BACKPACK)
     wait_interruptible(cfg.UI_SETTLE)
-    print("[debug] opening settings...")
+    logger.debug("Opening settings...")
     hover_click(*cfg.SETUP_BACKPACK_SETTINGS_POS)
     wait_interruptible(cfg.UI_SETTLE)
-    print("[debug] opening sort menu...")
+    logger.debug("Opening sort menu...")
     hover_click(*cfg.SETUP_SORT_MENU_POS)
     wait_interruptible(cfg.UI_SETTLE)
-    print("[debug] selecting favorites...")
+    logger.debug("Selecting favorites...")
     hover_click(*cfg.SETUP_FAVORITES_POS)
     wait_interruptible(cfg.UI_SETTLE)
-    print("[debug] confirming...")
+    logger.debug("Confirming...")
     hover_click(*cfg.SETUP_CONFIRM_POS)
     wait_interruptible(cfg.UI_SETTLE)
-    print("[debug] closing backpack...")
+    logger.debug("Closing backpack...")
     close_backpack("setup")
 
     disable_trades()
 
-    print("[!] Setup complete!")
+    logger.info("Setup complete")
     return True
 
 def send_macro_window_to_back() -> None:
@@ -1390,7 +1402,7 @@ def disable_trades() -> bool:
     """Set the game's trade setting to "no one". The macro window covers the
     settings gear, so it's sent to the back for the duration and always
     brought back, even if the run is stopped partway."""
-    print("[debug] sending the macro window to the back...")
+    logger.debug("Sending the macro window to the back...")
     send_macro_window_to_back()
     try:
         wait_interruptible(cfg.UI_SETTLE)
@@ -1402,13 +1414,13 @@ def disable_trades() -> bool:
                            ("trading setting", cfg.SETUP_TRADES_SETTING_POS),
                            ("no one", cfg.SETUP_TRADES_NO_ONE_POS),
                            ("closing settings", cfg.SETUP_TRADES_CLOSE_POS)):
-            print(f"[debug] {label}...")
+            logger.debug(f"{label}...")
             hover_click(*pos)
             wait_interruptible(cfg.UI_SETTLE)
     finally:
-        print("[debug] bringing the macro window back...")
+        logger.debug("Bringing the macro window back...")
         bring_macro_window_to_front()
-    print("[!] Trades disabled!")
+    logger.info("Trades disabled")
     return True
 
 def parse_server_link(link: str) -> Optional[tuple[str, str]]:
@@ -1440,11 +1452,11 @@ def close_roblox(clean_leave: bool = True) -> None:
     """
     window = roblox_window()
     if clean_leave and window is not None and window.height >= cfg.REJOIN_MIN_LEAVE_HEIGHT and focus_roblox():
-        print("[debug] leaving the game...")
+        logger.debug("Leaving the game...")
         for key in cfg.REJOIN_LEAVE_KEYS:
             pydirectinput.press(key)
             wait_stoppable(cfg.REJOIN_LEAVE_KEY_GAP)
-    print("[debug] closing Roblox...")
+    logger.debug("Closing Roblox...")
     for name in cfg.ROBLOX_PROCESS_NAMES:
         subprocess.run(["taskkill", "/F", "/IM", name], capture_output=True)
     wait_stoppable(cfg.REJOIN_CLOSE_WAIT)
@@ -1468,25 +1480,25 @@ def leave_and_rejoin(clean_leave: bool = True) -> bool:
     if link:
         server = parse_server_link(link)
         if server is None:
-            print("[!] Rejoin failed: the saved private server link isn't recognised")
+            logger.warning("Rejoin failed: the saved private server link isn't recognised")
             return False
     else:
-        print("[!] No private server link saved - rejoining a public server")
+        logger.info("No private server link saved - rejoining a public server")
 
     for attempt in range(1, cfg.REJOIN_MAX_ATTEMPTS + 1):
-        print(f"[debug] rejoin attempt {attempt}/{cfg.REJOIN_MAX_ATTEMPTS}")
+        logger.debug(f"Rejoin attempt {attempt}/{cfg.REJOIN_MAX_ATTEMPTS}")
         close_roblox(clean_leave)
         run_deeplink(server)
 
-        print("[debug] waiting for the Roblox window...")
+        logger.debug("Waiting for the Roblox window...")
         deadline = time.time() + cfg.REJOIN_WINDOW_TIMEOUT
         while not roblox_windows() and time.time() < deadline:
             wait_stoppable(cfg.REJOIN_POLL_INTERVAL)
         if not roblox_windows():
-            print("[!] No Roblox window appeared")
+            logger.warning("No Roblox window appeared")
             continue
 
-        print("[debug] waiting for the game to load...")
+        logger.debug("Waiting for the game to load...")
         loaded = False
         deadline = time.time() + cfg.REJOIN_LOAD_TIMEOUT
         while time.time() < deadline:
@@ -1497,22 +1509,22 @@ def leave_and_rejoin(clean_leave: bool = True) -> bool:
                     break
             wait_stoppable(cfg.REJOIN_POLL_INTERVAL)
         if not loaded:
-            print("[!] The game didn't finish loading")
+            logger.warning("The game didn't finish loading")
             continue
 
-        print("[debug] game loaded, clicking play...")
+        logger.debug("Game loaded, clicking play...")
         wait_stoppable(cfg.REJOIN_PLAY_SETTLE)
         focus_roblox()
         hover_click(*cfg.REJOIN_JOIN_POS)
-        print(f"[debug] waiting {cfg.REJOIN_AFTER_JOIN_WAIT}s, then respawning...")
+        logger.debug(f"Waiting {cfg.REJOIN_AFTER_JOIN_WAIT}s, then respawning...")
         wait_stoppable(cfg.REJOIN_AFTER_JOIN_WAIT)
         state.last_rejoin = state.last_progress = state.last_detection = time.time()   # first: the respawn can raise FocusLost
         state.white_since = None
         respawn_character()
-        print("[!] Rejoin complete!")
+        logger.info("Rejoin complete")
         return True
 
-    print(f"[!] Rejoin failed after {cfg.REJOIN_MAX_ATTEMPTS} attempts")
+    logger.warning(f"Rejoin failed after {cfg.REJOIN_MAX_ATTEMPTS} attempts")
     return False
 
 # ============================================================================
@@ -1594,7 +1606,7 @@ def focus_pet(click_duration: float = cfg.CLICK_MOVE_DURATION) -> bool:
     True if anything was clicked (or the pet was already focused). See docs/ARCHITECTURE.md#need-handlers.
     """
     if detect_pet_focus(grab_screen()):
-        print("[debug] focus_pet: the pet is already focused")
+        logger.debug("Focus_pet: the pet is already focused")
         return True
     img_a = grab_screen()
     wait_interruptible(cfg.FOCUS_PET_FRAME_GAP)
@@ -1602,19 +1614,19 @@ def focus_pet(click_duration: float = cfg.CLICK_MOVE_DURATION) -> bool:
     ignore = [box for box in [macro_window_reference_rect()] if box is not None]
     blobs, mask, top = moving_blobs(img_a, img_b, ignore=ignore)
     changed = int(np.count_nonzero(mask))
-    print(f"[debug] focus_pet: {len(blobs)} moving blob(s), {changed} changed px below y={top}")
+    logger.debug(f"Focus_pet: {len(blobs)} moving blob(s), {changed} changed px below y={top}")
     for i, (x, y, w, h, area) in enumerate(blobs, 1):
-        print(f"[debug] focus_pet:   #{i} center ({x + w // 2}, {y + h // 2}), {w}x{h}, area {area}")
+        logger.debug(f"Focus_pet:   #{i} center ({x + w // 2}, {y + h // 2}), {w}x{h}, area {area}")
     save_focus_pet_debug(img_b, blobs, mask, top, ignore=ignore)
     if not blobs:
-        print("[debug] focus_pet: nothing moved, pet not found (see debug/debug_focus_pet.png)")
+        logger.debug("Focus_pet: nothing moved, pet not found (see debug/debug_focus_pet.png)")
         return False
     for i, (x, y, w, h, _) in enumerate(blobs, 1):
-        print(f"[debug] focus_pet: clicking #{i} at ({x + w // 2}, {y + h // 2})...")
+        logger.debug(f"Focus_pet: clicking #{i} at ({x + w // 2}, {y + h // 2})...")
         hover_click(x + w // 2, y + h // 2, duration=click_duration)
         wait_interruptible(cfg.FOCUS_PET_CLICK_SETTLE)
         if detect_pet_focus(grab_screen()):
-            print(f"[debug] focus_pet: focused after click #{i}, no more clicks needed")
+            logger.debug(f"Focus_pet: focused after click #{i}, no more clicks needed")
             break
     else:
         wait_interruptible(cfg.FOCUS_PET_MENU_WAIT)
@@ -1634,7 +1646,7 @@ def select_backpack_tab(pos: Point) -> None:
     """Click the backpack category tab at `pos` unless it's already selected:
     clicking a selected tab expands the backpack."""
     if is_backpack_tab_selected(pos):
-        print("[debug] tab already selected, not clicking it")
+        logger.debug("Tab already selected, not clicking it")
         return
     hover_click(*pos)
 
@@ -1655,23 +1667,23 @@ def equip_favorite_vehicle() -> None:
     ride and the helicopter needs. See docs/ARCHITECTURE.md#need-handlers.
     """
     with backpack_on_purpose():
-        print("[debug] opening backpack...")
+        logger.debug("Opening backpack...")
         pydirectinput.press(cfg.KEY_BACKPACK)
         wait_interruptible(cfg.UI_SETTLE)
 
-        print("[debug] opening vehicles...")
+        logger.debug("Opening vehicles...")
         select_backpack_tab(cfg.RIDE_VEHICLES_POS)
         wait_interruptible(cfg.UI_SETTLE)
 
-        print("[debug] selecting first vehicle...")
+        logger.debug("Selecting first vehicle...")
         hover_click(*cfg.RIDE_FIRST_VEHICLE_POS)
         wait_interruptible(cfg.UI_SETTLE)
 
-        print("[debug] equipping vehicle...")
+        logger.debug("Equipping vehicle...")
         hover_click(*cfg.RIDE_EQUIP_POS)
         wait_interruptible(cfg.UI_SETTLE)
 
-        print("[debug] closing backpack...")
+        logger.debug("Closing backpack...")
         close_backpack("equipping the vehicle")
 
 class NeedHandler(ABC):
@@ -1700,7 +1712,7 @@ class WalkNeedHandler(NeedHandler):
     or less, the moment its icon is confirmed gone (see walk_alternating())."""
 
     def handle(self) -> bool:
-        print("[!] WALK NEED")
+        logger.info("Walk need")
         walk_alternating(("a", "d"), cfg.NEED_GONE_MAX_WAIT, need_name="walk")
         return True
 
@@ -1709,37 +1721,37 @@ class CatchNeedHandler(NeedHandler):
     (clicking) CATCH_THROW_COUNT times, then unequipping it."""
 
     def handle(self) -> bool:
-        print("[!] CATCH NEED")
+        logger.info("Catch need")
         if not focus_roblox():
             return False
 
         with backpack_on_purpose():
             # Open backpack with 'b' key
-            print("[debug] opening backpack...")
+            logger.debug("Opening backpack...")
             pydirectinput.press(cfg.KEY_BACKPACK)
             wait_interruptible(cfg.UI_SETTLE)
 
             # Navigate to toys
-            print("[debug] opening toys...")
+            logger.debug("Opening toys...")
             select_backpack_tab(cfg.CATCH_TOYS_POS)
             wait_interruptible(cfg.UI_SETTLE)
 
             # Click squeaky toy
-            print("[debug] selecting squeaky toy...")
+            logger.debug("Selecting squeaky toy...")
             hover_click(*cfg.CATCH_SQUEAKY_TOY_POS)
             wait_interruptible(cfg.UI_SETTLE)
 
             # Equip the toy
-            print("[debug] equipping toy...")
+            logger.debug("Equipping toy...")
             hover_click(*cfg.CATCH_EQUIP_POS)
             wait_interruptible(cfg.UI_SETTLE)
 
             # Close backpack with 'b' key
-            print("[debug] closing backpack...")
+            logger.debug("Closing backpack...")
             close_backpack("equipping the toy")
 
         # Wait before throwing
-        print(f"[debug] waiting {cfg.CATCH_WAIT_AFTER_EQUIP}s before throwing...")
+        logger.debug(f"Waiting {cfg.CATCH_WAIT_AFTER_EQUIP}s before throwing...")
         wait_interruptible(cfg.CATCH_WAIT_AFTER_EQUIP)
 
         # Zoom in, to avoid focusing the pet on toy throw
@@ -1747,15 +1759,15 @@ class CatchNeedHandler(NeedHandler):
         
         # Click empty space to throw, with a delay between throws
         for i in range(cfg.CATCH_THROW_COUNT):
-            print(f"[debug] throw {i + 1}/{cfg.CATCH_THROW_COUNT}...")
+            logger.debug(f"Throw {i + 1}/{cfg.CATCH_THROW_COUNT}...")
             hover_click(*cfg.EMPTY_POS)
             wait_interruptible(cfg.CATCH_EMOTE_DELAY)
 
         # Unequip the toy
-        print("[debug] unequipping toy...")
+        logger.debug("Unequipping toy...")
         hover_click(*cfg.CATCH_UNEQUIP_POS)
 
-        print("[!] Catch complete!")
+        logger.info("Catch complete")
         return True
 
 class PetNeedHandler(NeedHandler):
@@ -1764,11 +1776,11 @@ class PetNeedHandler(NeedHandler):
     just below it, over PET_SWIPE_DURATION."""
 
     def handle(self) -> bool:
-        print("[!] PET NEED")
+        logger.info("Pet need")
         if not focus_roblox():
             return False
 
-        print("[debug] focusing pet...")
+        logger.debug("Focusing pet...")
         with wanting_pet_focus():
             return self._pet()
 
@@ -1776,7 +1788,7 @@ class PetNeedHandler(NeedHandler):
         if not focus_pet(cfg.PET_FOCUS_CLICK_DURATION):
             return False
         wait_interruptible(cfg.UI_SETTLE)
-        print(f"[debug] petting: one swipe down over {cfg.PET_SWIPE_DURATION}s...")
+        logger.debug(f"Petting: one swipe down over {cfg.PET_SWIPE_DURATION}s...")
         # Click the center to focus
         hover_click(cfg.REFERENCE_CENTER_X, cfg.REFERENCE_CENTER_Y, duration=cfg.PET_FOCUS_CLICK_DURATION)
         time.sleep(cfg.PET_SETTLE_DELAY)
@@ -1799,7 +1811,7 @@ class PetNeedHandler(NeedHandler):
         finally:
             # Always release, even if interrupted
             pydirectinput.mouseUp()
-        print("[!] Pet complete!")
+        logger.info("Pet complete")
         return True
 
 class ChooseNeedHandler(NeedHandler):
@@ -1808,11 +1820,11 @@ class ChooseNeedHandler(NeedHandler):
     """
 
     def handle(self) -> bool:
-        print("[!] CHOOSE NEED")
+        logger.info("Choose need")
         if not focus_roblox():
             return False
 
-        print("[debug] focusing pet...")
+        logger.debug("Focusing pet...")
         with wanting_pet_focus():
             return self._choose()
 
@@ -1821,20 +1833,20 @@ class ChooseNeedHandler(NeedHandler):
             return False
         wait_interruptible(cfg.UI_SETTLE)
 
-        print(f"[debug] searching screen for color {cfg.CHOOSE_BUTTON_COLOR}...")
+        logger.debug(f"Searching screen for color {cfg.CHOOSE_BUTTON_COLOR}...")
         img = grab_screen()
         match = find_exact_color(img, cfg.CHOOSE_BUTTON_COLOR)
         if match is None:
-            print(f"[!] WARNING: no pixel matching {cfg.CHOOSE_BUTTON_COLOR} found on screen")
+            logger.warning(f"No pixel matching {cfg.CHOOSE_BUTTON_COLOR} found on screen")
             return False
-        print(f"[debug] found at {match}, moving there slowly...")
+        logger.debug(f"Found at {match}, moving there slowly...")
         hover_click(*match, duration=cfg.CHOOSE_SLOW_MOVE_DURATION)
         wait_interruptible(cfg.UI_SETTLE)
 
-        print("[debug] clicking middle of screen...")
+        logger.debug("Clicking middle of screen...")
         hover_click(cfg.REFERENCE_CENTER_X, cfg.REFERENCE_CENTER_Y, duration=cfg.CHOOSE_SLOW_MOVE_DURATION)
 
-        print("[!] Choose complete!")
+        logger.info("Choose complete")
         return True
 
 class RideNeedHandler(NeedHandler):
@@ -1843,32 +1855,32 @@ class RideNeedHandler(NeedHandler):
     icon is confirmed gone (see walk_alternating())."""
 
     def handle(self) -> bool:
-        print("[!] RIDE NEED")
+        logger.info("Ride need")
         if not focus_roblox():
             return False
 
         # Step back before mounting
-        print(f"[debug] stepping back for {cfg.RIDE_BACKWARD_DURATION}s...")
+        logger.debug(f"Stepping back for {cfg.RIDE_BACKWARD_DURATION}s...")
         hold_key("s", cfg.RIDE_BACKWARD_DURATION)
 
-        print("[debug] pressing e...")
+        logger.debug("Pressing e...")
         pydirectinput.press(cfg.KEY_MOUNT)
         wait_interruptible(cfg.RIDE_WAIT_AFTER_E)
 
         # Walk forward briefly after mounting, before opening the backpack
-        print(f"[debug] walking forward for {cfg.RIDE_FORWARD_DURATION}s...")
+        logger.debug(f"Walking forward for {cfg.RIDE_FORWARD_DURATION}s...")
         hold_key("w", cfg.RIDE_FORWARD_DURATION)
 
         equip_favorite_vehicle()
 
         # Hold r briefly before starting to move
-        print(f"[debug] holding {cfg.KEY_HELICOPTER} for {cfg.RIDE_R_HOLD_DURATION}s...")
+        logger.debug(f"Holding {cfg.KEY_HELICOPTER} for {cfg.RIDE_R_HOLD_DURATION}s...")
         hold_key(cfg.KEY_HELICOPTER, cfg.RIDE_R_HOLD_DURATION)
 
         # Walk back and forth (forward/backward, not left/right) while riding
         walk_alternating(("w", "s"), cfg.NEED_GONE_MAX_WAIT, need_name="ride")
 
-        print("[!] Ride complete!")
+        logger.info("Ride complete")
         return True
 
 def teleport_to(category_pos: Point) -> None:
@@ -1876,11 +1888,11 @@ def teleport_to(category_pos: Point) -> None:
     spot. Shared by the teleport-walk needs. See docs/ARCHITECTURE.md#need-handlers.
     """
     with backpack_on_purpose():
-        print("[debug] opening backpack...")
+        logger.debug("Opening backpack...")
         pydirectinput.press(cfg.KEY_BACKPACK)
         wait_interruptible(cfg.UI_SETTLE)
 
-        print("[debug] selecting category...")
+        logger.debug("Selecting category...")
         hover_click(*category_pos)
         wait_interruptible(cfg.UI_SETTLE)
         hover_click(*cfg.GENERAL_TELEPORT_POS_2)
@@ -1890,11 +1902,11 @@ def teleport_to(category_pos: Point) -> None:
             hover_click(*cfg.GENERAL_TELEPORT_POS_3)
             if minigame_teleported(before):
                 break
-            print(f"[debug] the teleport did not take after click {attempt + 1}")
+            logger.debug(f"The teleport did not take after click {attempt + 1}")
         else:
             log_run_event("teleport: nothing happened after the dialog's Yes")
     wait_interruptible(cfg.TELEPORT_WAIT)
-    print("[debug] walking backward...")
+    logger.debug("Walking backward...")
     hold_key("s", cfg.TELEPORT_BACK_DURATION)
     wait_interruptible(cfg.TELEPORT_SETTLE_WAIT)
 
@@ -1909,7 +1921,7 @@ class TeleportWalkNeedHandler(NeedHandler):
         self.config = cfg.TELEPORT_WALK_NEEDS[name]
 
     def handle(self) -> bool:
-        print(f"[!] {self.name.upper()} NEED")
+        logger.info(f"{self.name.capitalize()} need")
         if not focus_roblox():
             return False
 
@@ -1917,35 +1929,35 @@ class TeleportWalkNeedHandler(NeedHandler):
 
         helicopter = self.config.get("helicopter", cfg.HELICOPTER_REQUIRED)
         if helicopter:
-            print(f"[debug] stepping forward for {cfg.HELICOPTER_FORWARD_DURATION}s...")
+            logger.debug(f"Stepping forward for {cfg.HELICOPTER_FORWARD_DURATION}s...")
             hold_key("w", cfg.HELICOPTER_FORWARD_DURATION)
             equip_favorite_vehicle()
-            print(f"[debug] holding {cfg.KEY_HELICOPTER} for {cfg.HELICOPTER_HOLD_DURATION}s...")
+            logger.debug(f"Holding {cfg.KEY_HELICOPTER} for {cfg.HELICOPTER_HOLD_DURATION}s...")
             hold_key(cfg.KEY_HELICOPTER, cfg.HELICOPTER_HOLD_DURATION)
 
         for i, (key, duration) in enumerate(self.config["steps"]):
             if i:
                 wait_interruptible(cfg.TELEPORT_WALK_STEP_GAP)
-            print(f"[debug] holding {key} for {duration}s...")
+            logger.debug(f"Holding {key} for {duration}s...")
             hold_key(key, duration)
 
         if helicopter:
-            print("[debug] arrived, pressing space...")
+            logger.debug("Arrived, pressing space...")
             pydirectinput.press(cfg.KEY_JUMP)
 
         final_click = self.config.get("final_click")
         if final_click:
             if not self._open_dialog():
                 # Nothing more can be done from here: the need has failed - no waiting for it to clear.
-                print(f"[debug] the {self.name} dialog never came up - the need failed")
+                logger.debug(f"The {self.name} dialog never came up - the need failed")
                 respawn_character()
                 return False
-            print(f"[debug] clicking {final_click}...")
+            logger.debug(f"Clicking {final_click}...")
             hover_click(*final_click)
 
         wait_until_need_gone(self.name, max_wait=self.config.get("max_wait", cfg.NEED_GONE_MAX_WAIT))
 
-        print(f"[!] {self.name.capitalize()} complete!")
+        logger.info(f"{self.name.capitalize()} complete")
         return True
 
     def _open_dialog(self) -> bool:
@@ -1961,7 +1973,7 @@ class TeleportWalkNeedHandler(NeedHandler):
         if prompt is None:
             log_run_event(f"{self.name}: the doctor's prompt is not on screen")
             return False
-        print(f"[debug] clicking the {self.name} prompt at {prompt}...")
+        logger.debug(f"Clicking the {self.name} prompt at {prompt}...")
         hover_click(*prompt)
         if look_until(detect_sick_dialog, cfg.SICK_CONFIRM_WAIT) is None:
             log_run_event(f"{self.name}: no dialog after the prompt was clicked")
@@ -2018,7 +2030,7 @@ def record_detection(detected: list[str]) -> None:
     stuck = {n for n, count in state.attempt_streaks.items() if count >= cfg.NEED_STUCK_CHECKS} & (enabled_needs() - state.disabled_needs)
     for need_name in sorted(stuck):
         state.disabled_needs.add(need_name)
-        print(f"[!] {need_name} still there after {cfg.NEED_STUCK_CHECKS} attempts in a row - disabling it for this run")
+        logger.info(f"{need_name} still there after {cfg.NEED_STUCK_CHECKS} attempts in a row - disabling it for this run")
         log_run_event(f"disabled: {need_name}")
         log_failure(f"{need_name} stuck for {cfg.NEED_STUCK_CHECKS} attempts - disabled for this run "
                     f"({len(state.disabled_needs)} disabled now: {', '.join(sorted(state.disabled_needs))})")
@@ -2041,7 +2053,7 @@ def process_needs() -> bool:
     for idx, icon_img, need_name, score in identify_icons(found_icons, full_img):
         if not need_name:
             if cfg.SAVE_NEW_NEEDS:
-                print(f"\n[!] NEW NEED (best score: {score:.4f})")
+                logger.info(f"New need (best score: {score:.4f})")
                 # prompt_rename_need() already saves the reference icon into
                 # NEEDS_DIR - that .png file is the only record needed for this
                 # need to be recognized next time, so there's nothing further to
@@ -2057,7 +2069,7 @@ def process_needs() -> bool:
             note_repeat_check()      # the same needs as the line above, nothing handled since: counted, not repeated
         else:
             flush_idle_checks()
-            print(f"\n[!] Found {len(found_icons)} icon(s): " + ", ".join(f"{n} ({s:.4f})" for n, s in matched_needs))
+            logger.info(f"Found {len(found_icons)} icon(s): " + ", ".join(f"{n} ({s:.4f})" for n, s in matched_needs))
             log_run_event(f"detected: {body}")
             state.last_detected_body = body
         state.none_matched_logged = False
@@ -2080,7 +2092,7 @@ def process_needs() -> bool:
 
             handler = get_need_handler(need_name)
             if handler is None:
-                print(f"[debug] {need_name} is disabled, skipping")
+                logger.debug(f"{need_name} is disabled, skipping")
                 continue
             attempted.add(need_name)
             flush_idle_checks()
@@ -2099,11 +2111,11 @@ def process_needs() -> bool:
                 # any other stuck need instead of being retried forever.
                 if interruption.reason != "a popup":
                     attempted.discard(need_name)
-                print(f"[debug] {need_name} interrupted by {interruption.reason}")
+                logger.debug(f"{need_name} interrupted by {interruption.reason}")
                 log_run_event(f"{need_name} interrupted by {interruption.reason}")
                 return True
             if not handled:
-                print(f"[debug] could not resolve '{need_name}' this pass, skipping")
+                logger.debug(f"Could not resolve '{need_name}' this pass, skipping")
                 run_stats.failed[need_name] = run_stats.failed.get(need_name, 0) + 1
                 log_failure(f"{need_name} handler could not resolve it")
                 continue
@@ -2113,7 +2125,7 @@ def process_needs() -> bool:
             if not state.need_cleared:
                 # The handler ran its course but the need was still showing when its wait ran out (already logged
                 # as a failure): not resolved. The character is respawned all the same, since it was moved.
-                print(f"[debug] {need_name} was not cleared, counting it as failed")
+                logger.debug(f"{need_name} was not cleared, counting it as failed")
                 run_stats.failed[need_name] = run_stats.failed.get(need_name, 0) + 1
                 log_run_event(f"not cleared: {need_name} ({seconds:.0f}s)")
                 write_status()
@@ -2141,7 +2153,7 @@ def detect_paycheck() -> bool:
     if not popup_visible(grab_screen(), "paycheck"):
         return False
 
-    print("[debug] paycheck popup detected, dismissing...")
+    logger.debug("Paycheck popup detected, dismissing...")
     log_run_event("paycheck popup dismissed")
     hover_click(*cfg.PAYCHECK_DISMISS_POS_1)
     hover_click(*cfg.PAYCHECK_DISMISS_POS_2)
@@ -2183,7 +2195,7 @@ def close_backpack_if_open(step: str = "") -> bool:
     if not is_roblox_focused() or not detect_backpack_open(grab_screen()):
         return False
     img = grab_screen()
-    print(f"[debug] backpack left open, closing it... (expanded: {detect_backpack_expanded(img)}, "
+    logger.debug(f"Backpack left open, closing it... (expanded: {detect_backpack_expanded(img)}, "
           f"normal: {detect_backpack_normal(img)})")
     cv2.imwrite(os.path.join(cfg.IMAGES_DIR, "debug_backpack_open.png"), img)
     if detect_backpack_expanded(img):
@@ -2230,7 +2242,7 @@ def close_backpack_if_stuck(in_task: bool) -> bool:
         return False
     state.backpack_strikes += 1
     if state.backpack_strikes == 1:                             # the sighting that may be a false one: keep what the screen looked like
-        print("[debug] the backpack was seen open (the first of the sightings that count as stuck)")
+        logger.debug("The backpack was seen open (the first of the sightings that count as stuck)")
         cv2.imwrite(os.path.join(cfg.IMAGES_DIR, "debug_backpack_first_sighting.png"), img)
     if state.backpack_strikes < cfg.BACKPACK_CLOSE_CONFIRMATIONS:
         return True
@@ -2292,14 +2304,14 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
         return False
     kind, reason = found
     if kind == "scheduled":
-        print(f"[!] {reason} - rejoining")
+        logger.info(f"{reason} - rejoining")
         log_run_event(f"scheduled rejoin: {reason}")
         run_stats.scheduled_rejoins += 1
     elif at_start and reason == ROBLOX_NOT_RUNNING:
-        print(f"[!] {reason} - starting it")
+        logger.info(f"{reason} - starting it")
         log_run_event(f"{reason} at the start - starting it")
     elif kind == "white_screen":
-        print(f"[!] {reason} - rejoining")                            # the game's own doing, nothing the macro can help: a rejoin that works is all there is to it
+        logger.info(f"{reason} - rejoining")                            # the game's own doing, nothing the macro can help: a rejoin that works is all there is to it
         log_run_event(f"white screen: {reason} - rejoining")
         run_stats.recoveries += 1
     else:
@@ -2319,7 +2331,7 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
     state.disabled_needs.clear()
     reset_need_tracking()
     log_run_event("recovery complete: rejoined, setup run, disabled needs cleared")
-    print("[!] Recovery complete - carrying on")
+    logger.info("Recovery complete - carrying on")
     write_status()
     return True
 
@@ -2450,7 +2462,7 @@ def dismiss_stray_windows() -> Optional[str]:
             continue
         if config.get("only_when_unwanted") and state.pet_focus_wanted:
             continue
-        print(f"[debug] stray window open: {name}, closing it...")
+        logger.debug(f"Stray window open: {name}, closing it...")
         log_run_event(f"stray window closed: {name}")
         if name == "trading_hub":
             left, top, right, bottom = cfg.STRAY_OKAY_BOX
@@ -2543,7 +2555,7 @@ def minigame_won(watch: MinigameWatch) -> bool:
 def zoom_out() -> None:
     """Zoom the camera out (KEY_ZOOM_OUT held MINIGAME_ZOOM_OUT_DURATION seconds) to see the whole room: close up, the TVs
     over a Hauntlet 2 room's doors are cut off by the top of the screen."""
-    print("[debug] zooming the camera out")
+    logger.debug("Zooming the camera out")
     hold_key(cfg.KEY_ZOOM_OUT, cfg.MINIGAME_ZOOM_OUT_DURATION)
 
 def minigame_wait(duration: float, watch: MinigameWatch) -> None:
@@ -2588,7 +2600,7 @@ class HauntletRun:
             self.room, self.since, self.walked_at, self.rooms = room, now, None, self.rooms + 1
             self.stuck, self.last_index, self.turns, self.picked = 0, None, 0, None
             self.tvs, self.empty_looks = None, 0
-            print(f"[debug] Hauntlet 2: room {room}")
+            logger.debug(f"Hauntlet 2: room {room}")
         if self.room is None:
             return None
         age = now - self.since
@@ -2728,7 +2740,7 @@ def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun, wat
     """Choose the door and use the items it calls for, logging the lot. With a chance of HAUNTLET_PHONE_CHANCE the phone is used first, and
     the door its red arrow shows is not gone through. Returns the door's index and the latest screenshot."""
     if run.picked is not None and run.picked < len(doors):
-        print(f"[debug] Hauntlet 2: room {run.room}, the door is picked already (its circle was stepped in): going to the same one")
+        logger.debug(f"Hauntlet 2: room {run.room}, the door is picked already (its circle was stepped in): going to the same one")
         return run.picked, img
     hearts = read_hauntlet_hearts(img)
     items = read_hauntlet_items(img, learn=len(run.learned) < cfg.HAUNTLET_LEARN_LIMIT)
@@ -2758,7 +2770,7 @@ def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun, wat
         if shown is not None:
             used.append(name)
             img = shown
-    print(f"[debug] Hauntlet 2: room {run.room}, "
+    logger.debug(f"Hauntlet 2: room {run.room}, "
           + (f"{hearts.red} hearts ({hearts.black} lost)" if hearts else "hearts not seen")
           + f", items: {', '.join(f'{item.name} x{item.count or 1}' for item in items) or 'none'}"
           + f", doors: {', '.join(door.kind or '-' for door in doors)}"
@@ -2792,7 +2804,7 @@ def hauntlet_unstick(img: Image, target_index: Optional[int], tries: int, last_k
             key = cfg.HAUNTLET_RIGHT_KEY if dx > 0 else cfg.HAUNTLET_LEFT_KEY
     if key is None:
         key = random.choice((cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_RIGHT_KEY))
-    print(f"[debug] Hauntlet 2: not moving - a step {key}")
+    logger.debug(f"Hauntlet 2: not moving - a step {key}")
     mark_run_capture("Hauntlet 2: not moving")
     pydirectinput.press(cfg.KEY_JUMP)
     hold_key(key, min(cfg.HAUNTLET_UNSTICK_STEP * (tries + 1), cfg.HAUNTLET_UNSTICK_MAX))
@@ -2865,7 +2877,7 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
                 locked_until = now + cfg.HAUNTLET_LOCK_WAIT
                 if run.picked is None and target_index is not None:
                     run.picked = target_index
-                    print(f"[debug] Hauntlet 2: in the circle of door {target_index + 1} - picked")
+                    logger.debug(f"Hauntlet 2: in the circle of door {target_index + 1} - picked")
             was_inside = inside
             if now < locked_until:
                 still_since, last_view = None, None
@@ -2875,7 +2887,7 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
                 steer_at = now + cfg.HAUNTLET_STEER_EVERY
                 steer = hauntlet_steer(img, target_index)
                 if steer is not None:
-                    print(f"[debug] Hauntlet 2: off the door - a step {steer[0]} for {steer[1]:.2f}s")
+                    logger.debug(f"Hauntlet 2: off the door - a step {steer[0]} for {steer[1]:.2f}s")
                     pydirectinput.keyUp(cfg.HAUNTLET_2_FORWARD_KEY)                # one key at a time
                     hold_key(*steer)
                     pydirectinput.keyDown(cfg.HAUNTLET_2_FORWARD_KEY)
@@ -2906,7 +2918,7 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
     hauntlet_choose(), hauntlet_walk()) until the victory screen shows or the overlay says it's over. True if won
     before `deadline`. See docs/ARCHITECTURE.md#playing-hauntlet-2.
     """
-    print(f"[debug] Hauntlet 2: waiting for it to start (at most {cfg.MINIGAME_START_WAIT:g}s)...")
+    logger.debug(f"Hauntlet 2: waiting for it to start (at most {cfg.MINIGAME_START_WAIT:g}s)...")
     waited_until = time.time() + cfg.MINIGAME_START_WAIT
     while time.time() < waited_until and watch.last_seen is None:       # its overlay (the room panel) shows when the game has begun - the lobby's countdown varies
         minigame_wait(cfg.HAUNTLET_START_LOOK_INTERVAL, watch)
@@ -3219,7 +3231,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     taken to hide, and the furniture around it is tried; no score for GHOST_STALL seconds moves the player and turns the camera.
     True if won before `deadline`. See docs/ARCHITECTURE.md#playing-ghost-gallery.
     """
-    print(f"[debug] Ghost Gallery: waiting for it to start (at most {cfg.MINIGAME_START_WAIT:g}s)...")
+    logger.debug(f"Ghost Gallery: waiting for it to start (at most {cfg.MINIGAME_START_WAIT:g}s)...")
     waited_until = time.time() + cfg.MINIGAME_START_WAIT
     while time.time() < waited_until and watch.last_seen is None:       # its overlay (TIME LEFT, the score) shows when the game has begun
         minigame_wait(cfg.GHOST_START_LOOK_INTERVAL, watch)
@@ -3278,7 +3290,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 regrab_at = time.time() + cfg.GHOST_REGRAB_PERIOD
             now_phase = ("shielded" if ghost_boss_shielded(img) else "boss") if bar else "ghosts"
             if now_phase != phase:
-                print(f"[debug] Ghost Gallery: {dict(ghosts='the boss phase is over', boss='the boss can be hurt', shielded='the boss is shielded: after the small ghosts')[now_phase]}")
+                logger.debug(f"Ghost Gallery: {dict(ghosts='the boss phase is over', boss='the boss can be hurt', shielded='the boss is shielded: after the small ghosts')[now_phase]}")
                 phase = now_phase
             blobs = find_ghost_blobs(img, bar)
             if phase == "shielded":                                         # only the small ghosts count: what is bigger is the beam's glow or the boss's fog
@@ -3294,7 +3306,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 feedback.new_spot(now, True)                                # another ghost: it has a trial of its own
             last_target = target
             if phase == "ghosts" and feedback.stalled(now):                 # nothing has scored for a long time (a view blocked by a pillar, a beam on the floor): somewhere else, looking another way
-                print(f"[debug] Ghost Gallery: no score for {cfg.GHOST_STALL:g}s - moving and turning the camera")
+                logger.debug(f"Ghost Gallery: no score for {cfg.GHOST_STALL:g}s - moving and turning the camera")
                 mark_run_capture(f"Ghost Gallery: no score for {cfg.GHOST_STALL:g}s")
                 let_go()
                 stop_walking()
@@ -3314,7 +3326,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 if feedback.hide_tries >= cfg.GHOST_HIDE_TRIES:             # the blob and the furniture around it score nothing: no ghost (the pet)
                     feedback.skip(target, now)
                     hide_spot, hide_until, target, last_target = None, 0.0, None, None
-                    print("[debug] Ghost Gallery: what the beam is on scores nothing, furniture or not - left alone")
+                    logger.debug("Ghost Gallery: what the beam is on scores nothing, furniture or not - left alone")
                 else:
                     hide_spot = find_furniture(watch, around=target, avoid=feedback.avoid(now))
                     hide_until = time.time() + cfg.GHOST_SPOT_TRIAL
@@ -3323,7 +3335,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
             elif phase == "boss" and target is not None and feedback.trial_over(now, cfg.GHOST_BOSS_TRIAL):
                 mark_run_capture("Ghost Gallery: the beam on what is taken for the boss scores nothing")
                 feedback.skip(target, now)                                  # fog, a light shaft: not the boss
-                print("[debug] Ghost Gallery: the biggest blob scores nothing - not the boss, left alone")
+                logger.debug("Ghost Gallery: the biggest blob scores nothing - not the boss, left alone")
                 target, last_target = None, None
                 now = time.time()
             if target is not None:
@@ -3382,7 +3394,7 @@ def click_nice_until_gone() -> bool:
         wait_interruptible(cfg.MINIGAME_FINISH_WAIT)
         if not detect_minigame_victory(grab_screen()):
             return True
-        print(f"[debug] win screen still up after click {attempt + 1}")
+        logger.debug(f"Win screen still up after click {attempt + 1}")
     log_failure("minigame win screen would not close")
     return False
 
@@ -3412,9 +3424,9 @@ def accept_minigame_popup() -> bool:
         if minigame_teleported(before):
             return True
         if not detect_minigame_popup(grab_screen()):
-            print("[debug] the minigame popup is gone and nothing teleported")
+            logger.debug("The minigame popup is gone and nothing teleported")
             return False
-        print(f"[debug] the popup is still up after click {attempt + 1}")
+        logger.debug(f"The popup is still up after click {attempt + 1}")
     return False
 
 def candy_corn_digit_templates() -> dict[int, Image]:
@@ -3459,7 +3471,7 @@ def save_minigame_result(name: str) -> Optional[str]:
         keep_newest_files(folder, cfg.MAX_RESULT_SHOTS, ".png")
         return path
     except Exception as error:
-        print(f"[!] couldn't save the result screen: {error}")
+        logger.warning(f"Couldn't save the result screen: {error}")
         return None
 
 def play_minigame(name: str) -> bool:
@@ -3469,7 +3481,7 @@ def play_minigame(name: str) -> bool:
     started, or after MINIGAME_MAX_DURATION. Counts as progress only if it ran to the end. See docs/ARCHITECTURE.md#need-handlers.
     """
     label = cfg.MINIGAME_LABELS.get(name, name)
-    print(f"[!] playing {label}")
+    logger.info(f"Playing {label}")
     log_run_event(f"minigame started: {label}")
     # The handler this interrupted may be holding a key or the mouse button
     # down (hold_key(), the pet swipe); that must not carry into the minigame.
@@ -3517,7 +3529,7 @@ def close_minigame_win_screen(abandon: bool = True) -> bool:
     """
     if not detect_minigame_victory(grab_screen()):
         return False
-    print("[debug] minigame win screen is up, clicking NICE!...")
+    logger.debug("Minigame win screen is up, clicking NICE!...")
     log_run_event("minigame win screen closed")
     click_nice_until_gone()
     if abandon:
@@ -3543,13 +3555,13 @@ def minigame_popup(play: bool = True) -> Optional[str]:
                 return "waiting"
         state.popup_held_since = None
         if play:
-            print(f"[debug] minigame popup detected: playing {name}")
+            logger.debug(f"Minigame popup detected: playing {name}")
             play_minigame(name)
             return "played"
-        print(f"[debug] minigame popup detected ({name}), declining it for now...")
+        logger.debug(f"Minigame popup detected ({name}), declining it for now...")
         hover_click(*cfg.MINIGAME_POPUP_NO_POS)
         return "dismissed"
-    print(f"[debug] minigame popup detected ({name or 'unknown'}), dismissing...")
+    logger.debug(f"Minigame popup detected ({name or 'unknown'}), dismissing...")
     log_run_event(f"minigame popup dismissed ({name or 'unknown'})")
     hover_click(*cfg.MINIGAME_POPUP_DONT_SHOW_POS)   # "Do not show again this session"
     hover_click(*cfg.MINIGAME_POPUP_NO_POS)
@@ -3589,7 +3601,7 @@ def run_side_action(action: Callable[[], bool]) -> bool:
         with task_unscrew():
             return action()
     except TaskInterrupted as interruption:
-        print(f"[debug] {action.__name__} interrupted by {interruption.reason}")
+        logger.debug(f"{action.__name__} interrupted by {interruption.reason}")
         log_run_event(f"{action.__name__} interrupted by {interruption.reason}")
         return False
 
@@ -3612,7 +3624,7 @@ def reset_money_if_due(config: dict[str, Any]) -> dict[str, Any]:
         return config
     if recorded is None:
         return update_game_config(lambda c: c.update(money_reset_boundary=boundary))
-    print(f"[!] money total reset (daily at {cfg.MONEY_RESET_HOUR}:00): {config['money_collected']} -> 0")
+    logger.info(f"Money total reset (daily at {cfg.MONEY_RESET_HOUR}:00): {config['money_collected']} -> 0")
     log_run_event(f"money total reset: {config['money_collected']} -> 0")
     return update_game_config(lambda c: c.update(money_collected=0, money_reset_boundary=boundary))
 
@@ -3705,7 +3717,7 @@ class RunRecorder:
             self.writer.release()
         size_mb = os.path.getsize(self.path) / (1024 * 1024) if os.path.exists(self.path) else 0
         log_run_event(f"recording stopped: {os.path.basename(self.path)} ({size_mb:.0f} MB)")
-        print(f"[!] Recording saved: {self.path} ({size_mb:.0f} MB)")
+        logger.info(f"Recording saved: {self.path} ({size_mb:.0f} MB)")
 
 def start_recording_if_requested() -> Optional[RunRecorder]:
     """If "Record the next run" is ticked, clear it, start a RunRecorder and return it
@@ -3725,11 +3737,11 @@ def start_recording_if_requested() -> Optional[RunRecorder]:
             pass
     recorder = RunRecorder(os.path.join(cfg.RECORDINGS_DIR, f"run{state.run_number}_{time.strftime('%Y%m%d_%H%M%S')}"))
     if not recorder.start():
-        print("[!] Couldn't open a video file - not recording")
+        logger.warning("Couldn't open a video file - not recording")
         log_run_event("recording: couldn't open a video file")
         return None
     log_run_event(f"recording started: {os.path.basename(recorder.path)}")
-    print(f"[!] Recording this run to {recorder.path}")
+    logger.info(f"Recording this run to {recorder.path}")
     return recorder
 
 # ============================================================================
@@ -3811,7 +3823,7 @@ class InputCapture:
         os.makedirs(self.folder, exist_ok=True)
         self.started = time.time()
         left, top, width, height = roblox_rect()
-        with open(os.path.join(self.folder, "info.json"), "w") as f:
+        with open(os.path.join(self.folder, "info.json"), "w", encoding="utf-8") as f:
             json.dump({"started": time.strftime("%Y-%m-%d %H:%M:%S"), "screen": list(pyautogui.size()),
                        "roblox_rect": [left, top, width, height], "reference": [cfg.REFERENCE_WIDTH, cfg.REFERENCE_HEIGHT],
                        "frame_interval": cfg.CAPTURE_FRAME_INTERVAL, "max_zips": self.max_zips}, f, indent=1)
@@ -3837,11 +3849,11 @@ class InputCapture:
                    + (f", {self.dropped} thinned out to stay within {self.max_zips} zips" if self.dropped else "")
                    + f"), {self.events} events, {seconds:.0f}s, {size_mb:.0f} MB in {self.folder}")
         try:
-            with open(os.path.join(self.folder, "info.json")) as f:
+            with open(os.path.join(self.folder, "info.json"), encoding="utf-8") as f:
                 info = json.load(f)
             info.update(stopped=time.strftime("%Y-%m-%d %H:%M:%S"), seconds=round(seconds, 1), frames=self.frames, frames_skipped=self.skipped,
                         frames_dropped=self.dropped, events=self.events, stopped_because=self.stopped_because or "hotkey")
-            with open(os.path.join(self.folder, "info.json"), "w") as f:
+            with open(os.path.join(self.folder, "info.json"), "w", encoding="utf-8") as f:
                 json.dump(info, f, indent=1)
         except (OSError, ValueError):
             pass
@@ -3901,7 +3913,7 @@ class InputCapture:
                     self._emit("move", **self._where())
                     last_position, last_move = position, time.time()
             except Exception as error:   # a failed look must not end the capture
-                print(f"[!] input capture: {error}")
+                logger.warning(f"Input capture: {error}")
 
     def _shots(self) -> None:
         """Thread body: look at the screen every CAPTURE_FRAME_INTERVAL and right after each click, saving a frame when
@@ -3938,7 +3950,7 @@ class InputCapture:
                 else:
                     self.skipped += 1
             except Exception as error:
-                print(f"[!] input capture: couldn't save a frame: {error}")
+                logger.warning(f"Input capture: couldn't save a frame: {error}")
             self.shot_now.wait(cfg.CAPTURE_FRAME_INTERVAL)
             if self.shot_now.is_set():
                 self.stop_event.wait(0.02)      # let the click land on screen before looking
@@ -3969,7 +3981,7 @@ class InputCapture:
     def _give_up(self, reason: str) -> None:
         self.stopped_because = reason
         self.stop_event.set()
-        print(f"[!] Input capture stopped by itself: {reason}")
+        logger.info(f"Input capture stopped by itself: {reason}")
 
 def plan_zip_parts(frame_sizes: list[int], head: int = 0) -> list[list[int]]:
     """Which frames (by position) go in which zip: parts of at most CAPTURE_ZIP_MB, the first one also holding `head`
@@ -4011,9 +4023,9 @@ def zip_capture_in_background(folder: str) -> threading.Thread:
     def work() -> None:
         try:
             paths = zip_capture(folder)
-            print(f"[!] Capture zipped for sending ({len(paths)} file(s), at most {cfg.CAPTURE_ZIP_MB:g} MB each): {os.path.join(folder, 'zips')}")
+            logger.info(f"Capture zipped for sending ({len(paths)} file(s), at most {cfg.CAPTURE_ZIP_MB:g} MB each): {os.path.join(folder, 'zips')}")
         except OSError as error:
-            print(f"[!] Couldn't zip the capture: {error}")
+            logger.warning(f"Couldn't zip the capture: {error}")
     thread = threading.Thread(target=work, daemon=True)
     thread.start()
     return thread
@@ -4036,10 +4048,10 @@ def start_run_capture(label: str) -> Optional[InputCapture]:
         capture = InputCapture(os.path.join(cfg.RUN_CAPTURES_DIR, f"{label}_{time.strftime('%Y%m%d_%H%M%S')}"), max_zips=cfg.RUN_CAPTURE_ZIPS)
         capture.start()
     except Exception as error:
-        print(f"[!] Couldn't start recording the minigame: {error}")
+        logger.warning(f"Couldn't start recording the minigame: {error}")
         return None
     state.run_capture = capture
-    print(f"[debug] recording the minigame: {capture.folder}")
+    logger.debug(f"Recording the minigame: {capture.folder}")
     return capture
 
 def mark_run_capture(reason: str) -> None:
@@ -4051,7 +4063,7 @@ def mark_run_capture(reason: str) -> None:
     try:
         capture.mark(reason)
     except Exception as error:
-        print(f"[!] couldn't mark the recording: {error}")
+        logger.warning(f"Couldn't mark the recording: {error}")
 
 def run_capture_suffix(outcome: str, result: dict[str, Any]) -> str:
     """What is added to a recording's folder name when the run is over, to tell it from the others: the candy corn earned (`_2105cc`, or
@@ -4074,23 +4086,23 @@ def finish_run_capture(capture: Optional[InputCapture], outcome: str, result: Op
         if not outcome.startswith("finished"):
             capture.protect_tail(cfg.RUN_CAPTURE_TAIL)          # a run that went wrong: its last moments are what shows why
         capture.stopped_because = capture.stopped_because or "the minigame ended"
-        print(f"[debug] minigame recording stopped: {capture.stop()}")
+        logger.debug(f"Minigame recording stopped: {capture.stop()}")
         path = os.path.join(capture.folder, "info.json")
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             info = json.load(f)
         info["outcome"] = outcome
         info.update(result or {})
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(info, f, indent=1)
         renamed = capture.folder + run_capture_suffix(outcome, result or {})
         try:
             os.rename(capture.folder, renamed)                      # (before the zips are made: they are named after the folder)
             capture.folder = renamed
         except OSError as error:
-            print(f"[!] Couldn't rename the recording: {error}")
+            logger.warning(f"Couldn't rename the recording: {error}")
         zip_capture_in_background(capture.folder)
     except Exception as error:
-        print(f"[!] Couldn't finish recording the minigame: {error}")
+        logger.warning(f"Couldn't finish recording the minigame: {error}")
 
 def captures_to_keep(runs: list[tuple[str, Optional[int], float]]) -> set[str]:
     """Of the recordings of one minigame, `runs` = (folder, candy corn earned or None, when it started), the ones to keep: the
@@ -4118,7 +4130,7 @@ def prune_run_captures(label: str) -> None:
             if not (name.startswith(label + "_") and os.path.isdir(folder)):
                 continue
             try:
-                with open(os.path.join(folder, "info.json")) as f:
+                with open(os.path.join(folder, "info.json"), encoding="utf-8") as f:
                     info = json.load(f)
             except (OSError, ValueError):
                 info = {}
@@ -4130,7 +4142,7 @@ def prune_run_captures(label: str) -> None:
         for folder in {run[0] for run in runs} - captures_to_keep(runs):
             shutil.rmtree(folder, ignore_errors=True)
     except Exception as error:
-        print(f"[!] couldn't tidy the recordings: {error}")
+        logger.warning(f"Couldn't tidy the recordings: {error}")
 
 def minigame_result(name: str, outcome: str, finished: bool, seconds: float, before: Optional[int], after: Optional[int]) -> dict[str, Any]:
     """What a minigame run came to: how it ended, and the candy corn it earned - the HUD total after less the total before, None when either
@@ -4152,7 +4164,7 @@ def record_minigame_result(result: dict[str, Any]) -> None:
         log_run_event(f"minigame result: {cfg.MINIGAME_LABELS.get(name, name)}: " + (f"{earned} candy corn" if earned is not None else "candy corn not read") + extra)
         prune_run_captures(name)
     except Exception as error:
-        print(f"[!] couldn't note the result: {error}")
+        logger.warning(f"Couldn't note the result: {error}")
 
 def read_candy_corn_settled(tries: int = 4) -> Optional[int]:
     """read_candy_corn() of the screen once two looks half a second apart agree (the total counts up for a moment after a run); if they
@@ -4174,7 +4186,7 @@ def toggle_input_capture() -> Optional[InputCapture]:
     if current is not None:
         state.capture = None
         was_running = current.running
-        print(f"[!] Capture stopped: {current.stop()}")
+        logger.info(f"Capture stopped: {current.stop()}")
         zip_capture_in_background(current.folder)
         if was_running:
             return None            # (one that had stopped by itself is only tidied up here: this press starts a new one)
@@ -4182,7 +4194,7 @@ def toggle_input_capture() -> Optional[InputCapture]:
     capture = InputCapture(os.path.join(cfg.CAPTURES_DIR, "capture_" + time.strftime("%Y%m%d_%H%M%S")))
     capture.start()
     state.capture = capture
-    print(f"[!] Capture started (press {cfg.CAPTURE_HOTKEY.upper()} again to stop): {capture.folder}")
+    logger.info(f"Capture started (press {cfg.CAPTURE_HOTKEY.upper()} again to stop): {capture.folder}")
     return capture
 
 # ============================================================================
@@ -4285,7 +4297,7 @@ def learn_hauntlet_item(crop: Image) -> str:
     name = f"unknown_{max(taken, default=0) + 1}"
     os.makedirs(os.path.join(cfg.HAUNTLET_ITEM_DIR, name))
     cv2.imwrite(os.path.join(cfg.HAUNTLET_ITEM_DIR, name, "1.png"), crop if crop.ndim == 2 else cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY))
-    print(f"[!] New Hauntlet 2 item saved as {name} in {cfg.HAUNTLET_ITEM_DIR} - rename the folder to what it is")
+    logger.info(f"New Hauntlet 2 item saved as {name} in {cfg.HAUNTLET_ITEM_DIR} - rename the folder to what it is")
     return name
 
 def read_item_count(img: Image, x: int, y: int) -> Optional[int]:
@@ -4653,7 +4665,7 @@ def respawn_if_no_detection() -> bool:
     if state.last_detection is None or time.time() - state.last_detection < cfg.NO_DETECTION_RESPAWN_INTERVAL:
         return False
     minutes = (time.time() - state.last_detection) / 60
-    print(f"[!] no need detected for {minutes:.0f} min - respawning")
+    logger.info(f"No need detected for {minutes:.0f} min - respawning")
     log_run_event(f"no need detected for {minutes:.0f} min - respawning")
     respawn_character()
     state.last_detection = time.time()
@@ -4682,7 +4694,7 @@ def run_full_cycle() -> None:
         waiting_since = waiting_since or time.time()
         deadline = time.time() + cfg.NEED_CHECK_RETRY_DELAY
         while time.time() < deadline:
-            print(f"\rWaiting for a need... {format_duration(time.time() - waiting_since)}", end="")
+            logger.info(f"Waiting for a need... {format_duration(time.time() - waiting_since)}", extra={"status": True})      # (a line the console overwrites)
             wait_interruptible(min(1.0, deadline - time.time()))
 
 def run_workflow_loop() -> None:
@@ -4699,9 +4711,9 @@ def run_workflow_loop() -> None:
     state.white_since = None
     log_run_event("LOOP started")
     recorder = start_recording_if_requested()
-    print("\n" + "=" * 50)
-    print(f"[LOOP] Starting continuous workflow (run {state.run_number})")
-    print("=" * 50)
+    logger.info("=" * 50)
+    logger.info(f"[LOOP] Starting continuous workflow (run {state.run_number})")
+    logger.info("=" * 50)
 
     # Respawn once up front so the loop always starts from a known state,
     # regardless of wherever the character happened to be standing.
@@ -4714,7 +4726,7 @@ def run_workflow_loop() -> None:
     try:
         while True:
             loop_num += 1
-            print(f"\n[LOOP {loop_num}]")
+            logger.info(f"[LOOP {loop_num}]")
             try:
                 if needs_respawn:
                     respawn_character()
@@ -4750,7 +4762,7 @@ def run_workflow_loop() -> None:
         flush_idle_checks()
         log_run_event("LOOP stopped")
         write_run_report(state.run_number)
-        print("\n[LOOP] Stopped\n")
+        logger.info("[LOOP] Stopped")
 
 # ============================================================================
 # RUN REPORT
@@ -5139,11 +5151,11 @@ def generate_run_report(log_path: str, run: Union[int, str], out_dir: str, basic
         os.makedirs(out_dir, exist_ok=True)
         path = os.path.join(out_dir, f"run{run}.png")
         if not cv2.imwrite(path, draw_report(data, run, set(basic), set(teleport))):
-            print(f"[!] couldn't write the run report to {path}")
+            logger.warning(f"Couldn't write the run report to {path}")
             return None
         return path
     except Exception as error:
-        print(f"[!] couldn't write the run report: {error}")
+        logger.warning(f"Couldn't write the run report: {error}")
         return None
 
 # ============================================================================
@@ -5166,7 +5178,7 @@ def write_run_report(run: Union[int, str]) -> Optional[str]:
     where it went. Returns the path, or None. Never raises."""
     path = generate_run_report(cfg.RUN_LOG_PATH, run, cfg.RUNS_DIR, cfg.BUTTON_NAMES, cfg.TELEPORT_WALK_NEEDS)
     if path:
-        print(f"[debug] run report: {path}")
+        logger.debug(f"Run report: {path}")
         keep_newest_files(cfg.RUNS_DIR, cfg.MAX_REPORTS, ".png")
     return path
 
@@ -5177,46 +5189,40 @@ def run_all_need_handlers(handlers: Optional[dict[str, Callable[[], NeedHandler]
     """
     handlers = TELEPORT_HANDLERS if handlers is None else handlers
     results: dict[str, str] = {}
-    print(f"\n[TEST] Running all {len(handlers)} need handlers, one after another...")
+    logger.info(f"[TEST] Running all {len(handlers)} need handlers, one after another...")
     for i, (name, handler_cls) in enumerate(handlers.items(), 1):
         check_stop()
-        print(f"\n[TEST] ({i}/{len(handlers)}) {name}...")
+        logger.info(f"[TEST] ({i}/{len(handlers)}) {name}...")
         try:
             with task_unscrew(play_minigames=False):    # a minigame popup is declined, not played
                 results[name] = "done" if handler_cls().handle() else "failed"
         except TaskInterrupted as interruption:
             results[name] = f"interrupted by {interruption.reason}"
-        print(f"[TEST] {name}: {results[name]}")
+        logger.info(f"[TEST] {name}: {results[name]}")
         respawn_character()
-    print("\n[TEST] Summary: " + ", ".join(f"{name} {result}" for name, result in results.items()) + "\n")
+    logger.info("[TEST] Summary: " + ", ".join(f"{name} {result}" for name, result in results.items()))
     return results
 
-class DebugCapture:
-    """Replaces sys.stdout while the GUI is up: every print goes to the console widget (queued,
-    drained on Tk's thread) and to output.log; a "\r" message is an overwritable status
-    line. See docs/ARCHITECTURE.md#gui-internals.
+class DebugCapture(logging.Handler):
+    """The GUI's console as a log handler (added to `logger` while the GUI is up): each record is queued and put on the widget on Tk's
+    thread, with the time, in the colour of its level (GUI_CONSOLE_LEVEL_COLORS); a status record ("Waiting for a need...") replaces
+    the status line before it. The level can be raised to hide the debug lines (setLevel). See docs/ARCHITECTURE.md#gui-internals.
     """
 
     def __init__(self, root: tk.Tk, text_widget: tk.Text) -> None:
+        super().__init__()
         self.root = root
         self.text = text_widget
-        self.queue: queue.Queue[str] = queue.Queue()
-        self.log_status_active = False   # write() side: a status line is the last thing logged
+        self.queue: queue.Queue[tuple[str, str, bool]] = queue.Queue()
         self.at_line_start = True        # drain() side: the widget's state
         self.status_active = False
+        self.setFormatter(logging.Formatter("%(message)s"))
+        for level, color in cfg.GUI_CONSOLE_LEVEL_COLORS.items():
+            text_widget.tag_config(level, foreground=color)
         self.drain()
 
-    def write(self, msg: str) -> None:
-        if not msg:
-            return
-        if msg.startswith("\r"):
-            if not self.log_status_active:
-                log_output(msg[1:] + "\n")
-            self.log_status_active = True
-        else:
-            self.log_status_active = False
-            log_output(msg)
-        self.queue.put(msg)
+    def emit(self, record: logging.LogRecord) -> None:
+        self.queue.put((record.levelname, self.format(record), bool(getattr(record, "status", False))))
 
     def drain(self) -> None:
         """Put every queued message on the widget, then schedule the next drain."""
@@ -5229,8 +5235,8 @@ class DebugCapture:
                     break
             if batch:
                 self.text.config(state=tk.NORMAL)
-                for msg in batch:
-                    self.render(msg)
+                for level, msg, status in batch:
+                    self.render(level, msg, status)
                 self.trim()
                 self.text.see(tk.END)
                 self.text.config(state=tk.DISABLED)
@@ -5239,39 +5245,29 @@ class DebugCapture:
             pass   # the window is gone
 
     def trim(self) -> None:
-        """Keep the widget to its last CONSOLE_MAX_LINES lines (Tk thread only): it holds everything printed
+        """Keep the widget to its last CONSOLE_MAX_LINES lines (Tk thread only): it holds everything logged
         otherwise, and a run left going for days is a lot of text. output.log on disk keeps all of it."""
         lines = int(self.text.index("end-1c").split(".")[0])
         if lines - 1 > cfg.CONSOLE_MAX_LINES:   # (the last "line" is the empty one after the final newline)
             self.text.delete("1.0", f"{lines - cfg.CONSOLE_MAX_LINES}.0")
 
-    def render(self, msg: str) -> None:
-        """Add one message to the widget (Tk thread only)."""
-        if msg.startswith("\r"):
-            line = time.strftime("[%H:%M:%S] ") + msg[1:]
+    def render(self, level: str, msg: str, status: bool) -> None:
+        """Add one record to the widget (Tk thread only)."""
+        line = time.strftime("[%H:%M:%S] ") + msg
+        if status:                      # a status line has no newline yet: the next one replaces it, anything else ends it
             if self.status_active:
                 self.text.delete("end-1c linestart", "end-1c")
             elif not self.at_line_start:
                 self.text.insert(tk.END, "\n")
-            self.text.insert(tk.END, line)
+            self.text.insert(tk.END, line, level)
             self.status_active = True
             self.at_line_start = False
             return
-        if self.status_active:
-            # the status line has no newline yet; the message supplies
-            # one if it starts with it, otherwise end the line first
-            if not msg.startswith("\n"):
-                self.text.insert(tk.END, "\n")
-            self.status_active = False
-            self.at_line_start = True
-        for piece in msg.splitlines(keepends=True):
-            if self.at_line_start and piece != "\n":
-                self.text.insert(tk.END, time.strftime("[%H:%M:%S] "))
-            self.text.insert(tk.END, piece)
-            self.at_line_start = piece.endswith("\n")
-
-    def flush(self) -> None:
-        pass
+        if self.status_active or not self.at_line_start:
+            self.text.insert(tk.END, "\n")
+        self.status_active = False
+        self.text.insert(tk.END, line + "\n", level)
+        self.at_line_start = True
 
 class AdoptMeGUI:
     def __init__(self, root: tk.Tk) -> None:
@@ -5291,14 +5287,14 @@ class AdoptMeGUI:
         self.create_ui()
 
         self.capture = DebugCapture(self.root, self.debug_text)
-        sys.stdout = self.capture
+        logger.addHandler(self.capture)
 
-        print("\n" + "=" * 60)
-        print("ADOPT ME MACRO - CONTROL PANEL")
-        print("=" * 60)
-        print(f"Needs:  {cfg.NEEDS_DIR}")
-        print(f"Debug:  {cfg.DEBUG_DIR}")
-        print("=" * 60 + "\n")
+        logger.info("=" * 60)
+        logger.info("ADOPT ME MACRO - CONTROL PANEL")
+        logger.info("=" * 60)
+        logger.info(f"Needs:  {cfg.NEEDS_DIR}")
+        logger.info(f"Debug:  {cfg.DEBUG_DIR}")
+        logger.info("=" * 60)
 
         self.is_running = False
         self.watch_stop_hotkey()
@@ -5341,12 +5337,12 @@ class AdoptMeGUI:
         try:
             toggle_input_capture()
         except OSError as error:
-            print(f"[!] Input capture: {error}")
+            logger.warning(f"Input capture: {error}")
 
     def stop_by_hotkey(self) -> None:
         """STOP_HOTKEY was pressed: stop, same as the [STOP] button, and say so."""
         if self.is_running:
-            print(f"\n[!] '{cfg.STOP_HOTKEY.upper()}' pressed")
+            logger.info(f"'{cfg.STOP_HOTKEY.upper()}' pressed")
             self.stop()   # first: a failing log write must not keep the macro running
             try:
                 log_run_event(f"stopped with the {cfg.STOP_HOTKEY.upper()} key")
@@ -5440,8 +5436,14 @@ class AdoptMeGUI:
         debug_frame = tk.Frame(self.root, bg=self.bg)
         debug_frame.pack(fill=tk.BOTH, expand=True, padx=cfg.GUI_OUTER_PADDING, pady=(0, cfg.GUI_OUTER_PADDING))
 
-        tk.Label(debug_frame, text="Output", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"),
-                 bg=self.bg, fg=self.accent).pack(anchor=tk.W, pady=(0, cfg.GUI_LABEL_PADDING))
+        output_header = tk.Frame(debug_frame, bg=self.bg)
+        output_header.pack(fill=tk.X, pady=(0, cfg.GUI_LABEL_PADDING))
+        tk.Label(output_header, text="Output", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"),
+                 bg=self.bg, fg=self.accent).pack(side=tk.LEFT)
+        self.show_debug_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(output_header, text="Debug lines", variable=self.show_debug_var, command=self.set_debug_lines_shown,
+                       font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.fg, selectcolor=self.bg,
+                       activebackground=self.bg, activeforeground=self.fg, cursor="hand2").pack(side=tk.RIGHT)
 
         self.debug_text = scrolledtext.ScrolledText(debug_frame, height=cfg.GUI_CONSOLE_HEIGHT, width=cfg.GUI_CONSOLE_WIDTH,
                                                      bg=cfg.GUI_CONSOLE_BG, fg=cfg.GUI_CONSOLE_FG,
@@ -5454,6 +5456,10 @@ class AdoptMeGUI:
         status.pack_propagate(False)
         self.status = tk.Label(status, text="Ready", font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.accent, fg=self.fg)
         self.status.pack(anchor=tk.W, padx=cfg.GUI_OUTER_PADDING, pady=cfg.GUI_LABEL_PADDING)
+
+    def set_debug_lines_shown(self) -> None:
+        """The console's checkbox: show the debug lines or leave them out (output.log has them either way)."""
+        self.capture.setLevel(logging.DEBUG if self.show_debug_var.get() else logging.INFO)
 
     def send_to_back(self) -> None:
         """Stop being always-on-top and drop behind other windows."""
@@ -5486,7 +5492,7 @@ class AdoptMeGUI:
         """
 
         if self.is_running:
-            print("[!] Already running - press [STOP] first")
+            logger.warning("Already running - press [STOP] first")
             return
 
         self.is_running = True
@@ -5529,7 +5535,7 @@ class AdoptMeGUI:
                     record(log_failure, "stopped: Roblox lost focus")
                     final_status = "[STOPPED: Roblox not focused]"
             except Exception as e:
-                print(f"\n[ERROR] {e}\n{traceback.format_exc()}")
+                logger.error(f"{e}\n{traceback.format_exc()}")
                 record(log_failure, f"crashed: {type(e).__name__}: {e}")
                 final_status = "[ERROR]"
             finally:
@@ -5567,14 +5573,14 @@ class AdoptMeGUI:
     def set_config_flag(self, key: str, value: Any) -> None:
         """Persist one of the config's on/off switches (a checkbox was clicked)."""
         update_game_config(lambda c: c.update({key: value}))
-        print(f"[!] {key} = {value}")
+        logger.info(f"{key} = {value}")
 
     def save_server_link(self) -> None:
         """Persist the private server link typed into the entry box."""
         link = self.server_link_var.get().strip()
         if link != load_game_config()["private_server_link"]:
             update_game_config(lambda c: c.update(private_server_link=link))
-            print("[!] Private server link saved")
+            logger.info("Private server link saved")
 
     def reset_config(self) -> None:
         """Delete the persisted config (money collected, timers and the
@@ -5584,7 +5590,7 @@ class AdoptMeGUI:
         config = load_game_config()
         for key, var in self.config_flag_vars.items():
             var.set(config[key])
-        print("[!] Config reset to defaults")
+        logger.info("Config reset to defaults")
 
     def build_debug_tab(self, parent: Any) -> None:
         """The Debug tab: a Needs subtab (build_needs_tab()) and an Other one
@@ -5628,7 +5634,7 @@ class AdoptMeGUI:
     def set_need_enabled(self, name: str, value: bool) -> None:
         """Persist a need's switch (usable while a run goes on, like the other switches: update_game_config() is locked)."""
         update_game_config(lambda c: c.setdefault("needs_enabled", {}).update({name: value}))
-        print(f"[!] {name} need {'on' if value else 'off'}")
+        logger.info(f"{name} need {'on' if value else 'off'}")
 
     def build_other_tab(self, parent: Any) -> None:
         """Fill the Other subtab: record the next run, refresh the debug
@@ -5648,23 +5654,23 @@ class AdoptMeGUI:
         """Ask, then empty the debug folder (refresh_debug()). Not while a run
         is going - it's writing there."""
         if self.is_running:
-            print("[debug] stop the run before refreshing the debug folder")
+            logger.debug("Stop the run before refreshing the debug folder")
             return
         if messagebox.askyesno("Refresh debug", "Delete everything in the debug folder (logs, images, recordings)?\n"
                                                 "The game config is kept."):
-            print(f"[debug] debug folder refreshed ({refresh_debug()} entries removed)")
+            logger.debug(f"Debug folder refreshed ({refresh_debug()} entries removed)")
 
     def test_handler(self, name: str, handler_cls: Callable[[], NeedHandler]) -> None:
         """Run one need handler on its own, outside the normal need-detection
         flow, so it can be tried even when it isn't in ENABLED_NEEDS."""
         def test():
-            print(f"\n[TEST] Running {name} handler...")
+            logger.info(f"[TEST] Running {name} handler...")
             try:
                 with task_unscrew():
                     handler_cls().handle()
             except TaskInterrupted as interruption:
-                print(f"[TEST] {name} interrupted by {interruption.reason}")
-            print(f"[TEST] {name.capitalize()} handler complete\n")
+                logger.info(f"[TEST] {name} interrupted by {interruption.reason}")
+            logger.info(f"[TEST] {name.capitalize()} handler complete")
         self.run_async(test)
 
     def stop(self) -> None:
@@ -5673,7 +5679,7 @@ class AdoptMeGUI:
         """
         if not self.is_running:
             return
-        print("\n[!] STOPPING...")
+        logger.info("Stopping...")
         STOP_EVENT.set()
         self.status.config(text="Stopping...")
 

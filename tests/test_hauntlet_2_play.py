@@ -507,7 +507,7 @@ def test_room_1_is_the_entrance_hall_a_single_doorway_found_as_soon_as_it_has_se
 
 # --- the whole loop ---
 
-def test_the_loop_chooses_a_door_walks_to_it_and_goes_on_in_the_next_room(macro, world, monkeypatch, capsys):
+def test_the_loop_chooses_a_door_walks_to_it_and_goes_on_in_the_next_room(macro, world, monkeypatch, caplog):
     cfg = macro.cfg
     monkeypatch.setattr(macro.random, "choice", lambda options: options[-1])    # always the right-most allowed door
     monkeypatch.setattr(macro, "log_run_event", lambda text: events.append(text))
@@ -520,7 +520,7 @@ def test_the_loop_chooses_a_door_walks_to_it_and_goes_on_in_the_next_room(macro,
     pressed = [(kind, key) for kind, key, _ in world.keys]
     assert pressed[:2] == [("down", "w"), ("up", "w")]                           # the middle door: forward only
     assert pressed.count(("down", "w")) == pressed.count(("up", "w"))
-    out = capsys.readouterr().out
+    out = caplog.text
     assert "room 12, hearts not seen, items: none, doors: boarded, boarded, locked, going middle" in out
     assert "Hauntlet 2: room 13" in out
     assert events == ["Hauntlet 2: got as far as room 13"]
@@ -553,7 +553,7 @@ def play_one_room(macro, world, screens, seconds=1.5):
     macro.play_hauntlet_2(world.clock.now + cfg.MINIGAME_START_WAIT + cfg.HAUNTLET_ROOM_SETTLE + seconds, watch_of(macro))
 
 
-def test_the_grey_key_is_used_for_a_locked_door_a_cyan_potion_for_a_boarded_one_and_a_heart_potion_always(macro, world, monkeypatch, capsys):
+def test_the_grey_key_is_used_for_a_locked_door_a_cyan_potion_for_a_boarded_one_and_a_heart_potion_always(macro, world, monkeypatch, caplog):
     cfg = macro.cfg
     monkeypatch.setattr(macro, "log_run_event", lambda text: None)
     monkeypatch.setattr(cfg, "HAUNTLET_PHONE_CHANCE", 0.0)
@@ -564,7 +564,7 @@ def test_the_grey_key_is_used_for_a_locked_door_a_cyan_potion_for_a_boarded_one_
         monkeypatch.setattr(macro.random, "choice", lambda options, index=index: index)
         play_one_room(macro, world, [base])
         assert macro.clicks[:2] == [slot_of(macro, name) for name in expected], index
-    assert "used key, heart_potion" in capsys.readouterr().out
+    assert "used key, heart_potion" in caplog.text
 
 
 def test_the_red_potion_is_used_when_the_hearts_are_low_and_not_otherwise(macro, world, monkeypatch):
@@ -587,7 +587,7 @@ def test_an_item_not_held_is_not_clicked(macro, world, monkeypatch):
     assert macro.hauntlet_use_item("red_potion", watch_of(macro)) is not None and macro.clicks == [slot_of(macro, "red_potion", bar=100)]
 
 
-def test_after_the_phone_the_door_with_the_red_arrow_is_not_gone_through(macro, world, monkeypatch, capsys):
+def test_after_the_phone_the_door_with_the_red_arrow_is_not_gone_through(macro, world, monkeypatch, caplog):
     cfg = macro.cfg
     monkeypatch.setattr(macro, "log_run_event", lambda text: None)
     monkeypatch.setattr(cfg, "HAUNTLET_PHONE_CHANCE", 1.0)
@@ -601,7 +601,7 @@ def test_after_the_phone_the_door_with_the_red_arrow_is_not_gone_through(macro, 
     play_one_room(macro, world, lambda: after if phone in macro.clicks else before)
     assert macro.clicks[0] == phone
     assert chosen and 1 not in chosen[0]                                                      # the middle door was not among those to choose from
-    assert "ghost behind the middle one" in capsys.readouterr().out
+    assert "ghost behind the middle one" in caplog.text
 
 
 def test_without_the_arrow_every_door_is_still_a_choice_and_the_phone_is_only_used_by_chance(macro, world, monkeypatch):
@@ -638,7 +638,7 @@ def test_a_room_whose_doors_are_never_found_is_walked_straight_on_and_the_screen
     assert len(world.zooms) == 2                                               # zoomed out at the start and once more when the doors weren't found, not before each turn
 
 
-def test_the_entrance_hall_is_walked_through_until_the_doors_show_without_a_failure(macro, world, monkeypatch, capsys):
+def test_the_entrance_hall_is_walked_through_until_the_doors_show_without_a_failure(macro, world, monkeypatch, caplog):
     """Room 1 of a real run: a hall with one doorway, then the room with three doors, both numbered 1."""
     cfg = macro.cfg
     failures = []
@@ -649,7 +649,7 @@ def test_the_entrance_hall_is_walked_through_until_the_doors_show_without_a_fail
     world.screens = lambda: room if world.keys and world.clock.now > world.keys[0][2] + 2 * cfg.HAUNTLET_LOOK_INTERVAL else hall
     start = world.clock.now
     macro.play_hauntlet_2(start + cfg.MINIGAME_START_WAIT + 3 * (cfg.HAUNTLET_ROOM_SETTLE + cfg.HAUNTLET_DOORS_TIMEOUT + cfg.HAUNTLET_WALK_MAX), watch_of(macro))
-    out = capsys.readouterr().out
+    out = caplog.text
     assert "going ahead" in out and failures == []
     first_walk = [(kind, key, at) for kind, key, at in world.keys][:2]
     assert [(kind, key) for kind, key, _ in first_walk] == [("down", "w"), ("up", "w")]

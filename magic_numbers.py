@@ -196,7 +196,7 @@ for _directory in (NEEDS_DIR, DEBUG_DIR, IMAGES_DIR, LOGS_DIR, RUNS_DIR):
 RUN_LOG_PATH = os.path.join(LOGS_DIR, "run_log.txt")        # appended to, never overwritten
 RUN_COUNTER_PATH = os.path.join(LOGS_DIR, "run_counter.txt")  # holds the last-used run number
 GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")       # persisted game state - see load_game_config()
-OUTPUT_LOG_PATH = os.path.join(LOGS_DIR, "output.log")      # everything the macro prints, timestamped - see log_output()
+OUTPUT_LOG_PATH = os.path.join(LOGS_DIR, "output.log")      # everything the macro logs, timestamped, with its level - see OutputLog
 STATUS_PATH = os.path.join(LOGS_DIR, "status.json")         # live "is it alive and what's it doing" summary - see write_status()
 FAILURE_DIR = os.path.join(IMAGES_DIR, "failures")          # a folder per failure (screenshot, need icons, info) - see log_failure()
 RECORDINGS_DIR = os.path.join(DEBUG_DIR, "recordings")      # run videos - see RunRecorder
@@ -918,6 +918,7 @@ GUI_RESPAWN_COLOR = "#8e44ad"
 GUI_TEST_COLOR = "#e74c3c"
 GUI_CONSOLE_BG = "#0a0a0a"
 GUI_CONSOLE_FG = "#00ff00"
+GUI_CONSOLE_LEVEL_COLORS = {"DEBUG": "#4f9f4f", "INFO": GUI_CONSOLE_FG, "WARNING": "#ffb000", "ERROR": "#ff5050"}     # the console's text by log level (the debug lines dimmer)
 GUI_SQUARE_BUTTON_SIZE = 44         # px, the stop button is square (and the loop button as tall)
 GUI_STATUS_HEIGHT = 25              # px
 

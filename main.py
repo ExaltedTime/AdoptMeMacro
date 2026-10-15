@@ -2791,14 +2791,14 @@ def hauntlet_unstick(img: Image, target_index: Optional[int], tries: int, last_k
 def hauntlet_steer(img: Image, target_index: int) -> Optional[tuple[str, float]]:
     """While walking to door `target_index`: the key to strafe with and for how long, if the player has drifted off the door (as hauntlet_strafe()
     measures it: the three TVs, the circle in front of the door, the hearts) by HAUNTLET_STEER_MIN door spacings or more, else None - also None when the
-    three TVs aren't all on screen (close to the doors they are cut off). At most HAUNTLET_STEER_MAX seconds."""
+    three TVs aren't all on screen (close to the doors they are cut off). HAUNTLET_STEER_GAIN of the strafe, at most HAUNTLET_STEER_MAX seconds."""
     doors = find_hauntlet_doors(img)
     if len(doors) != 3:
         return None
     key, seconds = hauntlet_strafe(img, doors, target_index)
     if key is None or seconds < cfg.HAUNTLET_STEER_MIN * cfg.HAUNTLET_STRAFE_DURATION:
         return None
-    return key, min(seconds, cfg.HAUNTLET_STEER_MAX)
+    return key, min(seconds * cfg.HAUNTLET_STEER_GAIN, cfg.HAUNTLET_STEER_MAX)
 
 def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, watch: MinigameWatch, until_doors: bool = False,
                   target_index: Optional[int] = None, until_doorways: bool = False) -> bool:
@@ -2813,8 +2813,19 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
     run.walked_at = time.time()
     if run.stuck > 0:
         hold_key(cfg.HAUNTLET_BACK_KEY, cfg.HAUNTLET_BACKUP_DURATION)
-    if direction and duration > 0:
-        hold_key(direction, duration)                                           # one key at a time: the strafe, then the walk
+    aimed = False
+    if target_index is not None and not run.fork:                               # aimed in small steps, looking at the doors again before each (HAUNTLET_AIM_STEPS)
+        for _ in range(cfg.HAUNTLET_AIM_STEPS):
+            img = minigame_look(watch)
+            if detect_minigame_victory(img):
+                return True
+            steer = hauntlet_steer(img, target_index)
+            if steer is None:
+                break
+            hold_key(*steer)
+            aimed = True
+    if not aimed and direction and duration > 0:
+        hold_key(direction, duration)                                           # one key at a time: the strafe, then the walk (what couldn't be aimed is a strafe worked out in one go)
     arrived = False
     started = time.time()
     pydirectinput.keyDown(cfg.HAUNTLET_2_FORWARD_KEY)

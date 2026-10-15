@@ -436,14 +436,19 @@ HAUNTLET_LEFT_KEY = "a"
 HAUNTLET_RIGHT_KEY = "d"
 HAUNTLET_STRAFE_DURATION = 1.1
 HAUNTLET_STRAFE_MIN = 0.15
-HAUNTLET_STRAFE_MAX = 2.5
+HAUNTLET_STRAFE_MAX = 1.2
 HAUNTLET_WALK_MAX = 6.0
-# While walking to a door the player is steered: every HAUNTLET_STEER_EVERY seconds, with the three TVs in sight, a player HAUNTLET_STEER_MIN door spacings or more
-# off the door (hauntlet_strafe()'s measure) lets go of W, strafes for what that is (at most HAUNTLET_STEER_MAX seconds) and walks on. A room seen at an angle
-# (the camera turned) takes W along its wall, away from the doors, and the first strafe alone can't make up for it.
-HAUNTLET_STEER_EVERY = 1.0
-HAUNTLET_STEER_MIN = 0.4
-HAUNTLET_STEER_MAX = 1.2
+# A key A or D does not only strafe: the camera turns with it (about 13 degrees a second; the doors moved 280-340 px a second across the screen in the recordings), and
+# W then walks along the new heading, not along the room. A hold worked out in one go from where the doors were - a room seen at an angle makes them look farther
+# off than they are - overshoots, and W then walks into the wall beside the doors for the rest of the room's 30 s. So the player is aimed in small steps, a fresh
+# look at the doors before each: first (up to HAUNTLET_AIM_STEPS steps, none once the door is within HAUNTLET_STEER_MIN door spacings of the player), then while walking, every
+# HAUNTLET_STEER_EVERY seconds: a player HAUNTLET_STEER_MIN door spacings or more off its door (hauntlet_strafe()'s measure, with the three TVs in sight) lets go of W, holds the key
+# for HAUNTLET_STEER_GAIN of what that is (at most HAUNTLET_STEER_MAX seconds) and walks on.
+HAUNTLET_STEER_EVERY = 0.3
+HAUNTLET_STEER_MIN = 0.15
+HAUNTLET_STEER_MAX = 0.5
+HAUNTLET_STEER_GAIN = 0.6
+HAUNTLET_AIM_STEPS = 8
 HAUNTLET_WALK_PAST_DURATION = 1.5            # more of W after the number changed (a human's: 1.0-2.0 s, median 1.4)
 HAUNTLET_START_LOOK_INTERVAL = 0.5            # while waiting for the game to begin (its overlay to show)
 HAUNTLET_START_DELAY = 1.5                    # after the view is set up, before the first step: the entrance hall's doors open on their own (a macro-played run that had not moved by the 45 s the room's timer gave it was thrown out)

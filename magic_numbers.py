@@ -139,6 +139,8 @@ STRAY_WINDOWS: dict[str, dict[str, Any]] = {
 POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     # The paycheck popup's bank-card header ("BANK of Adopt Me!").
     "paycheck":        {"box": (740, 400, 1180, 490), "threshold": 0.8},
+    # The minigame popup's "Teleport there now?" line (the same in every minigame's popup; the popup is always in the same place).
+    "minigame_popup":  {"box": (780, 515, 1160, 585), "threshold": 0.8},
     # The sick need's Yes/No dialog.
     "sick_dialog":     {"box": (700, 400, 1220, 700), "threshold": 0.8},
     # The normal backpack's "BACKPACK" title, and the expanded one's BACK button.
@@ -435,6 +437,12 @@ HAUNTLET_STRAFE_DURATION = 1.1
 HAUNTLET_STRAFE_MIN = 0.15
 HAUNTLET_STRAFE_MAX = 2.5
 HAUNTLET_WALK_MAX = 6.0
+# While walking to a door the player is steered: every HAUNTLET_STEER_EVERY seconds, with the three TVs in sight, a player HAUNTLET_STEER_MIN door spacings or more
+# off the door (hauntlet_strafe()'s measure) lets go of W, strafes for what that is (at most HAUNTLET_STEER_MAX seconds) and walks on. A room seen at an angle
+# (the camera turned) takes W along its wall, away from the doors, and the first strafe alone can't make up for it.
+HAUNTLET_STEER_EVERY = 1.0
+HAUNTLET_STEER_MIN = 0.4
+HAUNTLET_STEER_MAX = 1.2
 HAUNTLET_WALK_PAST_DURATION = 1.5            # more of W after the number changed (a human's: 1.0-2.0 s, median 1.4)
 HAUNTLET_START_LOOK_INTERVAL = 0.5            # while waiting for the game to begin (its overlay to show)
 HAUNTLET_START_DELAY = 1.5                    # after the view is set up, before the first step: the entrance hall's doors open on their own (a macro-played run that had not moved by the 45 s the room's timer gave it was thrown out)
@@ -636,6 +644,7 @@ RIDE_R_HOLD_DURATION = 1.5     # hold KEY_HELICOPTER this long after equipping, 
 # landing spot. Only the category tab differs per destination (passed into
 # teleport_to() as `category_pos`); everything else is always the same,
 # hence "general".
+TELEPORT_YES_TRIES = 2            # the teleport dialog's Yes is clicked this often at most, until the view changes or the screen goes white (as for a minigame popup)
 TELEPORT_WAIT = 5.0               # wait after the teleport click, for it to take effect
 TELEPORT_SETTLE_WAIT = 7.0         # wait after stepping back, for the landing to settle
 GENERAL_TELEPORT_POS_2 = (895, 705)

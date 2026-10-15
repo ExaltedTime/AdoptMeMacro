@@ -257,19 +257,27 @@ def test_backpack_title_marks_the_normal_backpack(macro):
     assert not macro.detect_backpack_open(blank())
 
 
-def test_minigame_popup_is_a_green_yes_with_a_red_no_beside_it(macro):
+def with_popup_text(macro, img):
+    return put(img, reference(macro, "minigame_popup"), macro.cfg.POPUP_TEMPLATES["minigame_popup"]["box"])
+
+
+def test_minigame_popup_is_a_green_yes_with_a_red_no_beside_it_under_its_teleport_text(macro):
     yes, no = macro.cfg.GREEN_BUTTON_COLOR, macro.cfg.MINIGAME_POPUP_NO_COLOR
-    img = blank()
+    img = with_popup_text(macro, blank())
     img[600:640, 1000:1140] = yes[::-1]          # the colours are RGB, the image BGR
     assert not macro.detect_minigame_popup(img)  # Yes alone (a paycheck's button, say) isn't one
     img[600:640, 800:940] = no[::-1]
     assert macro.detect_minigame_popup(img)
+    elsewhere = blank()                          # another dialog with the same two colours and no "Teleport there now?": not the popup
+    elsewhere[600:640, 1000:1140] = yes[::-1]
+    elsewhere[600:640, 800:940] = no[::-1]
+    assert not macro.detect_minigame_popup(elsewhere)
 
 
 def test_sick_dialog_is_not_a_minigame_popup(macro):
     """The doctor's Yes/No dialog has the same two colours, but it is the sick handler's to answer."""
     yes, no = macro.cfg.GREEN_BUTTON_COLOR, macro.cfg.MINIGAME_POPUP_NO_COLOR
-    screen = blank()
+    screen = with_popup_text(macro, blank())
     screen[600:640, 1000:1140] = yes[::-1]
     screen[600:640, 800:940] = no[::-1]
     assert macro.detect_minigame_popup(screen)                          # without the dialog's title it is a popup...
@@ -383,6 +391,10 @@ POPUP_SCREENSHOTS = {                    # real screenshots of a 1920x1080 windo
     "paycheck": (False, None),                           # the paycheck's green CASH OUT, a green Okay, the win screen's NICE!: no red No beside them
     "star_rewards": (False, None),
     "game_over": (False, None),
+    "teleport_nursery": (False, None),                   # the macro's own teleport dialogs (backpack -> category -> Yes) have a green Yes and a red No too: 30 of them were
+    "teleport_dealership": (False, None),                # taken for a minigame popup and "dismissed" in a run, which broke the teleports and the needs after them
+    "cant_spawn_vehicle": (False, None),                 # "You can't spawn a vehicle here." with its green Okay
+    "backpack_open": (False, None),
 }
 
 
@@ -393,3 +405,28 @@ def test_minigame_popups_are_found_and_named_in_real_screenshots_and_other_green
         assert macro.detect_minigame_popup(img) is popup, name
         if popup:
             assert macro.identify_minigame(img) == which, name
+
+
+def screenshot(name):
+    import cv2
+    return cv2.imread(os.path.join(os.path.dirname(__file__), "popups", f"{name}.png"))
+
+
+def test_an_open_backpack_is_seen_in_a_real_screenshot(macro):
+    assert macro.detect_backpack_open(screenshot("backpack_open"))
+    for name in ("teleport_nursery", "teleport_dealership", "cant_spawn_vehicle"):          # (these have the backpack's expanded grid behind them: the dialog is over it)
+        assert macro.detect_minigame_popup(screenshot(name)) is False
+
+
+def test_the_cant_spawn_a_vehicle_window_is_closed_where_its_okay_is(macro, monkeypatch):
+    clicks = []
+    monkeypatch.setattr(macro, "grab_screen", lambda: screenshot("cant_spawn_vehicle"))
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: clicks.append((x, y)))
+    monkeypatch.setattr(macro.time, "sleep", lambda d: None)
+    assert macro.dismiss_stray_windows() == "cant_spawn_vehicle"
+    assert clicks == [macro.cfg.STRAY_WINDOWS["cant_spawn_vehicle"]["close_pos"]]
+    clicks.clear()
+    for name in ("teleport_nursery", "teleport_dealership", "backpack_open"):                # the teleport dialogs are no stray windows: they are the teleport's to answer
+        monkeypatch.setattr(macro, "grab_screen", lambda name=name: screenshot(name))
+        assert macro.dismiss_stray_windows() is None
+    assert clicks == []

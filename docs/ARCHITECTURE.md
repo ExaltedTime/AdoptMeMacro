@@ -457,7 +457,7 @@ rather than a flat sleep after the fact.
 **Helicopter.** A teleport-walk entry can fly instead of walk. `HELICOPTER_REQUIRED`
 (`magic_numbers.py`, default `False`) is the default for entries that don't
 say; an entry overrides it with `helicopter=True`/`False`. When on, after
-`teleport_to()` the handler holds `w` for `HELICOPTER_FORWARD_DURATION`,
+`teleport_to()` (the dialog's Yes is clicked up to `TELEPORT_YES_TRIES` times until the view changes or the screen goes white, like a minigame popup's; a Yes that never takes is logged) the handler holds `w` for `HELICOPTER_FORWARD_DURATION`,
 calls `equip_favorite_vehicle()` (the same backpack sequence `ride` uses; the
 first vehicle is the favorite once `setup_game()` has filtered the backpack),
 holds `r` for `HELICOPTER_HOLD_DURATION`, runs the entry's steps as
@@ -629,7 +629,7 @@ color is unique alone (Yes green = `GREEN_BUTTON_COLOR`, No red = the
 Exit Home button), so it needs the Yes green (`GREEN_BUTTON_COLOR`, at
 least `MINIGAME_POPUP_MIN_BUTTON_PIXELS` px) with the No red
 (`MINIGAME_POPUP_NO_COLOR`) within `MINIGAME_POPUP_NO_MAX_DX` / `_DY` px to
-its left - except the sick need's own "Ask Doctor Heart to heal your family?" dialog, which has the same Yes/No look but is the sick handler's to answer (its Yes is `SICK_FINAL_CLICK_POS`): `ref/popups/sick_dialog.png`, within its `POPUP_TEMPLATES` box, makes the detector ignore it. (Before that, the every-4s in-task check took it for a minigame popup and clicked its decline positions in the middle of the sick sequence - `unknown` popups clustered in the sick handler in the logs.) `identify_minigame()` then says which one it is: it matches the
+its left, **under the popup's own "Teleport there now?" line** (a crop, `ref/popups/minigame_popup.png`, `POPUP_TEMPLATES["minigame_popup"]`; identical in the popups of both minigames). The crop was added after a run in which 30 "popup dismissed (unknown)" lines, each a click on the popup's "do not show again" and No places, and 19 "can't spawn vehicle" windows came with a cascade of failed needs (choose 10 of 10, the buttons' needs 15 in a row): the dialogs taken for the popup were the macro's own teleport dialogs ("Teleport to the Nursery to adopt pets?", "Teleport to The Vehicle Dealership to see vehicles?": a green Yes and a red No, clicked by `teleport_to()` and "dismissed" by the in-task check in the middle of it), as the screenshots `tests/popups/teleport_*.png` show - the detector before the crop fired on both. The one dialog left out on purpose is the sick need's own "Ask Doctor Heart to heal your family?" dialog, which has the same Yes/No look but is the sick handler's to answer (its Yes is `SICK_FINAL_CLICK_POS`): `ref/popups/sick_dialog.png`, within its `POPUP_TEMPLATES` box, makes the detector ignore it. (Before that, the every-4s in-task check took it for a minigame popup and clicked its decline positions in the middle of the sick sequence - `unknown` popups clustered in the sick handler in the logs.) `identify_minigame()` then says which one it is: it matches the
 first line of the title (`MINIGAME_TITLE_BOX`) against the crops in
 `ref/halloween/` (`cv2.matchTemplate`, best score at least
 `MINIGAME_TITLE_MATCH_THRESHOLD`); a minigame's name is its file name,
@@ -1299,7 +1299,7 @@ takes a moment to show, so it is looked for `HAUNTLET_ARROW_LOOKS` times) and sa
 found (6 of them) always within a few percent of a door spacing of a door's TV; it fired on none of the ~700 frames of the macro-played runs, which used no phone. `hauntlet_use_item()` clicks an item's slot, as the capture shows a human doing, and waits
 `HAUNTLET_ITEM_WAIT`; the slots close up when an item is used up, so it looks for the slot on a fresh screenshot each time. The items are used before the walk starts. Whether an item
 worked is not looked at, and the gold key and the wand have no use yet. `hauntlet_strafe()` works out how far to go sideways and `hauntlet_walk()` then holds `HAUNTLET_LEFT_KEY` or `HAUNTLET_RIGHT_KEY` for that long, on its own,
-and only then `HAUNTLET_2_FORWARD_KEY` - never the two at once - until the number changes (or `HAUNTLET_WALK_MAX` seconds), and then `HAUNTLET_WALK_PAST_DURATION` longer. **The number changes while the
+and only then `HAUNTLET_2_FORWARD_KEY` - never the two at once - until the number changes (or `HAUNTLET_WALK_MAX` seconds), and then `HAUNTLET_WALK_PAST_DURATION` longer. While it walks, **the player is steered** (`hauntlet_steer()`): every `HAUNTLET_STEER_EVERY` seconds, with the three TVs in sight, a player `HAUNTLET_STEER_MIN` door spacings or more off its door - measured as the strafe is - lets go of W, strafes for what that is (at most `HAUNTLET_STEER_MAX` seconds) and walks on. The first strafe can't make up for a room seen at an angle, where W takes the player along a wall and away from the doors (captured room 4: the player ended against the left wall, opposite the first door, and the walk got nowhere); the distance is now measured again as it goes. **The number changes while the
 player is still in the doorway** (the camera close on the door, its TV filling the screen, the next room's doors out of sight); a human keeps walking
 1.0-2.0 s more (median 1.4 s in the capture) and a macro that let go at once stood there for the rest of the run - which is how the
 macro's own captures showed it. The

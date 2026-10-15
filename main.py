@@ -1879,7 +1879,14 @@ def teleport_to(category_pos: Point) -> None:
         wait_interruptible(cfg.UI_SETTLE)
         hover_click(*cfg.GENERAL_TELEPORT_POS_2)
         wait_interruptible(cfg.UI_SETTLE)
-        hover_click(*cfg.GENERAL_TELEPORT_POS_3)
+        for attempt in range(cfg.TELEPORT_YES_TRIES):            # the dialog's Yes: clicked again if nothing teleported (the click can be lost)
+            before = grab_screen()
+            hover_click(*cfg.GENERAL_TELEPORT_POS_3)
+            if minigame_teleported(before):
+                break
+            print(f"[debug] the teleport did not take after click {attempt + 1}")
+        else:
+            log_run_event("teleport: nothing happened after the dialog's Yes")
     wait_interruptible(cfg.TELEPORT_WAIT)
     print("[debug] walking backward...")
     hold_key("s", cfg.TELEPORT_BACK_DURATION)
@@ -2318,12 +2325,13 @@ def detect_sick_dialog(img: Image) -> bool:
 
 def detect_minigame_popup(img: Image) -> bool:
     """True if a Halloween minigame popup is on screen: a button of the Yes green (a piece of it of at least
-    MINIGAME_POPUP_MIN_BUTTON_PIXELS px) with the No red close to its left (neither colour is unique alone). Each green piece
+    MINIGAME_POPUP_MIN_BUTTON_PIXELS px) with the No red close to its left (neither colour is unique alone), under the popup's own "Teleport there now?" line (a crop,
+    POPUP_TEMPLATES["minigame_popup"]). Each green piece
     is looked at on its own: a popup over the open backpack, whose buttons are green too, was missed when all the green on the
     screen was taken together. See docs/ARCHITECTURE.md#need-handlers.
     """
-    if detect_sick_dialog(img):
-        return False
+    if detect_sick_dialog(img) or not popup_visible(img, "minigame_popup"):
+        return False                                                  # (another dialog with a green and a red button is not the popup: it has its "Teleport there now?")
     green = (exact_color_mask(img, cfg.GREEN_BUTTON_COLOR) > 0).astype(np.uint8)
     count, _, stats, centres = cv2.connectedComponentsWithStats(green)
     for i in range(1, count):
@@ -2772,6 +2780,18 @@ def hauntlet_unstick(img: Image, target_index: Optional[int], tries: int, last_k
     hold_key(key, min(cfg.HAUNTLET_UNSTICK_STEP * (tries + 1), cfg.HAUNTLET_UNSTICK_MAX))
     return key
 
+def hauntlet_steer(img: Image, target_index: int) -> Optional[tuple[str, float]]:
+    """While walking to door `target_index`: the key to strafe with and for how long, if the player has drifted off the door (as hauntlet_strafe()
+    measures it: the three TVs, the circle in front of the door, the hearts) by HAUNTLET_STEER_MIN door spacings or more, else None - also None when the
+    three TVs aren't all on screen (close to the doors they are cut off). At most HAUNTLET_STEER_MAX seconds."""
+    doors = find_hauntlet_doors(img)
+    if len(doors) != 3:
+        return None
+    key, seconds = hauntlet_strafe(img, doors, target_index)
+    if key is None or seconds < cfg.HAUNTLET_STEER_MIN * cfg.HAUNTLET_STRAFE_DURATION:
+        return None
+    return key, min(seconds, cfg.HAUNTLET_STEER_MAX)
+
 def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, watch: MinigameWatch, until_doors: bool = False,
                   target_index: Optional[int] = None, until_doorways: bool = False) -> bool:
     """Walk to a door: first strafe, `direction` (a strafe key, or None) held for `duration` seconds on its own, then hold forward
@@ -2795,6 +2815,7 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
         still_since: Optional[float] = None
         tries, last_key = 0, None
         locked_until, was_inside = 0.0, False
+        steer_at = started + cfg.HAUNTLET_STEER_EVERY
         while time.time() < started + cfg.HAUNTLET_WALK_MAX:
             img = minigame_look(watch)
             if detect_minigame_victory(img):
@@ -2821,6 +2842,16 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
                 still_since, last_view = None, None
                 wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
                 continue
+            if target_index is not None and not run.fork and now >= steer_at:      # the way forward isn't always towards the door (a room seen at an angle): steer
+                steer_at = now + cfg.HAUNTLET_STEER_EVERY
+                steer = hauntlet_steer(img, target_index)
+                if steer is not None:
+                    print(f"[debug] Hauntlet 2: off the door - a step {steer[0]} for {steer[1]:.2f}s")
+                    pydirectinput.keyUp(cfg.HAUNTLET_2_FORWARD_KEY)                # one key at a time
+                    hold_key(*steer)
+                    pydirectinput.keyDown(cfg.HAUNTLET_2_FORWARD_KEY)
+                    still_since, last_view = None, None
+                    continue
             view = hauntlet_view(img)
             if last_view is not None and float(np.abs(view - last_view).mean()) < cfg.HAUNTLET_STILL_LEVEL:
                 still_since = now if still_since is None else still_since
@@ -3932,6 +3963,17 @@ def mark_run_capture(reason: str) -> None:
     except Exception as error:
         print(f"[!] couldn't mark the recording: {error}")
 
+def run_capture_suffix(outcome: str, result: dict[str, Any]) -> str:
+    """What is added to a recording's folder name when the run is over, to tell it from the others: the candy corn earned (`_2105cc`, or
+    `_cc-unread`), the room reached in Hauntlet 2 (`_room10`) and `_failed` for a run that did not finish."""
+    earned = result.get("earned")
+    parts = [f"{earned}cc" if earned is not None else "cc-unread"]
+    if result.get("room") is not None:
+        parts.append(f"room{result['room']}")
+    if not outcome.startswith("finished"):
+        parts.append("failed")
+    return "_" + "_".join(parts)
+
 def finish_run_capture(capture: Optional[InputCapture], outcome: str, result: Optional[dict[str, Any]] = None) -> None:
     """Stop a run capture (if there is one), note how the run ended in its info.json (with the fields of `result`, what the run earned, see
     minigame_result()), and zip it for sending."""
@@ -3950,6 +3992,12 @@ def finish_run_capture(capture: Optional[InputCapture], outcome: str, result: Op
         info.update(result or {})
         with open(path, "w") as f:
             json.dump(info, f, indent=1)
+        renamed = capture.folder + run_capture_suffix(outcome, result or {})
+        try:
+            os.rename(capture.folder, renamed)                      # (before the zips are made: they are named after the folder)
+            capture.folder = renamed
+        except OSError as error:
+            print(f"[!] Couldn't rename the recording: {error}")
         zip_capture_in_background(capture.folder)
     except Exception as error:
         print(f"[!] Couldn't finish recording the minigame: {error}")
@@ -3985,7 +4033,7 @@ def prune_run_captures(label: str) -> None:
             except (OSError, ValueError):
                 info = {}
             try:
-                started = time.mktime(time.strptime(name[len(label) + 1:], "%Y%m%d_%H%M%S"))     # (the folder's name says when; its time changes as files go in and out)
+                started = time.mktime(time.strptime(name[len(label) + 1:][:15], "%Y%m%d_%H%M%S"))     # (the folder's name says when; its time changes as files go in and out)
             except ValueError:
                 started = os.path.getmtime(folder)
             runs.append((folder, info.get("earned"), started))

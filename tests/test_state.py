@@ -1144,6 +1144,18 @@ def test_a_white_screen_is_acted_on_mid_task_too(macro, monkeypatch):
     assert seen == [True]
 
 
+def test_a_white_screen_rejoin_is_an_event_not_a_failure(macro, monkeypatch):
+    """The game's own doing: the rejoin that works is all there is to it (the run log says `white screen: ...`, the report counts them)."""
+    monkeypatch.setattr(macro, "rejoin_reason", lambda: ("white_screen", "the screen has been white for 30s"))
+    monkeypatch.setattr(macro, "leave_and_rejoin", lambda clean_leave=True: True)
+    monkeypatch.setattr(macro, "setup_game", lambda: True)
+    failures = []
+    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: failures.append(reason))
+    assert macro.rejoin_game() is True
+    assert failures == [] and macro.run_stats.recoveries == 1 and macro.run_stats.failures == 0
+    assert "white screen: the screen has been white for 30s - rejoining" in open(macro.cfg.RUN_LOG_PATH).read()
+
+
 def test_detect_white_screen_wants_most_of_the_screen_completely_white(macro):
     import numpy as np
     screen = np.zeros((1080, 1920, 3), np.uint8)

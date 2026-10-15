@@ -735,7 +735,7 @@ asks `rejoin_reason()` whether the game needs rejoining. In order:
    screenshot under 10%). It is looked for wherever `rejoin_reason()` is
    asked, which is every cycle and every `UNSCREW_TASK_INTERVAL` mid-task, and
    the clock (`state.white_since`) restarts whenever the screen isn't white.
-   (Needs stay visible on the white screen, so nothing else notices it.)
+   (Needs stay visible on the white screen, so nothing else notices it.) It is the game's own doing and nothing the macro can help, so a rejoin that works is not a failure: the run log gets `white screen: ... - rejoining` and no screenshot, and the report counts them.
 3. *Stuck* - `DISABLED_NEEDS_REJOIN_THRESHOLD` needs have been disabled as
    stuck.
 4. *Stalled* - no need has been resolved for `NO_PROGRESS_REJOIN_INTERVAL`
@@ -1475,7 +1475,7 @@ again, since the counter goes with the logs.
   from `BUCKET_STEPS` so the run fills about `TARGET_BUCKETS` bars, stacked by
   basic / teleport / other need, with failures and rejoins marked); needs
   detected per check; average seconds per resolved need with how many there
-  were; counts of failures by kind and other events; and the script's own CPU and memory use over time, each with the whole PC's use as a second line (CPU on the same scale; memory in % on its own axis, labelled down the right edge). A need disabled as stuck is drawn in the first panel as a grey bar from when it was disabled until the next rejoin (which clears them), named above it. `parse_run()` reads
+  were; the best, worst and average candy corn of each minigame's runs (from the `minigame result:` lines) and counts of failures by kind and other events (a rejoin after a white screen is an event, `white screens (rejoined)`, not a failure); and the script's own CPU and memory use over time, each with the whole PC's use as a second line (CPU on the same scale; memory in % on its own axis, labelled down the right edge). A need disabled as stuck is drawn in the first panel as a grey bar from when it was disabled until the next rejoin (which clears them), named above it. `parse_run()` reads
   the log by the exact line wording `log_run_event()` writes, so a wording
   change there needs the matching regex in the RUN REPORT section of `main.py`. It never raises -
   a report problem can't take a run down.

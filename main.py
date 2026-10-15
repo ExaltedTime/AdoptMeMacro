@@ -2276,8 +2276,8 @@ def rejoin_reason() -> Optional[tuple[str, str]]:
 
 def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
     """Recover when rejoin_reason() says so (or only for `kinds`): rejoin, run setup_game(),
-    clear disabled needs. Returns True if it recovered. All but the scheduled rejoin are
-    logged failures. See docs/ARCHITECTURE.md#stuck-needs.
+    clear disabled needs. Returns True if it recovered. All but the scheduled rejoin and the white screen's
+    (logged as events: `white screen: ...`) are logged failures. See docs/ARCHITECTURE.md#stuck-needs.
     """
     at_start = state.run_start_pending and kinds is None
     if kinds is None:
@@ -2293,6 +2293,10 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
     elif at_start and reason == ROBLOX_NOT_RUNNING:
         print(f"[!] {reason} - starting it")
         log_run_event(f"{reason} at the start - starting it")
+    elif kind == "white_screen":
+        print(f"[!] {reason} - rejoining")                            # the game's own doing, nothing the macro can help: a rejoin that works is all there is to it
+        log_run_event(f"white screen: {reason} - rejoining")
+        run_stats.recoveries += 1
     else:
         log_failure(f"{reason} - rejoining")
         run_stats.recoveries += 1
@@ -4770,6 +4774,7 @@ IDLE_CHECKS_RE = re.compile(r"^idle checks: (\d+) over (\d+)s$")
 SAME_CHECKS_RE = re.compile(r"^same checks: (\d+) over (\d+)s$")
 DISABLED_RE = re.compile(r"^disabled: (\S+)$")
 RESOURCES_RE = re.compile(r"^resources: cpu ([\d.]+)% mem (\d+)MB(?: pc ([\d.]+)%(?: pcmem (\d+)%)?)?$")
+RESULT_RE = re.compile(r"^minigame result: (.+?): (\d+) candy corn")
 MINIGAME_RE = re.compile(r"^minigame (started|finished): (.*?)(?: \(\d+s\))?$")
 
 TARGET_BUCKETS = 40
@@ -4798,7 +4803,7 @@ def parse_ts(text: str) -> float:
 
 def parse_run(log_path: str, run: Union[int, str]) -> Optional[dict[str, Any]]:
     """Everything the report needs from run `run` of the log, as a dict, or None if the run
-    isn't in it (keys: start, end, resolved, detected, failures, rejoins, disabled,
+    isn't in it (keys: start, end, resolved, detected, failures, rejoins, disabled, results,
     resources, events). "same checks: N" lines stand for N more of the detection above.
     See docs/ARCHITECTURE.md#debugging-an-unattended-run.
     """
@@ -4814,7 +4819,7 @@ def parse_run(log_path: str, run: Union[int, str]) -> Optional[dict[str, Any]]:
     if not lines:
         return None
     data: dict[str, Any] = {"start": lines[0][0], "end": lines[-1][0], "resolved": [], "detected": [],
-            "failures": [], "rejoins": [], "disabled": [], "resources": [], "events": Counter()}
+            "failures": [], "rejoins": [], "disabled": [], "resources": [], "results": [], "events": Counter()}
     for t, text in lines:
         if m := RESOLVED_RE.match(text):
             data["resolved"].append((t, m.group(1), int(m.group(2))))
@@ -4846,6 +4851,10 @@ def parse_run(log_path: str, run: Union[int, str]) -> Optional[dict[str, Any]]:
             data["events"]["quiet periods logged"] += 1
         elif text.startswith("FAILURE: "):
             data["failures"].append((t, text[len("FAILURE: "):]))
+        elif text.startswith("white screen: "):
+            data["events"]["white screens (rejoined)"] += 1
+        elif m := RESULT_RE.match(text):
+            data["results"].append((t, m.group(1), int(m.group(2))))
         elif text.startswith("recovery complete"):   # once per rejoin ("scheduled rejoin" is logged at its start too)
             data["rejoins"].append(t)
             data["events"]["rejoins"] += 1
@@ -5060,10 +5069,16 @@ def draw_report(data: dict[str, Any], run: Union[int, str], basic: set[str], tel
     else:
         draw_text(img, "nothing resolved", left, top + 44, 0.5)
 
-    # 4. counts
+    # 4. counts (the minigames' best, worst and average candy corn first)
     left, top = 820, 830
     draw_text(img, "Failures and events", left, top, 0.6, thick=2)
     y = top + 24
+    by_game: dict[str, list[int]] = defaultdict(list)
+    for _, game, earned in data["results"]:
+        by_game[game].append(earned)
+    for game, earned_list in sorted(by_game.items()):
+        draw_text(img, f"{game}: best {max(earned_list)}, worst {min(earned_list)}, average {sum(earned_list) / len(earned_list):.0f} candy corn ({len(earned_list)} runs)", left, y, 0.5)
+        y += 22
     kinds = Counter(failure_kind(t) for _, t in data["failures"])
     for kind, count in kinds.most_common(5):
         draw_text(img, f"{count:>4}  failure: {kind}", left, y, 0.5, COLOR_FAILURE)

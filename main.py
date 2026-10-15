@@ -2953,7 +2953,7 @@ def ghost_character_box(hsv: Image) -> Optional[tuple[int, int, int, int]]:
     """Where the character (and its pet, hoodie and beam) is when the camera is close to it - pulled in by a wall, as it is in the
     dark of the boss fight - and its cyan clothes are blobs as big as ghosts: the glowing pink emblem of its backpack
     (GHOST_EMBLEM_HSV, at least GHOST_EMBLEM_MIN px, in GHOST_EMBLEM_BOX) gives the place and, by its size, how close the camera is;
-    the box is GHOST_SELF_SCALE times the emblem's size (its side's square root, at least GHOST_SELF_MIN_UNIT) to the sides, up and down, and farther to the right (GHOST_SELF_RIGHT).
+    the box is GHOST_SELF_SCALE times the emblem's size (its side's square root, at least GHOST_SELF_MIN_UNIT) to the sides, up and down.
     None when the emblem isn't seen: the camera is far, and GHOST_IGNORE_BOXES' small box does."""
     left, top, right, bottom = cfg.GHOST_EMBLEM_BOX
     mask = cv2.inRange(hsv[top:bottom, left:right], cfg.GHOST_EMBLEM_HSV[0], cfg.GHOST_EMBLEM_HSV[1])
@@ -2964,14 +2964,12 @@ def ghost_character_box(hsv: Image) -> Optional[tuple[int, int, int, int]]:
     x, y = left + int(centres[best][0]), top + int(centres[best][1])
     unit = max(float(np.sqrt(stats[best, cv2.CC_STAT_AREA])), cfg.GHOST_SELF_MIN_UNIT)
     side, up, down = cfg.GHOST_SELF_SCALE
-    right_units, right_max = cfg.GHOST_SELF_RIGHT                   # the pet is to the right of the character
-    return int(x - side * unit), int(y - up * unit), int(x + min(max(side, right_units) * unit, right_max)), int(y + down * unit)
+    return int(x - side * unit), int(y - up * unit), int(x + side * unit), int(y + down * unit)
 
 def find_ghost_blobs(img: Image, boss: bool = False) -> list[tuple[int, int, int]]:
     """(x, y, area) of every ghost in `img`, biggest first: the connected pieces of the translucent cyan the ghosts and the
     boss are drawn in (GHOST_COLOR), at least GHOST_MIN_AREA px, not in the HUD (GHOST_IGNORE_BOXES) or on the character -
-    and, in the boss phase (`boss`), not on the boss's health bar, whose crest and icons are cyan too, and no big blob that fills less
-    than GHOST_BOSS_BLOB_FILL of its bounding box (fog, a light shaft)."""
+    and, in the boss phase (`boss`), not on the boss's health bar, whose crest and icons are cyan too."""
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     mask = cv2.bitwise_or(cv2.inRange(hsv, *cfg.GHOST_COLOR), cv2.inRange(hsv, *cfg.GHOST_COLOR_FAR))
     closeup = ghost_character_box(hsv)
@@ -2979,15 +2977,28 @@ def find_ghost_blobs(img: Image, boss: bool = False) -> list[tuple[int, int, int
         mask[max(0, top):bottom, max(0, left):right] = 0
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((cfg.GHOST_CLOSE, cfg.GHOST_CLOSE), np.uint8))
     count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    blobs = []
-    for i in range(1, count):
-        area, width, height = (int(stats[i, key]) for key in (cv2.CC_STAT_AREA, cv2.CC_STAT_WIDTH, cv2.CC_STAT_HEIGHT))
-        if area < cfg.GHOST_MIN_AREA:
-            continue
-        if boss and area >= cfg.GHOST_BOSS_MIN and area < cfg.GHOST_BOSS_BLOB_FILL * width * height:       # a big one that is thin or ragged is fog or a light shaft, not the boss
-            continue
-        blobs.append((int(centres[i][0]), int(centres[i][1]), area))
+    blobs = [(int(centres[i][0]), int(centres[i][1]), int(stats[i, cv2.CC_STAT_AREA])) for i in range(1, count)
+             if stats[i, cv2.CC_STAT_AREA] >= cfg.GHOST_MIN_AREA]
     return sorted(blobs, key=lambda blob: -blob[2])
+
+def find_ghost_alerts(img: Image) -> list[tuple[int, int, int]]:
+    """(x, y, height) of every white "!" in `img` - the mark over furniture a ghost hides in: a white bar with a white dot under it
+    (GHOST_ALERT_*), whatever the camera's distance, left to right."""
+    top, bottom = cfg.GHOST_ALERT_BAND
+    level = cfg.GHOST_ALERT_WHITE
+    white = cv2.inRange(img[top:bottom], (level, level, level), (255, 255, 255))
+    count, _, stats, _ = cv2.connectedComponentsWithStats(white, connectivity=8)
+    pieces = [tuple(int(v) for v in stats[i]) for i in range(1, count) if stats[i, cv2.CC_STAT_AREA] >= 8]
+    found = []
+    for x, y, w, h, area in pieces:
+        if h < cfg.GHOST_ALERT_ASPECT * w or h < cfg.GHOST_ALERT_MIN_HEIGHT or area < 0.55 * w * h:
+            continue                                                                   # not a bar
+        for x2, y2, w2, h2, area2 in pieces:
+            if (y + h < y2 <= y + 1.5 * h and abs((x2 + w2 / 2) - (x + w / 2)) <= 0.8 * w + 4 and 0.35 * w <= w2 <= 1.6 * w
+                    and h2 <= 1.6 * w2 + 2 and area2 >= 0.5 * w2 * h2):                    # a dot under it
+                found.append((x + w // 2, top + y + h // 2, h))
+                break
+    return sorted(found)
 
 def ghost_boss_bar_visible(img: Image) -> bool:
     """Whether the boss's health bar (a gold frame along the top, GHOST_BOSS_BAR_*) is on screen: the boss phase."""
@@ -3126,6 +3137,8 @@ class GhostFeedback:
         self.scored_at = now                                # the last time the score changed (or the start)
         self.spot_since = now                               # since when the beam has been on what it is on
         self.bad: list[tuple[Point, float]] = []            # places that scored nothing, and until when to keep away from them
+        self.skipped: list[list[float]] = []                # [x, y, until]: blobs the score says are no ghosts, where they were at the last look
+        self.hide_tries = 0                                 # furniture tried around the blob the beam is on, without a score
 
     def look(self, img: Image, now: float) -> bool:
         """Take in a screenshot. True if the score changed since the look before."""
@@ -3141,15 +3154,38 @@ class GhostFeedback:
         self.digits = digits
         if changed:
             self.scored_at = self.spot_since = now
+            self.hide_tries = 0
         return changed
 
-    def new_spot(self, now: float) -> None:
-        """The beam goes somewhere else: it has a trial of its own."""
+    def new_spot(self, now: float, new_target: bool = False) -> None:
+        """The beam goes somewhere else: it has a trial of its own (and with another blob - `new_target` - the furniture tried is counted afresh)."""
         self.spot_since = now
+        if new_target:
+            self.hide_tries = 0
 
-    def trial_over(self, now: float) -> bool:
-        """The beam has been where it is for GHOST_SPOT_TRIAL seconds without a score."""
-        return self.visible and now - max(self.scored_at, self.spot_since) >= cfg.GHOST_SPOT_TRIAL
+    def skip(self, point: Point, now: float) -> None:
+        """What is at `point` is no ghost: left alone for GHOST_SKIP_TIME seconds, wherever it goes."""
+        self.skipped.append([float(point[0]), float(point[1]), now + cfg.GHOST_SKIP_TIME])
+        self.hide_tries = 0
+
+    def follow_skipped(self, blobs: list[tuple[int, int, int]], now: float) -> list[tuple[int, int, int]]:
+        """`blobs` without the skipped ones; each skipped one moves to the blob it has become (the nearest within GHOST_STICK px), so that a pet that
+        flies about stays skipped, and is dropped when its time is up."""
+        self.skipped = [entry for entry in self.skipped if entry[2] > now]
+        kept = []
+        for blob in blobs:
+            for entry in self.skipped:
+                reach = max(cfg.GHOST_SKIP_RADIUS, float(blob[2]) ** 0.5)
+                if (blob[0] - entry[0]) ** 2 + (blob[1] - entry[1]) ** 2 <= reach ** 2:
+                    entry[0], entry[1] = float(blob[0]), float(blob[1])
+                    break
+            else:
+                kept.append(blob)
+        return kept
+
+    def trial_over(self, now: float, trial: Optional[float] = None) -> bool:
+        """The beam has been where it is for GHOST_SPOT_TRIAL seconds (or `trial`) without a score."""
+        return self.visible and now - max(self.scored_at, self.spot_since) >= (cfg.GHOST_SPOT_TRIAL if trial is None else trial)
 
     def stalled(self, now: float) -> bool:
         """No score for GHOST_STALL seconds."""
@@ -3237,10 +3273,15 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
             blobs = find_ghost_blobs(img, bar)
             if phase == "shielded":                                         # only the small ghosts count: what is bigger is the beam's glow or the boss's fog
                 blobs = [blob for blob in blobs if blob[2] <= cfg.GHOST_SMALL_MAX]
+            if phase == "ghosts":
+                alerts = find_ghost_alerts(img)                             # a "!" is a ghost hiding in the furniture below it: that comes first
+                if alerts:
+                    blobs = [(x, y + int(cfg.GHOST_ALERT_BELOW * height), cfg.GHOST_MIN_AREA) for x, y, height in alerts]
+            blobs = feedback.follow_skipped(blobs, time.time())
             target = choose_ghost_target(blobs, phase == "boss" and bool(blobs) and blobs[0][2] >= cfg.GHOST_BOSS_MIN, target)   # (the boss is a big one, else it's the ghosts that are there)
             now = time.time()
             if target is not None and (last_target is None or (target[0] - last_target[0]) ** 2 + (target[1] - last_target[1]) ** 2 > cfg.GHOST_STICK ** 2):
-                feedback.new_spot(now)                                      # another ghost: it has a trial of its own
+                feedback.new_spot(now, True)                                # another ghost: it has a trial of its own
             last_target = target
             if phase == "ghosts" and feedback.stalled(now):                 # nothing has scored for a long time (a view blocked by a pillar, a beam on the floor): somewhere else, looking another way
                 print(f"[debug] Ghost Gallery: no score for {cfg.GHOST_STALL:g}s - moving and turning the camera")
@@ -3259,9 +3300,21 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 mark_run_capture("Ghost Gallery: the beam on a ghost scores nothing")
                 if hide_spot is not None:
                     feedback.mark_bad(hide_spot, now)                       # (the furniture tried last scored nothing either)
-                hide_spot = find_furniture(watch, around=target, avoid=feedback.avoid(now))
-                hide_until = time.time() + cfg.GHOST_SPOT_TRIAL
-                feedback.new_spot(time.time())
+                    feedback.hide_tries += 1
+                if feedback.hide_tries >= cfg.GHOST_HIDE_TRIES:             # the blob and the furniture around it score nothing: no ghost (the pet)
+                    feedback.skip(target, now)
+                    hide_spot, hide_until, target, last_target = None, 0.0, None, None
+                    print("[debug] Ghost Gallery: what the beam is on scores nothing, furniture or not - left alone")
+                else:
+                    hide_spot = find_furniture(watch, around=target, avoid=feedback.avoid(now))
+                    hide_until = time.time() + cfg.GHOST_SPOT_TRIAL
+                    feedback.new_spot(time.time())
+                now = time.time()
+            elif phase == "boss" and target is not None and feedback.trial_over(now, cfg.GHOST_BOSS_TRIAL):
+                mark_run_capture("Ghost Gallery: the beam on what is taken for the boss scores nothing")
+                feedback.skip(target, now)                                  # fog, a light shaft: not the boss
+                print("[debug] Ghost Gallery: the biggest blob scores nothing - not the boss, left alone")
+                target, last_target = None, None
                 now = time.time()
             if target is not None:
                 last_seen = now

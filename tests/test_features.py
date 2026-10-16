@@ -349,6 +349,29 @@ def test_a_button_scan_that_finds_all_five_the_second_time_maps_them(macro, monk
     assert waits == [macro.cfg.BUTTON_SCAN_RETRY_WAIT] and macro.state.button_positions["sleepy"] == FIVE[4]
 
 
+def test_buttons_hidden_by_a_beam_or_the_character_leave_the_others_named_by_where_they_are(macro, monkeypatch):
+    """Real frames of a run (12:37 and 12:40): a beam of light crosses the thirsty button, and in the second the character stands before the potty
+    one. The scan found 4 and 3 buttons, and naming them by order sent the dirty need to the potty button."""
+    import cv2
+    here = os.path.join(os.path.dirname(__file__), "buttons")
+    monkeypatch.setattr(macro, "focus_roblox_click", lambda: True)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda *a, **k: None)
+    for name, missing in (("beam_hides_thirsty", {"thirsty"}), ("beam_hides_thirsty_character_hides_potty", {"thirsty", "potty"})):
+        screen = cv2.imread(os.path.join(here, f"{name}.png"))
+        monkeypatch.setattr(macro, "grab_screen", lambda screen=screen: screen)
+        assert macro.refresh_button_mapping() is True, name
+        assert set(macro.cfg.BUTTON_NAMES) - set(macro.state.button_positions) == missing, name
+        assert macro.state.button_positions["dirty"][0] == pytest.approx(858, abs=5), name
+        assert macro.click_need_button("thirsty") is False                                    # (no button seen: nothing is clicked)
+
+
+def test_buttons_that_are_not_where_the_buttons_are_are_not_named(macro):
+    slots = macro.cfg.BUTTON_SLOTS_X
+    assert macro.name_buttons_by_position([(slots[0] + 5, 600), (slots[3] - 8, 640)]) == {"hungry": (slots[0] + 5, 600), "potty": (slots[3] - 8, 640)}
+    assert macro.name_buttons_by_position([(slots[0], 600), (slots[3] + 100, 600)]) == {}        # one is near none
+    assert macro.name_buttons_by_position([(slots[0], 600), (slots[0] + 10, 600)]) == {}         # two are near the same one
+
+
 def test_a_button_scan_that_finds_all_five_does_not_wait_or_log(macro, monkeypatch):
     waits = scans(monkeypatch, macro, FIVE)
     assert macro.refresh_button_mapping() is True and waits == []

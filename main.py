@@ -1121,6 +1121,17 @@ def click_button(button_x: float, button_y: float, need_name: str) -> bool:
     hover_click(button_x, button_y)
     return True
 
+def name_buttons_by_position(positions: list[Point]) -> dict[str, Point]:
+    """The buttons of `positions` named by the BUTTON_SLOTS_X each is within BUTTON_SLOT_TOLERANCE of - {} if one is near none of them, or
+    two are near the same one (they are then not the buttons, or not all of them)."""
+    named: dict[str, Point] = {}
+    for x, y in positions:
+        near = [name for name, slot in zip(cfg.BUTTON_NAMES, cfg.BUTTON_SLOTS_X) if abs(x - slot) <= cfg.BUTTON_SLOT_TOLERANCE and name not in named]
+        if len(near) != 1:
+            return {}
+        named[near[0]] = (x, y)
+    return named
+
 def refresh_button_mapping() -> bool:
     """Detect the action buttons and cache them in state.button_positions, clearing any
     previous mapping first so a failed detection never leaves a stale one. Anything but all five buttons is a failed
@@ -1141,17 +1152,20 @@ def refresh_button_mapping() -> bool:
         return False
 
     logger.info(f"Detected {len(positions)} button(s)")
-    if len(positions) != len(cfg.BUTTON_NAMES):
-        # The buttons are named by their order left to right, so a missed (or extra) one shifts every name after it: the
-        # mapping would click the wrong buttons, so none is made.
+    if len(positions) == len(cfg.BUTTON_NAMES):
+        named = dict(zip(cfg.BUTTON_NAMES, positions))
+    else:
+        # The buttons are named by their order left to right, so a missed one (hidden by the character or a beam of light) would shift
+        # every name after it: they are named by where they are instead, if each is where one of the buttons is, else none is made.
+        named = name_buttons_by_position(positions)
         log_run_event(f"button scan found {len(positions)} of {len(cfg.BUTTON_NAMES)} again: "
-                      + ", ".join(f"({x}, {y})" for x, y in positions))
-        return False
-    for i, (cx, cy) in enumerate(positions):
-        if i < len(cfg.BUTTON_NAMES):
-            name = cfg.BUTTON_NAMES[i]
-            state.button_positions[name] = (cx, cy)
-            logger.info(f"Button {i + 1}: '{name}' @ ({cx}, {cy})")
+                      + ", ".join(f"({x}, {y})" for x, y in positions)
+                      + (f" - named by position, no {', '.join(n for n in cfg.BUTTON_NAMES if n not in named)}" if named else " - not where the buttons are, none mapped"))
+        if not named:
+            return False
+    for name, (cx, cy) in named.items():
+        state.button_positions[name] = (cx, cy)
+        logger.info(f"Button '{name}' @ ({cx}, {cy})")
 
     logger.info("Button mapping refreshed")
     return True

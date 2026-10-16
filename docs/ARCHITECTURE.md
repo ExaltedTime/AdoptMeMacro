@@ -366,8 +366,12 @@ the buttons:
    updating. It clears the previous mapping first, even when detection fails,
    so a failed scan never leaves a stale position for `click_need_button()`.
    Anything but five buttons is a failed scan: it logs `button scan found N of 5`
-   and scans once more after `BUTTON_SCAN_RETRY_WAIT` seconds; if that is not
-   five either, nothing is mapped and it returns `False` (the names would be shifted).
+   and scans once more after `BUTTON_SCAN_RETRY_WAIT` seconds. If that is not
+   five either, the buttons found are named by where they are (`name_buttons_by_position()`: each within
+   `BUTTON_SLOT_TOLERANCE` of its `BUTTON_SLOTS_X`, none two of them) - a button can be hidden by the
+   character standing before it or by a beam of light across it, and naming by order would then shift
+   every name after it (in a run, dirty went to the potty button for 40 minutes). The need of a hidden button
+   finds no button mapped and fails; if a found one is near no slot, nothing is mapped and it returns `False`.
 
 ## Click & input primitives
 

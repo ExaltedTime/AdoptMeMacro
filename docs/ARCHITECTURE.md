@@ -1537,7 +1537,7 @@ the commands. It is started by hand, next to the macro: `python bot/discord_bot.
 - **`bot/discord_bot.py`** is the glue that can't be tested away from Discord (discord.py, the screen grab, the process check): the commands below, registered
   for the one guild if `guild_id` is set (instant) or globally (up to an hour to show).
 - **`bot_config.json`** (untracked, and there is no example file: this list is where the keys are written down; the file is JSON, paths with forward slashes): `token`, `owner_id`, `channel_id`, optionally `guild_id`, `stale_status_minutes`
-  (how long `status.json` may go without an update before `/status` says it is not updating), `log_lines_max` (what `/log` is capped at), `onedrive_dir` (where the capture zips are copied to; leave it out to copy nothing), `onedrive_keep_days` (copies older than that are deleted; 0 keeps them all), `heartbeat_hours` (0: no heartbeat), `repo_dir` and `python` (what `/start` launches `main.py` with; the bot's own folder and Python when left out), `stop_timeout_seconds`, `auto_restart` (default off) and `auto_restart_max_per_hour`.
+  (how long `status.json` may go without an update before `/status` says it is not updating), `log_lines_max` (what `/log` is capped at), `onedrive_dir` (where the capture zips are copied to; leave it out to copy nothing), `onedrive_keep_days` (copies older than that are deleted; 0 keeps them all), `heartbeat_hours` (0: no heartbeat), `repo_dir` and `python` (what `/start` launches `main.py` with; the bot's own folder and Python when left out), `stop_timeout_seconds`, `auto_restart` (default off), `auto_restart_max_per_hour`, `update_remote` and `update_branch` (what `/update` pulls: `origin` and `main`).
 - **Who is obeyed:** only `owner_id`, only in `channel_id`; anyone else's commands get no answer at all (`OwnerOnlyTree.interaction_check()`). The commands are a
   fixed list whose only arguments are numbers - nothing is run, no path is read from a message. The bot is created private ("Public Bot" off) and the token
   stays out of the repository (`.gitignore`).
@@ -1553,6 +1553,8 @@ the commands. It is started by hand, next to the macro: `python bot/discord_bot.
 | `/start` | starts the macro's loop: launches `python main.py --loop` if no `main.py` process is running, else leaves it the `start` command; then waits up to `BOT_START_CONFIRM` seconds for `status.json` to be written and says whether the loop showed |
 | `/stop` | asks the macro to exit (the `exit` command) and waits up to `stop_timeout_seconds` for its process to end; if it hasn't, kills it and releases the keys and mouse buttons from the bot |
 | `/restart` | `/stop`, then `/start` |
+| `/update` | pulls `update_remote`/`update_branch` (main) and restarts the macro - and the bot, if its own code changed - see [Update and rollback](#update-and-rollback) |
+| `/rollback` | goes back to the commit the PC was on before the last `/update`, and restarts the macro the same way |
 | `/need <need> <on>` | switches a need on or off, as the Debug tab's checkbox does (the macro must be running: the command goes through the command file); says what the game config shows a moment later |
 | `/option <option> <on>` | the other switches: `side_quest`, `resume_on_focus_loss`, `record_next_run`, `play_<minigame>` and `show_debug_lines` (the output's debug lines, which is only a checkbox and so is not confirmed) |
 | `/options` | which options and needs are on, read from the game config (`debug/.config`, with the defaults for what is missing) |
@@ -1577,7 +1579,21 @@ the commands. It is started by hand, next to the macro: `python bot/discord_bot.
 
 **What the bot keeps in mind.** `/start` and `/restart` set `desired_state` in `bot_state.json` to `running`, `/stop` to `stopped`. A macro whose process is gone while it should be running is a crash, posted once (`crash_check()`) and again when it is back; a macro never started with `/start` (started by hand, say) is never reported as crashed, and one stopped with `/stop` is not. With `auto_restart` on, the bot restarts it by itself, at most `auto_restart_max_per_hour` times an hour (`restart_allowed()`); off by default, since a macro that stopped because Roblox lost focus usually means the PC is in use. A macro that is running but not writing `status.json` is the stale-status alert, not a crash. Whatever the macro prints on its error output goes to `debug/logs/macro_stderr.log`.
 
-Not built yet (the last phase of the plan): updating the macro (`/update`, `/rollback`).
+### Update and rollback
+
+`/update` takes whatever has been merged into `main` and runs it, from Discord, without a trip to the PC. It takes no argument: the remote and branch are the config's `update_remote` and `update_branch` (`origin` and `main`), and no other branch can be named in a message.
+
+1. **The plan, before anything is changed** (`make_plan()` over a `GitRunner`, so the tests run it against real repositories made in a temporary folder): `git fetch` of that branch (the only thing it changes), then `update_plan()` decides from the commits. Same commit: "already up to date". **Local changes to tracked files** (`git status --porcelain --untracked-files=no`; untracked files and the git-ignored `debug/` don't count): refused, naming them - nothing is ever discarded. The PC **ahead** of the branch, or the histories **diverged**: refused. Only a fast-forward goes ahead, and the plan lists the commits it brings (`git log --oneline`).
+2. **`apply_commit()`:** the macro is stopped as `/stop` does it (cooperatively, killed only if it will not end), `git merge --ff-only` moves the PC to the fetched commit, and the files that changed are listed (`git diff --name-only`). The commit the PC was on is kept in `bot_state.json` (`previous_commit`) before any of this, so a failure halfway can still be rolled back.
+3. If `requirements.txt` changed, `pip install -r requirements.txt` runs with the configured Python (`BOT_PIP_TIMEOUT`; the file is UTF-16, which pip reads); if it fails the macro is **not** started and `/rollback` is offered.
+4. The macro is started again (as `/start` does, waiting up to `BOT_START_CONFIRM` seconds for its status) **if it was running**; one that was stopped stays stopped. If the loop does not show, the end of `macro_stderr.log` is posted with the `/rollback` offer.
+5. **The bot restarts itself** when its own code changed - a file under `bot/`, `magic_numbers.py` (which it reads) or `requirements.txt` (`needs_bot_restart()`) - because Python does not reload a running program: it posts that, closes the Discord connection, and `main()` starts the same command again (`os.execv`; on Windows a new console window, since `execv` there leaves the terminal confused). The macro-side files alone (`main.py`, the references) need no bot restart.
+
+`/rollback` goes back to `previous_commit` with `git reset --hard`, with the same refusals (local changes to tracked files; no earlier commit; a commit that is no longer in this copy), then steps 2 to 5. It undoes one `/update`; a later `/update` pulls `main` again. The tests run both against real throwaway repositories: a clean update, an untracked file, a changed tracked file, ahead, diverged, a bad branch, and the way back.
+
+Nothing starts by itself with the PC: the bot is only ever started by hand, and the only time it starts itself is this restart after an update.
+
+Not built yet: nothing of the plan's phases is left.
 
 ## Automated checks
 

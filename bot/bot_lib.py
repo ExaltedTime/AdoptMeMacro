@@ -8,7 +8,7 @@ import re
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import magic_numbers as cfg
 
@@ -36,11 +36,15 @@ class Config:
     stop_timeout_seconds: float
     auto_restart: bool
     auto_restart_max_per_hour: int
+    update_remote: str           # what /update pulls from: this remote's branch (the default: origin's main)
+    update_branch: str
 
 
+GIT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")      # a remote or branch name: nothing git could take for an option, no spaces
 REQUIRED = ("token", "owner_id", "channel_id")
 DEFAULTS: dict[str, Any] = {"guild_id": None, "stale_status_minutes": 5, "log_lines_max": 40, "onedrive_dir": "", "onedrive_keep_days": 14, "heartbeat_hours": 0,
-            "repo_dir": "", "python": "", "stop_timeout_seconds": 30, "auto_restart": False, "auto_restart_max_per_hour": 3}
+            "repo_dir": "", "python": "", "stop_timeout_seconds": 30, "auto_restart": False, "auto_restart_max_per_hour": 3,
+            "update_remote": "origin", "update_branch": "main"}
 
 
 def load_config(path: str) -> Config:
@@ -83,11 +87,14 @@ def load_config(path: str) -> Config:
         raise ConfigError("auto_restart must be true or false")
     if not isinstance(values["auto_restart_max_per_hour"], int) or isinstance(values["auto_restart_max_per_hour"], bool) or values["auto_restart_max_per_hour"] < 1:
         raise ConfigError("auto_restart_max_per_hour must be a whole number of at least 1")
+    for key in ("update_remote", "update_branch"):
+        if not isinstance(values[key], str) or not GIT_NAME.match(values[key]) or ".." in values[key]:
+            raise ConfigError(f"{key} must be a name of letters, digits and . _ / - (not starting with a dash), not {values[key]!r}")
     return Config(values["token"], values["owner_id"], values["channel_id"], values["guild_id"],
                   float(values["stale_status_minutes"]), values["log_lines_max"], values["onedrive_dir"].strip(),
                   float(values["onedrive_keep_days"]), float(values["heartbeat_hours"]),
                   values["repo_dir"].strip(), values["python"].strip(), float(values["stop_timeout_seconds"]),
-                  values["auto_restart"], values["auto_restart_max_per_hour"])
+                  values["auto_restart"], values["auto_restart_max_per_hour"], values["update_remote"], values["update_branch"])
 
 
 def is_allowed(config: Config, user_id: int, channel_id: int) -> bool:
@@ -397,6 +404,7 @@ class BotState:
     desired_state: Optional[str] = None                      # "running" or "stopped" after the bot's /start and /stop, None before: a macro that is gone is a crash only if it should run
     crash_reported: bool = False                             # the macro's process is gone and that was posted
     restarts: list[float] = field(default_factory=list)      # when the bot restarted the macro by itself (the last hour counts)
+    previous_commit: Optional[str] = None                    # the commit the PC was on before the last /update: what /rollback goes back to
 
 
 def load_state(path: str) -> BotState:
@@ -409,6 +417,8 @@ def load_state(path: str) -> BotState:
     for key in ("charts", "captures"):
         if isinstance(data.get(key), list):
             setattr(state, key, [item for item in data[key] if isinstance(item, str)])
+    if isinstance(data.get("previous_commit"), str) and re.fullmatch(r"[0-9a-f]{7,64}", data["previous_commit"]):
+        state.previous_commit = data["previous_commit"]
     if isinstance(data.get("restarts"), list):
         state.restarts = [item for item in data["restarts"] if isinstance(item, (int, float)) and not isinstance(item, bool)]
     for key in ("stale", "crash_reported"):
@@ -593,3 +603,98 @@ def started_since(status: Optional[dict[str, Any]], since: datetime) -> bool:
         return status is not None and datetime.strptime(str(status.get("updated")), TIME_FORMAT) >= since.replace(microsecond=0)
     except ValueError:
         return False
+
+
+# --- update and rollback (Phase 5) ---
+
+@dataclass(frozen=True)
+class UpdatePlan:
+    """What /update or /rollback will do: `kind` is "update" (or "rollback") to go ahead, anything else to stop with `text` as the reason."""
+    kind: str
+    text: str
+
+
+def short(commit: str) -> str:
+    return commit[:7]
+
+
+def dirty_files(porcelain: str) -> list[str]:
+    """The paths in `git status --porcelain --untracked-files=no` output (a line is two status characters, a space, the path; a rename's new path)."""
+    return [line[3:].split(" -> ")[-1].strip() for line in porcelain.splitlines() if len(line) > 3]
+
+
+def files_text(files: list[str], limit: int = 8) -> str:
+    return ", ".join(files[:limit]) + (f" and {len(files) - limit} more" if len(files) > limit else "")
+
+
+def log_text(lines: list[str], limit: int = 15) -> str:
+    """The `git log --oneline` lines of what is pulled, the newest first, at most `limit` of them."""
+    return "\n".join(lines[:limit]) + (f"\n... and {len(lines) - limit} more" if len(lines) > limit else "")
+
+
+def update_plan(head: str, target: str, dirty: list[str], head_in_target: bool, target_in_head: bool, log_lines: list[str], name: str) -> UpdatePlan:
+    """Whether /update may move the PC from commit `head` to `target` (`name`, say origin/main) and what to say: nothing to do when they are the same,
+    never over local changes to tracked files, and only forward - `head_in_target` (head is an ancestor of target: a fast-forward). If target is
+    behind head (`target_in_head`) the PC is ahead; otherwise the histories have diverged."""
+    if head == target:
+        return UpdatePlan("up_to_date", f"Already up to date at {short(head)} ({name}).")
+    if dirty:
+        return UpdatePlan("dirty", f"The PC's copy has local changes to tracked files ({files_text(dirty)}) - not updating. Nothing was changed.")
+    if not head_in_target:
+        if target_in_head:
+            return UpdatePlan("ahead", f"The PC is ahead of {name} ({short(head)} is past {short(target)}) - nothing to pull.")
+        return UpdatePlan("diverged", f"The PC's history and {name} have diverged ({short(head)} vs {short(target)}) - not updating. Nothing was changed.")
+    return UpdatePlan("update", f"Updating {short(head)} -> {short(target)}:\n{log_text(log_lines)}")
+
+
+def rollback_plan(head: str, previous: Optional[str], dirty: list[str], previous_exists: bool) -> UpdatePlan:
+    """Whether /rollback may go back to commit `previous` (the one before the last /update, None if there was none): not over local changes."""
+    if previous is None:
+        return UpdatePlan("none", "There is no earlier commit to go back to - /rollback only undoes a /update.")
+    if not previous_exists:
+        return UpdatePlan("missing", f"The commit before the last update ({short(previous)}) is not in this copy any more - not rolling back.")
+    if previous == head:
+        return UpdatePlan("same", f"Already at {short(head)}, the commit before the last update.")
+    if dirty:
+        return UpdatePlan("dirty", f"The PC's copy has local changes to tracked files ({files_text(dirty)}) - not rolling back. Nothing was changed.")
+    return UpdatePlan("rollback", f"Going back {short(head)} -> {short(previous)}.")
+
+
+def needs_pip(changed: list[str]) -> bool:
+    """Whether the changed files include requirements.txt (the packages the macro and the bot need)."""
+    return "requirements.txt" in changed
+
+
+def needs_bot_restart(changed: list[str]) -> bool:
+    """Whether the bot itself runs different code after this change: its own files, the constants it reads (magic_numbers.py) or the packages."""
+    return any(path.startswith("bot/") or path in ("magic_numbers.py", "requirements.txt") for path in changed)
+
+
+GitRunner = Callable[[list[str]], tuple[int, str]]       # runs git with these arguments in the repository: (exit code, output)
+
+
+def git_ok(run: GitRunner, *args: str) -> str:
+    """The output of a git command that has to work; RuntimeError with git's own message if it doesn't."""
+    code, output = run(list(args))
+    if code != 0:
+        raise RuntimeError(f"git {' '.join(args)} failed: {output[-500:]}")
+    return output
+
+
+def make_plan(run: GitRunner, remote: str, branch: str, previous: Optional[str], rollback: bool) -> tuple[UpdatePlan, list[str], str]:
+    """Ask git what /update (or, with `rollback`, /rollback to commit `previous`) would do, changing nothing but the remote-tracking branch (a fetch):
+    the plan, the git arguments that carry it out (`merge --ff-only` to the fetched commit, or `reset --hard` to the earlier one) and the commit
+    the PC is on now. RuntimeError if git fails."""
+    head = git_ok(run, "rev-parse", "HEAD").strip()
+    dirty = dirty_files(git_ok(run, "status", "--porcelain", "--untracked-files=no"))
+    if rollback:
+        exists = previous is not None and run(["cat-file", "-e", f"{previous}^{{commit}}"])[0] == 0
+        plan = rollback_plan(head, previous, dirty, exists)
+        return plan, ["reset", "--hard", previous or ""], head
+    name = f"{remote}/{branch}"
+    git_ok(run, "fetch", remote, branch)
+    target = git_ok(run, "rev-parse", f"refs/remotes/{name}").strip()
+    head_in_target = run(["merge-base", "--is-ancestor", head, target])[0] == 0
+    target_in_head = run(["merge-base", "--is-ancestor", target, head])[0] == 0
+    log = git_ok(run, "log", "--oneline", f"{head}..{target}").splitlines() if head_in_target else []
+    return update_plan(head, target, dirty, head_in_target, target_in_head, log, name), ["merge", "--ff-only", target], head

@@ -32,8 +32,7 @@ Suggestions from reading through the code, none of them started. Roughly in orde
 
 ## Discord bot
 
-- [ ] Run phases 1 to 4 against a real Discord server and the real macro: the commands from a phone, a forced failure for the alert, a capture copied to OneDrive, `/start` and `/stop` (and that no key stays held in the game after a stop). Only the logic is tested; the Discord and Windows glue is not.
-- [ ] Phase 5: `/update` and `/rollback` (fast-forward pull of one configured branch, refusing a dirty tree or diverged history, a failed start reported with `/rollback` offered), and a Startup-folder shortcut so the bot comes back with the PC. The plan is in `docs/planned/Discord.md`.
+- [ ] Run the bot (all five phases are built) against a real Discord server and the real macro: the commands from a phone, a forced failure for the alert, a capture copied to OneDrive, `/start` and `/stop` (and that no key stays held in the game after a stop), `/update` and `/rollback` on a spare branch, and the bot restarting itself after an update (on Windows it opens a new console window). Only the logic is tested - and the update steps against real git repositories - not the Discord and Windows glue.
 
 ## Hauntlet 2
 

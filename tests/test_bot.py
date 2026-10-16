@@ -172,3 +172,60 @@ def test_a_blank_grab_is_told_from_a_real_one():
 def test_the_macro_is_told_from_the_bot_in_a_process_list():
     assert bot_lib.main_py_in(["C:\\Python\\python.exe C:\\AdoptMeMacro\\main.py"]) and bot_lib.main_py_in(["python", "python main.py --loop"])
     assert not bot_lib.main_py_in(["python bot/discord_bot.py main.py-config"]) and not bot_lib.main_py_in([])
+
+
+# --- the macro starts the bot (main.py: start_discord_bot()) ---
+
+class FakeProcess:
+    def __init__(self, returncode=None):
+        self.returncode, self.ended = returncode, []
+    def poll(self):
+        return self.returncode
+    def terminate(self):
+        self.ended.append("terminate")
+        self.returncode = 0
+    def wait(self, timeout=None):
+        pass
+    def kill(self):
+        self.ended.append("kill")
+
+
+@pytest.fixture
+def bot_start(macro, monkeypatch, tmp_path):
+    config = tmp_path / "bot_config.json"
+    config.write_text("{}")
+    launched = []
+    monkeypatch.setattr(macro.cfg, "BOT_CONFIG_PATH", str(config))
+    monkeypatch.setattr(macro.cfg, "BOT_LOG_PATH", str(tmp_path / "bot.log"))
+    monkeypatch.setattr(macro, "load_game_config", lambda: {"start_discord_bot": True})
+    monkeypatch.setattr(macro.subprocess, "Popen", lambda command, **kw: launched.append((command, kw)) or FakeProcess())
+    monkeypatch.setattr(macro.state, "bot_process", None)
+    return config, launched
+
+
+def test_the_macro_starts_the_bot_once_when_it_is_set_up_and_switched_on(macro, bot_start):
+    _, launched = bot_start
+    assert macro.start_discord_bot() is True
+    assert len(launched) == 1 and launched[0][0][1:] == [macro.cfg.BOT_SCRIPT, macro.cfg.BOT_CONFIG_PATH]
+    assert macro.start_discord_bot() is False and len(launched) == 1                 # (running already)
+
+
+def test_the_macro_does_not_start_the_bot_without_its_config_or_when_switched_off(macro, bot_start, monkeypatch):
+    config, launched = bot_start
+    monkeypatch.setattr(macro, "load_game_config", lambda: {"start_discord_bot": False})
+    assert macro.start_discord_bot() is False
+    monkeypatch.setattr(macro, "load_game_config", lambda: {"start_discord_bot": True})
+    config.unlink()
+    assert macro.start_discord_bot() is False and launched == []
+
+
+def test_the_bot_ends_with_the_macro_and_one_that_ended_at_once_is_reported(macro, bot_start):
+    macro.start_discord_bot()
+    process = macro.state.bot_process
+    assert macro.discord_bot_ended_early() is None
+    assert macro.stop_discord_bot() is True and process.ended == ["terminate"] and macro.state.bot_process is None
+    assert macro.stop_discord_bot() is False
+    macro.state.bot_process = FakeProcess(returncode=1)
+    with open(macro.cfg.BOT_LOG_PATH, "w") as f:
+        f.write("starting\nConfigError: token missing\n")
+    assert macro.discord_bot_ended_early() == "exit code 1: ConfigError: token missing"

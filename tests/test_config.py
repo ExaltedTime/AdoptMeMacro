@@ -7,7 +7,7 @@ import pytest
 
 import magic_numbers as cfg
 
-ENTRY_KEYS = {"teleport_pos", "steps", "helicopter", "max_wait", "final_click", "prompt_pos"}
+ENTRY_KEYS = {"teleport_pos", "steps", "helicopter", "max_wait", "final_click"}
 NEEDS = sorted(cfg.TELEPORT_WALK_NEEDS)
 
 
@@ -26,10 +26,7 @@ def test_a_teleport_walk_entry_is_well_formed(name):
         assert key in cfg.MOVE_KEYS and isinstance(seconds, (int, float)) and seconds > 0
     assert isinstance(entry.get("helicopter", False), bool)
     assert entry.get("max_wait", 1) > 0
-    for key in ("final_click", "prompt_pos"):
-        assert key not in entry or on_screen(entry[key])
-    if "final_click" in entry:
-        assert "prompt_pos" in entry, "a dialog to answer needs the prompt to click if 'e' doesn't bring it up"
+    assert "final_click" not in entry or on_screen(entry["final_click"])
 
 
 def test_the_two_need_lists_do_not_overlap():
@@ -53,6 +50,8 @@ def test_the_handler_carries_out_the_real_entry(macro, monkeypatch, name):
     monkeypatch.setattr(macro, "hold_key", lambda key, duration: held.append((key, duration)))
     monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
     monkeypatch.setattr(macro, "detect_sick_dialog", lambda img: True)
+    monkeypatch.setattr(macro, "detect_pet_focus", lambda img: False)
+    monkeypatch.setattr(macro, "find_doctor_prompt", lambda img: (10, 20))
     monkeypatch.setattr(macro, "grab_screen", lambda: None)
     monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=0, **kw: waited.append(max_wait))
     assert macro.TeleportWalkNeedHandler(name).handle() is True
@@ -61,7 +60,7 @@ def test_the_handler_carries_out_the_real_entry(macro, monkeypatch, name):
               if entry.get("helicopter", cfg.HELICOPTER_REQUIRED) else [])
     assert held == flight + list(entry["steps"])
     if "final_click" in entry:
-        assert entry["final_click"] in macro.clicks
+        assert macro.clicks == [(10, 20), entry["final_click"]]            # the doctor's prompt, then the Yes
     assert waited == [entry.get("max_wait", cfg.NEED_GONE_MAX_WAIT)]
 
 

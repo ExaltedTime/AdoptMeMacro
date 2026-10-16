@@ -82,7 +82,7 @@ every second instead of a line per check.
    each `need_name`, `get_need_handler(need_name)` looks it up in
    `NEED_HANDLER_CLASSES` and returns an instance, or `None` if that need
    is switched off (`need_is_enabled()`) or was disabled as stuck (see
-   [Stuck needs](#stuck-needs)) - a `None` result is printed and skipped
+   [Stuck needs](#stuck-needs)) - a `None` result is logged and skipped
    without doing anything. Every need is handled the same way from here: calling
    `.handle()` on whatever handler came back (see
    [Need handlers](#need-handlers)).
@@ -134,7 +134,7 @@ an extra walk from wherever the previous need left the character standing.
   config/tuning value lives in `magic_numbers.py` instead - see
   [Configuration reference](#configuration-reference).
 - **LOGGING** - `next_run_number()` / `log_run_event()`, plus the
-  unattended-run tools `log_output()`, `save_failure_report()`,
+  unattended-run tools (`logger` with its `OutputLog` handler, see below), `save_failure_report()`,
   `log_failure()` and `write_status()` - see
   [Debugging an unattended run](#debugging-an-unattended-run).
 - **GAME CONFIG** - `load_game_config()`/`save_game_config()`: the state
@@ -430,7 +430,7 @@ scrolls and flickers and used to be picked up as a huge "moving" blob. Pixels th
 since an up/down bob only changes the pet's top and bottom edges), blobs
 under `FOCUS_PET_MIN_AREA` are dropped as noise, and `focus_pet()` clicks
 the center of every remaining blob, largest first. It returns `False` (and
-the handler skips the need) if nothing moved. It prints what it saw (how many
+the handler skips the need) if nothing moved. It logs what it saw (how many
 blobs, each one's center, size and area) and writes
 `debug/debug_focus_pet.png` - the second frame with the changed pixels in
 red and a numbered box round every blob (the ignored area in blue) - plus
@@ -446,12 +446,12 @@ rather than a flat sleep after the fact.
 
 | Need | How it's handled |
 |---|---|
-| `hungry` / `thirsty` / `dirty` / `potty` / `sleepy` | `ButtonNeedHandler`: walk to the action buttons (`walk_to_buttons()`), refresh the button mapping (`refresh_button_mapping()`), click the matching one (`click_need_button()`), which then calls `wait_until_need_gone()` for that need name. A click can be refused - the game answers "Only Pets, Babies, and Dolls can use this." even when all five buttons were found - and for `BUTTON_REJECT_LOOK` seconds after each click `only_pets_message_visible()` looks for that text (the white of its letters against `ref/popups/only_pets.png`, `ONLY_PETS_*`, so what is behind it doesn't matter). If it is there the button is clicked again, up to `BUTTON_CLICK_TRIES` clicks in all (a run event each time); if the last one is refused too the handler returns False without waiting for the icon. |
+| `hungry` / `thirsty` / `dirty` / `potty` / `sleepy` | `ButtonNeedHandler`: walk to the action buttons (`walk_to_buttons()`), refresh the button mapping (`refresh_button_mapping()`), click the matching one (`click_need_button()`), which then calls `wait_until_need_gone()` for that need name. A click can be refused - the game answers "Only Pets, Babies, and Dolls can use this." even when all five buttons were found - and for `BUTTON_REJECT_LOOK` seconds after each click `only_pets_message_visible()` looks for that text (the white of its letters against `ref/popups/only_pets.png`, `ONLY_PETS_*`, so what is behind it doesn't matter). If it is there the handler waits `BUTTON_RETRY_WAIT` seconds (the pet may be on its way: in a run three clicks a few seconds apart were all refused) and clicks again, up to `BUTTON_CLICK_TRIES` clicks in all (a run event each time); a click that is refused again gives the need up (the handler returns False without waiting for the icon), and one that takes after a retry gets `BUTTON_RETRY_CLEAR_WAIT` seconds for the icon to clear (a retried need timed out at the full wait) without waiting for the icon. |
 | `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → hold zoom-in → throw the toy by clicking empty space `CATCH_THROW_COUNT` times, `CATCH_EMOTE_DELAY` after each → unequip. A fixed sequence: it doesn't wait for the icon (the next check sees whether it cleared). |
 | `pet` | `PetNeedHandler`: `focus_pet()` (see below, with `PET_FOCUS_CLICK_DURATION`), click the screen centre, move to `PET_SWIPE_START_OFFSET` above it, then hold the mouse down and swipe once down to `PET_SWIPE_END_OFFSET` below it over `PET_SWIPE_DURATION`, releasing the button in a `finally`. Same as `catch` - always the full fixed duration. |
 | `choose` | `ChooseNeedHandler`: `focus_pet()` (see below), find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. It doesn't wait for the icon to clear (it's gone at once; the next check confirms). |
 | `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then `equip_favorite_vehicle()` (backpack → vehicles → first vehicle → equip → close backpack), hold `r` (`KEY_HELICOPTER`) for `RIDE_R_HOLD_DURATION`, then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT`, ending early the moment "ride" is confirmed cleared (see below). |
-| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, clicked after the last hold (used by `sick`: after pressing `e` and waiting `SICK_CONFIRM_WAIT` the handler looks for the doctor's dialog, `detect_sick_dialog()`. Recognised: it clicks Yes. Not recognised and the pet view is not open: it logs `sick: dialog not recognised after e (pet focused: False) - clicking Yes anyway` and clicks Yes all the same, and the wait for the icon says whether it worked (in run 2 the recognition failed on 27 of 27 real attempts while the plain click had worked in run 1, so it is not trusted to fail the need). Not recognised and the pet view *is* open - the prompt is then a hand button `e` doesn't press: it logs `sick: no dialog after e (pet focused: True) - clicking the prompt`, backs out of the pet view (`dismiss_stray_windows()`), clicks the prompt on screen (`prompt_pos`, `SICK_PROMPT_POS`) and looks once more. Only if the dialog still isn't up has the need failed: the character respawns and the handler returns False at once, with no wait for the icon to clear, and `process_needs()` logs the failure), `helicopter` (see below) and `max_wait` (how long to wait for the need to clear afterwards; default `NEED_GONE_MAX_WAIT`, 75s). `sick` waits `SICK_PRE_E_WAIT` after its last hold before pressing `e`. Which table is used depends on `HALLOWEEN` - see below. |
+| `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, the Yes of a dialog the need has to answer after the last hold (used by `sick`). After `SICK_PRE_CLICK_WAIT` the handler looks for the doctor's *prompt* - the purple hand button over the player's head, a reference crop (`ref/popups/doctor_prompt.png`, `POPUP_TEMPLATES["doctor_prompt"]`, `find_doctor_prompt()`) - for `SICK_PROMPT_LOOK` seconds (`look_until()`, a look every `SICK_LOOK_INTERVAL`), and clicks it where it is found. It does *not* press `e`: that is the key of the pet's own prompt, and in a recording of the macro it opened the pet's menu, the pet view backed out of, and the click on the Yes that followed hit nothing - while a hand clicking the prompt, by hand, brought up the dialog about 2.5 s later (`tests/sick/`: the real screenshots of the prompt, the dialog and the pet view). If the pet view is open when the handler starts it is backed out of first (`dismiss_stray_windows()`; it hides the prompt). Then it looks for the dialog (`detect_sick_dialog()`, `ref/popups/sick_dialog.png`) for `SICK_CONFIRM_WAIT` seconds; seen, it clicks the Yes (`final_click`). The need is given up at once - the character respawns, the handler returns False with no wait for the icon to clear and `process_needs()` logs the failure - when the prompt is not on screen (`sick: the doctor's prompt is not on screen`) or the dialog does not come up (`sick: no dialog after the prompt was clicked`). (Before this the handler pressed `e`, clicked Yes whether or not the dialog was recognised, and waited out the icon's 75 s: sick failed to clear 16 times in a 7-hour run, each costing about two minutes), `helicopter` (see below) and `max_wait` (how long to wait for the need to clear afterwards; default `NEED_GONE_MAX_WAIT`, 75s). Which table is used depends on `HALLOWEEN` - see below. |
 | `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")` - up to `NEED_GONE_MAX_WAIT`, same early-exit as `ride` above. |
 
 **Helicopter.** A teleport-walk entry can fly instead of walk. `HELICOPTER_REQUIRED`
@@ -580,7 +580,7 @@ things and can't be abandoned halfway.
 way, by `popup_found(img, name)` / `popup_visible(img, name)`: the crop is matched
 (`cv2.matchTemplate`, `TM_CCOEFF_NORMED`) within a box and counts as found when the score reaches
 a threshold - the crop's centre is returned too, for the BACK button's click. Each name's box and
-threshold are in `POPUP_TEMPLATES` (`paycheck`, `sick_dialog`, `backpack_normal`, `backpack_back`) or, for
+threshold are in `POPUP_TEMPLATES` (`paycheck`, `sick_dialog`, `doctor_prompt`, `backpack_normal`, `backpack_back`) or, for
 a stray window (and `pet_focus`), in `STRAY_WINDOWS` with `STRAY_WINDOW_MATCH_THRESHOLD`. The
 detectors (`detect_paycheck()`, `detect_sick_dialog()`, `detect_pet_focus()`, the title check in
 `detect_backpack_normal()`, the BACK button in `close_backpack_if_open()`) are that lookup plus
@@ -735,7 +735,7 @@ asks `rejoin_reason()` whether the game needs rejoining. In order:
    screenshot under 10%). It is looked for wherever `rejoin_reason()` is
    asked, which is every cycle and every `UNSCREW_TASK_INTERVAL` mid-task, and
    the clock (`state.white_since`) restarts whenever the screen isn't white.
-   (Needs stay visible on the white screen, so nothing else notices it.)
+   (Needs stay visible on the white screen, so nothing else notices it.) It is the game's own doing and nothing the macro can help, so a rejoin that works is not a failure: the run log gets `white screen: ... - rejoining` and no screenshot, and the report counts them.
 3. *Stuck* - `DISABLED_NEEDS_REJOIN_THRESHOLD` needs have been disabled as
    stuck.
 4. *Stalled* - no need has been resolved for `NO_PROGRESS_REJOIN_INTERVAL`
@@ -1095,15 +1095,14 @@ knowing if you're modifying it:
 - **`add_config_checkbox(key)`** makes a checkbox for a persisted switch. It is
   deliberately not in `action_buttons`: the switches stay usable while a
   workflow runs, which is safe because `update_game_config()` is locked.
-- **`DebugCapture`** redirects `sys.stdout` into the on-screen console
-  (`self.debug_text`) for the lifetime of the GUI, so every `print()`
-  anywhere in the macro shows up there automatically (`write()` only logs
-  and queues - from any thread - and the Tk thread puts the queue on the
-  widget every `CONSOLE_DRAIN_INTERVAL_MS`, since Tk isn't thread-safe), each line starting with
-  the time (`[HH:MM:SS]`). The widget keeps only its last `CONSOLE_MAX_LINES` lines (`trim()`) - it would otherwise hold everything printed, about 25 MB of memory per 100,000 lines - while `output.log` keeps all of it. A print starting with `\r` is a status line: it
-  replaces the previous status line instead of adding one, and goes into
-  `output.log` only the first time (this is the "Waiting for a need..."
-  counter).
+- **`DebugCapture`** is a `logging.Handler` on `logger` for the lifetime of the GUI: every record logged anywhere in the macro shows up in
+  the on-screen console (`self.debug_text`) - `emit()` only queues (from any thread) and the Tk thread puts the queue on the widget every
+  `CONSOLE_DRAIN_INTERVAL_MS`, since Tk isn't thread-safe - each line starting with the time (`[HH:MM:SS]`), in the colour of its level
+  (`GUI_CONSOLE_LEVEL_COLORS`: the debug lines are dimmer). The **Show debug lines in the output** checkbox on the Debug tab's Other subtab raises the handler's level to INFO to
+  leave them out (`output.log` keeps them either way). The widget keeps only its last `CONSOLE_MAX_LINES` lines (`trim()`) - it would otherwise
+  hold everything logged, about 25 MB of memory per 100,000 lines - while `output.log` keeps all of it. A record with `extra={"status": True}` is a
+  status line: it replaces the previous status line instead of adding one, and goes into `output.log` only the first time (this is the
+  "Waiting for a need..." counter).
 
 ### Input capture
 
@@ -1298,8 +1297,7 @@ red arrow - a big red triangle with a ghost on it, `HAUNTLET_ARROW_*` - over the
 takes a moment to show, so it is looked for `HAUNTLET_ARROW_LOOKS` times) and says which door it belongs to; over the captured runs it fired on 9 frames, all of the hand-played run (the one that used the phone), and where the doors were
 found (6 of them) always within a few percent of a door spacing of a door's TV; it fired on none of the ~700 frames of the macro-played runs, which used no phone. `hauntlet_use_item()` clicks an item's slot, as the capture shows a human doing, and waits
 `HAUNTLET_ITEM_WAIT`; the slots close up when an item is used up, so it looks for the slot on a fresh screenshot each time. The items are used before the walk starts. Whether an item
-worked is not looked at, and the gold key and the wand have no use yet. `hauntlet_strafe()` works out how far to go sideways and `hauntlet_walk()` then holds `HAUNTLET_LEFT_KEY` or `HAUNTLET_RIGHT_KEY` for that long, on its own,
-and only then `HAUNTLET_2_FORWARD_KEY` - never the two at once - until the number changes (or `HAUNTLET_WALK_MAX` seconds), and then `HAUNTLET_WALK_PAST_DURATION` longer. While it walks, **the player is steered** (`hauntlet_steer()`): every `HAUNTLET_STEER_EVERY` seconds, with the three TVs in sight, a player `HAUNTLET_STEER_MIN` door spacings or more off its door - measured as the strafe is - lets go of W, strafes for what that is (at most `HAUNTLET_STEER_MAX` seconds) and walks on. The first strafe can't make up for a room seen at an angle, where W takes the player along a wall and away from the doors (captured room 4: the player ended against the left wall, opposite the first door, and the walk got nowhere); the distance is now measured again as it goes. **The number changes while the
+worked is not looked at, and the gold key and the wand have no use yet. `hauntlet_strafe()` works out how far to go sideways (the key and the seconds), and `hauntlet_walk()` **aims the player in steps** before it holds `HAUNTLET_2_FORWARD_KEY` - never two keys at once. A door is only as wide as a part of the distance between two doors, so a player that is a little off its door stands against the wall beside it and W gets it nowhere. In the recordings of two runs (rooms 8 and 15) that took 10-30 s of a room's 30 s in the worst rooms: the player stood 0.3-0.4 door spacings off its door - below the old limit for steering, which was 0.4, and checked once a second - and the stuck check's sidestep is a guess. A strafe worked out in one go also ended short or long (in room 4 of the room 15 run 2.4 s of A moved the doors 20-30 % more than `HAUNTLET_STRAFE_DURATION` says, and the player ended against the left wall beside its door). So the walk begins with up to `HAUNTLET_AIM_STEPS` steps: a look at the doors (`hauntlet_steer()`), one hold of the key towards the chosen door - `HAUNTLET_STEER_GAIN` of the strafe, at most `HAUNTLET_STEER_MAX` seconds - and a new look, until the door is within `HAUNTLET_STEER_MIN` door spacings of the player. If the doors can't be seen at the first look (`hauntlet_steer()` gives nothing), the strafe worked out by the caller is held as it was (at most `HAUNTLET_STRAFE_MAX` spacings). Then W is held until the number changes (or `HAUNTLET_WALK_MAX` seconds), and then `HAUNTLET_WALK_PAST_DURATION` longer, and while it is held **the player is steered** the same way every `HAUNTLET_STEER_EVERY` seconds: with the three TVs in sight, a player `HAUNTLET_STEER_MIN` door spacings or more off its door - measured as the strafe is - lets go of W, holds the key for a step and walks on. (What the keys do to the camera is not known to be anything: in the recordings its heading stays the same and the view changes as the player moves; the player's place in a room carries over from the door it came through.) **The number changes while the
 player is still in the doorway** (the camera close on the door, its TV filling the screen, the next room's doors out of sight); a human keeps walking
 1.0-2.0 s more (median 1.4 s in the capture) and a macro that let go at once stood there for the rest of the run - which is how the
 macro's own captures showed it. The
@@ -1329,9 +1327,9 @@ the character while the camera followed it.
 under the human's cursor), at least `GHOST_MIN_AREA` px (ghosts 880-7200 px in the run, the boss 9500-41000), biggest first, leaving out the
 HUD, the character's own glow and the bottom of the screen (`GHOST_IGNORE_BOXES`: a player's pet, in the macro-played run a cyan one - the same cyan as the ghosts to a few units of hue and brightness, so it can't be told apart by colour -
 was aimed at for 20 s of a run, the camera being close, and a cyan costume was taken for a ghost for much longer) and, in the boss phase, the boss's health bar (its crest and its ghost icons are the
-same cyan). **Ghosts from afar.** In a macro-played run's first two minutes the score stayed at 450: from the high camera the ghosts are small blue-cyan ovals (hue 88-96, saturation 170-240, 1200-3500 px) and `GHOST_COLOR`, taken from a close-up human run, stopped at saturation 210 - ghosts were found in 12 of 27 looks, most of them the character itself. `GHOST_COLOR_FAR` (hue 84-98, saturation 100-240, value from 200) is looked for as well. What looks alike and is outside it: the slime puddles (hue 80-83, saturation 245 and over, up to 10000 px), the glow of the haunted paintings (hue 100 and over), the ghosts' own purple trail (hue 100). The dim boss of the shielded phase stays out by its value. Ghosts really are rare in view in that stretch (about a third of the looks have one), so the camera is turned **one way round** until one is seen (`GHOST_CAMERA_PERIOD`; the way is chosen at random and kept, as in the boss phase) and `GHOST_CAMERA_TILT` is 0: a random up-and-down in every turn made the pitch a random walk, and the view ended on the ceiling, the floor or a wall.
+same cyan). **Ghosts from afar.** In a macro-played run's first two minutes the score stayed at 450: from the high camera the ghosts are small blue-cyan ovals (1200-3500 px) and `GHOST_COLOR`, taken from a close-up human run, stopped at saturation 210 - ghosts were found in 12 of 27 looks, most of them the character itself. `GHOST_COLOR_FAR` is looked for as well. Its first version (saturation to 240) was still too narrow: in a later run (a Ghost Gallery run whose score stayed 0 for its first 100 s) the ghosts' heads were hue 92-99 and saturation 244-254, and none was found in the first minute. Now hue 90-99, saturation to 255, value from 235. What looks alike and is outside it: the slime puddles (hue 83-85 here, saturation 255, not as bright), the glow of the haunted paintings (hue 100 and over), the ghosts' own purple trail (hue 100), The pet's cyan is inside it, see below. The dim boss of the shielded phase stays out by its value. Ghosts really are rare in view in that stretch (about a third of the looks have one), so the camera is turned **one way round** until one is seen (`GHOST_CAMERA_PERIOD`; the way is chosen at random and kept, as in the boss phase) and `GHOST_CAMERA_TILT` is 0: a random up-and-down in every turn made the pitch a random walk, and the view ended on the ceiling, the floor or a wall.
 
-**Things that are not ghosts.** In the last 40 s of a macro-played run (the camera pulled in against a wall in the dark of the boss fight) the macro was stuck, aiming at and walking towards its own hoodie, its pet and its beam, and so never turned the camera to look for the boss. Three rules came out of that capture. (1) **The character's box follows the camera**: the glowing pink emblem on its backpack (`GHOST_EMBLEM_HSV`, at least `GHOST_EMBLEM_MIN` px in `GHOST_EMBLEM_BOX` - none is seen with the camera far away, 750-10000 px close up) gives the place and, by its size, how close the camera is, and `ghost_character_box()` ignores a box of `GHOST_SELF_SCALE` times that size (pet below included) on top of the small fixed one. (2) **In the shielded phase only small ghosts count** (at most `GHOST_SMALL_MAX` px: the beam's glow, which turns cyan where it ends, was 9500, the boss's fog 400000). (3) **In the boss phase a blob is the boss only if it is at least `GHOST_BOSS_MIN` px** (9500-41000 seen); a smaller one is a minion or a bit of fog and is aimed at like the ghosts are, the nearest. The top 150 px of the screen are not looked at, where bits of fog under the HUD were found.
+**Things that are not ghosts.** In the last 40 s of a macro-played run (the camera pulled in against a wall in the dark of the boss fight) the macro was stuck, aiming at and walking towards its own hoodie, its pet and its beam, and so never turned the camera to look for the boss. Three rules came out of that capture. (1) **The character's box follows the camera**: the glowing pink emblem on its backpack (`GHOST_EMBLEM_HSV`, at least `GHOST_EMBLEM_MIN` px in `GHOST_EMBLEM_BOX` - none is seen with the camera far away, 750-10000 px close up) gives the place and, by its size, how close the camera is, and `ghost_character_box()` ignores a box of `GHOST_SELF_SCALE` times that size (pet below included) on top of the small fixed one. (2) **In the shielded phase only small ghosts count** (at most `GHOST_SMALL_MAX` px: the beam's glow, which turns cyan where it ends, was 9500, the boss's fog 400000). (3) **In the boss phase a blob is the boss only if it is at least `GHOST_BOSS_MIN` px** (9500-41000 seen); a smaller one is a minion or a bit of fog and is aimed at like the ghosts are, the nearest. The top 150 px of the screen are not looked at, where bits of fog under the HUD were found. (4) **The pet is the same cyan as a ghost and flies about wherever the camera is** (in one run it was beside the character in some looks and 300-500 px away in others), so nothing of the screen is left out for it. Two references were tried and don't work on the frames at hand: the median hue, saturation and value of the pet's pieces against a ghost's (the nearest of 15 labelled examples told right 11 times with each left out in turn, and a margin that dropped no ghost dropped no pet either), and a picture of the pet matched at several sizes (0.4-0.65 on other frames of it, as much as on ghosts). What does tell them apart is the score: **a blob the beam scores nothing on, and neither does the furniture around it** (`GHOST_HIDE_TRIES` places, `GHOST_SPOT_TRIAL` each), **is skipped** for `GHOST_SKIP_TIME` seconds (`GhostFeedback.skip()`), and `follow_skipped()` moves the mark to the blob it has become (the nearest within `GHOST_STICK` px at each look), so that the pet stays skipped as it flies and a ghost elsewhere is not. A hiding ghost, which also scores nothing at first, gets its furniture tried before that. (5) **In the boss phase the beam on the biggest blob for `GHOST_BOSS_TRIAL` seconds without a score skips it too**: in that run the boss was in sight in 3 looks of 10, and in the others the biggest blob was a light shaft along a side or a pale sheet at the bottom (15900-33600 px) which was walked towards for seconds. The boss can be far away, so nothing is concluded from a blob's shape or size. (6) **The white "!"** over the furniture a ghost hides in (`find_ghost_alerts()`: a white bar, at least `GHOST_ALERT_MIN_HEIGHT` px high and `GHOST_ALERT_ASPECT` times as high as wide, with a white dot under it, at any distance - four seen, 17-25 px high; a candle is white and as tall and has no dot) is aimed at before any ghost, `GHOST_ALERT_BELOW` bar heights below the mark, where the furniture is (seen in the run's first 60 s, while the score was 0). A trial there that scores nothing goes the same way as a ghost's: the furniture around it is tried, and then it is skipped.
 
 `ghost_boss_bar_visible()` is the boss phase: 13,000-17,000 gold pixels in `GHOST_BOSS_BAR_BOX` against none (at most 230) before it, right on
 every frame of the run but the ones at the very start and end of the boss's bar. `choose_ghost_target()` picks where to aim: the biggest blob
@@ -1425,16 +1423,23 @@ exact values and rationale):
 | Debug logging | `OUTPUT_LOG_PATH`, `RUNS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
 | Hauntlet 2 reader | `HAUNTLET_ROOM_BOX`, `HAUNTLET_DIGIT_*`, `HAUNTLET_ROOM_MAX_DIGITS`, `HAUNTLET_SLOT_*`, `HAUNTLET_ITEM_*`, `HAUNTLET_BADGE_*`, `HAUNTLET_COUNT_*`, `HAUNTLET_NOT_ITEMS`, `HAUNTLET_HEART_*`, `HAUNTLET_*_DIR` |
-| Ghost Gallery play | `GHOST_COLOR`, `GHOST_COLOR_FAR`, `GHOST_CLOSE`, `GHOST_MIN_AREA`, `GHOST_IGNORE_BOXES`, `GHOST_CHARACTER`, `GHOST_STICK`, `GHOST_BOSS_BAR_*`, `GHOST_BOSS_FILL*`, `GHOST_LOOK_INTERVAL`, `GHOST_START_LOOK_INTERVAL`, `GHOST_FURNITURE_*`, `GHOST_CAMERA_*`, `GHOST_START_TILT`, `GHOST_MOVE_*`, `GHOST_START_FORWARD`, `GHOST_TOWARD_MARGIN`, `GHOST_BOSS_TURN_DRAG`, `GHOST_EMBLEM_*`, `GHOST_SELF_*`, `GHOST_SMALL_MAX`, `GHOST_BOSS_MIN`, `GHOST_REGRAB_PERIOD`, `GHOST_OUTLINE_*`, `GHOST_JUMP_*`, `GHOST_SCORE_*`, `GHOST_SPOT_TRIAL`, `GHOST_BAD_SPOT_*`, `GHOST_RING`, `GHOST_STALL*`, `KEY_ZOOM_OUT`, `MINIGAME_ZOOM_OUT_DURATION` |
+| Ghost Gallery play | `GHOST_COLOR`, `GHOST_COLOR_FAR`, `GHOST_CLOSE`, `GHOST_MIN_AREA`, `GHOST_IGNORE_BOXES`, `GHOST_CHARACTER`, `GHOST_STICK`, `GHOST_BOSS_BAR_*`, `GHOST_BOSS_FILL*`, `GHOST_LOOK_INTERVAL`, `GHOST_START_LOOK_INTERVAL`, `GHOST_FURNITURE_*`, `GHOST_CAMERA_*`, `GHOST_START_TILT`, `GHOST_MOVE_*`, `GHOST_START_FORWARD`, `GHOST_TOWARD_MARGIN`, `GHOST_BOSS_TURN_DRAG`, `GHOST_EMBLEM_*`, `GHOST_SELF_*`, `GHOST_SMALL_MAX`, `GHOST_BOSS_MIN`, `GHOST_REGRAB_PERIOD`, `GHOST_OUTLINE_*`, `GHOST_JUMP_*`, `GHOST_SCORE_*`, `GHOST_SPOT_TRIAL`, `GHOST_BAD_SPOT_*`, `GHOST_RING`, `GHOST_STALL*`, `GHOST_ALERT_*`, `GHOST_SKIP_*`, `GHOST_HIDE_TRIES`, `GHOST_BOSS_TRIAL`, `KEY_ZOOM_OUT`, `MINIGAME_ZOOM_OUT_DURATION` |
 | Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_SHADOW_*`, `HAUNTLET_CIRCLE_*`, `HAUNTLET_IN_CIRCLE`, `HAUNTLET_LOCK_WAIT`, `HAUNTLET_STILL_*`, `HAUNTLET_UNSTICK_*`, `HAUNTLET_START_*`, `HAUNTLET_DARK_*`, `HAUNTLET_PLANK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_*`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_ITEM_*`, `HAUNTLET_LOW_HEARTS`, `HAUNTLET_PHONE_CHANCE`, `HAUNTLET_ARROW_*`, `HAUNTLET_LEARN_LIMIT` |
 | Candy corn | `CANDY_CORN_*`, `MINIGAME_RESULT_BOX`, `MAX_RESULT_SHOTS` |
 | Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `MINIGAME_CAPTURE`, `RUN_CAPTURES_DIR`, `RUN_CAPTURE_ZIPS`, `RUN_CAPTURES_BEST`, `RUN_CAPTURES_WORST`, `RUN_CAPTURE_BURST`, `RUN_CAPTURE_TAIL`, `RUN_CAPTURE_PROTECTED`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
-| Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog and backpack crops) |
+| Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog, doctor-prompt and backpack crops) |
 | Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
 | GUI | colors/fonts (`GUI_BG`, `GUI_FONT`, ...) and layout spacing (`GUI_OUTER_PADDING`, `GUI_ROW_SPACING`, ...) for the `tkinter` panel |
 
 ## Debugging an unattended run
+
+**How the macro says things.** Two logs, for two readers. `logger` (Python's `logging`, one logger for the whole macro, `main.py`'s `logger`) is
+for the person watching or debugging: the console and `output.log`. `log_run_event()` is the record the report is drawn from and its wording is
+parsed (`parse_run()`), so it only gets the events the report knows. The levels mean what they usually do: **debug** is how the macro got somewhere
+(positions, scores, what a look found), **info** what it is doing, **warning** something it couldn't do or that looks wrong but it carried on,
+**error** a failure (`log_failure()` logs at this level) or a crash. A message is a sentence in sentence case - no `[debug]` or `[!]` tags (the level
+says that), no capitals for emphasis, no exclamation marks, no blank lines. `print()` is only for a question put to someone at a terminal.
 
 Everything below is in `debug/` (git-ignored) so a run that broke while you
 were away can be read back afterwards. The folder has `images/` (`IMAGES_DIR`: every png - the `debug_*.png` views and
@@ -1446,11 +1451,10 @@ Other subtab's **Refresh debug** button (`refresh_debug()`, after a confirmation
 run is going) empties all of it except `.config`; run numbers start from 1
 again, since the counter goes with the logs.
 
-- **`output.log`** - everything the macro prints (the same as the GUI
-  console), one timestamped line each, appended to across runs. `log_output()`
-  is called by `DebugCapture`, so this only exists while the GUI is up. The file stays open between writes (flushed after each one, so a crash loses nothing); `close_output_log()` closes it before **Refresh debug** deletes it, since Windows won't delete an open file. Past
-  `OUTPUT_LOG_MAX_BYTES` it moves to `output.log.old`, replacing the
-  previous one.
+- **`output.log`** - everything the macro logs (`logger`, the same lines as the GUI console, with the debug ones), one line each with its time
+  and level, appended to across runs, whether or not the GUI is up. The `OutputLog` handler opens the file with the first line (flushed by the
+  handler after each, so a crash loses nothing); `close_output_log()` closes it before **Refresh debug** deletes it, since Windows won't delete an
+  open file. Past `OUTPUT_LOG_MAX_BYTES` it moves to `output.log.old`, replacing the previous one (a `RotatingFileHandler` does that).
 - **`run_log.txt`** - the short version: one tagged line per notable event
   (needs detected, resolved with how long they took, popups dismissed,
   recoveries, stops, failures). Start here to see roughly what happened.
@@ -1476,7 +1480,7 @@ again, since the counter goes with the logs.
   from `BUCKET_STEPS` so the run fills about `TARGET_BUCKETS` bars, stacked by
   basic / teleport / other need, with failures and rejoins marked); needs
   detected per check; average seconds per resolved need with how many there
-  were; counts of failures by kind and other events; and the script's own CPU and memory use over time, each with the whole PC's use as a second line (CPU on the same scale; memory in % on its own axis, labelled down the right edge). A need disabled as stuck is drawn in the first panel as a grey bar from when it was disabled until the next rejoin (which clears them), named above it. `parse_run()` reads
+  were; the best, worst and average candy corn of each minigame's runs (from the `minigame result:` lines) and counts of failures by kind and other events (a rejoin after a white screen is an event, `white screens (rejoined)`, not a failure); and the script's own CPU and memory use over time, each with the whole PC's use as a second line (CPU on the same scale; memory in % on its own axis, labelled down the right edge). A need disabled as stuck is drawn in the first panel as a grey bar from when it was disabled until the next rejoin (which clears them), named above it. `parse_run()` reads
   the log by the exact line wording `log_run_event()` writes, so a wording
   change there needs the matching regex in the RUN REPORT section of `main.py`. It never raises -
   a report problem can't take a run down.
@@ -1487,7 +1491,7 @@ again, since the counter goes with the logs.
   and `info.txt` (the reason, the needs last detected, the disabled needs and
   how long ago a need was last resolved) and `state.json` (the whole `State`
   object and `run_stats` (a `RunStats` dataclass) as they were, for working out what the macro believed
-  at that moment). It also prints the reason, writes it
+  at that moment). It also logs the reason, writes it
   to `run_log.txt` and counts it in the status file. It's called when a handler
   can't resolve a need, a need is still showing after `NEED_GONE_MAX_WAIT`, a
   need is disabled as stuck, a recovery starts or fails, Roblox loses focus
@@ -1520,6 +1524,34 @@ resolution or Roblox's UI, check `debug/debug_needs.png` and
 pass and show exactly what the macro is looking at - before tuning any of
 these.
 
+## Discord bot
+
+`bot/` is a separate program, not part of `main.py`: a Discord bot that answers questions about the macro from anywhere (a phone, say). It is the first,
+read-only phase of the plan in `docs/planned/Discord.md`. It runs **on the PC the macro runs on**, in the same logged-in desktop session, because it reads the
+macro's files and grabs its screen; it connects out to Discord, so no port needs opening, and the Discord app itself is only on whatever device is used to type
+the commands. It is started by hand, next to the macro: `python bot/discord_bot.py [path to bot_config.json]`.
+
+- **`bot/bot_lib.py`** holds every decision that needs neither Discord nor Windows, as plain functions (`tests/test_bot.py` runs them anywhere, in CI too):
+  `load_config()` (a `ConfigError` saying what is wrong), `is_allowed()`, `status_text()`, `results_text()`, `tail_lines()`, `newest_report()`, `looks_blank()`,
+  `main_py_in()`. The paths it reads are the macro's own (`STATUS_PATH`, `RUN_LOG_PATH`, `RUNS_DIR` of `magic_numbers.py`), so a moved file moves for both.
+- **`bot/discord_bot.py`** is the glue that can't be tested away from Discord (discord.py, the screen grab, the process check): the commands below, registered
+  for the one guild if `guild_id` is set (instant) or globally (up to an hour to show).
+- **`bot_config.json`** (untracked; `bot_config.example.json` has the keys): `token`, `owner_id`, `channel_id`, optionally `guild_id`, `stale_status_minutes`
+  (how long `status.json` may go without an update before `/status` says it is not updating) and `log_lines_max` (what `/log` is capped at).
+- **Who is obeyed:** only `owner_id`, only in `channel_id`; anyone else's commands get no answer at all (`OwnerOnlyTree.interaction_check()`). The commands are a
+  fixed list whose only arguments are numbers - nothing is run, no path is read from a message. The bot is created private ("Public Bot" off) and the token
+  stays out of the repository (`.gitignore`).
+
+| Command | What it posts |
+| --- | --- |
+| `/status` | `status.json` as text - whether it is still being updated (flagged when not), whether `main.py` is running (psutil if installed, else PowerShell or `pgrep`), the run, resolved and failed per need, disabled needs, the last resolved need and failure, rejoins, CPU and memory |
+| `/screenshot` | the Roblox window (the whole monitor if there is none) as a PNG, with a note when it looks blank - a locked or sleeping PC |
+| `/log [lines]` | the last lines of `run_log.txt`, as a file when they don't fit a message |
+| `/report` | the newest run chart in `RUNS_DIR` |
+| `/results` | each minigame's runs, best, worst and average candy corn, the deepest Hauntlet 2 room and the latest, from `runs/results/results.jsonl` |
+
+Not built yet (the later phases of the plan): alerts, starting and stopping the macro, updating it, and copying the capture zips to OneDrive.
+
 ## Automated checks
 
 `.github/workflows/check.yml` runs on every push and pull request (GitHub
@@ -1549,25 +1581,32 @@ clicks instead of making them. They cover:
 
 - `test_pure.py` - the small pure functions (server link parsing, durations,
   colour masks, axis rounding, failure kinds);
-- `test_state.py` - stuck-need disabling, `process_needs()` (resolved, unresolvable and not-cleared cases), `RunStats`, `status.json`, the
+- `test_bot.py` - the Discord bot's logic (`bot/bot_lib.py`): the config, who is obeyed, and the messages made from the files `write_status()` and `record_minigame_result()` write;
+- `test_state.py` - the output log's levels, rotation and reopening, the console handler, stuck-need disabling, `process_needs()` (resolved, unresolvable and not-cleared cases), the sick handler on real screenshots (`tests/sick/`: the prompt, the dialog, the pet view), `RunStats`, `status.json`, the
   failure folders, the quiet and idle-respawn checks (including that a respawn
   leaves the 20-minute rejoin clock alone), stopping, and the open `output.log`;
 - `test_detection.py` - the need-strip capture and its cache, and the
   popups and stray windows against the real crops in `ref/` (including that every `POPUP_TEMPLATES` entry has a crop that fits its box);
-- `test_icon_screenshots.py` - every real screenshot in `tests/icon_detection/<folder>/` (the need bar over dark, bright, busy and white scenes) run through the circle search and the matching; each must be listed in `EXPECTED` with the needs on its bar, so a screenshot added without a label fails;
+- `test_icon_screenshots.py` - every real screenshot in `tests/icon_detection/<folder>/` (named `<scene>__<needs>.png`, the needs being what the test expects) (the need bar over dark, bright, busy and white scenes) run through the circle search and the matching; each must be listed in `EXPECTED` with the needs on its bar, so a screenshot added without a label fails;
 - `test_loop.py` - the whole workflow loop run for a moment with the game stubbed out (idle respawns, the resource monitor starting and stopping, the report being written);
 - `test_capture.py` - the input capture against a made-up keyboard, mouse and screen (events, both coordinate systems, click frames, skipping unchanged frames, the summary, the zips, stopping by itself, the hotkey toggle and pruning, and the automatic recording of minigame runs: the frame budget, its thinning, the outcome, the zip);
 - `test_hauntlet_2.py` - reading the Hauntlet 2 screen against crops of a real run;
 - `test_ghost_gallery.py` - ghost and boss finding against crops of a human's run, the aim and the player with a fake clock and mouse;
 - `test_hauntlet_2_play.py` - the timer and doors against crops of that run, then the room tracking, the choices (door, item), the walk and the whole loop with a fake clock and keyboard;
 - `test_features.py` - the daily money reset, the run-every-need sequence, the win screen and the like;
-- `test_config.py` - the real need tables in `magic_numbers.py`, without pinning any value: every entry is well formed (known keys, on-screen positions, movement keys, a `final_click` has its `prompt_pos`), has a handler, and the handler carries out exactly what the entry says (run over whichever needs exist, so `HALLOWEEN` off just drops `sick`). The handler tests elsewhere use made-up entries; this is what keeps the real ones honest;
+- `test_config.py` - the real need tables in `magic_numbers.py`, without pinning any value: every entry is well formed (known keys, on-screen positions, movement keys, a `final_click` is on screen), has a handler, and the handler carries out exactly what the entry says (run over whichever needs exist, so `HALLOWEEN` off just drops `sick`). The handler tests elsewhere use made-up entries; this is what keeps the real ones honest;
 - `test_report.py` - the run-report parser against the exact log wording the
   macro writes (a round trip through `log_run_event()`), the chart itself,
   and the constant check.
 
 Fixtures are synthetic images or the lossless crops in `ref/`; compressed
 screenshots (`.webp`) don't match exact colours, so they aren't used.
+
+**Screenshots are named for what they show**, not by the number the screenshot tool or a capture gave them, and where a test reads something off a
+picture the name says it, so a new file is checked against its own label: `tests/icon_detection/<folder>/<scene>__<needs>.png` (the needs on the bar,
+left to right, joined by hyphens), `tests/hauntlet_2/doors/<kind>-<kind>-<kind>[__note].png` (the three doors' kinds), `tests/hauntlet_2/item_bars/<item>[_x2]-...[__note].png`
+(the slots), `tests/hauntlet_2/room_panels/<NN>.png` (the room number), `tests/candy_corn/hud_<total>.png`. The pictures of `tests/halloween/hauntlet_2/with_others/` (rooms
+of a run with other players in them) are named `room<NN>_<what>.png`.
 
 **Tests don't pin tuned values.** `magic_numbers.py` is edited constantly (timings,
 routes, intervals, the `HALLOWEEN` flag), so a test must pass for any sensible

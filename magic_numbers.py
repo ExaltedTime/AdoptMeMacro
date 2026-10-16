@@ -143,6 +143,7 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "minigame_popup":  {"box": (780, 515, 1160, 585), "threshold": 0.8},
     # The sick need's Yes/No dialog.
     "sick_dialog":     {"box": (700, 400, 1220, 700), "threshold": 0.8},
+    "doctor_prompt":   {"box": (880, 420, 1050, 580), "threshold": 0.8},
     # The normal backpack's "BACKPACK" title, and the expanded one's BACK button.
     "backpack_normal": {"box": (700, 600, 1000, 690), "threshold": 0.8},
     "backpack_back":   {"box": (700, 80, 1000, 200), "threshold": 0.8},
@@ -153,11 +154,14 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
 # "Only Pets, Babies, and Dolls can use this." - the game's answer to a need button clicked while the pet is too far from it (or
 # otherwise not taken). The text is found by the white of its letters (>= ONLY_PETS_WHITE in every channel) matched against the same of
 # the crop ref/popups/only_pets.png, whatever is behind it: a score of at least ONLY_PETS_THRESHOLD within ONLY_PETS_BOX. A need
-# button is clicked again, up to BUTTON_CLICK_TRIES clicks in all; after each, the message is looked for for BUTTON_REJECT_LOOK seconds.
+# button is clicked again after BUTTON_RETRY_WAIT seconds, up to BUTTON_CLICK_TRIES clicks in all (the pet needs time to come: three clicks 3 s apart all failed);
+# after each, the message is looked for for BUTTON_REJECT_LOOK seconds. A click that is refused again gives the need up; one that takes after a retry gets BUTTON_RETRY_CLEAR_WAIT seconds for the icon to clear.
 ONLY_PETS_BOX = (600, 830, 1320, 930)
 ONLY_PETS_WHITE = 235
 ONLY_PETS_THRESHOLD = 0.6
-BUTTON_CLICK_TRIES = 3
+BUTTON_CLICK_TRIES = 2
+BUTTON_RETRY_WAIT = 10.0
+BUTTON_RETRY_CLEAR_WAIT = 15.0
 BUTTON_REJECT_LOOK = 1.5
 STRAY_OKAY_BOX = (800, 637, 1120, 680)
 STRAY_OKAY_MIN_PIXELS = 5000      # the button is ~11000 exact-color px in that box
@@ -192,7 +196,7 @@ for _directory in (NEEDS_DIR, DEBUG_DIR, IMAGES_DIR, LOGS_DIR, RUNS_DIR):
 RUN_LOG_PATH = os.path.join(LOGS_DIR, "run_log.txt")        # appended to, never overwritten
 RUN_COUNTER_PATH = os.path.join(LOGS_DIR, "run_counter.txt")  # holds the last-used run number
 GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")       # persisted game state - see load_game_config()
-OUTPUT_LOG_PATH = os.path.join(LOGS_DIR, "output.log")      # everything the macro prints, timestamped - see log_output()
+OUTPUT_LOG_PATH = os.path.join(LOGS_DIR, "output.log")      # everything the macro logs, timestamped, with its level - see OutputLog
 STATUS_PATH = os.path.join(LOGS_DIR, "status.json")         # live "is it alive and what's it doing" summary - see write_status()
 FAILURE_DIR = os.path.join(IMAGES_DIR, "failures")          # a folder per failure (screenshot, need icons, info) - see log_failure()
 RECORDINGS_DIR = os.path.join(DEBUG_DIR, "recordings")      # run videos - see RunRecorder
@@ -251,11 +255,25 @@ CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into
 # and is told by the boss's health bar, a gold frame (15800-16800 gold pixels in GHOST_BOSS_BAR_BOX; 0-230 before). The player is aimed
 # with the mouse: the beam goes to the cursor. The ghost aimed at is followed while a ghost is within GHOST_STICK px of where it was.
 GHOST_COLOR = ((78, 90, 200), (100, 210, 255))
-# The ghosts of a view from afar (the hall seen from above, the character tiny) are more saturated: blue-cyan ovals of hue 88-96 and
-# saturation 170-240 (GHOST_COLOR stops at 210, and found none of them: in a run's first 120 s it aimed at a ghost 4 times). The slime
-# puddles, which look alike, are hue 80-83 and saturation 245 and over; the haunted paintings' glow is hue 100 and over; both are outside.
-GHOST_COLOR_FAR = ((84, 100, 200), (98, 240, 255))
+# The ghosts of a view from afar (the hall seen from above, the character tiny) are small blue-cyan ovals, hue 92-99, and as saturated as 245-255 (the first version of
+# this range stopped at 240 and saw none of the ghosts of a run's first 100 s: its score stayed 0 until the camera was close). Hue from 90 keeps out the slime puddles
+# (hue 83-85, saturation 255, not as bright) and the haunted paintings' glow (hue 100 and over). The pet's cyan overlaps it (see GHOST_SKIP_TIME).
+GHOST_COLOR_FAR = ((90, 100, 235), (99, 255, 255))
 GHOST_CLOSE = 7
+# The white "!" over furniture a ghost hides in: a white bar (all channels at least GHOST_ALERT_WHITE) at least GHOST_ALERT_MIN_HEIGHT px high and GHOST_ALERT_ASPECT times
+# as high as wide, with a white dot under it (within half the bar's height); looked for in GHOST_ALERT_BAND's rows. The furniture is GHOST_ALERT_BELOW bar heights below it.
+GHOST_ALERT_WHITE = 235
+GHOST_ALERT_MIN_HEIGHT = 14
+GHOST_ALERT_ASPECT = 1.5
+GHOST_ALERT_BAND = (150, 860)
+GHOST_ALERT_BELOW = 4.0
+GHOST_BOSS_TRIAL = 6.0                       # the beam on the biggest blob of the boss phase for this long without a score: it is fog, not the boss
+# What the score says is no ghost is left alone - followed as it moves, not by where on the screen it was - for GHOST_SKIP_TIME seconds, then looked at again: the beam on
+# a blob scored nothing for GHOST_SPOT_TRIAL seconds, then on the furniture around it GHOST_HIDE_TRIES times (a pet is the same cyan as a ghost, and flies about wherever the camera is),
+# or in the boss phase for GHOST_BOSS_TRIAL seconds (fog, a light shaft). A skipped blob is one within GHOST_SKIP_RADIUS px or its own size (its area's square root) of the place.
+GHOST_SKIP_TIME = 45.0
+GHOST_HIDE_TRIES = 2
+GHOST_SKIP_RADIUS = 110
 GHOST_EMBLEM_HSV = ((140, 40, 200), (175, 255, 255))   # the pink glow of the emblem on the character's backpack: with the camera close it is 750-10000 px, far away there is none seen
 GHOST_EMBLEM_BOX = (500, 250, 1400, 950)
 GHOST_EMBLEM_MIN = 500
@@ -263,7 +281,7 @@ GHOST_SELF_SCALE = (4.5, 3.5, 6.0)           # the character's box with the came
 GHOST_SELF_MIN_UNIT = 45
 GHOST_SMALL_MAX = 8500                       # in the shielded phase a blob bigger than this is no small ghost (the beam's glow was 9500, the boss's fog 400000)
 GHOST_BOSS_MIN = 6000                        # in the boss phase the boss is at least this big (9500-41000 seen); a smaller blob is a minion, or some fog
-GHOST_MIN_AREA = 600
+GHOST_MIN_AREA = 250                         # ghosts from afar are 260-1500 px (their trails are white and don't count)
 GHOST_IGNORE_BOXES = ((0, 0, 1920, 150), (900, 520, 1020, 680), (0, 860, 1920, 1080))
 GHOST_CHARACTER = (960, 540)
 GHOST_STICK = 120
@@ -437,12 +455,17 @@ HAUNTLET_STRAFE_DURATION = 1.1
 HAUNTLET_STRAFE_MIN = 0.15
 HAUNTLET_STRAFE_MAX = 2.5
 HAUNTLET_WALK_MAX = 6.0
-# While walking to a door the player is steered: every HAUNTLET_STEER_EVERY seconds, with the three TVs in sight, a player HAUNTLET_STEER_MIN door spacings or more
-# off the door (hauntlet_strafe()'s measure) lets go of W, strafes for what that is (at most HAUNTLET_STEER_MAX seconds) and walks on. A room seen at an angle
-# (the camera turned) takes W along its wall, away from the doors, and the first strafe alone can't make up for it.
-HAUNTLET_STEER_EVERY = 1.0
-HAUNTLET_STEER_MIN = 0.4
-HAUNTLET_STEER_MAX = 1.2
+# A door is only as wide as a fraction of the distance between two doors, so a player that is a bit off its door stands against the wall beside it and W gets it nowhere
+# (room 5 of the room 8 run and room 4 of the room 15 run: 10-30 s of the room's 30 s timer, the player 0.3-0.4 door spacings off, which the old limit for steering, 0.4,
+# never corrected). A strafe worked out in one go from where the doors were also ends a little short or long (the room 15 run's 2.4 s of A moved the doors 20-30 % more than
+# the strafe's 1.1 s per spacing says, and the player stood against the left wall, beside its door). So the player is aimed in steps with a fresh look at the doors before each:
+# first, up to HAUNTLET_AIM_STEPS of them, each a hold of the key towards the door for HAUNTLET_STEER_GAIN of the strafe (at most HAUNTLET_STEER_MAX seconds), until the door is within
+# HAUNTLET_STEER_MIN door spacings of the player; then, with W held, the same every HAUNTLET_STEER_EVERY seconds while the three TVs are in sight.
+HAUNTLET_STEER_EVERY = 0.3
+HAUNTLET_STEER_MIN = 0.15
+HAUNTLET_STEER_MAX = 0.8
+HAUNTLET_STEER_GAIN = 0.75
+HAUNTLET_AIM_STEPS = 8
 HAUNTLET_WALK_PAST_DURATION = 1.5            # more of W after the number changed (a human's: 1.0-2.0 s, median 1.4)
 HAUNTLET_START_LOOK_INTERVAL = 0.5            # while waiting for the game to begin (its overlay to show)
 HAUNTLET_START_DELAY = 1.5                    # after the view is set up, before the first step: the entrance hall's doors open on their own (a macro-played run that had not moved by the 45 s the room's timer gave it was thrown out)
@@ -651,13 +674,14 @@ GENERAL_TELEPORT_POS_2 = (895, 705)
 GENERAL_TELEPORT_POS_3 = (1048, 658)
 TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing spot
 TELEPORT_WALK_STEP_GAP = 4.0      # pause between consecutive steps of a teleport-walk need's sequence
-SICK_PRE_E_WAIT = 2.0             # after the sick need's walk, before pressing 'e' (let the character come to rest)
-SICK_CONFIRM_WAIT = 7.0           # wait after pressing 'e' and before the sick need's final click
+SICK_PRE_CLICK_WAIT = 2.0         # after the sick need's walk, before the doctor's prompt is looked for (let the character come to rest)
+SICK_PROMPT_LOOK = 3.0            # how long the doctor's prompt (POPUP_TEMPLATES["doctor_prompt"]) is looked for before the need is given up
+SICK_CONFIRM_WAIT = 7.0           # how long the doctor's dialog (POPUP_TEMPLATES["sick_dialog"]) is looked for after the prompt was clicked (it took about 2.5 s) before the need is given up
+SICK_LOOK_INTERVAL = 0.4          # between two looks for either
 
 TELEPORT_PETS_TAB_POS = (817, 713)       # nursery: pets tab
 TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
 SICK_FINAL_CLICK_POS = (1045, 660)       # click after the sick need's walk
-SICK_PROMPT_POS = (963, 488)             # the doctor's prompt button (an E; a hand button when the pet is focused): below Doctor Heart, over the player's head. Clicked if e brought up no dialog
 
 # Whether a teleport-walk need flies by helicopter by default; an entry can
 # override it with `helicopter=True/False`. Only the Halloween bored, beach
@@ -668,8 +692,8 @@ HELICOPTER_HOLD_DURATION = 4.5     # then hold KEY_HELICOPTER this long (it was 
 
 # Needs that teleport somewhere and walk (see TeleportWalkNeedHandler), then
 # wait for the need to clear. Each entry: where to teleport, the
-# (key, seconds) holds to perform in order, optionally a `final_click`
-# position to click after the last hold (with a `prompt_pos`: the prompt button to click if pressing 'e' brought up no dialog), optionally `helicopter` (above) and optionally
+# (key, seconds) holds to perform in order, optionally a `final_click` (a need with one has a doctor's dialog to answer after the last hold:
+# its prompt is clicked, the dialog waited for and this is its Yes - sick; see TeleportWalkNeedHandler._open_dialog()), optionally `helicopter` (above) and optionally
 # `max_wait` (how long to wait for the need to clear afterwards; default NEED_GONE_MAX_WAIT).
 TELEPORT_WALK_NEEDS_NORMAL: dict[str, dict[str, Any]] = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
@@ -680,7 +704,7 @@ TELEPORT_WALK_NEEDS_NORMAL: dict[str, dict[str, Any]] = {
     "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 3.0), ("a", 7.2), ("s", 4.0))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 0.1), ("d", 3.0), ("s", 2.2), ("d", 15.0), ("w",20.0))),
     "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 3.0), ("w", 0.8)),
-                    final_click=SICK_FINAL_CLICK_POS, prompt_pos=SICK_PROMPT_POS),
+                    final_click=SICK_FINAL_CLICK_POS),
 }
 
 # Used instead of the entry of the same name above while HALLOWEEN is on (Halloween
@@ -692,7 +716,7 @@ TELEPORT_WALK_NEEDS_HALLOWEEN: dict[str, dict[str, Any]] = {
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 3), ("a", 10))),
     "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("s", 20),), helicopter=True),
     "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 4.0), ("w", 1.2)),
-                    final_click=SICK_FINAL_CLICK_POS, prompt_pos=SICK_PROMPT_POS),
+                    final_click=SICK_FINAL_CLICK_POS),
 }
 
 # The set actually used everywhere else (TeleportWalkNeedHandler and the
@@ -894,6 +918,7 @@ GUI_RESPAWN_COLOR = "#8e44ad"
 GUI_TEST_COLOR = "#e74c3c"
 GUI_CONSOLE_BG = "#0a0a0a"
 GUI_CONSOLE_FG = "#00ff00"
+GUI_CONSOLE_LEVEL_COLORS = {"DEBUG": "#4f9f4f", "INFO": GUI_CONSOLE_FG, "WARNING": "#ffb000", "ERROR": "#ff5050"}     # the console's text by log level (the debug lines dimmer)
 GUI_SQUARE_BUTTON_SIZE = 44         # px, the stop button is square (and the loop button as tall)
 GUI_STATUS_HEIGHT = 25              # px
 

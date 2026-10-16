@@ -380,12 +380,12 @@ def test_no_run_is_recorded_when_it_is_switched_off_or_a_capture_is_already_runn
     macro.finish_run_capture(None, "won")                                    # nothing to finish is no error
 
 
-def test_a_recording_that_cannot_start_does_not_stop_the_minigame(macro, run_folder, monkeypatch, capsys):
+def test_a_recording_that_cannot_start_does_not_stop_the_minigame(macro, run_folder, monkeypatch, caplog):
     def broken(self):
         raise OSError("disk says no")
     monkeypatch.setattr(macro.InputCapture, "start", broken)
     assert macro.start_run_capture("hauntlet_2") is None
-    assert "Couldn't start recording" in capsys.readouterr().out
+    assert "Couldn't start recording" in caplog.text
 
 
 def test_the_zip_plan_keeps_frames_whole_in_order_and_counts_the_events_in_the_first_zip(macro, monkeypatch):
@@ -527,9 +527,9 @@ def test_of_each_minigame_the_best_the_worst_and_the_latest_recordings_are_kept(
     assert any(n.startswith("ghost_gallery_") for n in os.listdir(cfg.RUN_CAPTURES_DIR))     # another minigame's are not touched
 
 
-def test_tidying_with_no_recordings_folder_is_nothing_and_the_latest_is_the_one_whose_name_is_latest(macro, run_folder, capsys):
+def test_tidying_with_no_recordings_folder_is_nothing_and_the_latest_is_the_one_whose_name_is_latest(macro, run_folder, caplog):
     macro.prune_run_captures("hauntlet_2")                                      # (recording was never on: no folder, no message)
-    assert capsys.readouterr().out == ""
+    assert caplog.text == ""
     runs_dir_with(macro, "hauntlet_2", {"20261014_100000_10cc_room3": 10, "20261014_110000": 9, "20261014_120000_8cc": 8, "20261014_090000": 7, "20261014_080000": 6, "20261014_070000": 5})
     for i, name in enumerate(sorted(os.listdir(macro.cfg.RUN_CAPTURES_DIR), reverse=True)):
         os.utime(os.path.join(macro.cfg.RUN_CAPTURES_DIR, name), (1000 + i, 1000 + i))      # (the folders' own times say the opposite of their names)

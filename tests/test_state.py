@@ -202,17 +202,27 @@ def test_stop_pressed_soon(macro, monkeypatch):
     assert macro.stop_pressed_soon() is True
 
 
-def test_output_log_stays_open_rotates_and_reopens(macro, monkeypatch):
+def test_output_log_has_every_line_with_its_level_rotates_and_reopens(macro, monkeypatch):
     monkeypatch.setattr(macro.cfg, "OUTPUT_LOG_MAX_BYTES", 300)
     for i in range(30):
-        macro.log_output(f"line {i}\n")
+        macro.logger.debug(f"line {i}")
+    macro.logger.warning("a warning")
     assert sorted(os.listdir(os.path.dirname(macro.cfg.OUTPUT_LOG_PATH))) >= ["output.log", "output.log.old"]
     text = open(macro.cfg.OUTPUT_LOG_PATH).read()
-    assert text.rstrip().endswith("line 29") and text.startswith("[20")
+    assert text.rstrip().endswith("WARNING: a warning") and text.startswith("[20") and "DEBUG: line 29" in text
     macro.close_output_log()
     os.remove(macro.cfg.OUTPUT_LOG_PATH)               # what Refresh debug does - must not be blocked
-    macro.log_output("after\n")
-    assert "after" in open(macro.cfg.OUTPUT_LOG_PATH).read()
+    macro.logger.info("after")
+    assert "INFO: after" in open(macro.cfg.OUTPUT_LOG_PATH).read()
+
+
+def test_a_status_line_is_written_to_output_log_once_in_a_row(macro):
+    for _ in range(3):
+        macro.logger.info("Waiting for a need... 0:05", extra={"status": True})
+    macro.logger.info("something else")
+    macro.logger.info("Waiting for a need... 0:10", extra={"status": True})
+    text = open(macro.cfg.OUTPUT_LOG_PATH).read()
+    assert text.count("Waiting for a need") == 2 and "something else" in text
 
 
 def test_log_run_event_tags_the_run(macro):
@@ -579,6 +589,58 @@ def test_the_console_keeps_only_its_last_lines(macro, monkeypatch):
     assert len(capture.text.lines) == 5
 
 
+class _TypingText:
+    """A Tk Text that keeps what was put on it: `content`, with (text, tag) pieces; delete() takes the last line (what the status line replacement does)."""
+    def __init__(self):
+        self.pieces, self.tags = [], {}
+
+    def tag_config(self, tag, **options):
+        self.tags[tag] = options
+
+    def config(self, **options):
+        pass
+
+    def see(self, where):
+        pass
+
+    def insert(self, where, text, tag=None):
+        self.pieces.append((text, tag))
+
+    def delete(self, start, end):
+        assert (start, end) == ("end-1c linestart", "end-1c")
+        while self.pieces and not self.pieces[-1][0].endswith("\n"):
+            self.pieces.pop()
+
+    def index(self, where):
+        return "1.0"
+
+    @property
+    def content(self):
+        return "".join(text for text, _ in self.pieces)
+
+
+def test_the_console_shows_each_level_in_its_colour_a_status_line_replaced_and_debug_lines_can_be_hidden(macro):
+    import logging
+    text = _TypingText()
+    root = type("Root", (), {"after": lambda self, ms, fn: None})()
+    capture = macro.DebugCapture(root, text)
+    macro.logger.addHandler(capture)
+    try:
+        macro.logger.debug("how it got there")
+        macro.logger.warning("could not do it")
+        macro.logger.info("Waiting 1", extra={"status": True})
+        macro.logger.info("Waiting 2", extra={"status": True})
+        capture.setLevel(logging.INFO)                                    # the checkbox: no debug lines
+        macro.logger.debug("hidden")
+        macro.logger.info("done")
+        capture.drain()
+    finally:
+        macro.logger.removeHandler(capture)
+    lines = [line.split("] ", 1)[1] for line in text.content.splitlines()]
+    assert lines == ["how it got there", "could not do it", "Waiting 2", "done"]
+    assert {tag for _, tag in text.pieces if tag} == {"DEBUG", "WARNING", "INFO"} and set(text.tags) == set(macro.cfg.GUI_CONSOLE_LEVEL_COLORS)
+
+
 def test_only_the_newest_run_reports_are_kept(macro, tmp_path):
     for i in range(6):
         path = tmp_path / f"run{i}.png"
@@ -862,85 +924,96 @@ def test_without_a_window_titled_exactly_roblox_any_roblox_title_still_counts(ma
     assert macro.is_roblox_focused() is True
 
 
+def sick_screen(name):
+    """A real screenshot from tests/sick/: at_the_doctor (the hand button over the player's head), dialog ("Ask Doctor Heart to heal
+    your family?") or pet_view (what pressing 'e' there brought up: the pet's menu)."""
+    import cv2
+    return cv2.imread(os.path.join(os.path.dirname(__file__), "sick", f"{name}.png"))
+
+
 @pytest.fixture
-def sick_run(macro, monkeypatch):
-    """The sick handler up to its press of 'e': run["dialog"] is what each look for the doctor's dialog sees, in order.
+def sick_run(macro, world, monkeypatch):
+    """The sick handler up to its Yes, on real screenshots (the detectors are the real ones): run["screen"] is what is on screen
+    now; the prompt's click changes it to run["after_prompt"], backing out of the pet view to run["after_back_out"].
     The need has an entry of its own here (positions made up), so none of this depends on how the real one is tuned
     or on HALLOWEEN, which decides whether the real one exists."""
-    import numpy as np
     from functools import partial
-    final, prompt = (610, 620), (630, 640)
+    final = (610, 620)
     monkeypatch.setitem(macro.cfg.TELEPORT_WALK_NEEDS, "sick", dict(teleport_pos=(1, 2), steps=(("w", 1.0),), helicopter=False,
-                                                                    final_click=final, prompt_pos=prompt))
+                                                                    final_click=final))
     monkeypatch.setitem(macro.NEED_HANDLER_CLASSES, "sick", partial(macro.TeleportWalkNeedHandler, "sick"))
-    run = {"dialog": [True], "waited": [], "respawns": 0, "events": [], "pet_focused": False, "final": final, "prompt": prompt}
+    run = {"screen": sick_screen("at_the_doctor"), "after_prompt": sick_screen("dialog"), "after_back_out": sick_screen("at_the_doctor"),
+           "events": [], "waited": [], "respawns": 0, "final": final, "world": world}
 
-    def dialog_up(img):
-        run["events"].append("look")
-        looks = run["dialog"]
-        return looks.pop(0) if len(looks) > 1 else looks[0]
+    def click(x, y, duration=0):
+        run["events"].append(("click", (x, y)))
+        if (x, y) != final:
+            run["screen"] = run["after_prompt"]
+
+    def back_out():
+        run["events"].append("back out")
+        run["screen"] = run["after_back_out"]
 
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
     monkeypatch.setattr(macro, "teleport_to", lambda pos: None)
     monkeypatch.setattr(macro, "hold_key", lambda key, duration: None)
-    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
-    monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((1080, 1920, 3), np.uint8))
-    monkeypatch.setattr(macro, "detect_sick_dialog", dialog_up)
-    monkeypatch.setattr(macro, "detect_pet_focus", lambda img: run["pet_focused"])
-    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: run["events"].append("back out") or None)
-    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: run["events"].append(("click", (x, y))))
+    monkeypatch.setattr(macro, "grab_screen", lambda: run["screen"])
+    monkeypatch.setattr(macro, "dismiss_stray_windows", back_out)
+    monkeypatch.setattr(macro, "hover_click", click)
     monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=60.0, **kw: run["waited"].append(name))
     monkeypatch.setattr(macro, "respawn_character", lambda: run.update(respawns=run["respawns"] + 1))
     return run
 
 
-def test_sick_clicks_yes_once_the_dialog_is_up(macro, sick_run):
+def prompt_click(run):
+    """The one click that is not the Yes."""
+    (_, pos), = [event for event in run["events"] if event != "back out" and event[1] != run["final"]]
+    return pos
+
+
+def test_sick_clicks_the_hand_button_where_it_is_and_then_yes(macro, sick_run):
     assert macro.TeleportWalkNeedHandler("sick").handle() is True
-    assert sick_run["events"] == ["look", ("click", sick_run["final"])]        # no prompt click needed
+    assert [event[0] for event in sick_run["events"]] == ["click", "click"] and sick_run["events"][-1] == ("click", sick_run["final"])
+    x, y = prompt_click(sick_run)
+    assert abs(x - 965) <= 3 and abs(y - 498) <= 3                       # the hand button of tests/sick/at_the_doctor.png
     assert sick_run["waited"] == ["sick"] and sick_run["respawns"] == 0
+    assert not [key for key in sick_run["world"].keys if key[:2] == ("press", "e")]       # 'e' focuses the pet
 
 
-def test_sick_backs_out_of_the_pet_view_and_clicks_the_prompt_when_e_brings_up_no_dialog(macro, sick_run):
-    sick_run["dialog"] = [False, True]                                   # nothing after e, the dialog after the click
-    sick_run["pet_focused"] = True
+def test_sick_backs_out_of_the_pet_view_before_it_looks_for_the_prompt(macro, sick_run):
+    sick_run["screen"] = sick_screen("pet_view")
     assert macro.TeleportWalkNeedHandler("sick").handle() is True
-    assert sick_run["events"] == ["look", "back out", ("click", sick_run["prompt"]), "look",
-                                  ("click", sick_run["final"])]
-    assert sick_run["waited"] == ["sick"] and sick_run["respawns"] == 0
-    log = open(macro.cfg.RUN_LOG_PATH).read()
-    assert "sick: no dialog after e (pet focused: True) - clicking the prompt" in log and "FAILURE" not in log
+    assert sick_run["events"][0] == "back out" and sick_run["events"][-1] == ("click", sick_run["final"])
+    assert len(sick_run["events"]) == 3 and sick_run["waited"] == ["sick"]
 
 
-def test_sick_goes_on_to_click_yes_when_the_dialog_is_not_recognised_and_the_pet_is_not_focused(macro, sick_run):
-    """Run 2: 27 sick attempts in a row found no dialog with the pet NOT focused (the recognition was failing; the
-    plain click had cleared sick every time in run 1). Not the pet view: click Yes as before."""
-    sick_run["dialog"] = [False]
-    assert macro.TeleportWalkNeedHandler("sick").handle() is True
-    assert sick_run["events"] == ["look", ("click", sick_run["final"])]            # no back-out, no prompt click
-    assert sick_run["waited"] == ["sick"] and sick_run["respawns"] == 0
-    assert "dialog not recognised after e (pet focused: False) - clicking Yes anyway" in open(macro.cfg.RUN_LOG_PATH).read()
-
-
-def test_sick_fails_at_once_when_the_prompt_click_brings_up_no_dialog_either(macro, sick_run):
-    sick_run["dialog"] = [False]
-    sick_run["pet_focused"] = True
+def test_sick_gives_up_at_once_when_the_prompt_is_not_on_screen(macro, sick_run):
+    sick_run["screen"] = sick_screen("dialog")                          # not at the doctor
     assert macro.TeleportWalkNeedHandler("sick").handle() is False
-    assert sick_run["events"] == ["look", "back out", ("click", sick_run["prompt"]), "look"]   # never the Yes click
+    assert sick_run["events"] == [] and sick_run["waited"] == [] and sick_run["respawns"] == 1
+    assert "sick: the doctor's prompt is not on screen" in open(macro.cfg.RUN_LOG_PATH).read()
+
+
+def test_sick_gives_up_at_once_when_the_dialog_does_not_come_up(macro, sick_run):
+    sick_run["after_prompt"] = sick_screen("at_the_doctor")             # the click did nothing
+    assert macro.TeleportWalkNeedHandler("sick").handle() is False
+    assert len(sick_run["events"]) == 1 and ("click", sick_run["final"]) not in sick_run["events"]     # never the Yes
     assert sick_run["waited"] == [] and sick_run["respawns"] == 1                                    # no waiting for the icon
+    assert "sick: no dialog after the prompt was clicked" in open(macro.cfg.RUN_LOG_PATH).read()
 
 
-def test_a_need_without_a_prompt_to_click_fails_after_the_first_look(macro, sick_run, monkeypatch):
-    monkeypatch.setitem(macro.cfg.TELEPORT_WALK_NEEDS["sick"], "prompt_pos", None)
-    sick_run["dialog"] = [False]
-    sick_run["pet_focused"] = True
-    assert macro.TeleportWalkNeedHandler("sick").handle() is False
-    assert sick_run["events"] == ["look"] and sick_run["respawns"] == 1
+def test_sick_looks_for_the_dialog_for_a_while_and_not_longer(macro, sick_run):
+    clock = sick_run["world"].clock
+    sick_run["after_prompt"] = sick_screen("at_the_doctor")
+    start = clock.now
+    macro.TeleportWalkNeedHandler("sick").handle()
+    spent = clock.now - start
+    assert macro.cfg.SICK_CONFIRM_WAIT <= spent <= macro.cfg.SICK_PRE_CLICK_WAIT + macro.cfg.SICK_CONFIRM_WAIT + 2 * macro.cfg.SICK_LOOK_INTERVAL
 
 
 def test_a_failed_sick_is_logged_as_a_failure_by_process_needs(macro, sick_run, monkeypatch):
     import numpy as np
-    sick_run["dialog"] = [False]
-    sick_run["pet_focused"] = True
+    sick_run["screen"] = sick_screen("dialog")                          # not at the doctor
     screen = np.zeros((1080, 1920, 3), np.uint8)
     monkeypatch.setattr(macro, "focus_roblox_click", lambda: True)
     monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([(100, 50, 30)], screen))
@@ -1133,6 +1206,18 @@ def test_a_white_screen_is_acted_on_mid_task_too(macro, monkeypatch):
     assert seen == [True]
 
 
+def test_a_white_screen_rejoin_is_an_event_not_a_failure(macro, monkeypatch):
+    """The game's own doing: the rejoin that works is all there is to it (the run log says `white screen: ...`, the report counts them)."""
+    monkeypatch.setattr(macro, "rejoin_reason", lambda: ("white_screen", "the screen has been white for 30s"))
+    monkeypatch.setattr(macro, "leave_and_rejoin", lambda clean_leave=True: True)
+    monkeypatch.setattr(macro, "setup_game", lambda: True)
+    failures = []
+    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: failures.append(reason))
+    assert macro.rejoin_game() is True
+    assert failures == [] and macro.run_stats.recoveries == 1 and macro.run_stats.failures == 0
+    assert "white screen: the screen has been white for 30s - rejoining" in open(macro.cfg.RUN_LOG_PATH).read()
+
+
 def test_detect_white_screen_wants_most_of_the_screen_completely_white(macro):
     import numpy as np
     screen = np.zeros((1080, 1920, 3), np.uint8)
@@ -1150,7 +1235,7 @@ def test_the_real_white_transition_is_white_and_no_other_real_screenshot_is(macr
     folder = os.path.join(os.path.dirname(__file__), "icon_detection", "halloween1")
     white = [os.path.basename(f) for f in sorted(glob.glob(os.path.join(folder, "*.png")))
              if macro.detect_white_screen(cv2.imread(f))]
-    assert white == ["Screenshot (303).png"]
+    assert [name.split("__")[0] for name in white] == ["white_screen"]
 
 
 def test_a_failed_minigame_does_not_count_as_progress_but_a_won_one_does(macro, monkeypatch):
@@ -1230,23 +1315,28 @@ def test_a_hotkey_acts_on_a_new_press_only_when_its_conditions_hold(macro, monke
     assert not fires(True, False, False, False, True) and fires(True, False, False, False, False)             # M needs Roblox, P doesn't
 
 
-def test_a_button_the_game_refuses_is_clicked_again_until_it_takes(macro, world, monkeypatch):
-    waited, refusals = [], [2]
+def test_a_button_the_game_refuses_is_clicked_again_after_a_wait_and_refused_again_it_is_given_up(macro, world, monkeypatch):
+    cfg = macro.cfg
+    waited, refusals = [], [1]
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
     monkeypatch.setattr(macro, "grab_screen", lambda: None)
     monkeypatch.setattr(macro, "only_pets_message_visible", lambda img: refusals[0] > 0 and (refusals.__setitem__(0, refusals[0] - 1) or True))
-    monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, **kw: waited.append(name))
+    monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=None, **kw: waited.append((name, max_wait)))
     macro.state.button_positions["potty"] = (100, 200)
-    assert macro.click_need_button("potty") is True                                    # refused twice, then taken
-    assert macro.clicks.count((100, 200)) == 3 and waited == ["potty"]
+    assert macro.click_need_button("potty") is True                                    # refused once, then taken: the icon gets the shorter wait
+    assert macro.clicks.count((100, 200)) == 2 and waited == [("potty", cfg.BUTTON_RETRY_CLEAR_WAIT)]
+    assert world.waits.count(cfg.BUTTON_RETRY_WAIT) == 1
     del macro.clicks[:]
-    refusals[0] = 10 ** 6                                                              # always refused: given up, not waited for
+    refusals[0] = 10 ** 6                                                              # refused again: given up at once, the icon not waited for
     waited.clear()
+    world.waits.clear()
     assert macro.click_need_button("potty") is False
-    assert macro.clicks.count((100, 200)) == macro.cfg.BUTTON_CLICK_TRIES and waited == []
+    assert macro.clicks.count((100, 200)) == cfg.BUTTON_CLICK_TRIES and waited == []
+    assert world.waits.count(cfg.BUTTON_RETRY_WAIT) == cfg.BUTTON_CLICK_TRIES - 1 and world.waits[-1] == cfg.BUTTON_RETRY_WAIT
     del macro.clicks[:]
     refusals[0] = 0                                                                    # not refused: clicked once
-    assert macro.click_need_button("potty") is True and macro.clicks.count((100, 200)) == 1
+    waited.clear()
+    assert macro.click_need_button("potty") is True and macro.clicks.count((100, 200)) == 1 and waited == [("potty", None)]       # (the usual wait)
 
 
 def test_a_minigame_popup_waits_for_a_need_in_its_end_wait_but_not_for_ever(macro, world, monkeypatch):

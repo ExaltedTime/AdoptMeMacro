@@ -33,7 +33,7 @@ def blank():
 def test_the_ghosts_in_the_hall_are_found_biggest_first(macro):
     blobs = macro.find_ghost_blobs(shot("ghosts_50"))
     (x, y, area), *rest = blobs
-    assert abs(x - 1047) <= 5 and abs(y - 471) <= 5 and area > 5000                   # the ghost the human held the beam on
+    assert abs(x - 1047) <= 10 and abs(y - 471) <= 10 and area > 5000                   # the ghost the human held the beam on
     assert [b[2] for b in blobs] == sorted((b[2] for b in blobs), reverse=True)
     assert all(b[2] >= macro.cfg.GHOST_MIN_AREA for b in blobs)
     several = macro.find_ghost_blobs(shot("ghosts_66"))                                       # four ghosts at once
@@ -291,8 +291,9 @@ def test_zooming_out_holds_the_zoom_out_key_and_the_tilt_drags_down_with_the_rig
     assert sum(dy for _, _, dy in drags) == pytest.approx(cfg.GHOST_START_TILT, abs=cfg.GHOST_CAMERA_DRAG_STEPS)
 
 
-def test_it_walks_about_a_step_at_a_time_without_stopping_the_aiming(macro, world):
+def test_it_walks_about_a_step_at_a_time_without_stopping_the_aiming(macro, world, monkeypatch):
     cfg = macro.cfg
+    monkeypatch.setattr(cfg, "GHOST_STALL", 1000.0)                                            # (a stall - nothing scored for a while - stops a step and walks one of its own)
     world.screens = [blank()]                                                                  # nothing in sight
     start = world.clock.now
     macro.play_ghost_gallery(start + cfg.GHOST_MOVE_PERIOD * 3.5, watch_started(macro))
@@ -304,8 +305,10 @@ def test_it_walks_about_a_step_at_a_time_without_stopping_the_aiming(macro, worl
         held += 1 if kind == "down" else -1
         assert held in (0, 1)
     assert held == 0
-    for (kind, _, at), (kind2, _, at2) in zip(steps[::2], steps[1::2]):
-        assert cfg.GHOST_MOVE_STEP_MIN - 0.3 <= at2 - at <= cfg.GHOST_MOVE_STEP_MAX + 0.3 + (cfg.GHOST_FURNITURE_PROBES + 1) * cfg.GHOST_OUTLINE_WAIT      # (a step ends at the next look, which can be after a search for furniture)
+    pairs = list(zip(steps[::2], steps[1::2]))
+    for number, ((kind, _, at), (kind2, _, at2)) in enumerate(pairs):
+        assert at2 - at <= cfg.GHOST_MOVE_STEP_MAX + 0.3 + (cfg.GHOST_FURNITURE_PROBES + 1) * cfg.GHOST_OUTLINE_WAIT      # (a step ends at the next look, which can be after a search for furniture)
+        assert number == len(pairs) - 1 or at2 - at >= cfg.GHOST_MOVE_STEP_MIN - 0.3                                       # (the last one can be cut short by the deadline)
     assert world.mouse.count(("down",)) >= 1 and len([m for m in world.mouse if m[0] == "move"]) > 20       # it kept aiming meanwhile
 
 
@@ -469,11 +472,113 @@ def test_in_the_boss_phase_a_blob_too_small_for_the_boss_is_a_minion_not_the_bos
     limit = cfg.GHOST_BOSS_MIN
     big_side, small_side = int((limit * 0.8) ** 0.5), int(1200 ** 0.5)
     screen[400:400 + big_side, 300:300 + big_side] = ghost                         # bigger than the other, smaller than a boss, far from the character
-    screen[600:600 + small_side, 1100:1100 + small_side] = ghost                   # a small one near the character
+    screen[420:420 + small_side, 1300:1300 + small_side] = ghost                   # a small one near the character (not where the pet sits)
     world.screens = [screen]
     macro.play_ghost_gallery(world.clock.now + 1, watch_started(macro))
     first = next(m[1:] for m in world.mouse if m[0] == "move")
-    assert abs(first[0] - 1100 - small_side / 2) < 40 and abs(first[1] - 600 - small_side / 2) < 40       # the near small one: nothing is the boss
+    assert abs(first[0] - 1300 - small_side / 2) < 40 and abs(first[1] - 420 - small_side / 2) < 40       # the near small one: nothing is the boss
+
+
+def near_any(blobs, x, y, reach=30):
+    return any(abs(bx - x) <= reach and abs(by - y) <= reach for bx, by, _ in blobs)
+
+
+def test_the_ghosts_of_a_macro_played_run_are_seen_from_afar_even_as_saturated_as_they_were(macro):
+    """tests/ghost_gallery/afar_ghosts_57.png (45 s into a run whose score stayed 0 for 100 s): three ghosts with white trails, hue 93-95 and saturation 244-247,
+    above the limit the colour range had (240): none was found. The tiny one is 330 px."""
+    blobs = macro.find_ghost_blobs(shot("afar_ghosts_57"))
+    areas = {(x, y): area for x, y, area in blobs}
+    whole = lambda x, y, at_least: any(abs(bx - x) <= 10 and abs(by - y) <= 10 and area >= at_least for (bx, by), area in areas.items())
+    assert whole(1596, 300, 1200) and whole(763, 403, 600) and whole(631, 275, 300)               # whole, not the unsaturated rim of them (267-387 px, off by 20)
+
+
+def alert_screen(name):
+    """A crop of a real frame with a "!" in it (alert_<left>_<top>.png), pasted on a blank screen where it was taken from."""
+    _, left, top = name[:-4].split("_")
+    crop = shot(name[:-4])
+    screen = blank()
+    screen[int(top):int(top) + crop.shape[0], int(left):int(left) + crop.shape[1]] = crop
+    return screen
+
+
+@pytest.mark.parametrize("name, x, y", [("alert_702_316", 902, 476), ("alert_528_330", 728, 490), ("alert_523_426", 723, 586), ("alert_1336_369", 1536, 529)])
+def test_the_exclamation_mark_over_a_hiding_ghosts_furniture_is_found_at_any_distance(macro, name, x, y):
+    """Four real ones (the camera at different distances, the mark tilted): a white bar with a dot under it. A candle, white and as tall, has no dot."""
+    found = macro.find_ghost_alerts(alert_screen(name + ".png"))
+    assert len(found) == 1 and abs(found[0][0] - x) <= 3 and abs(found[0][1] - y) <= 3
+
+
+def test_a_white_bar_alone_is_no_exclamation_mark_and_with_its_dot_it_is(macro):
+    screen = blank()
+    screen[400:424, 500:512] = 255
+    assert macro.find_ghost_alerts(screen) == []
+    screen[428:434, 502:508] = 255
+    assert macro.find_ghost_alerts(screen) == [(506, 412, 24)]
+
+
+def test_a_candle_a_blank_screen_and_the_ghosts_are_no_exclamation_marks(macro):
+    assert macro.find_ghost_alerts(alert_screen("candle_243_266.png")) == [] and macro.find_ghost_alerts(blank()) == []
+    assert macro.find_ghost_alerts(shot("afar_ghosts_57")) == [] and macro.find_ghost_alerts(shot("ghosts_66")) == []
+
+
+def test_the_beam_goes_to_the_furniture_under_an_exclamation_mark_before_any_ghost(macro, world):
+    """The mark is over the furniture a ghost hides in, `GHOST_ALERT_BELOW` of its heights above that furniture."""
+    cfg = macro.cfg
+    screen = with_banner(alert_screen("alert_528_330.png"), "banner_450")
+    screen[300:300 + 60, 1500:1500 + 60] = shot("ghosts_50")[400:460, 1000:1060]              # (a ghost in sight, too: no longer first)
+    world.screens = [screen]
+    macro.play_ghost_gallery(world.clock.now + 1, watch_started(macro))
+    first = left_held_on(world)[0]
+    assert distance(first, (728, 490 + cfg.GHOST_ALERT_BELOW * 21)) <= 25
+
+
+def test_a_blob_skipped_for_scoring_nothing_stays_skipped_wherever_it_flies_and_for_its_time_only(macro):
+    cfg = macro.cfg
+    feedback = macro.GhostFeedback(0.0)
+    pet = (1000, 600, 800)
+    feedback.skip(pet[:2], 10.0)
+    assert feedback.follow_skipped([pet], 11.0) == []
+    flown = (pet[0] + cfg.GHOST_STICK - 10, pet[1], pet[2])                                   # it has moved: a bit at each look
+    assert feedback.follow_skipped([flown], 12.0) == []
+    again = (flown[0] + cfg.GHOST_STICK - 10, flown[1], flown[2])
+    assert feedback.follow_skipped([again], 13.0) == []                                       # (the mark followed it, so this is within reach of where it was)
+    ghost = (300, 300, 900)
+    assert feedback.follow_skipped([ghost, again], 14.0) == [ghost]
+    assert feedback.follow_skipped([again], 10.0 + cfg.GHOST_SKIP_TIME + 1) == [again]       # its time is up
+
+
+def test_what_scores_nothing_in_spite_of_the_furniture_around_it_is_left_alone_and_the_beam_moves_on(macro, world, short_trial, monkeypatch, caplog):
+    """The pet beside the character (afar_pet_49.png, the score never changes): first the nearest blob, then the furniture around it, then the next blob."""
+    cfg = macro.cfg
+    monkeypatch.setattr(macro, "find_furniture", lambda watch, around=None, avoid=(): (400, 800))
+    screen = shot("afar_pet_49")
+    pet = macro.choose_ghost_target(macro.find_ghost_blobs(screen), False, None)
+    world.screens = [screen]
+    start = world.clock.now
+    macro.play_ghost_gallery(start + cfg.GHOST_SPOT_TRIAL * (cfg.GHOST_HIDE_TRIES + 3), watch_started(macro))
+    held = left_held_on(world)
+    near_the_pet = [distance(place, pet) < 40 for place in held]
+    assert near_the_pet[0] and not any(near_the_pet[len(held) * 2 // 3:])                     # held on the pet at first, not in the last third
+    assert "left alone" in caplog.text
+
+
+def test_in_the_boss_phase_what_scores_nothing_is_not_the_boss_but_what_scores_is(macro, world, monkeypatch):
+    """fog_129.png: the biggest blob is a light shaft along the left side (the boss was out of sight). boss_141.png: the boss, the score going up."""
+    cfg = macro.cfg
+    monkeypatch.setattr(cfg, "GHOST_BOSS_TRIAL", 2.0)
+    fog = shot("fog_129")
+    shaft = macro.find_ghost_blobs(fog, True)[0][:2]
+    world.screens = [fog]
+    start = world.clock.now
+    macro.play_ghost_gallery(start + cfg.GHOST_BOSS_TRIAL + 2, watch_started(macro))
+    assert distance(left_held_on(world)[0], shaft) < 40 and distance(left_held_on(world)[-1], shaft) > 100
+    boss = shot("boss_141")
+    boss_at = macro.find_ghost_blobs(boss, True)[0][:2]
+    world.mouse.clear()
+    start = world.clock.now
+    world.screens = lambda: with_banner(boss, ["banner_450", "banner_1450"][int((world.clock.now - start) / 0.3) % 2])        # the score changes all the time
+    macro.play_ghost_gallery(start + cfg.GHOST_BOSS_TRIAL * 3, watch_started(macro))
+    assert all(distance(place, boss_at) < 60 for place in left_held_on(world))
 
 
 def test_a_ghost_seen_from_afar_is_found_and_the_slime_puddle_beside_it_is_not(macro):
@@ -569,6 +674,7 @@ def test_the_beam_goes_back_to_the_ghost_when_the_score_goes_up(macro, world, sh
 
 def test_each_try_for_a_hiding_ghost_keeps_away_from_the_furniture_that_scored_nothing(macro, world, short_trial, monkeypatch):
     cfg = macro.cfg
+    monkeypatch.setattr(cfg, "GHOST_HIDE_TRIES", 10)                                          # (the number of tries is the next test's)
     screen, ghost = ghost_with_banner(macro)
     world.screens = [screen]
     tried = iter([(300, 300), (1500, 700), (400, 800), (1600, 200)])

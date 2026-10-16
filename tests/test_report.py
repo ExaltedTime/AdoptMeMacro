@@ -188,6 +188,27 @@ def test_the_report_draws_the_whole_pcs_line_only_when_it_was_logged(macro, tmp_
     assert pixels_of(drawn, macro.COLOR_PC, bottom) > 100 and pixels_of(old, macro.COLOR_PC, bottom) == 0
 
 
+def test_white_screens_and_minigame_results_are_read_and_drawn(macro, tmp_path):
+    path = log_of(tmp_path, "00:00] [RUN 7] LOOP started", "01:00] [RUN 7] white screen: the screen has been white for 30s - rejoining",
+                  "02:00] [RUN 7] minigame result: Ghost Gallery: 3288 candy corn", "03:00] [RUN 7] minigame result: Hauntlet 2: 2520 candy corn, room 6",
+                  "04:00] [RUN 7] minigame result: Ghost Gallery: 4107 candy corn", "05:00] [RUN 7] minigame result: Ghost Gallery: candy corn not read",
+                  "06:00] [RUN 7] LOOP stopped")
+    data = macro.parse_run(path, 7)
+    assert data["events"]["white screens (rejoined)"] == 1 and data["failures"] == []
+    assert [result[1:] for result in data["results"]] == [("Ghost Gallery", 3288), ("Hauntlet 2", 2520), ("Ghost Gallery", 4107)]
+    with_results = macro.draw_report(data, 7, set(), set())
+    without = macro.draw_report({**data, "results": []}, 7, set(), set())
+    assert (with_results != without).any()
+
+
+def test_what_record_minigame_result_logs_is_what_the_parser_reads(macro, tmp_path):
+    macro.state.run_number = 5
+    macro.record_minigame_result({"minigame": "ghost_gallery", "earned": 3102, "room": None, "time": "2026-10-15 16:35:50"})
+    macro.record_minigame_result({"minigame": "hauntlet_2", "earned": 3360, "room": 8, "time": "2026-10-15 16:25:10"})
+    results = macro.parse_run(macro.cfg.RUN_LOG_PATH, 5)["results"]
+    assert [result[1:] for result in results] == [(macro.cfg.MINIGAME_LABELS["ghost_gallery"], 3102), (macro.cfg.MINIGAME_LABELS["hauntlet_2"], 3360)]
+
+
 def test_the_report_shows_a_disabled_need_until_the_next_rejoin(macro, tmp_path):
     path = log_of(tmp_path, "00:00] [RUN 7] LOOP started", "05:00] [RUN 7] disabled: pizza",
                   "10:00] [RUN 7] recovery complete: rejoined", "20:00] [RUN 7] LOOP stopped")

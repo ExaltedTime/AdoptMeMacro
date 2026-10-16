@@ -1,6 +1,7 @@
-"""Need-icon recognition against real screenshots (tests/icon_detection/<folder>/Screenshot (N).png), each with
-the need bar over a different background - dark, bright, busy, white. Every screenshot must be listed in EXPECTED with
-the needs on its bar, left to right; one that isn't fails, so a newly added screenshot gets a label."""
+"""Need-icon recognition against real screenshots (tests/icon_detection/<folder>/<scene>__<needs>.png), each with
+the need bar over a different background - dark, bright, busy, white. A file is named for what it shows and what is on its bar:
+the scene, then two underscores, then the needs on the bar left to right joined by hyphens (`hospital_1__bored-pizza-cafe-dirty-ride.png`).
+The needs are what the test expects; a file named otherwise fails, so a newly added screenshot gets a label."""
 import glob
 import os
 import re
@@ -12,35 +13,20 @@ import conftest
 
 SHOTS = os.path.join(conftest.ROOT, "tests", "icon_detection")
 
-ALL = "bored pizza cafe dirty ride"
-CAMPING = "bored camping pizza cafe dirty"
-SCHOOL = "bored school pizza cafe dirty"
-NIGHT = "bored pizza cafe dirty sleepy"
-EXPECTED = {
-    "halloween1": {
-        **{n: ALL for n in range(278, 285)},
-        285: CAMPING, 287: CAMPING,
-        **{n: SCHOOL for n in range(288, 297)},
-        297: "bored pizza cafe dirty",
-        **{n: NIGHT for n in range(298, 302)},
-        **{n: "bored pizza dirty sleepy" for n in range(302, 308)},
-    },
-}
-
 
 def screenshots():
     found = []
     for folder in sorted(os.listdir(SHOTS)):
         for path in sorted(glob.glob(os.path.join(SHOTS, folder, "*.png"))):
-            number = int(re.search(r"\((\d+)\)", path).group(1))
-            found.append((folder, number, path))
+            found.append((folder, os.path.basename(path), path))
     return found
 
 
-@pytest.mark.parametrize("folder,number,path", screenshots(), ids=lambda v: v if isinstance(v, str) and not v.endswith(".png") else None)
-def test_every_icon_on_the_bar_is_recognised_and_nothing_else_is(macro, monkeypatch, folder, number, path):
-    expected = EXPECTED.get(folder, {}).get(number)
-    assert expected is not None, f"{path} has no entry in EXPECTED - add the needs on its bar"
+@pytest.mark.parametrize("folder,name,path", screenshots(), ids=lambda v: v if isinstance(v, str) and not v.endswith(".png") else None)
+def test_every_icon_on_the_bar_is_recognised_and_nothing_else_is(macro, monkeypatch, folder, name, path):
+    named = re.fullmatch(r"[a-z0-9_]+__([a-z-]+)\.png", name)
+    assert named, f"{path} is not named <scene>__<needs>.png - name it for what it shows and the needs on its bar"
+    expected = named.group(1).replace("-", " ")
     screen = cv2.imread(path)
     monkeypatch.setattr(macro, "grab_screen_region", lambda x, y, w, h: screen[y:y + h, x:x + w].copy())
     monkeypatch.setattr(macro, "check_running", lambda: None)

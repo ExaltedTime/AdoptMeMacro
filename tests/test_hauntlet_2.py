@@ -63,7 +63,6 @@ BAR_AT = (640, 930)
 # the backpack button.
 THREE_ITEMS_AND_PHONE = "phone-key-cyan_potion-heart_potion"
 PHONE_KEY_HEART = "phone-key-heart_potion"
-KEY_CYAN_HEART = "key-cyan_potion-heart_potion"
 
 
 def bar_fixtures():
@@ -94,27 +93,15 @@ def test_slot_positions_are_where_the_slots_are(macro):
     assert all(abs(item.pos[1] - 1012) <= 3 for item in items)
 
 
-def test_an_item_that_is_not_saved_is_unknown_and_learned_when_asked(macro, monkeypatch, tmp_path):
+def test_an_item_that_is_not_saved_is_unknown_and_nothing_is_saved(macro, monkeypatch, tmp_path):
     import shutil
     items_dir = tmp_path / "items"
     shutil.copytree(macro.cfg.HAUNTLET_ITEM_DIR, items_dir)
     shutil.rmtree(items_dir / "phone")                                               # forget the phone
+    before = sorted(os.listdir(items_dir))
     monkeypatch.setattr(macro.cfg, "HAUNTLET_ITEM_DIR", str(items_dir))
     assert [i.name for i in macro.read_hauntlet_items(bar(PHONE_KEY_HEART))] == ["unknown", "key", "heart_potion"]
-    assert not any(n.startswith("unknown") for n in os.listdir(items_dir))              # looking doesn't save anything
-    learned = macro.read_hauntlet_items(bar(PHONE_KEY_HEART), learn=True)
-    assert [i.name for i in learned] == ["unknown_1", "key", "heart_potion"] and learned[0].count == 1
-    assert os.path.isfile(items_dir / "unknown_1" / "1.png")
-    assert [i.name for i in macro.read_hauntlet_items(bar(PHONE_KEY_HEART))] == ["unknown_1", "key", "heart_potion"]    # known now
-    (items_dir / "unknown_1").rename(items_dir / "phone")                            # naming it is renaming the folder
-    assert [i.name for i in macro.read_hauntlet_items(bar(PHONE_KEY_HEART))] == ["phone", "key", "heart_potion"]
-
-
-def test_each_unknown_item_gets_the_next_number(macro, monkeypatch, tmp_path):
-    monkeypatch.setattr(macro.cfg, "HAUNTLET_ITEM_DIR", str(tmp_path / "items"))              # nothing saved: all unknown
-    names = [i.name for i in macro.read_hauntlet_items(bar(KEY_CYAN_HEART), learn=True)]
-    assert names == ["unknown_1", "unknown_2", "unknown_3"]
-    assert sorted(os.listdir(tmp_path / "items")) == names
+    assert sorted(os.listdir(items_dir)) == before
 
 
 def test_a_badge_that_cannot_be_read_gives_no_count_not_a_guess(macro):

@@ -1195,8 +1195,7 @@ item, several pictures each - bright, dim, slightly enlarged). The best must rea
 item is `unknown`. They were cut from the 382 slots of a 256-frame run: `phone`, `key`, `gold_key`, `cyan_potion`,
 `heart_potion`, `red_potion`, plus `backpack` (the lobby's button, which sits where a slot would and is left out,
 `HAUNTLET_NOT_ITEMS`); every slot of that run is read as the item it is (60 ms a frame). The wand was not in it, so
-it has no pictures yet. **Learning:** with `learn=True` an unknown slot is saved as `ref/hauntlet_2/items/unknown_<n>/1.png`
-(`learn_hauntlet_item()`) and is known from then on; renaming the folder to what it is names it. The count is the number
+it has no pictures yet. A slot that matches none of them reads as `unknown`; nothing is saved. The count is the number
 on the purple "x2" badge at a slot's top left (`read_item_count()`): the badge is the purple piece of the right size
 (`HAUNTLET_BADGE_*`), its white pieces are the "x" and the digits, each compared with the glyphs in
 `ref/hauntlet_2/counts/` (`x`, `1`, `2` - the only counts in the run, so no other digit is known yet: a glyph that
@@ -1285,8 +1284,7 @@ a wall until the timer ran out), or a TV hidden - the camera can be dragged roun
 after each, before walking ahead - but that is **0, off**: turning the camera changes where the keys take the player, and in a captured fork (room 10, two doorways under signs, "Power Station" and "Spider Den") the player stood in front of its doorway until the camera was turned, then against the wall for 20 s. (That turn was a bug of its own: a fork whose looks had started over after a walk, past `HAUNTLET_DOORS_TIMEOUT`, was taken for one doorway; a fork now waits for its two empty looks whatever the age.) A TV showing a "1" (the player stands before that door) is a thin stroke, much smaller than the "0"s of the others, hence the low end of
 `HAUNTLET_TV_AREA`; the real run's row was missed for 25 s because of one.
 
-`hauntlet_choose()` reads the hearts and the items off the same screenshot (new items are saved, at most
-`HAUNTLET_LEARN_LIMIT` per play, so a misreading can't fill the folder), chooses the door, uses the items the choice calls for, and logs the lot:
+`hauntlet_choose()` reads the hearts and the items off the same screenshot chooses the door, uses the items the choice calls for, and logs the lot:
 `room 12, 3 hearts (1 lost), items: phone x1, key x1, doors: -, -, locked, going right, used key`.
 
 *The door* (`choose_hauntlet_door()`) is a random one, with two exceptions: a locked door is only a choice when the **grey key** (`HAUNTLET_ITEM_KEY`; the gold key is not it)

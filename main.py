@@ -2585,7 +2585,6 @@ class HauntletRun:
         self.rooms = 0                                # numbers seen
         self.tvs: Optional[list[tuple[int, int]]] = None   # of the last look: None if the timer was hidden
         self.empty_looks = 0                          # looks in a row at a room without TVs
-        self.learned: set[str] = set()                # unknown items seen (and saved) so far
         self.doors_missing_reported = False           # the failure for a room with no doors found has been logged
 
     @property
@@ -2743,8 +2742,7 @@ def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun, wat
         logger.debug(f"Hauntlet 2: room {run.room}, the door is picked already (its circle was stepped in): going to the same one")
         return run.picked, img
     hearts = read_hauntlet_hearts(img)
-    items = read_hauntlet_items(img, learn=len(run.learned) < cfg.HAUNTLET_LEARN_LIMIT)
-    run.learned |= {item.name for item in items if item.name.startswith("unknown_")}
+    items = read_hauntlet_items(img)
     names = {1: ("ahead",), 2: ("left", "right"), 3: ("left", "middle", "right")}[len(doors)]
     ghost: Optional[int] = None
     used: list[str] = []
@@ -4241,7 +4239,7 @@ def read_hauntlet_room(img: Image) -> Optional[int]:
 
 @dataclass
 class HauntletItem:
-    """An item slot on the Hauntlet 2 screen: its `name` (a folder of HAUNTLET_ITEM_DIR, or unknown_<n>), the `count`
+    """An item slot on the Hauntlet 2 screen: its `name` (a folder of HAUNTLET_ITEM_DIR, or "unknown"), the `count`
     on its badge (None if the badge couldn't be read), and the slot's centre `pos`."""
     name: str
     count: Optional[int]
@@ -4289,17 +4287,6 @@ def identify_item(crop: Image) -> tuple[Optional[str], float]:
                     best_name, best = name, score
     return (best_name if best >= cfg.HAUNTLET_ITEM_MATCH else None), best
 
-def learn_hauntlet_item(crop: Image) -> str:
-    """Save `crop` as a new item, unknown_<n>/1.png in HAUNTLET_ITEM_DIR, to be renamed (the folder) to what it is.
-    Returns the name."""
-    os.makedirs(cfg.HAUNTLET_ITEM_DIR, exist_ok=True)
-    taken = {int(n[len("unknown_"):]) for n in os.listdir(cfg.HAUNTLET_ITEM_DIR) if n.startswith("unknown_") and n[len("unknown_"):].isdigit()}
-    name = f"unknown_{max(taken, default=0) + 1}"
-    os.makedirs(os.path.join(cfg.HAUNTLET_ITEM_DIR, name))
-    cv2.imwrite(os.path.join(cfg.HAUNTLET_ITEM_DIR, name, "1.png"), crop if crop.ndim == 2 else cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY))
-    logger.info(f"New Hauntlet 2 item saved as {name} in {cfg.HAUNTLET_ITEM_DIR} - rename the folder to what it is")
-    return name
-
 def read_item_count(img: Image, x: int, y: int) -> Optional[int]:
     """The number on the "x2" badge of the slot centred at (x, y), or None if it can't be read (no badge, or a glyph
     that matches none of the saved ones)."""
@@ -4336,10 +4323,9 @@ def read_item_count(img: Image, x: int, y: int) -> Optional[int]:
         text += name
     return int(text[1:]) if text.startswith("x") and text[1:].isdigit() else None
 
-def read_hauntlet_items(img: Image, learn: bool = False) -> list[HauntletItem]:
+def read_hauntlet_items(img: Image) -> list[HauntletItem]:
     """The items in the slots along the bottom of `img`, left to right: each one's name, count and position. An item
-    that matches none of the saved ones is named "unknown" - or, with `learn`, saved with learn_hauntlet_item() and
-    named after the folder it got. Names in HAUNTLET_NOT_ITEMS (the lobby's backpack button) are left out."""
+    that matches none of the saved ones is named "unknown". Names in HAUNTLET_NOT_ITEMS (the lobby's backpack button) are left out."""
     items = []
     for x, y, radius in find_item_slots(img):
         half = cfg.HAUNTLET_ITEM_CROP // 2
@@ -4348,7 +4334,7 @@ def read_hauntlet_items(img: Image, learn: bool = False) -> list[HauntletItem]:
             continue
         name, _ = identify_item(crop)
         if name is None:
-            name = learn_hauntlet_item(crop) if learn else "unknown"
+            name = "unknown"
         if name not in cfg.HAUNTLET_NOT_ITEMS:
             items.append(HauntletItem(name, read_item_count(img, x, y), (x, y)))
     return items

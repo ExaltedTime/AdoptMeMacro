@@ -359,8 +359,7 @@ HAUNTLET_ROOM_MAX_DIGITS = 3
 # The item slots along the bottom of the Hauntlet 2 screen: round white-ringed icons, about HAUNTLET_SLOT_PITCH apart,
 # centred on the screen, up to four. They are found as circles within HAUNTLET_SLOT_BAND (top, bottom). A slot's picture is
 # the HAUNTLET_ITEM_CROP px square around its centre, matched by correlation (0-1) with the pictures of each saved item;
-# the best must reach HAUNTLET_ITEM_MATCH or the item is unknown (and saved as unknown_<n> to be named - see
-# read_hauntlet_items()). These names are not items and are left out of the list.
+# the best must reach HAUNTLET_ITEM_MATCH or the item is unknown. These names are not items and are left out of the list.
 HAUNTLET_SLOT_BAND = (930, 1080)
 HAUNTLET_SLOT_RADIUS = (44, 58)
 HAUNTLET_SLOT_MIN_DISTANCE = 80
@@ -534,7 +533,6 @@ HAUNTLET_ARROW_WIDTH = (100, 150)
 HAUNTLET_ARROW_HEIGHT = (45, 125)
 HAUNTLET_ARROW_MAX_OFFSET = 0.5
 HAUNTLET_ARROW_LOOKS = 4
-HAUNTLET_LEARN_LIMIT = 4                     # new item pictures saved in one play (unknown_<n> folders); more is a misreading
 
 # ============================================================================
 # SCREEN / INPUT SETUP

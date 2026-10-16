@@ -234,7 +234,7 @@ CAPTURE_MIN_FREE_MB = 3000               # ...or when less than this much disk i
 MAX_CAPTURES = 5                         # oldest captures are deleted beyond this many
 # Every minigame played is recorded the same way, automatically (MINIGAME_CAPTURE; not while a capture of the hotkey's is
 # running), into a folder of RUN_CAPTURES_DIR. Of each minigame the captures of its RUN_CAPTURES_BEST best runs (the most candy corn
-# earned), its RUN_CAPTURES_WORST worst and its latest are kept (prune_run_captures()). A lossless frame is 1-3 MB, so a run
+# earned), its RUN_CAPTURES_WORST worst, its latest and the latest RUN_CAPTURES_FAILED that failed are kept (prune_run_captures()). A lossless frame is 1-3 MB, so a run
 # is kept to RUN_CAPTURE_ZIPS zips of CAPTURE_ZIP_MB by thinning its frames out evenly (see InputCapture) - except frames of
 # when things went wrong: at a mark() (a walk that got nowhere, a failure, a stall...) a frame is saved at once and every look for
 # the next RUN_CAPTURE_BURST seconds, and a run that didn't finish keeps the frames of its last RUN_CAPTURE_TAIL seconds; such
@@ -244,6 +244,7 @@ RUN_CAPTURES_DIR = os.path.join(DEBUG_DIR, "minigame_captures")
 RUN_CAPTURE_ZIPS = 5
 RUN_CAPTURES_BEST = 2
 RUN_CAPTURES_WORST = 2
+RUN_CAPTURES_FAILED = 5                   # the latest this many runs that failed (did not finish, or had a failure logged) are kept too
 RUN_CAPTURE_BURST = 4.0
 RUN_CAPTURE_TAIL = 15.0
 RUN_CAPTURE_PROTECTED = 25

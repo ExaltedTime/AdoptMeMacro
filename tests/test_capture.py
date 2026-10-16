@@ -507,13 +507,13 @@ def test_a_failure_and_a_popup_in_the_middle_of_a_minigame_mark_the_recording(ma
     assert len(marks) == 1 and "paycheck" in marks[0]
 
 
-def runs_dir_with(macro, label, earned_by_name):
+def runs_dir_with(macro, label, earned_by_name, failed=()):
     os.makedirs(macro.cfg.RUN_CAPTURES_DIR, exist_ok=True)
     for i, (name, earned) in enumerate(earned_by_name.items()):
         folder = os.path.join(macro.cfg.RUN_CAPTURES_DIR, f"{label}_{name}")
         os.makedirs(folder)
         with open(os.path.join(folder, "info.json"), "w") as f:
-            json.dump({} if earned == "unknown" else {"earned": earned}, f)
+            json.dump(({} if earned == "unknown" else {"earned": earned}) | ({"finished": False} if name in failed else {}), f)
         os.utime(folder, (1000 + i, 1000 + i))                                 # in the order given: the last is the latest
 
 
@@ -525,6 +525,26 @@ def test_of_each_minigame_the_best_the_worst_and_the_latest_recordings_are_kept(
     kept = {n.split("_", 2)[2] for n in os.listdir(cfg.RUN_CAPTURES_DIR) if n.startswith("hauntlet_2_")}
     assert kept == {"b", "e", "c", "f", "latest"}                              # the two best, the two worst and the latest
     assert any(n.startswith("ghost_gallery_") for n in os.listdir(cfg.RUN_CAPTURES_DIR))     # another minigame's are not touched
+
+
+def test_the_latest_runs_that_failed_are_kept_whatever_they_earned(macro, run_folder, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "RUN_CAPTURES_FAILED", 2)
+    runs_dir_with(macro, "hauntlet_2", {"f1": 5000, "f2": 5100, "f3": 5200, "ok": 4000, "best": 9000, "b2": 8000, "w1": 10, "w2": 20, "latest": 4500}, failed={"f1", "f2", "f3"})
+    macro.prune_run_captures("hauntlet_2")
+    kept = {n.split("_", 2)[2] for n in os.listdir(macro.cfg.RUN_CAPTURES_DIR)}
+    assert kept == {"f2", "f3", "best", "b2", "w1", "w2", "latest"}             # (f1 is the third failure back; "ok" is nothing special)
+
+
+def test_a_run_with_failures_logged_counts_as_failed_too(macro, run_folder):
+    os.makedirs(macro.cfg.RUN_CAPTURES_DIR)
+    for name, info in (("old", {"earned": 5000, "failures": 3}), ("older", {"earned": 5000, "failures": 0}), ("best", {"earned": 9000}), ("b2", {"earned": 8000}),
+                       ("w1", {"earned": 1}), ("w2", {"earned": 2}), ("latest", {"earned": 3000})):
+        os.makedirs(os.path.join(macro.cfg.RUN_CAPTURES_DIR, f"hauntlet_2_{name}"))
+        with open(os.path.join(macro.cfg.RUN_CAPTURES_DIR, f"hauntlet_2_{name}", "info.json"), "w") as f:
+            json.dump(info, f)
+        os.utime(os.path.join(macro.cfg.RUN_CAPTURES_DIR, f"hauntlet_2_{name}"), (len(name), len(name)))
+    macro.prune_run_captures("hauntlet_2")
+    assert {n.split("_", 2)[2] for n in os.listdir(macro.cfg.RUN_CAPTURES_DIR)} == {"old", "best", "b2", "w1", "w2", "latest"}
 
 
 def test_tidying_with_no_recordings_folder_is_nothing_and_the_latest_is_the_one_whose_name_is_latest(macro, run_folder, caplog):
@@ -564,3 +584,4 @@ def test_the_name_added_to_a_recording_says_what_the_run_earned_and_how_it_ended
     assert macro.run_capture_suffix("finished (the game over screen)", {"earned": 2540}) == "_2540cc"
     assert macro.run_capture_suffix("left the minigame (its overlay was gone for 10s)", {"earned": None, "room": 1}) == "_cc-unread_room1_failed"
     assert macro.run_capture_suffix("interrupted", {}) == "_cc-unread_failed"
+    assert macro.run_capture_suffix("finished (the game over screen)", {"earned": 2105, "room": 10, "failures": 2}) == "_2105cc_room10_failures"

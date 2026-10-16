@@ -2510,17 +2510,21 @@ def detect_minigame_overlay(img: Image) -> Optional[str]:
 
 class MinigameWatch:
     """Keeps track of whether the minigame being played is on screen (its
-    overlay - detect_minigame_overlay()), fed one screenshot at a time by
-    minigame_won(). `problem` says why to stop, or None."""
+    overlay - detect_minigame_overlay()) and whether the game disconnected
+    (detect_disconnect()), fed one screenshot at a time by minigame_won().
+    `problem` says why to stop, or None."""
 
     def __init__(self, name: str) -> None:
         self.name = name
         self.began = time.time()
         self.last_seen: Optional[float] = None
         self.start_grace_from: Optional[float] = None   # set once the start wait is over
+        self.disconnected = False                       # the "Disconnected" dialog has been seen
 
     def update(self, img: Image) -> None:
-        if detect_minigame_overlay(img) == self.name:
+        if detect_disconnect(img):
+            self.disconnected = True
+        elif detect_minigame_overlay(img) == self.name:
             self.last_seen = time.time()
 
     def start_wait_over(self) -> None:
@@ -2529,6 +2533,8 @@ class MinigameWatch:
     @property
     def problem(self) -> Optional[str]:
         now = time.time()
+        if self.disconnected:
+            return "disconnected from the game"
         if self.last_seen is not None and now - self.last_seen > cfg.MINIGAME_OVERLAY_LOST_TIMEOUT:
             return f"left the minigame (its overlay was gone for {cfg.MINIGAME_OVERLAY_LOST_TIMEOUT:g}s)"
         if (self.last_seen is None and self.start_grace_from is not None
@@ -3498,6 +3504,7 @@ def play_minigame(name: str) -> bool:
         respawn_character()
         return False
     started = time.time()
+    failures_before = run_stats.failures
     watch = MinigameWatch(name)
     state.minigame_detail = {}
     before = read_candy_corn_settled(cfg.CANDY_CORN_BEFORE_TRIES)      # in the lobby the total is on screen (after the white of the teleport): what the run earned is the difference
@@ -3513,13 +3520,17 @@ def play_minigame(name: str) -> bool:
     finally:
         release_all_inputs()
         bring_macro_window_to_front()
-        result = minigame_result(name, outcome, finished, time.time() - started, before, after)
+        result = minigame_result(name, outcome, finished, time.time() - started, before, after, run_stats.failures - failures_before)
         finish_run_capture(capture, outcome, result)
     record_minigame_result(result)
     if finished:
         log_run_event(f"minigame finished: {label} ({time.time() - started:.0f}s)")
         save_minigame_result(name)
         click_nice_until_gone()
+    elif watch.disconnected:
+        log_run_event(f"{label} ended by a disconnect")      # (the failure is the rejoin's to log)
+        state.last_detection = time.time()
+        return False
     else:
         reason = watch.problem or f"did not reach the victory screen within {cfg.MINIGAME_MAX_DURATION:g}s"
         log_failure(f"{label} {reason}")
@@ -4073,13 +4084,16 @@ def mark_run_capture(reason: str) -> None:
 
 def run_capture_suffix(outcome: str, result: dict[str, Any]) -> str:
     """What is added to a recording's folder name when the run is over, to tell it from the others: the candy corn earned (`_2105cc`, or
-    `_cc-unread`), the room reached in Hauntlet 2 (`_room10`) and `_failed` for a run that did not finish."""
+    `_cc-unread`), the room reached in Hauntlet 2 (`_room10`), `_failed` for a run that did not finish and `_failures` for one that did
+    with failures logged on the way."""
     earned = result.get("earned")
     parts = [f"{earned}cc" if earned is not None else "cc-unread"]
     if result.get("room") is not None:
         parts.append(f"room{result['room']}")
     if not outcome.startswith("finished"):
         parts.append("failed")
+    elif result.get("failures"):
+        parts.append("failures")
     return "_" + "_".join(parts)
 
 def finish_run_capture(capture: Optional[InputCapture], outcome: str, result: Optional[dict[str, Any]] = None) -> None:
@@ -4110,16 +4124,18 @@ def finish_run_capture(capture: Optional[InputCapture], outcome: str, result: Op
     except Exception as error:
         logger.warning(f"Couldn't finish recording the minigame: {error}")
 
-def captures_to_keep(runs: list[tuple[str, Optional[int], float]]) -> set[str]:
-    """Of the recordings of one minigame, `runs` = (folder, candy corn earned or None, when it started), the ones to keep: the
-    latest, the RUN_CAPTURES_BEST that earned most and the RUN_CAPTURES_WORST that earned least (a run whose candy corn wasn't read
-    counts as the worst)."""
+def captures_to_keep(runs: list[tuple[str, Optional[int], float, bool]]) -> set[str]:
+    """Of the recordings of one minigame, `runs` = (folder, candy corn earned or None, when it started, whether it failed - did not finish
+    or had a failure logged), the ones to keep: the latest, the RUN_CAPTURES_FAILED latest that failed, the RUN_CAPTURES_BEST that earned
+    most and the RUN_CAPTURES_WORST that earned least (a run whose candy corn wasn't read counts as the worst)."""
     if not runs:
         return set()
-    def earned(run: tuple[str, Optional[int], float]) -> tuple[int, float]:
+    def earned(run: tuple[str, Optional[int], float, bool]) -> tuple[int, float]:
         return (-1 if run[1] is None else run[1], run[2])
     ranked = sorted(runs, key=earned)
     keep = {max(runs, key=lambda run: run[2])[0]}
+    failed = sorted((run for run in runs if run[3]), key=lambda run: run[2])
+    keep |= {run[0] for run in failed[max(0, len(failed) - cfg.RUN_CAPTURES_FAILED):]}
     keep |= {run[0] for run in ranked[:cfg.RUN_CAPTURES_WORST]}
     keep |= {run[0] for run in ranked[len(ranked) - cfg.RUN_CAPTURES_BEST:]}
     return keep
@@ -4144,18 +4160,19 @@ def prune_run_captures(label: str) -> None:
                 started = time.mktime(time.strptime(name[len(label) + 1:][:15], "%Y%m%d_%H%M%S"))     # (the folder's name says when; its time changes as files go in and out)
             except ValueError:
                 started = os.path.getmtime(folder)
-            runs.append((folder, info.get("earned"), started))
+            failed = info.get("finished") is False or bool(info.get("failures"))
+            runs.append((folder, info.get("earned"), started, failed))
         for folder in {run[0] for run in runs} - captures_to_keep(runs):
             shutil.rmtree(folder, ignore_errors=True)
     except Exception as error:
         logger.warning(f"Couldn't tidy the recordings: {error}")
 
-def minigame_result(name: str, outcome: str, finished: bool, seconds: float, before: Optional[int], after: Optional[int]) -> dict[str, Any]:
+def minigame_result(name: str, outcome: str, finished: bool, seconds: float, before: Optional[int], after: Optional[int], failures: int = 0) -> dict[str, Any]:
     """What a minigame run came to: how it ended, and the candy corn it earned - the HUD total after less the total before, None when either
-    wasn't read - plus what its player noted (state.minigame_detail: the room reached in Hauntlet 2)."""
+    wasn't read - the `failures` logged while it ran, plus what its player noted (state.minigame_detail: the room reached in Hauntlet 2)."""
     earned = after - before if before is not None and after is not None and after >= before else None
     return {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "run": state.run_number, "minigame": name, "outcome": outcome, "finished": finished,
-            "seconds": round(seconds), "candy_corn_before": before, "candy_corn_after": after, "earned": earned, **state.minigame_detail}
+            "seconds": round(seconds), "candy_corn_before": before, "candy_corn_after": after, "earned": earned, "failures": failures, **state.minigame_detail}
 
 def record_minigame_result(result: dict[str, Any]) -> None:
     """Note a finished minigame run's `result` (minigame_result()): a line of RUNS_DIR/results/results.jsonl and one in the run log - then the

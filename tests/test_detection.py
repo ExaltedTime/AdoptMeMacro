@@ -431,6 +431,16 @@ def screenshot(name):
     return cv2.imread(os.path.join(os.path.dirname(__file__), "popups", f"{name}.png"))
 
 
+def test_the_disconnected_dialog_ends_a_minigame_watch_and_its_clean_screens_do_not(macro):
+    """Real frame of Hauntlet 2's start (Error Code 277): the dialog stayed up for 90 s, the minigame not noticing."""
+    watch = macro.MinigameWatch("hauntlet_2")
+    for name in ("backpack_open", "game_over", "paycheck"):
+        watch.update(screenshot(name))
+    assert watch.problem is None and not watch.disconnected
+    watch.update(screenshot("disconnected_error_277"))
+    assert watch.disconnected and watch.problem == "disconnected from the game"
+
+
 def test_an_open_backpack_is_seen_in_a_real_screenshot(macro):
     assert macro.detect_backpack_open(screenshot("backpack_open"))
     for name in ("teleport_nursery", "teleport_dealership", "cant_spawn_vehicle"):          # (these have the backpack's expanded grid behind them: the dialog is over it)

@@ -2679,11 +2679,21 @@ def find_fork_doorways(img: Image) -> Optional[tuple[int, int]]:
             spans[-1][1] = int(x)
         else:
             spans.append([int(x), int(x)])
-    spans = [span for span in spans if cfg.HAUNTLET_OPENING_WIDTH[0] <= span[1] - span[0] + 1 <= cfg.HAUNTLET_OPENING_WIDTH[1]]
-    if len(spans) != 2:
-        return None
-    left, right = ((a + b) // 2 for a, b in spans)
-    return (left, right) if cfg.HAUNTLET_OPENING_GAP[0] <= right - left <= cfg.HAUNTLET_OPENING_GAP[1] else None
+    whole = [span for span in spans if cfg.HAUNTLET_OPENING_WIDTH[0] <= span[1] - span[0] + 1 <= cfg.HAUNTLET_OPENING_WIDTH[1]]
+    if len(whole) == 2:
+        left, right = ((a + b) // 2 for a, b in whole)
+        return (left, right) if cfg.HAUNTLET_OPENING_GAP[0] <= right - left <= cfg.HAUNTLET_OPENING_GAP[1] else None
+    # Seen at an angle the second doorway shows only as a narrow piece (its far side is lit, not dark): one whole opening that isn't
+    # too wide, with exactly one narrow piece the distance away that the doorways are of each other, is the pair.
+    pairs = []
+    for opening in whole:
+        if opening[1] - opening[0] + 1 > cfg.HAUNTLET_OPENING_MAIN_MAX:
+            continue
+        for piece in spans:
+            if cfg.HAUNTLET_OPENING_PIECE[0] <= piece[1] - piece[0] + 1 <= cfg.HAUNTLET_OPENING_PIECE[1] and \
+                    cfg.HAUNTLET_OPENING_PIECE_GAP[0] <= abs((piece[0] + piece[1]) // 2 - (opening[0] + opening[1]) // 2) <= cfg.HAUNTLET_OPENING_PIECE_GAP[1]:
+                pairs.append(sorted(((opening[0] + opening[1]) // 2, (piece[0] + piece[1]) // 2)))
+    return (pairs[0][0], pairs[0][1]) if len(pairs) == 1 else None
 
 def player_in_circle(img: Image, circles: list[tuple[int, int, int, int]]) -> bool:
     """Whether the player stands in one of the three circles - and so has picked that door, and is locked in place for a few moments:

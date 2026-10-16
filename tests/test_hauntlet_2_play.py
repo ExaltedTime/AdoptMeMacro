@@ -902,6 +902,15 @@ def test_a_forks_two_doorways_are_found_when_the_camera_is_near_the_wall(macro, 
     assert found is not None and abs(found[0] - left) <= 20 and abs(found[1] - right) <= 20
 
 
+@pytest.mark.parametrize("name, left, right", [("full_frame_right_doorway_lit_a", 1063, 1655), ("full_frame_right_doorway_lit_b", 1110, 1680)])
+def test_a_second_doorway_seen_only_as_a_narrow_piece_is_found_with_the_whole_one(macro, name, left, right):
+    """Real frames of room 10 (full, not rows 160-850): the camera is at an angle and the right doorway, lit inside, is dark only in a narrow
+    strip. Where the doorways really are (by eye) is what is given, within 60 px: a click that far off still goes through, and the aim is
+    looked at again before each step."""
+    found = macro.find_fork_doorways(cv2.imread(os.path.join(HERE, "forks", f"{name}.png")))
+    assert found is not None and abs(found[0] - left) <= 60 and abs(found[1] - right) <= 60
+
+
 def test_no_two_doorways_are_found_from_the_forks_entrance_in_a_crowded_view_or_in_another_room(macro):
     for name in ("from_entrance", "near_wall_crowded"):                 # (one doorway in sight; one that is much too wide)
         assert macro.find_fork_doorways(fork_screen(macro, name)) is None

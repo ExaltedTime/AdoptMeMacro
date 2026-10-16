@@ -514,6 +514,11 @@ HAUNTLET_OPENING_WALL = 10
 HAUNTLET_OPENING_JOIN = 12
 HAUNTLET_OPENING_WIDTH = (100, 260)
 HAUNTLET_OPENING_GAP = (400, 800)
+# Seen at an angle, the far doorway may show only a narrow piece (HAUNTLET_OPENING_PIECE px wide: its inside is lit): one whole opening no wider than
+# HAUNTLET_OPENING_MAIN_MAX and exactly one such piece HAUNTLET_OPENING_PIECE_GAP px from it (middle to middle) are the two doorways.
+HAUNTLET_OPENING_PIECE = (40, 99)
+HAUNTLET_OPENING_MAIN_MAX = 200
+HAUNTLET_OPENING_PIECE_GAP = (420, 680)
 HAUNTLET_DOORS_TIMEOUT = 8.0
 # The items (their folder names in HAUNTLET_ITEM_DIR) and what each is for: the grey key opens a locked door; a cyan potion makes a heart
 # that lasts one room, for a boarded door; the red potion refills the hearts, used when only HAUNTLET_LOW_HEARTS or fewer are left; a

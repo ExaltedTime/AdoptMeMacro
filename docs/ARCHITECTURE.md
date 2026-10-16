@@ -1012,7 +1012,6 @@ actually on disk (so an old config missing a newer key still works), and
   workflow runs.
 - **`resume_on_focus_loss`** - the **Resume after focus loss** checkbox (default
   off); see [Stopping & focus safety](#stopping--focus-safety).
-- **`start_discord_bot`** - the **Start the Discord bot with the macro** checkbox on the Options tab (default on); see [Discord bot](#discord-bot).
 - **`needs_enabled`** - `{need: on or off}`, the switches next to the Test buttons on the Debug tab's Needs subtab. A need that isn't in it
   follows `ENABLED_NEEDS`, so by default they are all on; **Reset Config** puts them back.
 - **`record_next_run`** - the **Record the next run (low quality video)**
@@ -1528,7 +1527,7 @@ resolution or Roblox's UI, look at the screenshot of a failure (`failures/`) and
 `bot/` is a separate program, not part of `main.py`: a Discord bot that answers questions about the macro from anywhere (a phone, say). It is the first,
 read-only phase of the plan in `docs/planned/Discord.md`. It runs **on the PC the macro runs on**, in the same logged-in desktop session, because it reads the
 macro's files and grabs its screen; it connects out to Discord, so no port needs opening, and the Discord app itself is only on whatever device is used to type
-the commands. The macro starts it: `start_discord_bot()` runs `BOT_SCRIPT` as a process of its own when the GUI opens, if `BOT_CONFIG_PATH` (`bot_config.json`) exists and the **Start the Discord bot with the macro** switch (`start_discord_bot` in the game config, default on) is on - the checkbox starts or stops it at once. Its output goes to `BOT_LOG_PATH`; a bot that has ended `BOT_START_CHECK_MS` after the start (a wrong config, a missing package) is reported in the output with its last line, and `close()` ends it (`stop_discord_bot()`, killed after `BOT_STOP_WAIT`). It can still be started by hand, without the macro: `python bot/discord_bot.py [path to bot_config.json]`.
+the commands. It is started by hand, next to the macro: `python bot/discord_bot.py [path to bot_config.json]`.
 
 - **`bot/bot_lib.py`** holds every decision that needs neither Discord nor Windows, as plain functions (`tests/test_bot.py` runs them anywhere, in CI too):
   `load_config()` (a `ConfigError` saying what is wrong), `is_allowed()`, `status_text()`, `results_text()`, `tail_lines()`, `newest_report()`, `looks_blank()`,

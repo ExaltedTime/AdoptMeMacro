@@ -15,7 +15,7 @@ from __future__ import annotations
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
-import os, re, sys, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib, shutil, zipfile
+import os, re, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib, shutil, zipfile
 import datetime
 import logging
 import logging.handlers
@@ -298,7 +298,6 @@ class State:
     # The input capture that is running, if any (see toggle_input_capture()). A State field only so snapshot() sees it as text.
     capture: Optional[Any] = None
     run_capture: Optional[Any] = None                    # the recording of the minigame being played, see start_run_capture()
-    bot_process: Optional[Any] = None                    # the Discord bot's process (a subprocess.Popen) while the macro has it running, see start_discord_bot()
     minigame_detail: dict = field(default_factory=dict)  # what the player of the minigame being played says about it ("room")
     # The needs named by the last "detected:" line, and how many checks since then found exactly the same with no
     # handler run in between (not yet written to the run log - see note_repeat_check()).
@@ -411,52 +410,6 @@ def refresh_debug() -> int:
     for directory in (cfg.LOGS_DIR, cfg.RUNS_DIR, cfg.FAILURE_DIR):
         os.makedirs(directory, exist_ok=True)
     return removed
-
-def start_discord_bot() -> bool:
-    """Start the Discord bot (BOT_SCRIPT) as a process of its own that ends with the macro - when the "Start the Discord bot" switch is on, BOT_CONFIG_PATH
-    exists and it isn't running already. Its output goes to BOT_LOG_PATH. True if it was started. Never raises. See docs/ARCHITECTURE.md#discord-bot."""
-    try:
-        if state.bot_process is not None and state.bot_process.poll() is None:
-            return False
-        if not load_game_config()["start_discord_bot"] or not os.path.isfile(cfg.BOT_CONFIG_PATH):
-            return False
-        log_file = open(cfg.BOT_LOG_PATH, "a", encoding="utf-8")
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)                      # (no console window of its own on Windows)
-        state.bot_process = subprocess.Popen([sys.executable, cfg.BOT_SCRIPT, cfg.BOT_CONFIG_PATH], cwd=cfg.SCRIPT_DIR, stdout=log_file, stderr=subprocess.STDOUT, creationflags=flags)
-        log_file.close()
-        logger.info(f"Discord bot started (its output: {cfg.BOT_LOG_PATH})")
-        return True
-    except Exception as error:
-        logger.warning(f"Couldn't start the Discord bot: {error}")
-        return False
-
-def stop_discord_bot() -> bool:
-    """End the Discord bot if the macro started it. True if it was running. Never raises."""
-    process, state.bot_process = state.bot_process, None
-    if process is None or process.poll() is not None:
-        return False
-    try:
-        process.terminate()
-        process.wait(timeout=cfg.BOT_STOP_WAIT)
-    except Exception:
-        try:
-            process.kill()
-        except Exception as error:
-            logger.warning(f"Couldn't end the Discord bot: {error}")
-    logger.info("Discord bot stopped")
-    return True
-
-def discord_bot_ended_early() -> Optional[str]:
-    """If the bot the macro started has already ended (a wrong config, a missing package): the last line of its output, else None."""
-    process = state.bot_process
-    if process is None or process.poll() is None:
-        return None
-    try:
-        with open(cfg.BOT_LOG_PATH, encoding="utf-8", errors="replace") as f:
-            lines = [line.strip() for line in f if line.strip()]
-    except OSError:
-        lines = []
-    return f"exit code {process.returncode}" + (f": {lines[-1]}" if lines else "")
 
 def next_run_number() -> int:
     """Return a fresh run number, persisted in RUN_COUNTER_PATH so numbers
@@ -692,7 +645,6 @@ def _read_game_config() -> dict[str, Any]:
         "side_quest_enabled": True, # whether side_quest() is allowed to run at all
         "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
         "record_next_run": False,   # record the next run as a low quality video; cleared when that run starts
-        "start_discord_bot": True,  # start the Discord bot with the macro (only when BOT_CONFIG_PATH exists), see start_discord_bot()
         "needs_enabled": {},        # {need: whether it is acted on}, the Debug tab's switches; a need not in it follows ENABLED_NEEDS (see need_is_enabled())
         **{f"{name}_enabled": False for name in cfg.MINIGAME_LABELS},  # which Halloween minigames get played (see minigame_popup())
         "private_server_link": "",  # used by leave_and_rejoin(); kept here, not in the source, since it's a join key
@@ -5366,15 +5318,6 @@ class AdoptMeGUI:
         self.is_running = False
         self.watch_stop_hotkey()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
-        if start_discord_bot():
-            self.root.after(cfg.BOT_START_CHECK_MS, self.check_discord_bot)
-
-    def check_discord_bot(self) -> None:
-        """A moment after the bot was started: say so if it has already ended (see discord_bot_ended_early())."""
-        ended = discord_bot_ended_early()
-        if ended is not None:
-            logger.warning(f"The Discord bot ended at once ({ended}) - see {cfg.BOT_LOG_PATH}")
-            state.bot_process = None
 
     def close(self) -> None:
         """The window's X button: stop whatever is running and let go of every key and the mouse before the
@@ -5386,7 +5329,6 @@ class AdoptMeGUI:
         STOP_EVENT.set()
         time.sleep(cfg.STOP_CHECK_INTERVAL * 3)   # the worker notices the stop within a check or two and releases what it holds
         release_all_inputs()
-        stop_discord_bot()
         self.root.destroy()
 
     def watch_stop_hotkey(self) -> None:
@@ -5492,7 +5434,6 @@ class AdoptMeGUI:
         self.config_flag_vars: dict[str, tk.BooleanVar] = {}
         for label, key in (("Run side quest", "side_quest_enabled"),
                            ("Resume after focus loss", "resume_on_focus_loss"),
-                           ("Start the Discord bot with the macro", "start_discord_bot"),
                            *((f"Play {label}", f"{name}_enabled") for name, label in cfg.MINIGAME_LABELS.items())):
             self.add_config_checkbox(options_tab, label, key, config)
 
@@ -5646,12 +5587,6 @@ class AdoptMeGUI:
         """Persist one of the config's on/off switches (a checkbox was clicked)."""
         update_game_config(lambda c: c.update({key: value}))
         logger.info(f"{key} = {value}")
-        if key == "start_discord_bot":
-            if value:
-                if start_discord_bot():
-                    self.root.after(cfg.BOT_START_CHECK_MS, self.check_discord_bot)
-            else:
-                stop_discord_bot()
 
     def save_server_link(self) -> None:
         """Persist the private server link typed into the entry box."""

@@ -193,11 +193,6 @@ RUNS_DIR = os.path.join(DEBUG_DIR, "runs")                    # run<N>.txt (this
 for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
-BOT_CONFIG_PATH = os.path.join(SCRIPT_DIR, "bot_config.json")   # the Discord bot's settings (git-ignored, see bot_config.example.json): the macro starts the bot only if it exists
-BOT_SCRIPT = os.path.join(SCRIPT_DIR, "bot", "discord_bot.py")
-BOT_LOG_PATH = os.path.join(LOGS_DIR, "bot.log")            # what the bot prints, appended to
-BOT_START_CHECK_MS = 3000                                   # how long after starting the bot the macro looks whether it is still there
-BOT_STOP_WAIT = 5.0                                         # seconds the bot is given to end before it is killed
 RUN_LOG_PATH = os.path.join(LOGS_DIR, "run_log.txt")        # appended to, never overwritten
 RUN_COUNTER_PATH = os.path.join(LOGS_DIR, "run_counter.txt")  # holds the last-used run number
 GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")       # persisted game state - see load_game_config()

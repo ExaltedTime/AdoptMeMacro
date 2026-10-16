@@ -365,8 +365,9 @@ the buttons:
    changes that order, this mapping (and only this mapping) would need
    updating. It clears the previous mapping first, even when detection fails,
    so a failed scan never leaves a stale position for `click_need_button()`.
-   Anything but five buttons is a failed scan: it logs `button scan found N of 5`,
-   maps nothing and returns `False` (the names would be shifted).
+   Anything but five buttons is a failed scan: it logs `button scan found N of 5`
+   and scans once more after `BUTTON_SCAN_RETRY_WAIT` seconds; if that is not
+   five either, nothing is mapped and it returns `False` (the names would be shifted).
 
 ## Click & input primitives
 

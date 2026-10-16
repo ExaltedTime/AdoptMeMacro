@@ -324,15 +324,32 @@ def test_setup_is_not_aborted_by_a_paycheck(macro, quiet_screen, monkeypatch):
     assert macro.unscrew(in_task=True, play_minigames=False) is None
 
 
-def test_a_button_scan_that_misses_one_maps_nothing_and_is_logged(macro, monkeypatch):
+def scans(monkeypatch, macro, *results):
+    """Make detect_buttons() return `results` one after another; returns the waits asked for."""
+    waits, queue = [], list(results)
+    monkeypatch.setattr(macro, "detect_buttons", lambda save_debug=False: queue.pop(0))
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration, *a, **k: waits.append(duration))
+    return waits
+
+FOUR = [(620, 600), (960, 600), (1130, 600), (1300, 600)]
+FIVE = [(620 + 170 * i, 600) for i in range(5)]
+
+
+def test_a_button_scan_that_misses_one_is_repeated_and_maps_nothing_if_it_misses_again(macro, monkeypatch):
     macro.state.button_positions["hungry"] = (1, 1)                                      # a stale one
-    monkeypatch.setattr(macro, "detect_buttons", lambda save_debug=False: [(620, 600), (960, 600), (1130, 600), (1300, 600)])
+    waits = scans(monkeypatch, macro, FOUR, FOUR)
     assert macro.refresh_button_mapping() is False
-    assert macro.state.button_positions == {}
+    assert waits == [macro.cfg.BUTTON_SCAN_RETRY_WAIT] and macro.state.button_positions == {}
     assert "button scan found 4 of 5" in open(macro.cfg.RUN_LOG_PATH).read()
-    assert macro.ButtonNeedHandler("sleepy").handle() is False                               # no click on a shifted name
-    five = [(620 + 170 * i, 600) for i in range(5)]
-    monkeypatch.setattr(macro, "detect_buttons", lambda save_debug=False: five)
+
+
+def test_a_button_scan_that_finds_all_five_the_second_time_maps_them(macro, monkeypatch):
+    waits = scans(monkeypatch, macro, FOUR, FIVE)
     assert macro.refresh_button_mapping() is True
-    assert macro.state.button_positions["sleepy"] == five[4]
-    assert open(macro.cfg.RUN_LOG_PATH).read().count("button scan found") == 2       # all five: nothing more to say (the two are the 4-button scans)
+    assert waits == [macro.cfg.BUTTON_SCAN_RETRY_WAIT] and macro.state.button_positions["sleepy"] == FIVE[4]
+
+
+def test_a_button_scan_that_finds_all_five_does_not_wait_or_log(macro, monkeypatch):
+    waits = scans(monkeypatch, macro, FIVE)
+    assert macro.refresh_button_mapping() is True and waits == []
+    assert not os.path.exists(macro.cfg.RUN_LOG_PATH) or "button scan" not in open(macro.cfg.RUN_LOG_PATH).read()

@@ -1135,12 +1135,17 @@ def click_button(button_x: float, button_y: float, need_name: str) -> bool:
 def refresh_button_mapping() -> bool:
     """Detect the action buttons and cache them in state.button_positions, clearing any
     previous mapping first so a failed detection never leaves a stale one. Anything but all five buttons is a failed
-    detection (returns False, nothing mapped).
+    detection - tried once more after BUTTON_SCAN_RETRY_WAIT seconds, then False with nothing mapped.
     See docs/ARCHITECTURE.md#button-detection.
     """
     state.button_positions.clear()
 
     positions = detect_buttons(save_debug=True)
+    if len(positions) != len(cfg.BUTTON_NAMES):
+        log_run_event(f"button scan found {len(positions)} of {len(cfg.BUTTON_NAMES)}: "
+                      + ", ".join(f"({x}, {y})" for x, y in positions) + f" - looking again in {cfg.BUTTON_SCAN_RETRY_WAIT:g}s")
+        wait_interruptible(cfg.BUTTON_SCAN_RETRY_WAIT)
+        positions = detect_buttons(save_debug=True)
     if not positions:
         logger.error("No buttons detected")
         respawn_character()
@@ -1150,7 +1155,7 @@ def refresh_button_mapping() -> bool:
     if len(positions) != len(cfg.BUTTON_NAMES):
         # The buttons are named by their order left to right, so a missed (or extra) one shifts every name after it: the
         # mapping would click the wrong buttons, so none is made.
-        log_run_event(f"button scan found {len(positions)} of {len(cfg.BUTTON_NAMES)}: "
+        log_run_event(f"button scan found {len(positions)} of {len(cfg.BUTTON_NAMES)} again: "
                       + ", ".join(f"({x}, {y})" for x, y in positions))
         return False
     for i, (cx, cy) in enumerate(positions):

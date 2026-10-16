@@ -163,6 +163,7 @@ BUTTON_CLICK_TRIES = 2
 BUTTON_RETRY_WAIT = 10.0
 BUTTON_RETRY_CLEAR_WAIT = 15.0
 BUTTON_REJECT_LOOK = 1.5
+BUTTON_SCAN_RETRY_WAIT = 5.0              # seconds before a button scan that did not find all five is repeated
 STRAY_OKAY_BOX = (800, 637, 1120, 680)
 STRAY_OKAY_MIN_PIXELS = 5000      # the button is ~11000 exact-color px in that box
 STRAY_OKAY_POS = (962, 657)

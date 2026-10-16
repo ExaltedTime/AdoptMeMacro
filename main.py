@@ -4438,18 +4438,20 @@ def find_door_tvs(img: Image) -> list[tuple[int, int]]:
     left, top, right, bottom = cfg.HAUNTLET_TV_HUD_BOX
     mask[top:bottom, left:right] = 0
     count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    found = sorted((float(centres[i][0]), float(centres[i][1])) for i in range(1, count)
+    blobs = sorted((float(centres[i][0]), float(centres[i][1]), float(stats[i, cv2.CC_STAT_AREA])) for i in range(1, count)
                    if cfg.HAUNTLET_TV_AREA[0] <= stats[i, cv2.CC_STAT_AREA] <= cfg.HAUNTLET_TV_AREA[1])
+    found = [(x, y) for x, y, _ in blobs]
     for first, middle, last in itertools.combinations(found, 3):                   # (not only neighbours: a stray glow can sit between)
         gaps = (middle[0] - first[0], last[0] - middle[0])
         if (abs(first[1] - middle[1]) <= cfg.HAUNTLET_TV_ROW_TOLERANCE and abs(middle[1] - last[1]) <= cfg.HAUNTLET_TV_ROW_TOLERANCE
                 and all(cfg.HAUNTLET_TV_SPACING[0] <= gap <= cfg.HAUNTLET_TV_SPACING[1] for gap in gaps)
                 and abs(gaps[0] - gaps[1]) <= cfg.HAUNTLET_TV_SPACING_TOLERANCE * max(gaps)):
             return [(int(x), int(y)) for x, y in (first, middle, last)]
-    for first, last in zip(found, found[1:]):
+    for (first, last), size in zip(zip(found, found[1:]), (((a + b) / 2) ** 0.5 for (_, _, a), (_, _, b) in zip(blobs, blobs[1:]))):
+        far_apart = last[0] - first[0] >= cfg.HAUNTLET_TV_PAIR_RATIO * size       # twice the neighbours' gap for the TVs' size
         if (abs(first[1] - last[1]) <= cfg.HAUNTLET_TV_ROW_TOLERANCE
                 and cfg.HAUNTLET_TV_PAIR_GAP[0] <= last[0] - first[0] <= cfg.HAUNTLET_TV_PAIR_GAP[1]
-                and abs((first[0] + last[0]) / 2 - cfg.REFERENCE_CENTER_X) <= cfg.HAUNTLET_TV_PAIR_OFF_CENTER):
+                and (far_apart or abs((first[0] + last[0]) / 2 - cfg.REFERENCE_CENTER_X) <= cfg.HAUNTLET_TV_PAIR_OFF_CENTER)):
             return [(int(first[0]), int(first[1])), (int((first[0] + last[0]) / 2), int((first[1] + last[1]) / 2)), (int(last[0]), int(last[1]))]
     hud_left, _, hud_right, hud_bottom = cfg.HAUNTLET_TV_HUD_BOX
     for first, second in zip(found, found[1:]):                                  # two neighbours, the third behind the room panel
@@ -4486,8 +4488,12 @@ def hauntlet_door_kind(img: Image, x: int, y: int, scale: float) -> Optional[str
         left, top, right, bottom = box
         return img[max(0, int(y + top * scale)):int(y + bottom * scale), max(0, int(x + left * scale)):int(x + right * scale)]
     light = region(cfg.HAUNTLET_LOCK_LIGHT_BOX).astype(int)
-    if light.size and np.count_nonzero((light[..., 2] >= cfg.HAUNTLET_LOCK_LIGHT_RED) & (light[..., 1] <= cfg.HAUNTLET_LOCK_LIGHT_OTHER) & (light[..., 0] <= cfg.HAUNTLET_LOCK_LIGHT_OTHER)) >= cfg.HAUNTLET_LOCK_LIGHT_MIN:
-        return "locked"
+    if light.size:
+        red = ((light[..., 2] >= cfg.HAUNTLET_LOCK_LIGHT_RED) & (light[..., 1] <= cfg.HAUNTLET_LOCK_LIGHT_OTHER) & (light[..., 0] <= cfg.HAUNTLET_LOCK_LIGHT_OTHER)).astype(np.uint8)
+        for area, width, height in cv2.connectedComponentsWithStats(red)[2][1:, 2:5][:, [2, 0, 1]]:     # the light is a small round patch: a red wall is not
+            if (cfg.HAUNTLET_LOCK_LIGHT_MIN <= area <= cfg.HAUNTLET_LOCK_LIGHT_MAX
+                    and max(width, height) <= cfg.HAUNTLET_LOCK_LIGHT_ROUND * min(width, height)):
+                return "locked"
     if hauntlet_shadow_eyes(region(cfg.HAUNTLET_SHADOW_BOX)):
         return "shadow"
     door = region(cfg.HAUNTLET_DOOR_BOX)

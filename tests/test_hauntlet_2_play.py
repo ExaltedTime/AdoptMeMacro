@@ -75,9 +75,9 @@ def test_a_forks_hall_and_a_blank_screen_have_no_doors(macro):
     assert macro.find_hauntlet_doors(frame(macro)) == []
 
 
-def blob(screen, x, y):
-    """A TV number's light (an 18 px square of the glow colour) centred at (x, y)."""
-    screen[y - 9:y + 9, x - 9:x + 9] = (255, 255, 206)
+def blob(screen, x, y, side=18):
+    """A TV number's light (a square of the glow colour, `side` px) centred at (x, y)."""
+    screen[y - side // 2:y + side // 2, x - side // 2:x + side // 2] = (255, 255, 206)
 
 
 def test_a_thin_one_on_a_tv_does_not_hide_the_row(macro):
@@ -103,8 +103,11 @@ def test_two_tvs_are_the_outer_ones_only_when_far_apart_and_centred(macro):
     blob(screen, 570, 300), blob(screen, 1350, 300)                                   # 780 apart, centred
     assert [x for x, _ in macro.find_door_tvs(screen)] == pytest.approx([570, 960, 1350], abs=1)
     screen = np.zeros((1080, 1920, 3), np.uint8)
-    blob(screen, 160, 300), blob(screen, 938, 300)                                    # as far apart, but two neighbours with the third off screen
+    blob(screen, 160, 300, 34), blob(screen, 938, 300, 34)                            # as far apart, but two neighbours (big: the camera is close) with the third off screen
     assert macro.find_door_tvs(screen) == []
+    screen = np.zeros((1080, 1920, 3), np.uint8)
+    blob(screen, 160, 300), blob(screen, 836, 300)                                    # off centre, but twice the neighbours' gap for their size: the middle one is hidden
+    assert [x for x, _ in macro.find_door_tvs(screen)] == pytest.approx([160, 498, 836], abs=1)
     screen = np.zeros((1080, 1920, 3), np.uint8)
     blob(screen, 780, 300), blob(screen, 1140, 300)                                   # 360 apart: neighbours, not the outer two
     assert macro.find_door_tvs(screen) == []

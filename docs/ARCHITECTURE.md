@@ -1225,14 +1225,17 @@ of `HAUNTLET_TV_AREA` px (except those in `HAUNTLET_TV_HUD_BOX`, where the room 
 `HAUNTLET_TV_ROW_TOLERANCE`, evenly spaced within `HAUNTLET_TV_SPACING_TOLERANCE`), else `[]` - a fork's hall has no TVs, and neither do
 the close-ups. **With the camera close** - which is how it looks once the macro stands still in a room - the middle TV is above the top of
 the screen or behind the room panel, and only the outer two show; two TVs `HAUNTLET_TV_PAIR_GAP` apart (the real gap was about twice the neighbours') and centred on the
-screen (`HAUNTLET_TV_PAIR_OFF_CENTER`; the player stands in front of the middle door) are taken for the outer two, the middle one halfway between.
+screen (`HAUNTLET_TV_PAIR_OFF_CENTER`; the player stands in front of the middle door) are taken for the outer two, the middle one halfway between. Off centre
+they are also taken for the outer two when their gap is `HAUNTLET_TV_PAIR_RATIO` times the side of a number's blob or more (the gap between neighbours is a
+fixed multiple of that side, half the outer two's): a balloon in front of the middle TV hid its glow in room 22.
 Two neighbours (`HAUNTLET_TV_SPACING` apart, level, no lower than the panel) with the third where the room panel is (`HAUNTLET_TV_HUD_BOX`, whichever side puts it there) give that third: the panel hides its glow.
-Two neighbours with the third off screen are 350-780 px apart but not centred, so they don't pass. The spacing between TVs (330-410 px as the camera zooms) is the picture's scale, so the boxes under each
+Two neighbours with the third off screen are 350-780 px apart but not centred, and their gap is too small for their size, so they don't pass. The spacing between TVs (330-410 px as the camera zooms) is the picture's scale, so the boxes under each
 TV (`HAUNTLET_LOCK_LIGHT_BOX`, `HAUNTLET_DOOR_BOX`, measured at a spacing of `HAUNTLET_DOOR_SPACING`) are scaled with it.
 `HauntletDoor(x, y, kind)` gives each door's `kind` from its pixels (`hauntlet_door_kind()`), the first that fits:
 
 - `locked` - the padlock's red light above the door: 40-99 pure red pixels (`HAUNTLET_LOCK_LIGHT_RED`: (255, 37, 37)), none on other doors. The
-  dark red outline of the player's hearts, which can be under the door, is (204, 68, 54) and doesn't count;
+  dark red outline of the player's hearts, which can be under the door, is (204, 68, 54) and doesn't count. The light is one small round patch
+  (`HAUNTLET_LOCK_LIGHT_MIN` to `HAUNTLET_LOCK_LIGHT_MAX` px, `HAUNTLET_LOCK_LIGHT_ROUND`): a wall painted red beside a door (room 22) is bigger and long;
 - `shadow` - a shadow door: dark smoke over the boards with **glowing eyes** (white-pink ovals, a few px each; `hauntlet_shadow_eyes()`). A near-white piece (`HAUNTLET_SHADOW_WHITE`, `HAUNTLET_SHADOW_AREA`) in `HAUNTLET_SHADOW_BOX` whose surrounding ring is dark (mean brightness at most `HAUNTLET_SHADOW_RING`: 46-49 for the eyes of the captured room 6, 73 and more for every other white thing in a door's box - screws, lights, the lock's glare). It is looked for before `dark`, since an opened shadow doorway is dark too. Before it, a shadow door read `boarded` (its smoke and boards looked like planks): in the four captures looked at, 84 frames with doors, only the shadow door's two frames read `shadow`. It is recognised only so far; nothing is done with it yet;
 - `dark` - over 40% near-black pixels (44-74% on the doors that look so, at most 37% on the others);
 - `mystery` - the pale grey "???" door, brightness 180-203 where every other door is under 164;

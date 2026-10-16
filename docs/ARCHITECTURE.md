@@ -1226,6 +1226,7 @@ of `HAUNTLET_TV_AREA` px (except those in `HAUNTLET_TV_HUD_BOX`, where the room 
 the close-ups. **With the camera close** - which is how it looks once the macro stands still in a room - the middle TV is above the top of
 the screen or behind the room panel, and only the outer two show; two TVs `HAUNTLET_TV_PAIR_GAP` apart (the real gap was about twice the neighbours') and centred on the
 screen (`HAUNTLET_TV_PAIR_OFF_CENTER`; the player stands in front of the middle door) are taken for the outer two, the middle one halfway between.
+Two neighbours (`HAUNTLET_TV_SPACING` apart, level, no lower than the panel) with the third where the room panel is (`HAUNTLET_TV_HUD_BOX`, whichever side puts it there) give that third: the panel hides its glow.
 Two neighbours with the third off screen are 350-780 px apart but not centred, so they don't pass. The spacing between TVs (330-410 px as the camera zooms) is the picture's scale, so the boxes under each
 TV (`HAUNTLET_LOCK_LIGHT_BOX`, `HAUNTLET_DOOR_BOX`, measured at a spacing of `HAUNTLET_DOOR_SPACING`) are scaled with it.
 `HauntletDoor(x, y, kind)` gives each door's `kind` from its pixels (`hauntlet_door_kind()`), the first that fits:

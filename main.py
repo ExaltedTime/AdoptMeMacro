@@ -4431,7 +4431,8 @@ def find_door_tvs(img: Image) -> list[tuple[int, int]]:
     the row they make - [] when there isn't one (a fork's hall, a close-up, a transition). With the camera close the
     middle TV can be off the top of the screen or behind the room panel: two TVs far enough apart to be the outer ones
     (HAUNTLET_TV_PAIR_GAP) and centred on the screen (the player stands in front of the middle door) give the middle one
-    halfway between."""
+    halfway between. Two neighbours high up (in the row of the room panel) with the third where the panel is give the third
+    there: the panel hides its glow."""
     low, high = cfg.HAUNTLET_TV_GLOW
     mask = cv2.inRange(img, (low[2], low[1], low[0]), (high[2], high[1], high[0]))   # BGR
     left, top, right, bottom = cfg.HAUNTLET_TV_HUD_BOX
@@ -4450,6 +4451,14 @@ def find_door_tvs(img: Image) -> list[tuple[int, int]]:
                 and cfg.HAUNTLET_TV_PAIR_GAP[0] <= last[0] - first[0] <= cfg.HAUNTLET_TV_PAIR_GAP[1]
                 and abs((first[0] + last[0]) / 2 - cfg.REFERENCE_CENTER_X) <= cfg.HAUNTLET_TV_PAIR_OFF_CENTER):
             return [(int(first[0]), int(first[1])), (int((first[0] + last[0]) / 2), int((first[1] + last[1]) / 2)), (int(last[0]), int(last[1]))]
+    hud_left, _, hud_right, hud_bottom = cfg.HAUNTLET_TV_HUD_BOX
+    for first, second in zip(found, found[1:]):                                  # two neighbours, the third behind the room panel
+        gap = second[0] - first[0]
+        if abs(first[1] - second[1]) > cfg.HAUNTLET_TV_ROW_TOLERANCE or not cfg.HAUNTLET_TV_SPACING[0] <= gap <= cfg.HAUNTLET_TV_SPACING[1] or second[1] > hud_bottom:
+            continue
+        for order in ((first, second, (second[0] + gap, second[1])), ((first[0] - gap, first[1]), first, second)):
+            if hud_left <= order[0][0] <= hud_right or hud_left <= order[2][0] <= hud_right:
+                return [(int(x), int(y)) for x, y in order]
     return []
 
 def hauntlet_shadow_eyes(door: Image) -> bool:

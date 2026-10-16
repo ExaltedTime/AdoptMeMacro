@@ -113,6 +113,19 @@ def test_two_tvs_are_the_outer_ones_only_when_far_apart_and_centred(macro):
     assert macro.find_door_tvs(screen) == []
 
 
+def test_two_neighbouring_tvs_high_up_give_the_third_behind_the_room_panel(macro):
+    """Real frame of room 9 (plain-boarded-boarded__third_tv_behind_room_panel): the right door's TV is behind the room panel."""
+    tvs = macro.find_door_tvs(cv2.imread(os.path.join(HERE, "doors", "plain-boarded-boarded__third_tv_behind_room_panel.png")))
+    assert [x for x, _ in tvs] == pytest.approx([272, 622, 973], abs=3)
+    screen = np.zeros((1080, 1920, 3), np.uint8)
+    blob(screen, 1320, 127), blob(screen, 1670, 127)                                  # the middle and right ones: the first is behind the panel
+    assert [x for x, _ in macro.find_door_tvs(screen)] == pytest.approx([970, 1320, 1670], abs=1)
+    for first, second, y in ((272, 622, 300), (300, 800, 127), (40, 300, 127)):     # too low, too far apart, the third not behind the panel
+        screen = np.zeros((1080, 1920, 3), np.uint8)
+        blob(screen, first, y), blob(screen, second, y)
+        assert macro.find_door_tvs(screen) == [], (first, second, y)
+
+
 def test_the_glow_of_the_room_panel_is_no_tv_but_a_tv_beside_it_high_up_is(macro):
     screen = np.zeros((1080, 1920, 3), np.uint8)
     blob(screen, 950, 100)                                                            # inside the room panel and timer

@@ -44,12 +44,12 @@ DEFAULTS: dict[str, Any] = {"guild_id": None, "stale_status_minutes": 5, "log_li
 
 
 def load_config(path: str) -> Config:
-    """The bot's settings from the JSON file at `path` (see bot_config.example.json); ConfigError with what is wrong if it can't be used."""
+    """The bot's settings from the JSON file at `path` (its keys are listed in docs/ARCHITECTURE.md#discord-bot); ConfigError with what is wrong if it can't be used."""
     try:
         with open(path, encoding="utf-8") as f:
             raw = json.load(f)
     except FileNotFoundError:
-        raise ConfigError(f"{path} not found - copy bot_config.example.json to it and fill it in") from None
+        raise ConfigError(f"{path} not found - create it with the bot's settings (docs/ARCHITECTURE.md#discord-bot lists the keys)") from None
     except (OSError, ValueError) as error:
         raise ConfigError(f"{path} can't be read: {error}") from None
     if not isinstance(raw, dict):

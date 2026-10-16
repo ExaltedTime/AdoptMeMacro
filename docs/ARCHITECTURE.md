@@ -1536,8 +1536,8 @@ the commands. It is started by hand, next to the macro: `python bot/discord_bot.
   `main_py_in()`. The paths it reads are the macro's own (`STATUS_PATH`, `RUN_LOG_PATH`, `RUNS_DIR` of `magic_numbers.py`), so a moved file moves for both.
 - **`bot/discord_bot.py`** is the glue that can't be tested away from Discord (discord.py, the screen grab, the process check): the commands below, registered
   for the one guild if `guild_id` is set (instant) or globally (up to an hour to show).
-- **`bot_config.json`** (untracked; `bot_config.example.json` has the keys): `token`, `owner_id`, `channel_id`, optionally `guild_id`, `stale_status_minutes`
-  (how long `status.json` may go without an update before `/status` says it is not updating), `log_lines_max` (what `/log` is capped at), `onedrive_dir` (where the capture zips are copied to; leave it out to copy nothing), `onedrive_keep_days` (copies older than that are deleted; 0 keeps them all) `heartbeat_hours` (0: no heartbeat), `repo_dir` and `python` (what `/start` launches `main.py` with; the bot's own folder and Python when left out), `stop_timeout_seconds`, `auto_restart` (default off) and `auto_restart_max_per_hour`.
+- **`bot_config.json`** (untracked, and there is no example file: this list is where the keys are written down; the file is JSON, paths with forward slashes): `token`, `owner_id`, `channel_id`, optionally `guild_id`, `stale_status_minutes`
+  (how long `status.json` may go without an update before `/status` says it is not updating), `log_lines_max` (what `/log` is capped at), `onedrive_dir` (where the capture zips are copied to; leave it out to copy nothing), `onedrive_keep_days` (copies older than that are deleted; 0 keeps them all), `heartbeat_hours` (0: no heartbeat), `repo_dir` and `python` (what `/start` launches `main.py` with; the bot's own folder and Python when left out), `stop_timeout_seconds`, `auto_restart` (default off) and `auto_restart_max_per_hour`.
 - **Who is obeyed:** only `owner_id`, only in `channel_id`; anyone else's commands get no answer at all (`OwnerOnlyTree.interaction_check()`). The commands are a
   fixed list whose only arguments are numbers - nothing is run, no path is read from a message. The bot is created private ("Public Bot" off) and the token
   stays out of the repository (`.gitignore`).
@@ -1589,7 +1589,7 @@ undefined names, unused imports, duplicate definitions), then
 that `magic_numbers.py` doesn't define, then `mypy main.py` (configured in
 `mypy.ini`: it also checks the bodies of functions without type hints, and
 ignores the Windows-only libraries it has no stubs for), then
-`python -m pytest -q`. Every top-level function and method in
+`python -m pytest -q -n auto`. Every top-level function and method in
 `main.py` has type hints (a few small nested helpers don't), using the aliases `Image` (a BGR screenshot or crop),
 `Point`, `Box` and `Color` defined under the imports. A few lines carry
 `# type: ignore[...]` for what the stubs get wrong (Windows-only calls, tkinter,
@@ -1598,7 +1598,10 @@ needs Windows, a screen and Roblox.
 
 ### Tests
 
-`tests/` holds the pytest tests (`python -m pytest -q`, also run by the Action).
+`tests/` holds the pytest tests (`python -m pytest -q`, also run by the Action, there as `-n auto` with `pytest-xdist`, which spreads them over the machine's cores;
+`pip install pytest-xdist` to do the same). The minigame players are tested by running them for minutes of fake time over real screenshots, so most of the time is
+detection on the same frames again and again: the `world` fixture answers each of `MEMOIZED_DETECTORS` once per frame (`memoized_detectors()`) and makes the frames
+read-only while they are remembered, so a test that changes one in place fails loudly (copy the frame first) instead of getting an old answer.
 `tests/conftest.py` stands in for the libraries that only work on Windows or
 with a screen (`pyautogui`, `pydirectinput`, `mss`, `pygetwindow`), so
 `main.py` imports anywhere, and its `macro` fixture gives each test a fresh

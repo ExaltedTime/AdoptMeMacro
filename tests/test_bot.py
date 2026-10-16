@@ -28,10 +28,11 @@ def test_a_config_is_read_with_defaults_for_what_is_left_out(tmp_path):
     assert bot_lib.load_config(write_config(tmp_path, guild_id=333, stale_status_minutes=2.5, log_lines_max=10)).guild_id == 333
 
 
-def test_the_example_config_has_every_key_and_is_what_a_config_looks_like():
-    example = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bot_config.example.json")
-    keys = set(json.load(open(example)))
-    assert set(bot_lib.REQUIRED) | set(bot_lib.DEFAULTS) == keys
+def test_the_docs_list_every_config_key():
+    """There is no example file: docs/ARCHITECTURE.md is where the keys of bot_config.json are written down."""
+    docs = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs", "ARCHITECTURE.md"), encoding="utf-8").read()
+    section = docs[docs.index("## Discord bot"):]
+    assert [key for key in (*bot_lib.REQUIRED, *bot_lib.DEFAULTS) if f"`{key}`" not in section] == []
 
 
 @pytest.mark.parametrize("change, message", [

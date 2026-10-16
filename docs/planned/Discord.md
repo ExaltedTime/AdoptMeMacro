@@ -93,8 +93,8 @@ effectively remote control of the PC.
   silently. Use slash commands with `default_member_permissions`/an `owner_id` check, not text prefixes.
 - **A fixed list of commands. No `/run <anything>`, no shell, no file-path arguments.** Arguments are limited to
   choices from a fixed list (for example the minigame names) and numbers.
-- **The token and ids live in an untracked file** (`bot_config.json` or `.env`, added to `.gitignore`), with a
-  committed `bot_config.example.json` showing the keys. Never print the token. If it ever leaks, reset it in the
+- **The token and ids live in an untracked file** (`bot_config.json` or `.env`, added to `.gitignore`), with its
+  keys written down in `docs/ARCHITECTURE.md` (**Built:** no example file is committed). Never print the token. If it ever leaks, reset it in the
   Discord developer portal.
 - **Create the bot as private** ("Public Bot" off in the developer portal) and invite it only to a private server
   of yours, with just the permissions it needs (send messages, attach files, use slash commands).
@@ -207,7 +207,7 @@ Each phase is shippable and testable on its own; later phases build on earlier o
 2. Add `bot/` (or `discord_bot.py` plus a small `bot_lib.py` for the testable parts - see Phase 6) with:
    config loading (`bot_config.json`, validated, with a clear error for a missing key), the owner/channel check,
    and the commands `/status`, `/screenshot`, `/log`, `/report`.
-3. `.gitignore`: `bot_config.json`, `bot_state.json`. Commit `bot_config.example.json`.
+3. `.gitignore`: `bot_config.json`, `bot_state.json`. (**Built:** no example config is committed; its keys are documented instead.)
 4. Run it by hand next to the macro and try the commands from the phone.
 5. Add the process check (is `python main.py` running?) so `/status` can say "macro not running".
 

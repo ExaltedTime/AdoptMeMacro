@@ -525,11 +525,11 @@ def test_a_log_that_cannot_be_written_cannot_leave_the_ui_disabled(macro, monkey
 
 def test_refresh_debug_carries_on_past_a_locked_entry(macro, monkeypatch, tmp_path):
     debug = tmp_path / "debug"
-    for folder in ("images", "logs", "recordings"):
+    for folder in ("failures", "logs", "recordings"):
         (debug / folder).mkdir(parents=True)
         (debug / folder / "x.txt").write_text("x")
     (debug / ".config").write_text("{}")
-    for name, value in (("DEBUG_DIR", str(debug)), ("IMAGES_DIR", str(debug / "images")), ("LOGS_DIR", str(debug / "logs")),
+    for name, value in (("DEBUG_DIR", str(debug)), ("FAILURE_DIR", str(debug / "failures")), ("LOGS_DIR", str(debug / "logs")),
                         ("GAME_CONFIG_PATH", str(debug / ".config"))):
         monkeypatch.setattr(macro.cfg, name, value)
     real_rmtree = macro.shutil.rmtree
@@ -540,8 +540,8 @@ def test_refresh_debug_carries_on_past_a_locked_entry(macro, monkeypatch, tmp_pa
         real_rmtree(path, *args, **kwargs)
 
     monkeypatch.setattr(macro.shutil, "rmtree", rmtree)
-    assert macro.refresh_debug() == 2                                  # images and logs went, recordings stayed
-    assert (debug / "images").is_dir() and (debug / "logs").is_dir() and (debug / ".config").exists()
+    assert macro.refresh_debug() == 2                                  # failures and logs went, recordings stayed
+    assert (debug / "failures").is_dir() and (debug / "logs").is_dir() and (debug / ".config").exists()
 
 
 def test_the_stop_hotkey_stops_even_if_the_log_cannot_be_written(macro, monkeypatch):
@@ -785,14 +785,12 @@ def test_setup_keeps_its_backpack_open_without_the_in_task_check_closing_it(macr
 def test_the_in_task_check_closes_a_backpack_seen_open_twice_but_not_one_a_handler_has_open_on_purpose(macro, monkeypatch, tmp_path):
     import numpy as np
     closed = []
-    monkeypatch.setattr(macro.cfg, "IMAGES_DIR", str(tmp_path))
     monkeypatch.setattr(macro, "is_roblox_focused", lambda: True)
     monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((20, 20, 3), np.uint8))
     monkeypatch.setattr(macro, "detect_backpack_open", lambda img: True)
     monkeypatch.setattr(macro, "close_backpack_if_open", lambda step="": closed.append(step))
     stuck = macro.close_backpack_if_stuck
     assert stuck(True) is True and closed == []                                            # one sighting is not enough...
-    assert (tmp_path / "debug_backpack_first_sighting.png").exists()                       # ...but what the screen looked like is kept
     assert stuck(True) is False and len(closed) == 1                                       # the second one closes it
     closed.clear()
     with macro.backpack_on_purpose():
@@ -1379,8 +1377,14 @@ def test_the_run_logs_and_charts_of_an_older_layout_are_moved_into_the_runs_fold
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("x")
     old = tmp_path / "old"
-    for name, value in (("DEBUG_DIR", old), ("LOGS_DIR", old / "logs"), ("IMAGES_DIR", old / "images"), ("RUNS_DIR", old / "runs")):
+    for name, folder in (("debug_needs.png", "images"), ("debug_buttons.png", ""), ("1/screen.png", "images/failures")):
+        path = tmp_path / "old" / folder / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x")
+    for name, value in (("DEBUG_DIR", old), ("LOGS_DIR", old / "logs"), ("FAILURE_DIR", old / "failures"), ("RUNS_DIR", old / "runs")):
         monkeypatch.setattr(cfg, name, str(value))
     macro.migrate_debug_layout()
+    assert (old / "failures" / "1" / "screen.png").exists() and not (old / "images").exists()          # the failures moved up; the debug images are gone
+    assert not (old / "debug_buttons.png").exists()
     assert sorted(os.listdir(old / "runs")) == ["run1.png", "run1.txt", "run2.png"]
     assert not (old / "logs" / "runs").exists() and not (old / "images" / "reports").exists() and not (old / "reports").exists()

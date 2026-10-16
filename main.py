@@ -361,18 +361,17 @@ state = State()
 # ============================================================================
 
 def migrate_debug_layout() -> None:
-    """Move what an older version left in debug/ into the images/ and logs/
-    subfolders (see IMAGES_DIR / LOGS_DIR), if it isn't there already. Never
-    raises."""
-    moves = [(name, cfg.LOGS_DIR) for name in ("run_log.txt", "run_counter.txt", "output.log", "output.log.old", "status.json")]
-    moves += [(name, cfg.IMAGES_DIR) for name in ("failures",)]
+    """Move what an older version left in debug/ into the logs/ and failures/ subfolders (see LOGS_DIR / FAILURE_DIR), if it isn't
+    there already, and drop the images/ folder it had (the debug_*.png views are not made any more). Never raises."""
+    moves = [(os.path.join(cfg.DEBUG_DIR, name), os.path.join(cfg.LOGS_DIR, name))
+             for name in ("run_log.txt", "run_counter.txt", "output.log", "output.log.old", "status.json")]
+    old_images = os.path.join(cfg.DEBUG_DIR, "images")
+    moves += [(os.path.join(old_images, "failures"), cfg.FAILURE_DIR)]
     try:
-        moves += [(name, cfg.IMAGES_DIR) for name in os.listdir(cfg.DEBUG_DIR) if name.startswith("debug_") and name.endswith(".png")]
-        for name, folder in moves:
-            source, target = os.path.join(cfg.DEBUG_DIR, name), os.path.join(folder, name)
+        for source, target in moves:
             if os.path.exists(source) and not os.path.exists(target):
                 os.replace(source, target)
-        for old_folder in (os.path.join(cfg.LOGS_DIR, "runs"), os.path.join(cfg.IMAGES_DIR, "reports"), os.path.join(cfg.DEBUG_DIR, "reports")):       # run logs and run charts: now together in RUNS_DIR
+        for old_folder in (os.path.join(cfg.LOGS_DIR, "runs"), os.path.join(old_images, "reports"), os.path.join(cfg.DEBUG_DIR, "reports")):       # run logs and run charts: now together in RUNS_DIR
             if os.path.isdir(old_folder):
                 os.makedirs(cfg.RUNS_DIR, exist_ok=True)
                 for name in os.listdir(old_folder):
@@ -380,6 +379,13 @@ def migrate_debug_layout() -> None:
                         os.replace(os.path.join(old_folder, name), os.path.join(cfg.RUNS_DIR, name))
                 if not os.listdir(old_folder):
                     os.rmdir(old_folder)
+        for folder in (cfg.DEBUG_DIR, old_images):
+            if os.path.isdir(folder):
+                for name in os.listdir(folder):
+                    if name.startswith("debug_") and name.endswith(".png"):
+                        os.remove(os.path.join(folder, name))
+        if os.path.isdir(old_images) and not os.listdir(old_images):
+            os.rmdir(old_images)
     except OSError as error:
         logger.warning(f"Couldn't move the old debug files: {error}")
 
@@ -401,7 +407,7 @@ def refresh_debug() -> int:
             removed += 1
         except OSError as error:   # a locked file (a video still open, say): leave it, carry on with the rest
             logger.warning(f"Couldn't delete {name}: {error}")
-    for directory in (cfg.IMAGES_DIR, cfg.LOGS_DIR, cfg.RUNS_DIR):
+    for directory in (cfg.LOGS_DIR, cfg.RUNS_DIR, cfg.FAILURE_DIR):
         os.makedirs(directory, exist_ok=True)
     return removed
 
@@ -759,7 +765,7 @@ def strip_changed_fraction(before: Image, after: Image) -> float:
     changed = cv2.absdiff(before, after).max(axis=2) > cfg.NEED_STRIP_CHANGED_LEVEL
     return np.count_nonzero(changed) / changed.size
 
-def detect_need_icons(save_debug: bool = False, fresh: bool = False) -> tuple[list[tuple[int, int, int]], Image]:
+def detect_need_icons(fresh: bool = False) -> tuple[list[tuple[int, int, int]], Image]:
     """Find the round need icons in the top-left strip by Hough circles: ((cx, cy, radius)
     left to right, the captured image). The search is skipped while the strip is
     practically unchanged; `fresh` always searches. See docs/ARCHITECTURE.md#need-icon-detection.
@@ -786,12 +792,6 @@ def detect_need_icons(save_debug: bool = False, fresh: bool = False) -> tuple[li
                                        minRadius=cfg.NEED_ICON_MIN_RADIUS, maxRadius=cfg.NEED_ICON_MAX_RADIUS)
             found = [] if circles is None else sorted((int(x), int(y), int(r)) for x, y, r in circles[0])
             cache.update(strip=top_strip, found=found, reuses=0)
-
-    if save_debug:
-        debug_img = top_strip.copy()
-        for cx, cy, r in found:
-            cv2.circle(debug_img, (cx, cy), r, cfg.DEBUG_NEED_MARKER_COLOR, cfg.DEBUG_NEED_MARKER_THICKNESS)
-        cv2.imwrite(os.path.join(cfg.IMAGES_DIR, "debug_needs.png"), debug_img)
 
     return found, img
 
@@ -1047,7 +1047,7 @@ def release_all_inputs() -> None:
 # BUTTON DETECTION
 # ============================================================================
 
-def detect_buttons(save_debug: bool = False) -> list[Point]:
+def detect_buttons() -> list[Point]:
     """Detect purple, white-outlined action buttons in the middle of the screen.
     Assumes the character is already positioned where the buttons are visible."""
     if not focus_roblox_click():
@@ -1107,19 +1107,8 @@ def detect_buttons(save_debug: bool = False) -> list[Point]:
     candidates = sorted(candidates[:cfg.BUTTON_MAX_COUNT], key=lambda t: t[0])
     positions = [(cx, cy) for cx, cy, _, _ in candidates]
 
-    if save_debug:
-        debug_img = img.copy()
-        for i, (cx, cy) in enumerate(positions):
-            cv2.circle(debug_img, (cx, cy), cfg.DEBUG_BUTTON_MARKER_RADIUS,
-                       cfg.DEBUG_BUTTON_MARKER_COLOR, cfg.DEBUG_BUTTON_MARKER_THICKNESS)
-            label_pos = (cx + cfg.DEBUG_BUTTON_LABEL_OFFSET[0], cy + cfg.DEBUG_BUTTON_LABEL_OFFSET[1])
-            cv2.putText(debug_img, str(i + 1), label_pos, cv2.FONT_HERSHEY_SIMPLEX,
-                        cfg.DEBUG_BUTTON_LABEL_SCALE, cfg.DEBUG_BUTTON_MARKER_COLOR, cfg.DEBUG_BUTTON_MARKER_THICKNESS)
-        cv2.imwrite(os.path.join(cfg.IMAGES_DIR, "debug_buttons.png"), debug_img)
-
     if not positions:
-        logger.warning("No buttons detected. Check debug_buttons.png in the debug/ folder to see "
-              "whether PURPLE_RANGE / BUTTON_BAND_X / BUTTON_BAND_Y need adjusting.")
+        logger.warning("No buttons detected. Check whether PURPLE_RANGE / BUTTON_BAND_X / BUTTON_BAND_Y need adjusting.")
 
     return positions
 
@@ -1140,12 +1129,12 @@ def refresh_button_mapping() -> bool:
     """
     state.button_positions.clear()
 
-    positions = detect_buttons(save_debug=True)
+    positions = detect_buttons()
     if len(positions) != len(cfg.BUTTON_NAMES):
         log_run_event(f"button scan found {len(positions)} of {len(cfg.BUTTON_NAMES)}: "
                       + ", ".join(f"({x}, {y})" for x, y in positions) + f" - looking again in {cfg.BUTTON_SCAN_RETRY_WAIT:g}s")
         wait_interruptible(cfg.BUTTON_SCAN_RETRY_WAIT)
-        positions = detect_buttons(save_debug=True)
+        positions = detect_buttons()
     if not positions:
         logger.error("No buttons detected")
         respawn_character()
@@ -1589,21 +1578,6 @@ def moving_blobs(img_a: Image, img_b: Image, top_percent: float = cfg.FOCUS_PET_
         blobs.append((x, top + y, w, h, int(area)))
     return blobs, mask, top
 
-def save_focus_pet_debug(img: Image, blobs: list[tuple[int, int, int, int, int]], mask: Image, top: int, name: str = "debug_focus_pet.png", ignore: Sequence[Box] = ()) -> None:
-    """Write debug/<name>: `img` (the second frame) with the searched region
-    marked, the changed pixels in red, and a numbered box around every blob -
-    so what focus_pet() thinks moved, and so where it clicks, can be seen."""
-    marked = img.copy()
-    region = marked[top:]
-    region[mask > 0] = (0, 0, 255)
-    cv2.line(marked, (0, top), (marked.shape[1], top), cfg.FOCUS_PET_DEBUG_COLOR, 1)
-    for left, box_top, right, bottom in ignore:   # ignored areas, in blue
-        cv2.rectangle(marked, (left, box_top), (right, bottom), (255, 0, 0), 2)
-    for i, (x, y, w, h, area) in enumerate(blobs, 1):
-        cv2.rectangle(marked, (x, y), (x + w, y + h), cfg.FOCUS_PET_DEBUG_COLOR, 2)
-        cv2.putText(marked, f"{i}: {area}", (x, max(12, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cfg.FOCUS_PET_DEBUG_COLOR, 2)
-    cv2.imwrite(os.path.join(cfg.IMAGES_DIR, name), marked)
-
 def detect_pet_focus(img: Image) -> bool:
     """True if the pet focus view (its BACK button) is showing in `img`."""
     return popup_visible(img, "pet_focus")
@@ -1625,9 +1599,8 @@ def focus_pet(click_duration: float = cfg.CLICK_MOVE_DURATION) -> bool:
     logger.debug(f"Focus_pet: {len(blobs)} moving blob(s), {changed} changed px below y={top}")
     for i, (x, y, w, h, area) in enumerate(blobs, 1):
         logger.debug(f"Focus_pet:   #{i} center ({x + w // 2}, {y + h // 2}), {w}x{h}, area {area}")
-    save_focus_pet_debug(img_b, blobs, mask, top, ignore=ignore)
     if not blobs:
-        logger.debug("Focus_pet: nothing moved, pet not found (see debug/debug_focus_pet.png)")
+        logger.debug("Focus_pet: nothing moved, pet not found")
         return False
     for i, (x, y, w, h, _) in enumerate(blobs, 1):
         logger.debug(f"Focus_pet: clicking #{i} at ({x + w // 2}, {y + h // 2})...")
@@ -1638,8 +1611,6 @@ def focus_pet(click_duration: float = cfg.CLICK_MOVE_DURATION) -> bool:
             break
     else:
         wait_interruptible(cfg.FOCUS_PET_MENU_WAIT)
-    after = grab_screen()
-    save_focus_pet_debug(after, blobs, np.zeros_like(mask), top, name="debug_focus_pet_after.png", ignore=ignore)
     return True
 
 def is_backpack_tab_selected(pos: Point) -> bool:
@@ -2051,7 +2022,7 @@ def process_needs() -> bool:
     if not focus_roblox_click():
         return False
 
-    found_icons, full_img = detect_need_icons(save_debug=True)
+    found_icons, full_img = detect_need_icons()
     if not found_icons:
         record_detection([])
         note_idle_check()
@@ -2205,7 +2176,6 @@ def close_backpack_if_open(step: str = "") -> bool:
     img = grab_screen()
     logger.debug(f"Backpack left open, closing it... (expanded: {detect_backpack_expanded(img)}, "
           f"normal: {detect_backpack_normal(img)})")
-    cv2.imwrite(os.path.join(cfg.IMAGES_DIR, "debug_backpack_open.png"), img)
     if detect_backpack_expanded(img):
         # Its BACK button closes it entirely; the key would only shrink it first.
         back = popup_found(img, "backpack_back")
@@ -2249,9 +2219,8 @@ def close_backpack_if_stuck(in_task: bool) -> bool:
         state.backpack_strikes = 0
         return False
     state.backpack_strikes += 1
-    if state.backpack_strikes == 1:                             # the sighting that may be a false one: keep what the screen looked like
+    if state.backpack_strikes == 1:
         logger.debug("The backpack was seen open (the first of the sightings that count as stuck)")
-        cv2.imwrite(os.path.join(cfg.IMAGES_DIR, "debug_backpack_first_sighting.png"), img)
     if state.backpack_strikes < cfg.BACKPACK_CLOSE_CONFIRMATIONS:
         return True
     state.backpack_strikes = 0

@@ -433,12 +433,8 @@ since an up/down bob only changes the pet's top and bottom edges), blobs
 under `FOCUS_PET_MIN_AREA` are dropped as noise, and `focus_pet()` clicks
 the center of every remaining blob, largest first. It returns `False` (and
 the handler skips the need) if nothing moved. It logs what it saw (how many
-blobs, each one's center, size and area) and writes
-`debug/debug_focus_pet.png` - the second frame with the changed pixels in
-red and a numbered box round every blob (the ignored area in blue) - plus
-`debug/debug_focus_pet_after.png`, the screen after the clicks and the menu
-wait, so a click that lands on the wrong thing (another player, a UI
-element) can be seen.
+blobs, each one's center, size and area), so a click that lands on the
+wrong thing (another player, a UI element) can be told from the log.
 
 Except for `catch` and `pet` - which always run their full fixed sequence
 precisely, with no early exit - every other need either waits for its
@@ -501,7 +497,7 @@ backpack's settings button, which expands the backpack.
 
 **Stray windows.** Two windows have been seen open on their own, covering
 the screen: the Trading Hub (how it got opened isn't known; a misclicking
-`choose` is the suspect - see `debug/debug_focus_pet.png`; it throws up a "Go
+`choose` is the suspect; it throws up a "Go
 to the Trading Hub to edit listings!" popup on top) and the Star Rewards, which
 opens once a day, at no known moment. The Star Rewards hides the need icons;
 the Trading Hub doesn't, but needs can't be resolved with it in the way. Run
@@ -562,7 +558,7 @@ handler in the middle of its steps, isn't enough. That was not enough either: an
 sequence (a plain "backpack was left open - closed it" 2-3 s before the "... after equipping the vehicle" of the sequence's own close) - given one
 earlier sighting that wasn't real, the next check, inside the sequence, was the second; the key that ends the sequence then opened the backpack
 again and it was closed a second time. (A simulation of the real handler and check on a fake clock gives the same pair of lines; what the
-first, false sighting is is not known - the screen of the first sighting of a count is now saved as `debug_backpack_first_sighting.png`.)
+first, false sighting is is not known - the debug image of the first sighting that was kept for this is gone; the log has the line.)
 So **a handler that opens the backpack on purpose says so**: `backpack_on_purpose()` (used by `equip_favorite_vehicle()`, the catch
 need's toy sequence and `teleport_to()` up to the click that teleports) makes `close_backpack_if_stuck()` leave the backpack alone, forget any
 sighting from before, and say whether it is open (so the paycheck check is still skipped). Setup, which keeps it open for ~8 s, is
@@ -1433,7 +1429,6 @@ exact values and rationale):
 | Candy corn | `CANDY_CORN_*`, `MINIGAME_RESULT_BOX`, `MAX_RESULT_SHOTS` |
 | Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `MINIGAME_CAPTURE`, `RUN_CAPTURES_DIR`, `RUN_CAPTURE_ZIPS`, `RUN_CAPTURES_BEST`, `RUN_CAPTURES_WORST`, `RUN_CAPTURES_FAILED`, `RUN_CAPTURE_BURST`, `RUN_CAPTURE_TAIL`, `RUN_CAPTURE_PROTECTED`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog, doctor-prompt and backpack crops) |
-| Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
 | GUI | colors/fonts (`GUI_BG`, `GUI_FONT`, ...) and layout spacing (`GUI_OUTER_PADDING`, `GUI_ROW_SPACING`, ...) for the `tkinter` panel |
 
@@ -1447,11 +1442,10 @@ parsed (`parse_run()`), so it only gets the events the report knows. The levels 
 says that), no capitals for emphasis, no exclamation marks, no blank lines. `print()` is only for a question put to someone at a terminal.
 
 Everything below is in `debug/` (git-ignored) so a run that broke while you
-were away can be read back afterwards. The folder has `images/` (`IMAGES_DIR`: every png - the `debug_*.png` views and
-`failures/`), `logs/` (`LOGS_DIR`: every text and json file - `output.log`, `run_log.txt` (all runs, the whole log),
+were away can be read back afterwards. The folder has `failures/` (`FAILURE_DIR`), `logs/` (`LOGS_DIR`: every text and json file - `output.log`, `run_log.txt` (all runs, the whole log),
 `run_counter.txt`, `status.json`), **`runs/`** (`RUNS_DIR`: what belongs to one run - its own log, `run<N>.txt`, and its chart, `run<N>.png`, side by side, and the GAME OVER! cards of the minigames in `runs/results/`) and `recordings/` for the
 videos, and the game config (`.config`) in `debug/` itself. An older layout is
-moved into place at startup (`migrate_debug_layout()`, which also moves the old `logs/runs/` and `reports/` files into `runs/`). The Debug tab's
+moved into place at startup (`migrate_debug_layout()`, which also moves the old `logs/runs/` and `reports/` files into `runs/`, `images/failures/` up to `failures/`, and deletes the `debug_*.png` views and the `images/` folder). The Debug tab's
 Other subtab's **Refresh debug** button (`refresh_debug()`, after a confirmation, not while a
 run is going) empties all of it except `.config`; run numbers start from 1
 again, since the counter goes with the logs.
@@ -1512,10 +1506,7 @@ again, since the counter goes with the logs.
   rejoins and focus resumes, how many whole minutes no need has been resolved
   for (`quiet_minutes`), the script's latest CPU and memory use, and the last
   resolved need and last failure. `run_stats` (a `RunStats` dataclass) holds the counters in memory.
-- **`debug_needs.png`** / **`debug_buttons.png`** - see below.
 - **`recordings/`** - run videos, see [Recording a run](#recording-a-run).
-- **`debug_focus_pet.png`** / **`debug_focus_pet_after.png`** - what
-  `focus_pet()` saw and what the screen looked like after its clicks.
 
 A run that *stops* (a crash, or Roblox losing focus with **Resume after focus
 loss** off) ends the loop and stays stopped - deliberately, since losing focus
@@ -1524,10 +1515,8 @@ why: the failure screenshot is of the whole screen, so it shows what took the
 focus.
 
 If detection isn't finding what you expect after changing screen
-resolution or Roblox's UI, check `debug/debug_needs.png` and
-`debug/debug_buttons.png` first - both are overwritten every detection
-pass and show exactly what the macro is looking at - before tuning any of
-these.
+resolution or Roblox's UI, look at the screenshot of a failure (`failures/`) and the
+`button scan found N of 5` line of the run log before tuning any of these.
 
 ## Discord bot
 

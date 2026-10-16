@@ -109,16 +109,6 @@ def test_a_new_icon_forces_a_new_search(macro, icon_screen):
     assert len(searches) == 2 and len(first) == 1 and len(second) == 2
 
 
-def test_the_debug_image_is_still_saved_when_the_search_is_skipped(macro, icon_screen, monkeypatch, tmp_path):
-    screen, searches = icon_screen
-    monkeypatch.setattr(macro.cfg, "IMAGES_DIR", str(tmp_path))
-    ring(screen["img"], (700, 80))
-    macro.detect_need_icons(save_debug=True)
-    (tmp_path / "debug_needs.png").unlink()
-    macro.detect_need_icons(save_debug=True)
-    assert len(searches) == 1 and (tmp_path / "debug_needs.png").exists()
-
-
 def test_a_one_off_missed_icon_cannot_pass_the_flicker_recheck(macro, icon_screen, monkeypatch):
     """_need_cleared() looks twice. If the first search misses an icon that is still there and the strip then looks
     unchanged, the second look must still be a real search - not the same wrong answer from the cache."""

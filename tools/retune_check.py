@@ -133,7 +133,7 @@ def pytest_collection_modifyitems(items):
 def prepare(copy: str, setup: str) -> None:
     """Things around the code, as they are on a real machine."""
     if setup == "dirty_debug":       # a debug/ folder with a real config and logs in it
-        for sub in ("logs", "images/failures", "recordings"):
+        for sub in ("logs", "failures", "recordings"):
             os.makedirs(os.path.join(copy, "debug", sub), exist_ok=True)
         with open(os.path.join(copy, "debug", ".config"), "w") as f:
             f.write('{"side_quest_enabled": false, "ghost_gallery_enabled": true, "hauntlet_2_enabled": true, "resume_on_focus_loss": true, "record_next_run": true, "private_server_link": "https://www.roblox.com/share?code=%s&type=Server", "money_collected": 99999}' % ("a" * 32))

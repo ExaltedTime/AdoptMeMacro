@@ -185,13 +185,12 @@ HAUNTLET_ITEM_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "items")      
 HAUNTLET_COUNT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "counts")    # x/, 1/, 2/: the glyphs of an item's "x2" badge
 CANDY_CORN_DIGIT_DIR = os.path.join(SCRIPT_DIR, "ref", "candy_corn_digits")      # 0.png ... 9.png: the digits of the candy corn total in the HUD, see read_candy_corn()
 DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
-# debug/ holds images/ for every png (the debug_*.png views, failures/), logs/ for every text and json file, runs/ for
+# debug/ holds failures/ (a folder per failure), logs/ for every text and json file, runs/ for
 # what belongs to one run (its log lines, run<N>.txt, and its chart, run<N>.png) and recordings/ for the run videos - plus
 # the game config, which stays in debug/ itself so "Refresh debug" (which empties everything else) leaves it alone.
-IMAGES_DIR = os.path.join(DEBUG_DIR, "images")
 LOGS_DIR = os.path.join(DEBUG_DIR, "logs")
 RUNS_DIR = os.path.join(DEBUG_DIR, "runs")                    # run<N>.txt (this run's lines of the log on their own, see log_run_event()) and run<N>.png (its chart, see the RUN REPORT section of main.py)
-for _directory in (NEEDS_DIR, DEBUG_DIR, IMAGES_DIR, LOGS_DIR, RUNS_DIR):
+for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
 RUN_LOG_PATH = os.path.join(LOGS_DIR, "run_log.txt")        # appended to, never overwritten
@@ -199,7 +198,7 @@ RUN_COUNTER_PATH = os.path.join(LOGS_DIR, "run_counter.txt")  # holds the last-u
 GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")       # persisted game state - see load_game_config()
 OUTPUT_LOG_PATH = os.path.join(LOGS_DIR, "output.log")      # everything the macro logs, timestamped, with its level - see OutputLog
 STATUS_PATH = os.path.join(LOGS_DIR, "status.json")         # live "is it alive and what's it doing" summary - see write_status()
-FAILURE_DIR = os.path.join(IMAGES_DIR, "failures")          # a folder per failure (screenshot, need icons, info) - see log_failure()
+FAILURE_DIR = os.path.join(DEBUG_DIR, "failures")              # a folder per failure (screenshot, need icons, info) - see log_failure()
 RECORDINGS_DIR = os.path.join(DEBUG_DIR, "recordings")      # run videos - see RunRecorder
 OUTPUT_LOG_MAX_BYTES = 5 * 1024 * 1024   # output.log moves to output.log.old (replacing the last one) past this size
 MAX_FAILURE_FOLDERS = 100                # oldest failure folders are deleted beyond this many
@@ -612,7 +611,6 @@ FOCUS_PET_DIFF_THRESHOLD = 25        # per-pixel brightness change that counts a
 FOCUS_PET_MERGE_KERNEL = 25          # px; changed pixels this close together merge into one blob
 FOCUS_PET_MIN_AREA = 150             # px^2; smaller blobs are noise, not the pet
 FOCUS_PET_IGNORE_MARGIN = 20           # px around the macro's own window that focus_pet() ignores too
-FOCUS_PET_DEBUG_COLOR = (0, 255, 0)    # BGR, the boxes drawn on debug/debug_focus_pet.png
 FOCUS_PET_CLICK_SETTLE = 1.0         # after each click, before checking whether the pet is focused now
 FOCUS_PET_MENU_WAIT = 4.0            # wait after the clicks, for the pet's menu to open
 
@@ -892,15 +890,6 @@ BUTTON_LOOSE_CIRCULARITY_FACTOR = 0.8  # how much looser than BUTTON_MIN_CIRCULA
 BUTTON_PURPLE_DILATE_ITERATIONS = 3    # dilation used to build the outline search zone
 BUTTON_PURPLE_ERODE_ITERATIONS = 1     # erosion used to build the outline search zone
 BUTTON_OUTLINE_PADDING = 3             # px of padding around a candidate when scoring its white outline
-
-# Debug drawing
-DEBUG_NEED_MARKER_COLOR = (0, 255, 0)      # BGR
-DEBUG_NEED_MARKER_THICKNESS = 2
-DEBUG_BUTTON_MARKER_COLOR = (0, 0, 255)    # BGR
-DEBUG_BUTTON_MARKER_RADIUS = 8
-DEBUG_BUTTON_MARKER_THICKNESS = 2
-DEBUG_BUTTON_LABEL_OFFSET = (-5, -15)      # px offset of the number label from its marker
-DEBUG_BUTTON_LABEL_SCALE = 0.5
 
 # Color ranges (HSV): lower, upper
 PURPLE_RANGE = (np.array([130, 80, 80]), np.array([160, 255, 255]))

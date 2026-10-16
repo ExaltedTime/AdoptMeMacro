@@ -31,10 +31,16 @@ class Config:
     onedrive_dir: str            # "": the capture zips are not copied anywhere
     onedrive_keep_days: float
     heartbeat_hours: float       # 0: no heartbeat
+    repo_dir: str                # "": the folder this repository is in
+    python: str                  # "": the Python that runs the bot
+    stop_timeout_seconds: float
+    auto_restart: bool
+    auto_restart_max_per_hour: int
 
 
 REQUIRED = ("token", "owner_id", "channel_id")
-DEFAULTS: dict[str, Any] = {"guild_id": None, "stale_status_minutes": 5, "log_lines_max": 40, "onedrive_dir": "", "onedrive_keep_days": 14, "heartbeat_hours": 0}
+DEFAULTS: dict[str, Any] = {"guild_id": None, "stale_status_minutes": 5, "log_lines_max": 40, "onedrive_dir": "", "onedrive_keep_days": 14, "heartbeat_hours": 0,
+            "repo_dir": "", "python": "", "stop_timeout_seconds": 30, "auto_restart": False, "auto_restart_max_per_hour": 3}
 
 
 def load_config(path: str) -> Config:
@@ -68,9 +74,20 @@ def load_config(path: str) -> Config:
     for key in ("onedrive_keep_days", "heartbeat_hours"):
         if not isinstance(values[key], (int, float)) or isinstance(values[key], bool) or values[key] < 0:
             raise ConfigError(f"{key} must be a number, 0 or more")
+    for key in ("repo_dir", "python"):
+        if not isinstance(values[key], str):
+            raise ConfigError(f"{key} must be a path (a string), or left out")
+    if not isinstance(values["stop_timeout_seconds"], (int, float)) or isinstance(values["stop_timeout_seconds"], bool) or values["stop_timeout_seconds"] <= 0:
+        raise ConfigError("stop_timeout_seconds must be a positive number")
+    if not isinstance(values["auto_restart"], bool):
+        raise ConfigError("auto_restart must be true or false")
+    if not isinstance(values["auto_restart_max_per_hour"], int) or isinstance(values["auto_restart_max_per_hour"], bool) or values["auto_restart_max_per_hour"] < 1:
+        raise ConfigError("auto_restart_max_per_hour must be a whole number of at least 1")
     return Config(values["token"], values["owner_id"], values["channel_id"], values["guild_id"],
                   float(values["stale_status_minutes"]), values["log_lines_max"], values["onedrive_dir"].strip(),
-                  float(values["onedrive_keep_days"]), float(values["heartbeat_hours"]))
+                  float(values["onedrive_keep_days"]), float(values["heartbeat_hours"]),
+                  values["repo_dir"].strip(), values["python"].strip(), float(values["stop_timeout_seconds"]),
+                  values["auto_restart"], values["auto_restart_max_per_hour"])
 
 
 def is_allowed(config: Config, user_id: int, channel_id: int) -> bool:
@@ -377,6 +394,9 @@ class BotState:
     captures: list[str] = field(default_factory=list)        # capture folders already copied (or there when the bot first started)
     stale: bool = False
     last_heartbeat: Optional[float] = None
+    desired_state: Optional[str] = None                      # "running" or "stopped" after the bot's /start and /stop, None before: a macro that is gone is a crash only if it should run
+    crash_reported: bool = False                             # the macro's process is gone and that was posted
+    restarts: list[float] = field(default_factory=list)      # when the bot restarted the macro by itself (the last hour counts)
 
 
 def load_state(path: str) -> BotState:
@@ -389,8 +409,13 @@ def load_state(path: str) -> BotState:
     for key in ("charts", "captures"):
         if isinstance(data.get(key), list):
             setattr(state, key, [item for item in data[key] if isinstance(item, str)])
-    if isinstance(data.get("stale"), bool):
-        state.stale = data["stale"]
+    if isinstance(data.get("restarts"), list):
+        state.restarts = [item for item in data["restarts"] if isinstance(item, (int, float)) and not isinstance(item, bool)]
+    for key in ("stale", "crash_reported"):
+        if isinstance(data.get(key), bool):
+            setattr(state, key, data[key])
+    if data.get("desired_state") in ("running", "stopped"):
+        state.desired_state = data["desired_state"]
     return state
 
 
@@ -478,3 +503,62 @@ def captures_text(captures_dir: str, done: set[str], limit: int = 10) -> str:
         if len(rows) == limit:
             break
     return "\n".join(rows) if rows else "No minigame captures on this PC."
+
+
+# --- control: start, stop, restart the macro (Phase 4) ---
+
+def write_command(path: str, command: str, now: float) -> None:
+    """Leave `command` (one of magic_numbers.COMMANDS) for the macro to find at `path`: {"command": ..., "time": ...}, written all at once. The
+    macro removes the file once it has read it, and ignores a command that is old (COMMAND_MAX_AGE)."""
+    if command not in cfg.COMMANDS:
+        raise ValueError(f"not a command the macro knows: {command!r}")
+    temp = path + ".tmp"
+    with open(temp, "w", encoding="utf-8") as f:
+        json.dump({"command": command, "time": now}, f)
+    os.replace(temp, path)
+
+
+def macro_pids(processes: list[tuple[int, str]]) -> list[int]:
+    """The ids of the processes of `processes` = (id, command line) that are the macro (`... main.py ...`, not the bot)."""
+    return [pid for pid, line in processes if main_py_in([line])]
+
+
+def parse_process_lines(output: str) -> list[tuple[int, str]]:
+    """(id, command line) of each line `<id> <command line>` of `pgrep -af`'s or the PowerShell listing's output; other lines are skipped."""
+    found = []
+    for line in output.splitlines():
+        head, _, rest = line.strip().partition(" ")
+        if head.isdigit():
+            found.append((int(head), rest))
+    return found
+
+
+def restart_allowed(history: list[float], now: float, per_hour: int) -> tuple[bool, list[float]]:
+    """Whether the bot may restart the macro by itself once more: fewer than `per_hour` restarts in the last hour. Returns that and the history
+    to keep (the last hour's, with this restart added when allowed)."""
+    recent = [t for t in history if now - t < 3600]
+    if len(recent) >= per_hour:
+        return False, recent
+    return True, recent + [now]
+
+
+def crash_check(desired: Optional[str], running: Optional[bool], reported: bool) -> tuple[bool, Optional[str]]:
+    """Whether the macro's process is gone when the bot's /start (and not /stop) says it should be there: the new "reported" state and "alert" or
+    "recovered" when that changes. Nothing is known (None) when the process check can't tell, or `/start` was never used."""
+    if desired != "running":
+        return False, None                                   # (stopped on purpose, or the bot never started it: no crash to report)
+    if running is None:
+        return reported, None
+    if not running and not reported:
+        return True, "alert"
+    if running and reported:
+        return False, "recovered"
+    return reported, None
+
+
+def started_since(status: Optional[dict[str, Any]], since: datetime) -> bool:
+    """Whether status.json was written at or after `since` - the macro that was just started is running its loop (it writes the status when it starts)."""
+    try:
+        return status is not None and datetime.strptime(str(status.get("updated")), TIME_FORMAT) >= since.replace(microsecond=0)
+    except ValueError:
+        return False

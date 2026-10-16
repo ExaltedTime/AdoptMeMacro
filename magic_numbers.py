@@ -193,6 +193,12 @@ RUNS_DIR = os.path.join(DEBUG_DIR, "runs")                    # run<N>.txt (this
 for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
+COMMANDS_PATH = os.path.join(DEBUG_DIR, "commands.json")    # a command for the macro, written by the Discord bot (see read_command()); the macro removes it once read
+COMMANDS = ("start", "stop", "exit")                         # what it may hold: start the loop, stop it, or stop and close the window
+COMMAND_POLL_MS = 1000                                      # how often the macro looks for one
+COMMAND_MAX_AGE = 30                                        # seconds: an older command is ignored (left over from before the macro was started)
+START_LOOP_DELAY_MS = 1500                                  # after the window is up, before the --loop argument starts the loop
+BOT_START_CONFIRM = 60                                     # seconds the bot waits, after /start, for the macro's loop to show in status.json
 BOT_WATCH_INTERVAL = 10                                     # seconds between the Discord bot's looks at what the macro wrote (failures, run charts, captures, status)
 BOT_ALERT_GAP = 60                                          # seconds: at most one failure post per this long, the rest counted ("N more failures")
 BOT_CAPTURE_SETTLE = 20                                     # seconds a capture's zips must be unchanged before they are copied (they are written on a thread)

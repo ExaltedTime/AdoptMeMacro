@@ -1388,3 +1388,75 @@ def test_the_run_logs_and_charts_of_an_older_layout_are_moved_into_the_runs_fold
     assert not (old / "debug_buttons.png").exists()
     assert sorted(os.listdir(old / "runs")) == ["run1.png", "run1.txt", "run2.png"]
     assert not (old / "logs" / "runs").exists() and not (old / "images" / "reports").exists() and not (old / "reports").exists()
+
+
+# --- commands from outside (the Discord bot): read_command(), poll_commands() ---
+
+def write_command(macro, command, age=0, **extra):
+    with open(macro.cfg.COMMANDS_PATH, "w", encoding="utf-8") as f:
+        json.dump({"command": command, "time": time.time() - age, **extra}, f)
+
+
+def test_a_fresh_command_is_read_once_and_the_file_is_removed(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "COMMANDS_PATH", str(tmp_path / "commands.json"))
+    assert macro.read_command() is None                                       # (no file)
+    for command in ("start", "stop", "exit"):
+        write_command(macro, command)
+        assert macro.read_command() == command and not os.path.exists(macro.cfg.COMMANDS_PATH)
+
+
+def test_a_command_that_is_old_unknown_or_unreadable_is_dropped_but_its_file_still_goes(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "COMMANDS_PATH", str(tmp_path / "commands.json"))
+    for write in (lambda: write_command(macro, "exit", age=macro.cfg.COMMAND_MAX_AGE + 5),      # left over from before the macro started
+                  lambda: write_command(macro, "format-c"),                                       # not in the fixed list
+                  lambda: write_command(macro, "stop", time="soon"),
+                  lambda: open(macro.cfg.COMMANDS_PATH, "w").write("{not json"),
+                  lambda: open(macro.cfg.COMMANDS_PATH, "w").write("[\"exit\"]")):
+        write()
+        assert macro.read_command() is None and not os.path.exists(macro.cfg.COMMANDS_PATH)
+
+
+class FakeRoot:
+    def __init__(self):
+        self.scheduled = []
+    def after(self, ms, func):
+        self.scheduled.append((ms, func.__name__))
+
+
+def remote_gui(macro, monkeypatch, tmp_path, running=False):
+    monkeypatch.setattr(macro.cfg, "COMMANDS_PATH", str(tmp_path / "commands.json"))
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.root, gui.is_running, gui.calls = FakeRoot(), running, []
+    gui.run_async = lambda func: gui.calls.append(("run_async", func.__name__))
+    gui.stop = lambda: gui.calls.append(("stop",))
+    gui.close = lambda: gui.calls.append(("close",))
+    monkeypatch.setattr(macro, "log_run_event", lambda message: None)
+    return gui
+
+
+def test_the_commands_do_what_the_buttons_do_and_polling_goes_on_except_after_exit(macro, monkeypatch, tmp_path):
+    gui = remote_gui(macro, monkeypatch, tmp_path)
+    for command, expected in (("start", [("run_async", "run_workflow_loop")]), ("stop", [("stop",)]), ("exit", [("close",)])):
+        gui.calls.clear(), gui.root.scheduled.clear()
+        write_command(macro, command)
+        gui.poll_commands()
+        assert gui.calls == expected
+        assert gui.root.scheduled == ([] if command == "exit" else [(macro.cfg.COMMAND_POLL_MS, "poll_commands")])
+    gui.calls.clear()
+    gui.poll_commands()                                                       # nothing waiting: nothing done, polling goes on
+    assert gui.calls == [] and gui.root.scheduled[-1][1] == "poll_commands"
+
+
+def test_start_does_nothing_to_a_loop_that_is_running_and_the_loop_argument_starts_it_once_the_window_is_up(macro, monkeypatch, tmp_path):
+    gui = remote_gui(macro, monkeypatch, tmp_path, running=True)
+    write_command(macro, "start")
+    gui.poll_commands()
+    assert gui.calls == []
+    gui = remote_gui(macro, monkeypatch, tmp_path)
+    write_command(macro, "exit")                                              # (a command left from before is dropped, not done)
+    gui.start_remote_control(loop=True)
+    assert [name for _, name in gui.root.scheduled] == ["poll_commands", "start_loop_from_outside"] and not os.path.exists(macro.cfg.COMMANDS_PATH)
+    assert gui.calls == []
+    gui.root.scheduled.clear()
+    gui.start_remote_control(loop=False)
+    assert [name for _, name in gui.root.scheduled] == ["poll_commands"]

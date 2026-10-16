@@ -15,7 +15,7 @@ from __future__ import annotations
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
-import os, re, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib, shutil, zipfile
+import os, re, sys, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib, shutil, zipfile
 import datetime
 import logging
 import logging.handlers
@@ -410,6 +410,26 @@ def refresh_debug() -> int:
     for directory in (cfg.LOGS_DIR, cfg.RUNS_DIR, cfg.FAILURE_DIR):
         os.makedirs(directory, exist_ok=True)
     return removed
+
+def read_command() -> Optional[str]:
+    """The command waiting in COMMANDS_PATH (written by the Discord bot: {"command": ..., "time": ...}), or None. The file is always removed once
+    read; a command that isn't one of COMMANDS, or is older than COMMAND_MAX_AGE seconds (left over from before the macro started, say), is none.
+    Never raises. See docs/ARCHITECTURE.md#remote-control."""
+    try:
+        with open(cfg.COMMANDS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = None
+    try:
+        os.remove(cfg.COMMANDS_PATH)
+    except OSError:
+        pass
+    if not isinstance(data, dict) or data.get("command") not in cfg.COMMANDS:
+        return None
+    sent = data.get("time")
+    if not isinstance(sent, (int, float)) or abs(time.time() - sent) > cfg.COMMAND_MAX_AGE:
+        return None
+    return str(data["command"])
 
 def next_run_number() -> int:
     """Return a fresh run number, persisted in RUN_COUNTER_PATH so numbers
@@ -5319,6 +5339,39 @@ class AdoptMeGUI:
         self.watch_stop_hotkey()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
+    def start_remote_control(self, loop: bool) -> None:
+        """Begin looking for commands in COMMANDS_PATH every COMMAND_POLL_MS (see poll_commands()), and with `loop` (the --loop argument) start the
+        loop once the window is up, as if the loop button was pressed. Commands left from before are dropped first."""
+        read_command()
+        self.root.after(cfg.COMMAND_POLL_MS, self.poll_commands)
+        if loop:
+            self.root.after(cfg.START_LOOP_DELAY_MS, self.start_loop_from_outside)
+
+    def start_loop_from_outside(self) -> None:
+        """Start the loop, as the loop button does (`start` command, or the --loop argument)."""
+        if self.is_running:
+            logger.info("Start asked for, but the macro is already running")
+            return
+        log_run_event("started from outside (the Discord bot)")
+        self.run_async(run_workflow_loop)
+
+    def poll_commands(self) -> None:
+        """Do the command waiting in COMMANDS_PATH, if any (Tk's thread): `start` the loop, `stop` it (the cooperative stop, same as [STOP]) or
+        `exit` (stop, release every key and the mouse, and close the window - what the X button does). Looks again COMMAND_POLL_MS later."""
+        command = read_command()
+        if command is not None:
+            logger.info(f"Command from outside: {command}")
+        if command == "exit":
+            self.close()
+            return
+        if command == "start":
+            self.start_loop_from_outside()
+        elif command == "stop":
+            if self.is_running:
+                log_run_event("stopped from outside (the Discord bot)")
+            self.stop()
+        self.root.after(cfg.COMMAND_POLL_MS, self.poll_commands)
+
     def close(self) -> None:
         """The window's X button: stop whatever is running and let go of every key and the mouse before the
         process ends - the worker is a daemon thread, which dies with the process before its own cleanup can run
@@ -5708,4 +5761,5 @@ class AdoptMeGUI:
 if __name__ == "__main__":
     root = tk.Tk()
     gui = AdoptMeGUI(root)
+    gui.start_remote_control(loop="--loop" in sys.argv[1:])
     root.mainloop()

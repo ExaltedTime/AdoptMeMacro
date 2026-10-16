@@ -7,5 +7,10 @@
   "log_lines_max": 40,
   "onedrive_dir": "C:/Users/you/OneDrive/AdoptMeMacro/captures",
   "onedrive_keep_days": 14,
-  "heartbeat_hours": 0
+  "heartbeat_hours": 0,
+  "repo_dir": "",
+  "python": "",
+  "stop_timeout_seconds": 30,
+  "auto_restart": false,
+  "auto_restart_max_per_hour": 3
 }

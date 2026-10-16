@@ -343,3 +343,70 @@ def test_the_new_config_keys_are_read_and_checked(tmp_path):
     for change in ({"onedrive_dir": 5}, {"onedrive_keep_days": -1}, {"heartbeat_hours": "2"}, {"heartbeat_hours": True}):
         with pytest.raises(bot_lib.ConfigError):
             bot_lib.load_config(write_config(tmp_path, **change))
+
+
+# --- control (Phase 4) ---
+
+def test_a_command_is_left_for_the_macro_all_at_once_and_only_a_known_one(tmp_path):
+    path = str(tmp_path / "commands.json")
+    bot_lib.write_command(path, "exit", 1234.5)
+    assert json.load(open(path)) == {"command": "exit", "time": 1234.5} and not os.path.exists(path + ".tmp")
+    for command in ("start", "stop"):
+        bot_lib.write_command(path, command, 1.0)
+    with pytest.raises(ValueError):
+        bot_lib.write_command(path, "git pull", 1.0)
+    assert json.load(open(path))["command"] == "stop"                         # (the refused one wrote nothing)
+
+
+def test_the_macro_is_found_among_the_processes_but_not_the_bot_or_other_scripts():
+    processes = [(10, "python bot/discord_bot.py bot_config.json"), (11, "python C:/repo/main.py --loop"), (12, "python other.py"),
+                 (13, "C:/Python/python.exe main.py"), (14, "")]
+    assert bot_lib.macro_pids(processes) == [11, 13]
+    assert bot_lib.parse_process_lines("11 python main.py --loop\n\nnot a pid line\n12 \n 13 python x.py") == [(11, "python main.py --loop"), (12, ""), (13, "python x.py")]
+
+
+def test_the_bot_restarts_the_macro_by_itself_only_so_often():
+    allowed, history = bot_lib.restart_allowed([], 10000, 2)
+    assert allowed and history == [10000]
+    allowed, history = bot_lib.restart_allowed(history, 10100, 2)
+    assert allowed and history == [10000, 10100]
+    assert bot_lib.restart_allowed(history, 10200, 2) == (False, [10000, 10100])
+    assert bot_lib.restart_allowed(history, 10000 + 3601, 2) == (True, [10100, 13601])      # (the first is more than an hour old)
+
+
+@pytest.mark.parametrize("desired, running, reported, expected", [
+    ("running", False, False, (True, "alert")),          # it should be there and is gone
+    ("running", False, True, (True, None)),              # ...said once
+    ("running", True, True, (False, "recovered")),
+    ("running", True, False, (False, None)),
+    ("running", None, False, (False, None)),             # (the process check can't tell)
+    ("running", None, True, (True, None)),
+    ("stopped", False, False, (False, None)),            # stopped on purpose is not a crash
+    (None, False, False, (False, None)),                 # (never started by the bot: not its business)
+    ("stopped", False, True, (False, None)),
+])
+def test_a_macro_that_is_gone_is_a_crash_only_if_the_bot_started_it_and_is_said_once(desired, running, reported, expected):
+    assert bot_lib.crash_check(desired, running, reported) == expected
+
+
+def test_a_started_macro_shows_when_status_is_written_at_or_after_the_start():
+    since = datetime(2026, 10, 16, 12, 0, 5, 700000)
+    assert bot_lib.started_since({"updated": "2026-10-16 12:00:05"}, since) and bot_lib.started_since({"updated": "2026-10-16 12:01:00"}, since)
+    assert not bot_lib.started_since({"updated": "2026-10-16 12:00:04"}, since)       # (what the last run left)
+    assert not bot_lib.started_since(None, since) and not bot_lib.started_since({"updated": "soon"}, since) and not bot_lib.started_since({}, since)
+
+
+def test_the_control_config_keys_and_state_are_read_and_checked(tmp_path):
+    config = bot_lib.load_config(write_config(tmp_path))
+    assert (config.repo_dir, config.python, config.auto_restart) == ("", "", False) and config.stop_timeout_seconds > 0 and config.auto_restart_max_per_hour >= 1
+    config = bot_lib.load_config(write_config(tmp_path, repo_dir=" C:/repo ", python="C:/py/python.exe", stop_timeout_seconds=10, auto_restart=True, auto_restart_max_per_hour=2))
+    assert (config.repo_dir, config.python, config.stop_timeout_seconds, config.auto_restart, config.auto_restart_max_per_hour) == ("C:/repo", "C:/py/python.exe", 10.0, True, 2)
+    for change in ({"repo_dir": 1}, {"python": []}, {"stop_timeout_seconds": 0}, {"auto_restart": "yes"}, {"auto_restart_max_per_hour": 0}):
+        with pytest.raises(bot_lib.ConfigError):
+            bot_lib.load_config(write_config(tmp_path, **change))
+    path = str(tmp_path / "bot_state.json")
+    state = bot_lib.BotState(desired_state="running", crash_reported=True, restarts=[1.5, 2.0])
+    bot_lib.save_state(path, state)
+    assert bot_lib.load_state(path) == state
+    (tmp_path / "bot_state.json").write_text(json.dumps({"desired_state": "paused", "restarts": [1, "x", True], "crash_reported": "no"}))
+    assert bot_lib.load_state(path) == bot_lib.BotState(restarts=[1])

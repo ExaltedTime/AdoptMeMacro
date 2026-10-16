@@ -364,8 +364,9 @@ the buttons:
    are always laid out in that fixed order on screen - if Roblox ever
    changes that order, this mapping (and only this mapping) would need
    updating. It clears the previous mapping first, even when detection fails,
-   so a failed scan never leaves a stale position for `click_need_button()`;
-   when fewer than five buttons are found it logs `button scan found N of 5`.
+   so a failed scan never leaves a stale position for `click_need_button()`.
+   Anything but five buttons is a failed scan: it logs `button scan found N of 5`,
+   maps nothing and returns `False` (the names would be shifted).
 
 ## Click & input primitives
 
@@ -694,8 +695,7 @@ out `MINIGAME_MAX_DURATION`.
 
 A handler only counts as resolved (and only then triggers a respawn) if
 `handle()` returns `True`. `ButtonNeedHandler` returns `False` if
-`refresh_button_mapping()` found no buttons at all, or if this specific
-need's button wasn't among them; `ChooseNeedHandler` returns `False` if it
+`refresh_button_mapping()` did not find all five buttons; `ChooseNeedHandler` returns `False` if it
 can't find its exact-color button on screen. Either way the need is
 logged and skipped for this pass with no respawn, same as a disabled need
 - `process_needs()` doesn't distinguish between the two.

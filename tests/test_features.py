@@ -324,11 +324,15 @@ def test_setup_is_not_aborted_by_a_paycheck(macro, quiet_screen, monkeypatch):
     assert macro.unscrew(in_task=True, play_minigames=False) is None
 
 
-def test_a_button_scan_that_misses_one_is_logged(macro, monkeypatch):
+def test_a_button_scan_that_misses_one_maps_nothing_and_is_logged(macro, monkeypatch):
+    macro.state.button_positions["hungry"] = (1, 1)                                      # a stale one
     monkeypatch.setattr(macro, "detect_buttons", lambda save_debug=False: [(620, 600), (960, 600), (1130, 600), (1300, 600)])
-    assert macro.refresh_button_mapping() is True
+    assert macro.refresh_button_mapping() is False
+    assert macro.state.button_positions == {}
     assert "button scan found 4 of 5" in open(macro.cfg.RUN_LOG_PATH).read()
+    assert macro.ButtonNeedHandler("sleepy").handle() is False                               # no click on a shifted name
     five = [(620 + 170 * i, 600) for i in range(5)]
     monkeypatch.setattr(macro, "detect_buttons", lambda save_debug=False: five)
-    macro.refresh_button_mapping()
-    assert open(macro.cfg.RUN_LOG_PATH).read().count("button scan found") == 1       # all five: nothing to say
+    assert macro.refresh_button_mapping() is True
+    assert macro.state.button_positions["sleepy"] == five[4]
+    assert open(macro.cfg.RUN_LOG_PATH).read().count("button scan found") == 2       # all five: nothing more to say (the two are the 4-button scans)

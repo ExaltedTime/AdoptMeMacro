@@ -324,11 +324,55 @@ def test_setup_is_not_aborted_by_a_paycheck(macro, quiet_screen, monkeypatch):
     assert macro.unscrew(in_task=True, play_minigames=False) is None
 
 
-def test_a_button_scan_that_misses_one_is_logged(macro, monkeypatch):
-    monkeypatch.setattr(macro, "detect_buttons", lambda save_debug=False: [(620, 600), (960, 600), (1130, 600), (1300, 600)])
-    assert macro.refresh_button_mapping() is True
+def scans(monkeypatch, macro, *results):
+    """Make detect_buttons() return `results` one after another; returns the waits asked for."""
+    waits, queue = [], list(results)
+    monkeypatch.setattr(macro, "detect_buttons", lambda save_debug=False: queue.pop(0))
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration, *a, **k: waits.append(duration))
+    return waits
+
+FOUR = [(620, 600), (960, 600), (1130, 600), (1300, 600)]
+FIVE = [(620 + 170 * i, 600) for i in range(5)]
+
+
+def test_a_button_scan_that_misses_one_is_repeated_and_maps_nothing_if_it_misses_again(macro, monkeypatch):
+    macro.state.button_positions["hungry"] = (1, 1)                                      # a stale one
+    waits = scans(monkeypatch, macro, FOUR, FOUR)
+    assert macro.refresh_button_mapping() is False
+    assert waits == [macro.cfg.BUTTON_SCAN_RETRY_WAIT] and macro.state.button_positions == {}
     assert "button scan found 4 of 5" in open(macro.cfg.RUN_LOG_PATH).read()
-    five = [(620 + 170 * i, 600) for i in range(5)]
-    monkeypatch.setattr(macro, "detect_buttons", lambda save_debug=False: five)
-    macro.refresh_button_mapping()
-    assert open(macro.cfg.RUN_LOG_PATH).read().count("button scan found") == 1       # all five: nothing to say
+
+
+def test_a_button_scan_that_finds_all_five_the_second_time_maps_them(macro, monkeypatch):
+    waits = scans(monkeypatch, macro, FOUR, FIVE)
+    assert macro.refresh_button_mapping() is True
+    assert waits == [macro.cfg.BUTTON_SCAN_RETRY_WAIT] and macro.state.button_positions["sleepy"] == FIVE[4]
+
+
+def test_buttons_hidden_by_a_beam_or_the_character_leave_the_others_named_by_where_they_are(macro, monkeypatch):
+    """Real frames of a run (12:37 and 12:40): a beam of light crosses the thirsty button, and in the second the character stands before the potty
+    one. The scan found 4 and 3 buttons, and naming them by order sent the dirty need to the potty button."""
+    import cv2
+    here = os.path.join(os.path.dirname(__file__), "buttons")
+    monkeypatch.setattr(macro, "focus_roblox_click", lambda: True)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda *a, **k: None)
+    for name, missing in (("beam_hides_thirsty", {"thirsty"}), ("beam_hides_thirsty_character_hides_potty", {"thirsty", "potty"})):
+        screen = cv2.imread(os.path.join(here, f"{name}.png"))
+        monkeypatch.setattr(macro, "grab_screen", lambda screen=screen: screen)
+        assert macro.refresh_button_mapping() is True, name
+        assert set(macro.cfg.BUTTON_NAMES) - set(macro.state.button_positions) == missing, name
+        assert macro.state.button_positions["dirty"][0] == pytest.approx(858, abs=5), name
+        assert macro.click_need_button("thirsty") is False                                    # (no button seen: nothing is clicked)
+
+
+def test_buttons_that_are_not_where_the_buttons_are_are_not_named(macro):
+    slots = macro.cfg.BUTTON_SLOTS_X
+    assert macro.name_buttons_by_position([(slots[0] + 5, 600), (slots[3] - 8, 640)]) == {"hungry": (slots[0] + 5, 600), "potty": (slots[3] - 8, 640)}
+    assert macro.name_buttons_by_position([(slots[0], 600), (slots[3] + 100, 600)]) == {}        # one is near none
+    assert macro.name_buttons_by_position([(slots[0], 600), (slots[0] + 10, 600)]) == {}         # two are near the same one
+
+
+def test_a_button_scan_that_finds_all_five_does_not_wait_or_log(macro, monkeypatch):
+    waits = scans(monkeypatch, macro, FIVE)
+    assert macro.refresh_button_mapping() is True and waits == []
+    assert not os.path.exists(macro.cfg.RUN_LOG_PATH) or "button scan" not in open(macro.cfg.RUN_LOG_PATH).read()

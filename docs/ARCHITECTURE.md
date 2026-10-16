@@ -364,8 +364,14 @@ the buttons:
    are always laid out in that fixed order on screen - if Roblox ever
    changes that order, this mapping (and only this mapping) would need
    updating. It clears the previous mapping first, even when detection fails,
-   so a failed scan never leaves a stale position for `click_need_button()`;
-   when fewer than five buttons are found it logs `button scan found N of 5`.
+   so a failed scan never leaves a stale position for `click_need_button()`.
+   Anything but five buttons is a failed scan: it logs `button scan found N of 5`
+   and scans once more after `BUTTON_SCAN_RETRY_WAIT` seconds. If that is not
+   five either, the buttons found are named by where they are (`name_buttons_by_position()`: each within
+   `BUTTON_SLOT_TOLERANCE` of its `BUTTON_SLOTS_X`, none two of them) - a button can be hidden by the
+   character standing before it or by a beam of light across it, and naming by order would then shift
+   every name after it (in a run, dirty went to the potty button for 40 minutes). The need of a hidden button
+   finds no button mapped and fails; if a found one is near no slot, nothing is mapped and it returns `False`.
 
 ## Click & input primitives
 
@@ -431,12 +437,8 @@ since an up/down bob only changes the pet's top and bottom edges), blobs
 under `FOCUS_PET_MIN_AREA` are dropped as noise, and `focus_pet()` clicks
 the center of every remaining blob, largest first. It returns `False` (and
 the handler skips the need) if nothing moved. It logs what it saw (how many
-blobs, each one's center, size and area) and writes
-`debug/debug_focus_pet.png` - the second frame with the changed pixels in
-red and a numbered box round every blob (the ignored area in blue) - plus
-`debug/debug_focus_pet_after.png`, the screen after the clicks and the menu
-wait, so a click that lands on the wrong thing (another player, a UI
-element) can be seen.
+blobs, each one's center, size and area), so a click that lands on the
+wrong thing (another player, a UI element) can be told from the log.
 
 Except for `catch` and `pet` - which always run their full fixed sequence
 precisely, with no early exit - every other need either waits for its
@@ -499,7 +501,7 @@ backpack's settings button, which expands the backpack.
 
 **Stray windows.** Two windows have been seen open on their own, covering
 the screen: the Trading Hub (how it got opened isn't known; a misclicking
-`choose` is the suspect - see `debug/debug_focus_pet.png`; it throws up a "Go
+`choose` is the suspect; it throws up a "Go
 to the Trading Hub to edit listings!" popup on top) and the Star Rewards, which
 opens once a day, at no known moment. The Star Rewards hides the need icons;
 the Trading Hub doesn't, but needs can't be resolved with it in the way. Run
@@ -560,7 +562,7 @@ handler in the middle of its steps, isn't enough. That was not enough either: an
 sequence (a plain "backpack was left open - closed it" 2-3 s before the "... after equipping the vehicle" of the sequence's own close) - given one
 earlier sighting that wasn't real, the next check, inside the sequence, was the second; the key that ends the sequence then opened the backpack
 again and it was closed a second time. (A simulation of the real handler and check on a fake clock gives the same pair of lines; what the
-first, false sighting is is not known - the screen of the first sighting of a count is now saved as `debug_backpack_first_sighting.png`.)
+first, false sighting is is not known - the debug image of the first sighting that was kept for this is gone; the log has the line.)
 So **a handler that opens the backpack on purpose says so**: `backpack_on_purpose()` (used by `equip_favorite_vehicle()`, the catch
 need's toy sequence and `teleport_to()` up to the click that teleports) makes `close_backpack_if_stuck()` leave the backpack alone, forget any
 sighting from before, and say whether it is open (so the paycheck check is still skipped). Setup, which keeps it open for ~8 s, is
@@ -681,7 +683,8 @@ losing it for `MINIGAME_OVERLAY_LOST_TIMEOUT` means the minigame was left
 (game over without the victory screen, kicked out) and it stops there; never
 seeing it within `MINIGAME_OVERLAY_START_GRACE` of the start wait means it
 never started. Either is a logged failure with that reason, instead of waiting
-out `MINIGAME_MAX_DURATION`.
+out `MINIGAME_MAX_DURATION`. The watch also looks for the "Disconnected" dialog (`detect_disconnect()`) in every screenshot: once seen, the minigame stops at once
+(logged as a `ended by a disconnect` event, not a failure - the rejoin that follows logs that), where it used to go on for the rest of its time with the dialog up.
 - **The start is the overlay, not a time.** Rounds start at fixed times of the hour (in the captured day Hauntlet 2 at about :03:07, :23:07 and :43:07, Ghost Gallery at :12:46, :32:46 and :52:46, a round every 20 minutes each) and the popup's Yes is clicked
   12-52 s before one, depending on what the macro was doing (a need's end wait holds it back by up to `MINIGAME_POPUP_END_WAIT`). A fixed wait from the click is therefore wrong most of the time: in Hauntlet 2's first room the timer is 30 s and crossing the hall takes about 20, and of 21 runs with a fixed 50 s wait the 11 whose Yes came 40 s or less before the round
   were thrown out of room 1 (the macro still waiting) and the 10 that came 43 s or more before it played on. So each player looks for its game's overlay every 0.5 s and acts the moment it shows; `MINIGAME_START_WAIT` is only the most it waits (the overlay came 50.5 s after the Yes in one run), after which it acts regardless.
@@ -694,8 +697,7 @@ out `MINIGAME_MAX_DURATION`.
 
 A handler only counts as resolved (and only then triggers a respawn) if
 `handle()` returns `True`. `ButtonNeedHandler` returns `False` if
-`refresh_button_mapping()` found no buttons at all, or if this specific
-need's button wasn't among them; `ChooseNeedHandler` returns `False` if it
+`refresh_button_mapping()` did not find all five buttons; `ChooseNeedHandler` returns `False` if it
 can't find its exact-color button on screen. Either way the need is
 logged and skipped for this pass with no respawn, same as a disabled need
 - `process_needs()` doesn't distinguish between the two.
@@ -1153,7 +1155,8 @@ stops (the events have grown by then). The events of the deleted frames stay in 
 line naming the file, so a reader can tell; `info.json` has `frames_dropped` and `max_zips`, and `stopped_because` is "the minigame
 ended". The folders are big (the frames and then the same again as zips), hence **only some are kept**: after each run `prune_run_captures()` keeps, of each minigame, the
 `RUN_CAPTURES_BEST` runs that earned the most candy corn (see [Candy corn](#candy-corn)), the `RUN_CAPTURES_WORST` that earned the least (a run whose total wasn't read counts as the worst)
-and the latest - five at most, going by the `earned` that `finish_run_capture()` wrote into each `info.json`.
+the latest, and the `RUN_CAPTURES_FAILED` latest that failed - a run that did not finish, or had a failure logged while it ran (`failures` in its `info.json`, `_failed` / `_failures` on its
+folder's name) - going by the `earned`, `finished` and `failures` that `finish_run_capture()` wrote into each `info.json`.
 **Frames of when things went wrong are kept and not thinned out.** `mark_run_capture(reason)` (`InputCapture.mark()`) writes a `mark` line with the reason into `events.jsonl`, saves a frame at once and then every look for
 `RUN_CAPTURE_BURST` seconds, however far apart the thinning has put the others - and those frames are `protected`, which `_keep_within_budget()` leaves alone (at most `RUN_CAPTURE_PROTECTED` of them, or they would use up the zips).
 It is called when a failure is logged (`log_failure()`), when a Hauntlet 2 walk gets nowhere, when the player is found not to be moving (`hauntlet_unstick()`) or a fork's doorways aren't seen, when a Ghost Gallery
@@ -1195,8 +1198,7 @@ item, several pictures each - bright, dim, slightly enlarged). The best must rea
 item is `unknown`. They were cut from the 382 slots of a 256-frame run: `phone`, `key`, `gold_key`, `cyan_potion`,
 `heart_potion`, `red_potion`, plus `backpack` (the lobby's button, which sits where a slot would and is left out,
 `HAUNTLET_NOT_ITEMS`); every slot of that run is read as the item it is (60 ms a frame). The wand was not in it, so
-it has no pictures yet. **Learning:** with `learn=True` an unknown slot is saved as `ref/hauntlet_2/items/unknown_<n>/1.png`
-(`learn_hauntlet_item()`) and is known from then on; renaming the folder to what it is names it. The count is the number
+it has no pictures yet. A slot that matches none of them reads as `unknown`; nothing is saved. The count is the number
 on the purple "x2" badge at a slot's top left (`read_item_count()`): the badge is the purple piece of the right size
 (`HAUNTLET_BADGE_*`), its white pieces are the "x" and the digits, each compared with the glyphs in
 `ref/hauntlet_2/counts/` (`x`, `1`, `2` - the only counts in the run, so no other digit is known yet: a glyph that
@@ -1225,13 +1227,17 @@ of `HAUNTLET_TV_AREA` px (except those in `HAUNTLET_TV_HUD_BOX`, where the room 
 `HAUNTLET_TV_ROW_TOLERANCE`, evenly spaced within `HAUNTLET_TV_SPACING_TOLERANCE`), else `[]` - a fork's hall has no TVs, and neither do
 the close-ups. **With the camera close** - which is how it looks once the macro stands still in a room - the middle TV is above the top of
 the screen or behind the room panel, and only the outer two show; two TVs `HAUNTLET_TV_PAIR_GAP` apart (the real gap was about twice the neighbours') and centred on the
-screen (`HAUNTLET_TV_PAIR_OFF_CENTER`; the player stands in front of the middle door) are taken for the outer two, the middle one halfway between.
-Two neighbours with the third off screen are 350-780 px apart but not centred, so they don't pass. The spacing between TVs (330-410 px as the camera zooms) is the picture's scale, so the boxes under each
+screen (`HAUNTLET_TV_PAIR_OFF_CENTER`; the player stands in front of the middle door) are taken for the outer two, the middle one halfway between. Off centre
+they are also taken for the outer two when their gap is `HAUNTLET_TV_PAIR_RATIO` times the side of a number's blob or more (the gap between neighbours is a
+fixed multiple of that side, half the outer two's): a balloon in front of the middle TV hid its glow in room 22.
+Two neighbours (`HAUNTLET_TV_SPACING` apart, level, no lower than the panel) with the third where the room panel is (`HAUNTLET_TV_HUD_BOX`, whichever side puts it there) give that third: the panel hides its glow.
+Two neighbours with the third off screen are 350-780 px apart but not centred, and their gap is too small for their size, so they don't pass. The spacing between TVs (330-410 px as the camera zooms) is the picture's scale, so the boxes under each
 TV (`HAUNTLET_LOCK_LIGHT_BOX`, `HAUNTLET_DOOR_BOX`, measured at a spacing of `HAUNTLET_DOOR_SPACING`) are scaled with it.
 `HauntletDoor(x, y, kind)` gives each door's `kind` from its pixels (`hauntlet_door_kind()`), the first that fits:
 
 - `locked` - the padlock's red light above the door: 40-99 pure red pixels (`HAUNTLET_LOCK_LIGHT_RED`: (255, 37, 37)), none on other doors. The
-  dark red outline of the player's hearts, which can be under the door, is (204, 68, 54) and doesn't count;
+  dark red outline of the player's hearts, which can be under the door, is (204, 68, 54) and doesn't count. The light is one small round patch
+  (`HAUNTLET_LOCK_LIGHT_MIN` to `HAUNTLET_LOCK_LIGHT_MAX` px, `HAUNTLET_LOCK_LIGHT_ROUND`): a wall painted red beside a door (room 22) is bigger and long;
 - `shadow` - a shadow door: dark smoke over the boards with **glowing eyes** (white-pink ovals, a few px each; `hauntlet_shadow_eyes()`). A near-white piece (`HAUNTLET_SHADOW_WHITE`, `HAUNTLET_SHADOW_AREA`) in `HAUNTLET_SHADOW_BOX` whose surrounding ring is dark (mean brightness at most `HAUNTLET_SHADOW_RING`: 46-49 for the eyes of the captured room 6, 73 and more for every other white thing in a door's box - screws, lights, the lock's glare). It is looked for before `dark`, since an opened shadow doorway is dark too. Before it, a shadow door read `boarded` (its smoke and boards looked like planks): in the four captures looked at, 84 frames with doors, only the shadow door's two frames read `shadow`. It is recognised only so far; nothing is done with it yet;
 - `dark` - over 40% near-black pixels (44-74% on the doors that look so, at most 37% on the others);
 - `mystery` - the pale grey "???" door, brightness 180-203 where every other door is under 164;
@@ -1271,7 +1277,7 @@ logged once per run as a failure, which keeps a screenshot of what the TVs were 
 
 **The circles.** In front of every door there is a **purple circle** on the floor (a lilac ring, `find_door_circles()`: the ring-shaped pieces of `HAUNTLET_CIRCLE_HSV`, `HAUNTLET_CIRCLE_*`; badges and labels are smaller and don't count): **stepping into one picks that door**, and the player is then **held in place for a few moments**. `hauntlet_strafe()` therefore walks to the circle's middle, not to the TV above the door (in an angled room the two are far apart), when all three are seen. The circle the player stands on is mostly hidden: two circles seen and the player (the hearts) where the third would be is **standing in it** (`player_in_circle()`, `HAUNTLET_IN_CIRCLE`). `hauntlet_walk()` then notes the door as picked (`HauntletRun.picked`, until the room changes), and for `HAUNTLET_LOCK_WAIT` seconds does not take the still view for being stuck - a step sideways after the lock would take the player out of the doorway. A retry in a room with a door picked goes to that same door (`hauntlet_choose()` returns it at once, with no items used and no other door avoided): the choice was made when the circle was stepped in.
 
-**A fork's doorways.** A fork has no TVs to find its doorways by. `find_fork_doorways()` finds their openings: each is dark inside (`HAUNTLET_OPENING_HSV`) and begins right under the wall's pale stripes (`HAUNTLET_WALL_HSV`), where everywhere else between the wall and the floor there is the gold wainscot, so in each column the first dark pixel with wall just above it is a column of an opening (`HAUNTLET_OPENING_*`); exactly two openings of the right width, the right distance apart, are the doorways. That only works with the camera near the wall: from the room's entrance at most one is seen (the other shows the next hall's gold panelling, not a dark inside). Over the two captured room 10s it found both doorways in 8 of 25 frames - those from the wall; the others were from the entrance or with the player pushed about - and nowhere else but a frame of the lobby of the ordinary game, over 350 frames. So a fork is walked in two parts: `play_hauntlet_2()` holds forward until both doorways are seen (`hauntlet_walk(until_doorways=True)`, at most `HAUNTLET_WALK_MAX` seconds), then strafes by `hauntlet_strafe()` as in a room, the two doorways being taken for two door spacings apart (a room's outer doors) and the player's place the hearts; if they are never seen, what is left is the fixed strafe below.
+**A fork's doorways.** A fork has no TVs to find its doorways by. `find_fork_doorways()` finds their openings: each is dark inside (`HAUNTLET_OPENING_HSV`) and begins right under the wall's pale stripes (`HAUNTLET_WALL_HSV`), where everywhere else between the wall and the floor there is the gold wainscot, so in each column the first dark pixel with wall just above it is a column of an opening (`HAUNTLET_OPENING_*`); exactly two openings of the right width, the right distance apart, are the doorways. Seen at an angle, the far doorway can be lit inside and show only as a narrow piece of dark (`HAUNTLET_OPENING_PIECE`): one whole opening no wider than `HAUNTLET_OPENING_MAIN_MAX` with exactly one such piece `HAUNTLET_OPENING_PIECE_GAP` from it are taken as the pair, the piece's middle being a little off the doorway's (the aim is looked at again before each step). That only works with the camera near the wall: from the room's entrance at most one is seen (the other shows the next hall's gold panelling, not a dark inside). Over the two captured room 10s it found both doorways in 8 of 25 frames - those from the wall; the others were from the entrance or with the player pushed about - and nowhere else but a frame of the lobby of the ordinary game, over 350 frames. So a fork is walked in two parts: `play_hauntlet_2()` holds forward until both doorways are seen (`hauntlet_walk(until_doorways=True)`, at most `HAUNTLET_WALK_MAX` seconds), then strafes by `hauntlet_strafe()` as in a room, the two doorways being taken for two door spacings apart (a room's outer doors) and the player's place the hearts; if they are never seen, what is left is the fixed strafe below.
 
 **Getting stuck.** The room timer runs out after a while and the run is over, so a stuck player has to do something else, quickly. A walk that ended with the
 number unchanged counts in `HauntletRun.stuck`; the next one (`hauntlet_walk()`) steps back first (`HAUNTLET_BACK_KEY`, `HAUNTLET_BACKUP_DURATION`) and avoids the door that
@@ -1285,8 +1291,7 @@ a wall until the timer ran out), or a TV hidden - the camera can be dragged roun
 after each, before walking ahead - but that is **0, off**: turning the camera changes where the keys take the player, and in a captured fork (room 10, two doorways under signs, "Power Station" and "Spider Den") the player stood in front of its doorway until the camera was turned, then against the wall for 20 s. (That turn was a bug of its own: a fork whose looks had started over after a walk, past `HAUNTLET_DOORS_TIMEOUT`, was taken for one doorway; a fork now waits for its two empty looks whatever the age.) A TV showing a "1" (the player stands before that door) is a thin stroke, much smaller than the "0"s of the others, hence the low end of
 `HAUNTLET_TV_AREA`; the real run's row was missed for 25 s because of one.
 
-`hauntlet_choose()` reads the hearts and the items off the same screenshot (new items are saved, at most
-`HAUNTLET_LEARN_LIMIT` per play, so a misreading can't fill the folder), chooses the door, uses the items the choice calls for, and logs the lot:
+`hauntlet_choose()` reads the hearts and the items off the same screenshot chooses the door, uses the items the choice calls for, and logs the lot:
 `room 12, 3 hearts (1 lost), items: phone x1, key x1, doors: -, -, locked, going right, used key`.
 
 *The door* (`choose_hauntlet_door()`) is a random one, with two exceptions: a locked door is only a choice when the **grey key** (`HAUNTLET_ITEM_KEY`; the gold key is not it)
@@ -1420,15 +1425,15 @@ exact values and rationale):
 | Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN/MAX_RADIUS`, `NEED_ICON_HOUGH_*`, `NEED_STRIP_*` (when the circle search is skipped) |
 | Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_MATCH_RADIUS_FRACTION`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
+| Discord bot | `COMMANDS_PATH`, `COMMANDS`, `COMMAND_POLL_MS`, `COMMAND_MAX_AGE`, `START_LOOP_DELAY_MS`, `BOT_START_CONFIRM`, `BOT_WATCH_INTERVAL`, `BOT_ALERT_GAP`, `BOT_CAPTURE_SETTLE`, `BOT_FILE_SETTLE`, `BOT_MAX_UPLOAD_MB` |
 | Debug logging | `OUTPUT_LOG_PATH`, `RUNS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
 | Hauntlet 2 reader | `HAUNTLET_ROOM_BOX`, `HAUNTLET_DIGIT_*`, `HAUNTLET_ROOM_MAX_DIGITS`, `HAUNTLET_SLOT_*`, `HAUNTLET_ITEM_*`, `HAUNTLET_BADGE_*`, `HAUNTLET_COUNT_*`, `HAUNTLET_NOT_ITEMS`, `HAUNTLET_HEART_*`, `HAUNTLET_*_DIR` |
 | Ghost Gallery play | `GHOST_COLOR`, `GHOST_COLOR_FAR`, `GHOST_CLOSE`, `GHOST_MIN_AREA`, `GHOST_IGNORE_BOXES`, `GHOST_CHARACTER`, `GHOST_STICK`, `GHOST_BOSS_BAR_*`, `GHOST_BOSS_FILL*`, `GHOST_LOOK_INTERVAL`, `GHOST_START_LOOK_INTERVAL`, `GHOST_FURNITURE_*`, `GHOST_CAMERA_*`, `GHOST_START_TILT`, `GHOST_MOVE_*`, `GHOST_START_FORWARD`, `GHOST_TOWARD_MARGIN`, `GHOST_BOSS_TURN_DRAG`, `GHOST_EMBLEM_*`, `GHOST_SELF_*`, `GHOST_SMALL_MAX`, `GHOST_BOSS_MIN`, `GHOST_REGRAB_PERIOD`, `GHOST_OUTLINE_*`, `GHOST_JUMP_*`, `GHOST_SCORE_*`, `GHOST_SPOT_TRIAL`, `GHOST_BAD_SPOT_*`, `GHOST_RING`, `GHOST_STALL*`, `GHOST_ALERT_*`, `GHOST_SKIP_*`, `GHOST_HIDE_TRIES`, `GHOST_BOSS_TRIAL`, `KEY_ZOOM_OUT`, `MINIGAME_ZOOM_OUT_DURATION` |
 | Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_SHADOW_*`, `HAUNTLET_CIRCLE_*`, `HAUNTLET_IN_CIRCLE`, `HAUNTLET_LOCK_WAIT`, `HAUNTLET_STILL_*`, `HAUNTLET_UNSTICK_*`, `HAUNTLET_START_*`, `HAUNTLET_DARK_*`, `HAUNTLET_PLANK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_*`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_ITEM_*`, `HAUNTLET_LOW_HEARTS`, `HAUNTLET_PHONE_CHANCE`, `HAUNTLET_ARROW_*`, `HAUNTLET_LEARN_LIMIT` |
 | Candy corn | `CANDY_CORN_*`, `MINIGAME_RESULT_BOX`, `MAX_RESULT_SHOTS` |
-| Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `MINIGAME_CAPTURE`, `RUN_CAPTURES_DIR`, `RUN_CAPTURE_ZIPS`, `RUN_CAPTURES_BEST`, `RUN_CAPTURES_WORST`, `RUN_CAPTURE_BURST`, `RUN_CAPTURE_TAIL`, `RUN_CAPTURE_PROTECTED`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
+| Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `MINIGAME_CAPTURE`, `RUN_CAPTURES_DIR`, `RUN_CAPTURE_ZIPS`, `RUN_CAPTURES_BEST`, `RUN_CAPTURES_WORST`, `RUN_CAPTURES_FAILED`, `RUN_CAPTURE_BURST`, `RUN_CAPTURE_TAIL`, `RUN_CAPTURE_PROTECTED`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog, doctor-prompt and backpack crops) |
-| Debug drawing | `DEBUG_NEED_MARKER_*`, `DEBUG_BUTTON_MARKER_*`, `DEBUG_BUTTON_LABEL_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
 | GUI | colors/fonts (`GUI_BG`, `GUI_FONT`, ...) and layout spacing (`GUI_OUTER_PADDING`, `GUI_ROW_SPACING`, ...) for the `tkinter` panel |
 
@@ -1442,11 +1447,10 @@ parsed (`parse_run()`), so it only gets the events the report knows. The levels 
 says that), no capitals for emphasis, no exclamation marks, no blank lines. `print()` is only for a question put to someone at a terminal.
 
 Everything below is in `debug/` (git-ignored) so a run that broke while you
-were away can be read back afterwards. The folder has `images/` (`IMAGES_DIR`: every png - the `debug_*.png` views and
-`failures/`), `logs/` (`LOGS_DIR`: every text and json file - `output.log`, `run_log.txt` (all runs, the whole log),
+were away can be read back afterwards. The folder has `failures/` (`FAILURE_DIR`), `logs/` (`LOGS_DIR`: every text and json file - `output.log`, `run_log.txt` (all runs, the whole log),
 `run_counter.txt`, `status.json`), **`runs/`** (`RUNS_DIR`: what belongs to one run - its own log, `run<N>.txt`, and its chart, `run<N>.png`, side by side, and the GAME OVER! cards of the minigames in `runs/results/`) and `recordings/` for the
 videos, and the game config (`.config`) in `debug/` itself. An older layout is
-moved into place at startup (`migrate_debug_layout()`, which also moves the old `logs/runs/` and `reports/` files into `runs/`). The Debug tab's
+moved into place at startup (`migrate_debug_layout()`, which also moves the old `logs/runs/` and `reports/` files into `runs/`, `images/failures/` up to `failures/`, and deletes the `debug_*.png` views and the `images/` folder). The Debug tab's
 Other subtab's **Refresh debug** button (`refresh_debug()`, after a confirmation, not while a
 run is going) empties all of it except `.config`; run numbers start from 1
 again, since the counter goes with the logs.
@@ -1507,10 +1511,7 @@ again, since the counter goes with the logs.
   rejoins and focus resumes, how many whole minutes no need has been resolved
   for (`quiet_minutes`), the script's latest CPU and memory use, and the last
   resolved need and last failure. `run_stats` (a `RunStats` dataclass) holds the counters in memory.
-- **`debug_needs.png`** / **`debug_buttons.png`** - see below.
 - **`recordings/`** - run videos, see [Recording a run](#recording-a-run).
-- **`debug_focus_pet.png`** / **`debug_focus_pet_after.png`** - what
-  `focus_pet()` saw and what the screen looked like after its clicks.
 
 A run that *stops* (a crash, or Roblox losing focus with **Resume after focus
 loss** off) ends the loop and stays stopped - deliberately, since losing focus
@@ -1519,15 +1520,13 @@ why: the failure screenshot is of the whole screen, so it shows what took the
 focus.
 
 If detection isn't finding what you expect after changing screen
-resolution or Roblox's UI, check `debug/debug_needs.png` and
-`debug/debug_buttons.png` first - both are overwritten every detection
-pass and show exactly what the macro is looking at - before tuning any of
-these.
+resolution or Roblox's UI, look at the screenshot of a failure (`failures/`) and the
+`button scan found N of 5` line of the run log before tuning any of these.
 
 ## Discord bot
 
-`bot/` is a separate program, not part of `main.py`: a Discord bot that answers questions about the macro from anywhere (a phone, say). It is the first,
-read-only phase of the plan in `docs/planned/Discord.md`. It runs **on the PC the macro runs on**, in the same logged-in desktop session, because it reads the
+`bot/` is a separate program, not part of `main.py`: a Discord bot that answers questions about the macro from anywhere (a phone, say). It is the first
+four phases of the plan in `docs/planned/Discord.md`: the read-only commands, alerts, copying the capture zips to OneDrive, and starting and stopping the macro. It runs **on the PC the macro runs on**, in the same logged-in desktop session, because it reads the
 macro's files and grabs its screen; it connects out to Discord, so no port needs opening, and the Discord app itself is only on whatever device is used to type
 the commands. It is started by hand, next to the macro: `python bot/discord_bot.py [path to bot_config.json]`.
 
@@ -1537,7 +1536,7 @@ the commands. It is started by hand, next to the macro: `python bot/discord_bot.
 - **`bot/discord_bot.py`** is the glue that can't be tested away from Discord (discord.py, the screen grab, the process check): the commands below, registered
   for the one guild if `guild_id` is set (instant) or globally (up to an hour to show).
 - **`bot_config.json`** (untracked; `bot_config.example.json` has the keys): `token`, `owner_id`, `channel_id`, optionally `guild_id`, `stale_status_minutes`
-  (how long `status.json` may go without an update before `/status` says it is not updating) and `log_lines_max` (what `/log` is capped at).
+  (how long `status.json` may go without an update before `/status` says it is not updating), `log_lines_max` (what `/log` is capped at), `onedrive_dir` (where the capture zips are copied to; leave it out to copy nothing), `onedrive_keep_days` (copies older than that are deleted; 0 keeps them all) `heartbeat_hours` (0: no heartbeat), `repo_dir` and `python` (what `/start` launches `main.py` with; the bot's own folder and Python when left out), `stop_timeout_seconds`, `auto_restart` (default off) and `auto_restart_max_per_hour`.
 - **Who is obeyed:** only `owner_id`, only in `channel_id`; anyone else's commands get no answer at all (`OwnerOnlyTree.interaction_check()`). The commands are a
   fixed list whose only arguments are numbers - nothing is run, no path is read from a message. The bot is created private ("Public Bot" off) and the token
   stays out of the repository (`.gitignore`).
@@ -1550,7 +1549,31 @@ the commands. It is started by hand, next to the macro: `python bot/discord_bot.
 | `/report` | the newest run chart in `RUNS_DIR` |
 | `/results` | each minigame's runs, best, worst and average candy corn, the deepest Hauntlet 2 room and the latest, from `runs/results/results.jsonl` |
 
-Not built yet (the later phases of the plan): alerts, starting and stopping the macro, updating it, and copying the capture zips to OneDrive.
+| `/start` | starts the macro's loop: launches `python main.py --loop` if no `main.py` process is running, else leaves it the `start` command; then waits up to `BOT_START_CONFIRM` seconds for `status.json` to be written and says whether the loop showed |
+| `/stop` | asks the macro to exit (the `exit` command) and waits up to `stop_timeout_seconds` for its process to end; if it hasn't, kills it and releases the keys and mouse buttons from the bot |
+| `/restart` | `/stop`, then `/start` |
+| `/captures` | the newest minigame captures on this PC, with their outcome, zips and size, and whether each has been copied to OneDrive |
+
+**What the bot posts by itself.** `watch()` looks at the macro's files every `BOT_WATCH_INTERVAL` seconds (`watch_once()`; a look that fails is logged and the watching goes on) and keeps what it has dealt with in `bot_state.json` (`BotState`: where it got to in `run_log.txt`, the run charts and captures done, whether the status is stale, the last heartbeat), so a restart neither posts things twice nor misses what came while it was down. On its first start, what exists already is taken as dealt with, so old failures, charts and captures are not posted.
+
+- **A failure:** a new `FAILURE:` line in `run_log.txt` (`parse_failure()`) is posted with its reason and its screenshot (`failure_screenshot_path()`: only a file inside `debug/`, not whatever path a line names; not posted when bigger than `BOT_MAX_UPLOAD_MB`). At most one post per `BOT_ALERT_GAP` seconds (`RateLimiter`): the next post says how many more there were. A log that is shorter than the offset was deleted or started again (**Refresh debug**), and is read from its start (`read_new_lines()`; a line still being written waits for the next look).
+- **The macro stops updating:** once, when `status.json` has not been updated for `stale_status_minutes` (the macro is stuck, stopped, or the PC asleep or locked), and once when it updates again (`stale_alert()`).
+- **A run chart:** each new `run<N>.png` in `RUNS_DIR`, once it has been unchanged for `BOT_FILE_SETTLE` seconds.
+- **A heartbeat:** the `/status` text every `heartbeat_hours`, so silence means trouble; off by default.
+- **A capture is copied to OneDrive:** when `onedrive_dir` is set (and is a folder), a capture in `RUN_CAPTURES_DIR` is ready once its `info.json` has an `outcome` and none of its `zips/` has changed for `BOT_CAPTURE_SETTLE` seconds (the zips are written on a thread, so they can appear before they are complete; `ready_captures()`). Its zips are copied to `onedrive_dir/<capture name>/` (`copy_capture()`) - the OneDrive app on the PC uploads them from there - and the post says `Zips posted to OneDrive.` with the capture's name, outcome, zip count and size; there is no link (open the folder in OneDrive). Copies older than `onedrive_keep_days` are then deleted (`old_copies()`: only folders named like a capture's, nothing else in the folder). Discord takes about 10 MB from a bot, so the 25 MB parts can't be posted.
+
+### Remote control
+
+`/start`, `/stop` and `/restart` need two small things in `main.py`, and no more of it:
+
+- **`python main.py --loop`** starts the loop once the window is up (`start_remote_control(loop=True)`, `START_LOOP_DELAY_MS` later), as if the loop button was pressed.
+- **A command file.** `poll_commands()` (a `root.after` timer, every `COMMAND_POLL_MS`, so on Tk's thread) reads `COMMANDS_PATH` (`debug/commands.json`, `{"command": ..., "time": ...}`; `read_command()`), which the bot wrote (`bot_lib.write_command()`, all at once). The file is removed whenever it is read. A command that is not one of `COMMANDS`, or is older than `COMMAND_MAX_AGE` seconds, is dropped - one left from before the macro started cannot close it. `start` starts the loop (nothing if it runs), `stop` is the [STOP] button, and **`exit`** is what the window's X button does: stop cooperatively, release every key and the mouse, close the window and end the process. Commands left from before are dropped when the macro starts. The list is fixed; the bot takes no argument that is run or opened.
+
+`/stop` uses `exit` and not `stop`, so that the process ending is the proof that the loop ended and the inputs were released; only if the process outlasts `stop_timeout_seconds` does the bot kill it (`kill_macro()`: `taskkill /F`, `SIGKILL` elsewhere) and release the keys itself (`release_inputs()`: the same list as `release_all_inputs()`, and a mouse button only if it is down). The macro's process is found by its command line (`main.py`, not the bot; `macro_pids()`).
+
+**What the bot keeps in mind.** `/start` and `/restart` set `desired_state` in `bot_state.json` to `running`, `/stop` to `stopped`. A macro whose process is gone while it should be running is a crash, posted once (`crash_check()`) and again when it is back; a macro never started with `/start` (started by hand, say) is never reported as crashed, and one stopped with `/stop` is not. With `auto_restart` on, the bot restarts it by itself, at most `auto_restart_max_per_hour` times an hour (`restart_allowed()`); off by default, since a macro that stopped because Roblox lost focus usually means the PC is in use. A macro that is running but not writing `status.json` is the stale-status alert, not a crash. Whatever the macro prints on its error output goes to `debug/logs/macro_stderr.log`.
+
+Not built yet (the last phase of the plan): updating the macro (`/update`, `/rollback`).
 
 ## Automated checks
 
@@ -1581,7 +1604,7 @@ clicks instead of making them. They cover:
 
 - `test_pure.py` - the small pure functions (server link parsing, durations,
   colour masks, axis rounding, failure kinds);
-- `test_bot.py` - the Discord bot's logic (`bot/bot_lib.py`): the config, who is obeyed, and the messages made from the files `write_status()` and `record_minigame_result()` write;
+- `test_bot.py` - the Discord bot's logic (`bot/bot_lib.py`): the config, who is obeyed, the messages made from the files `write_status()` and `record_minigame_result()` write, and the alert, OneDrive and control logic (failure lines, log offsets, rate limiting, stale status, captures ready and copied, the command file, crash and restart decisions);
 - `test_state.py` - the output log's levels, rotation and reopening, the console handler, stuck-need disabling, `process_needs()` (resolved, unresolvable and not-cleared cases), the sick handler on real screenshots (`tests/sick/`: the prompt, the dialog, the pet view), `RunStats`, `status.json`, the
   failure folders, the quiet and idle-respawn checks (including that a respawn
   leaves the 20-minute rejoin clock alone), stopping, and the open `output.log`;

@@ -75,9 +75,9 @@ def test_a_forks_hall_and_a_blank_screen_have_no_doors(macro):
     assert macro.find_hauntlet_doors(frame(macro)) == []
 
 
-def blob(screen, x, y):
-    """A TV number's light (an 18 px square of the glow colour) centred at (x, y)."""
-    screen[y - 9:y + 9, x - 9:x + 9] = (255, 255, 206)
+def blob(screen, x, y, side=18):
+    """A TV number's light (a square of the glow colour, `side` px) centred at (x, y)."""
+    screen[y - side // 2:y + side // 2, x - side // 2:x + side // 2] = (255, 255, 206)
 
 
 def test_a_thin_one_on_a_tv_does_not_hide_the_row(macro):
@@ -103,14 +103,30 @@ def test_two_tvs_are_the_outer_ones_only_when_far_apart_and_centred(macro):
     blob(screen, 570, 300), blob(screen, 1350, 300)                                   # 780 apart, centred
     assert [x for x, _ in macro.find_door_tvs(screen)] == pytest.approx([570, 960, 1350], abs=1)
     screen = np.zeros((1080, 1920, 3), np.uint8)
-    blob(screen, 160, 300), blob(screen, 938, 300)                                    # as far apart, but two neighbours with the third off screen
+    blob(screen, 160, 300, 34), blob(screen, 938, 300, 34)                            # as far apart, but two neighbours (big: the camera is close) with the third off screen
     assert macro.find_door_tvs(screen) == []
+    screen = np.zeros((1080, 1920, 3), np.uint8)
+    blob(screen, 160, 300), blob(screen, 836, 300)                                    # off centre, but twice the neighbours' gap for their size: the middle one is hidden
+    assert [x for x, _ in macro.find_door_tvs(screen)] == pytest.approx([160, 498, 836], abs=1)
     screen = np.zeros((1080, 1920, 3), np.uint8)
     blob(screen, 780, 300), blob(screen, 1140, 300)                                   # 360 apart: neighbours, not the outer two
     assert macro.find_door_tvs(screen) == []
     screen = np.zeros((1080, 1920, 3), np.uint8)
     blob(screen, 570, 300), blob(screen, 1350, 340)                                   # not level
     assert macro.find_door_tvs(screen) == []
+
+
+def test_two_neighbouring_tvs_high_up_give_the_third_behind_the_room_panel(macro):
+    """Real frame of room 9 (plain-boarded-boarded__third_tv_behind_room_panel): the right door's TV is behind the room panel."""
+    tvs = macro.find_door_tvs(cv2.imread(os.path.join(HERE, "doors", "plain-boarded-boarded__third_tv_behind_room_panel.png")))
+    assert [x for x, _ in tvs] == pytest.approx([272, 622, 973], abs=3)
+    screen = np.zeros((1080, 1920, 3), np.uint8)
+    blob(screen, 1320, 127), blob(screen, 1670, 127)                                  # the middle and right ones: the first is behind the panel
+    assert [x for x, _ in macro.find_door_tvs(screen)] == pytest.approx([970, 1320, 1670], abs=1)
+    for first, second, y in ((272, 622, 300), (300, 800, 127), (40, 300, 127)):     # too low, too far apart, the third not behind the panel
+        screen = np.zeros((1080, 1920, 3), np.uint8)
+        blob(screen, first, y), blob(screen, second, y)
+        assert macro.find_door_tvs(screen) == [], (first, second, y)
 
 
 def test_the_glow_of_the_room_panel_is_no_tv_but_a_tv_beside_it_high_up_is(macro):
@@ -884,6 +900,15 @@ def fork_screen(macro, name):
 def test_a_forks_two_doorways_are_found_when_the_camera_is_near_the_wall(macro, name, left, right):
     found = macro.find_fork_doorways(fork_screen(macro, name))
     assert found is not None and abs(found[0] - left) <= 20 and abs(found[1] - right) <= 20
+
+
+@pytest.mark.parametrize("name, left, right", [("full_frame_right_doorway_lit_a", 1063, 1655), ("full_frame_right_doorway_lit_b", 1110, 1680)])
+def test_a_second_doorway_seen_only_as_a_narrow_piece_is_found_with_the_whole_one(macro, name, left, right):
+    """Real frames of room 10 (full, not rows 160-850): the camera is at an angle and the right doorway, lit inside, is dark only in a narrow
+    strip. Where the doorways really are (by eye) is what is given, within 60 px: a click that far off still goes through, and the aim is
+    looked at again before each step."""
+    found = macro.find_fork_doorways(cv2.imread(os.path.join(HERE, "forks", f"{name}.png")))
+    assert found is not None and abs(found[0] - left) <= 60 and abs(found[1] - right) <= 60
 
 
 def test_no_two_doorways_are_found_from_the_forks_entrance_in_a_crowded_view_or_in_another_room(macro):

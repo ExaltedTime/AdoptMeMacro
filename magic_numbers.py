@@ -163,6 +163,7 @@ BUTTON_CLICK_TRIES = 2
 BUTTON_RETRY_WAIT = 10.0
 BUTTON_RETRY_CLEAR_WAIT = 15.0
 BUTTON_REJECT_LOOK = 1.5
+BUTTON_SCAN_RETRY_WAIT = 5.0              # seconds before a button scan that did not find all five is repeated
 STRAY_OKAY_BOX = (800, 637, 1120, 680)
 STRAY_OKAY_MIN_PIXELS = 5000      # the button is ~11000 exact-color px in that box
 STRAY_OKAY_POS = (962, 657)
@@ -184,21 +185,31 @@ HAUNTLET_ITEM_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "items")      
 HAUNTLET_COUNT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "counts")    # x/, 1/, 2/: the glyphs of an item's "x2" badge
 CANDY_CORN_DIGIT_DIR = os.path.join(SCRIPT_DIR, "ref", "candy_corn_digits")      # 0.png ... 9.png: the digits of the candy corn total in the HUD, see read_candy_corn()
 DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
-# debug/ holds images/ for every png (the debug_*.png views, failures/), logs/ for every text and json file, runs/ for
+# debug/ holds failures/ (a folder per failure), logs/ for every text and json file, runs/ for
 # what belongs to one run (its log lines, run<N>.txt, and its chart, run<N>.png) and recordings/ for the run videos - plus
 # the game config, which stays in debug/ itself so "Refresh debug" (which empties everything else) leaves it alone.
-IMAGES_DIR = os.path.join(DEBUG_DIR, "images")
 LOGS_DIR = os.path.join(DEBUG_DIR, "logs")
 RUNS_DIR = os.path.join(DEBUG_DIR, "runs")                    # run<N>.txt (this run's lines of the log on their own, see log_run_event()) and run<N>.png (its chart, see the RUN REPORT section of main.py)
-for _directory in (NEEDS_DIR, DEBUG_DIR, IMAGES_DIR, LOGS_DIR, RUNS_DIR):
+for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
+COMMANDS_PATH = os.path.join(DEBUG_DIR, "commands.json")    # a command for the macro, written by the Discord bot (see read_command()); the macro removes it once read
+COMMANDS = ("start", "stop", "exit")                         # what it may hold: start the loop, stop it, or stop and close the window
+COMMAND_POLL_MS = 1000                                      # how often the macro looks for one
+COMMAND_MAX_AGE = 30                                        # seconds: an older command is ignored (left over from before the macro was started)
+START_LOOP_DELAY_MS = 1500                                  # after the window is up, before the --loop argument starts the loop
+BOT_START_CONFIRM = 60                                     # seconds the bot waits, after /start, for the macro's loop to show in status.json
+BOT_WATCH_INTERVAL = 10                                     # seconds between the Discord bot's looks at what the macro wrote (failures, run charts, captures, status)
+BOT_ALERT_GAP = 60                                          # seconds: at most one failure post per this long, the rest counted ("N more failures")
+BOT_CAPTURE_SETTLE = 20                                     # seconds a capture's zips must be unchanged before they are copied (they are written on a thread)
+BOT_FILE_SETTLE = 5                                         # seconds a run chart must be unchanged before it is posted
+BOT_MAX_UPLOAD_MB = 8                                       # bigger files are not posted (Discord's limit for a bot is about 10 MB)
 RUN_LOG_PATH = os.path.join(LOGS_DIR, "run_log.txt")        # appended to, never overwritten
 RUN_COUNTER_PATH = os.path.join(LOGS_DIR, "run_counter.txt")  # holds the last-used run number
 GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")       # persisted game state - see load_game_config()
 OUTPUT_LOG_PATH = os.path.join(LOGS_DIR, "output.log")      # everything the macro logs, timestamped, with its level - see OutputLog
 STATUS_PATH = os.path.join(LOGS_DIR, "status.json")         # live "is it alive and what's it doing" summary - see write_status()
-FAILURE_DIR = os.path.join(IMAGES_DIR, "failures")          # a folder per failure (screenshot, need icons, info) - see log_failure()
+FAILURE_DIR = os.path.join(DEBUG_DIR, "failures")              # a folder per failure (screenshot, need icons, info) - see log_failure()
 RECORDINGS_DIR = os.path.join(DEBUG_DIR, "recordings")      # run videos - see RunRecorder
 OUTPUT_LOG_MAX_BYTES = 5 * 1024 * 1024   # output.log moves to output.log.old (replacing the last one) past this size
 MAX_FAILURE_FOLDERS = 100                # oldest failure folders are deleted beyond this many
@@ -233,7 +244,7 @@ CAPTURE_MIN_FREE_MB = 3000               # ...or when less than this much disk i
 MAX_CAPTURES = 5                         # oldest captures are deleted beyond this many
 # Every minigame played is recorded the same way, automatically (MINIGAME_CAPTURE; not while a capture of the hotkey's is
 # running), into a folder of RUN_CAPTURES_DIR. Of each minigame the captures of its RUN_CAPTURES_BEST best runs (the most candy corn
-# earned), its RUN_CAPTURES_WORST worst and its latest are kept (prune_run_captures()). A lossless frame is 1-3 MB, so a run
+# earned), its RUN_CAPTURES_WORST worst, its latest and the latest RUN_CAPTURES_FAILED that failed are kept (prune_run_captures()). A lossless frame is 1-3 MB, so a run
 # is kept to RUN_CAPTURE_ZIPS zips of CAPTURE_ZIP_MB by thinning its frames out evenly (see InputCapture) - except frames of
 # when things went wrong: at a mark() (a walk that got nowhere, a failure, a stall...) a frame is saved at once and every look for
 # the next RUN_CAPTURE_BURST seconds, and a run that didn't finish keeps the frames of its last RUN_CAPTURE_TAIL seconds; such
@@ -243,6 +254,7 @@ RUN_CAPTURES_DIR = os.path.join(DEBUG_DIR, "minigame_captures")
 RUN_CAPTURE_ZIPS = 5
 RUN_CAPTURES_BEST = 2
 RUN_CAPTURES_WORST = 2
+RUN_CAPTURES_FAILED = 5                   # the latest this many runs that failed (did not finish, or had a failure logged) are kept too
 RUN_CAPTURE_BURST = 4.0
 RUN_CAPTURE_TAIL = 15.0
 RUN_CAPTURE_PROTECTED = 25
@@ -359,8 +371,7 @@ HAUNTLET_ROOM_MAX_DIGITS = 3
 # The item slots along the bottom of the Hauntlet 2 screen: round white-ringed icons, about HAUNTLET_SLOT_PITCH apart,
 # centred on the screen, up to four. They are found as circles within HAUNTLET_SLOT_BAND (top, bottom). A slot's picture is
 # the HAUNTLET_ITEM_CROP px square around its centre, matched by correlation (0-1) with the pictures of each saved item;
-# the best must reach HAUNTLET_ITEM_MATCH or the item is unknown (and saved as unknown_<n> to be named - see
-# read_hauntlet_items()). These names are not items and are left out of the list.
+# the best must reach HAUNTLET_ITEM_MATCH or the item is unknown. These names are not items and are left out of the list.
 HAUNTLET_SLOT_BAND = (930, 1080)
 HAUNTLET_SLOT_RADIUS = (44, 58)
 HAUNTLET_SLOT_MIN_DISTANCE = 80
@@ -407,8 +418,9 @@ HAUNTLET_TIMER_MIN_WHITE = 500
 HAUNTLET_TV_GLOW = ((150, 248, 248), (225, 255, 255))   # (low, high) red, green, blue of the number's light
 HAUNTLET_TV_AREA = (80, 1200)                # px of one such number (a thin "1" is the smallest, a TV close to the camera the biggest)
 HAUNTLET_TV_HUD_BOX = (700, 0, 1220, 150)      # left, top, right, bottom: the room panel and timer; their glow is no TV
-HAUNTLET_TV_PAIR_GAP = (560, 1000)           # px between two TVs that are the outer two of three (900 with the camera close)
-HAUNTLET_TV_PAIR_OFF_CENTER = 150            # px: and their middle is this close to the middle of the screen (neighbours with the third off screen are not)
+HAUNTLET_TV_PAIR_GAP = (560, 1000)           # px between two TVs that are the outer two of three (900 with the camera close), when...
+HAUNTLET_TV_PAIR_OFF_CENTER = 150            # px: ...their middle is this close to the middle of the screen (neighbours with the third off screen are not), or...
+HAUNTLET_TV_PAIR_RATIO = 34                  # ...their gap is this many times the side of a number's blob (neighbours: about 21, the outer two: about 43; the middle TV is hidden, by a balloon say)
 HAUNTLET_TV_SPACING = (200, 500)             # px between neighbouring TVs
 HAUNTLET_TV_ROW_TOLERANCE = 15               # px: the TVs of a row are this level...
 HAUNTLET_TV_SPACING_TOLERANCE = 0.25         # ...and these spacings this close
@@ -424,7 +436,9 @@ HAUNTLET_DOOR_SPACING = 360
 HAUNTLET_LOCK_LIGHT_BOX = (-60, 20, 60, 70)
 HAUNTLET_LOCK_LIGHT_RED = 225                # the light is pure red, (255, 37, 37); the player's hearts, which can be under the door, have dark red outlines (204, 68, 54)
 HAUNTLET_LOCK_LIGHT_OTHER = 70
-HAUNTLET_LOCK_LIGHT_MIN = 25
+HAUNTLET_LOCK_LIGHT_MIN = 25                 # px of a red patch that is the light (about 45)...
+HAUNTLET_LOCK_LIGHT_MAX = 200                # ...at most this many (a wall painted red is bigger)...
+HAUNTLET_LOCK_LIGHT_ROUND = 2                # ...and no longer than this many times its width (or the other way round)
 HAUNTLET_DOOR_BOX = (-45, 35, 45, 130)
 HAUNTLET_MYSTERY_BRIGHTNESS = 172
 HAUNTLET_DARK_LEVEL = 55
@@ -511,6 +525,11 @@ HAUNTLET_OPENING_WALL = 10
 HAUNTLET_OPENING_JOIN = 12
 HAUNTLET_OPENING_WIDTH = (100, 260)
 HAUNTLET_OPENING_GAP = (400, 800)
+# Seen at an angle, the far doorway may show only a narrow piece (HAUNTLET_OPENING_PIECE px wide: its inside is lit): one whole opening no wider than
+# HAUNTLET_OPENING_MAIN_MAX and exactly one such piece HAUNTLET_OPENING_PIECE_GAP px from it (middle to middle) are the two doorways.
+HAUNTLET_OPENING_PIECE = (40, 99)
+HAUNTLET_OPENING_MAIN_MAX = 200
+HAUNTLET_OPENING_PIECE_GAP = (420, 680)
 HAUNTLET_DOORS_TIMEOUT = 8.0
 # The items (their folder names in HAUNTLET_ITEM_DIR) and what each is for: the grey key opens a locked door; a cyan potion makes a heart
 # that lasts one room, for a boarded door; the red potion refills the hearts, used when only HAUNTLET_LOW_HEARTS or fewer are left; a
@@ -534,7 +553,6 @@ HAUNTLET_ARROW_WIDTH = (100, 150)
 HAUNTLET_ARROW_HEIGHT = (45, 125)
 HAUNTLET_ARROW_MAX_OFFSET = 0.5
 HAUNTLET_ARROW_LOOKS = 4
-HAUNTLET_LEARN_LIMIT = 4                     # new item pictures saved in one play (unknown_<n> folders); more is a misreading
 
 # ============================================================================
 # SCREEN / INPUT SETUP
@@ -609,7 +627,6 @@ FOCUS_PET_DIFF_THRESHOLD = 25        # per-pixel brightness change that counts a
 FOCUS_PET_MERGE_KERNEL = 25          # px; changed pixels this close together merge into one blob
 FOCUS_PET_MIN_AREA = 150             # px^2; smaller blobs are noise, not the pet
 FOCUS_PET_IGNORE_MARGIN = 20           # px around the macro's own window that focus_pet() ignores too
-FOCUS_PET_DEBUG_COLOR = (0, 255, 0)    # BGR, the boxes drawn on debug/debug_focus_pet.png
 FOCUS_PET_CLICK_SETTLE = 1.0         # after each click, before checking whether the pet is focused now
 FOCUS_PET_MENU_WAIT = 4.0            # wait after the clicks, for the pet's menu to open
 
@@ -882,6 +899,8 @@ BUTTON_MIN_AREA = 150
 BUTTON_MIN_CIRCULARITY = 0.65
 BUTTON_MAX_COUNT = 5
 BUTTON_NAMES = ["hungry", "thirsty", "dirty", "potty", "sleepy"]
+BUTTON_SLOTS_X = (673, 752, 858, 998, 1219)    # where each of them is across the screen (x of the buttons of 12 scans, within 10 px of these) - for when one is not seen (a beam of light, the character)
+BUTTON_SLOT_TOLERANCE = 35                     # px: a button this close to a slot is that one (the slots are 77 or more apart)
 BUTTON_LOOSE_AREA_FACTOR = 0.7         # how much looser than BUTTON_MIN_AREA a candidate may be
 BUTTON_MAX_AREA_FRACTION = 0.5         # reject a blob covering more than this fraction of the band
 BUTTON_MIN_RADIUS = 5                  # reject a candidate smaller than this radius (px)
@@ -889,15 +908,6 @@ BUTTON_LOOSE_CIRCULARITY_FACTOR = 0.8  # how much looser than BUTTON_MIN_CIRCULA
 BUTTON_PURPLE_DILATE_ITERATIONS = 3    # dilation used to build the outline search zone
 BUTTON_PURPLE_ERODE_ITERATIONS = 1     # erosion used to build the outline search zone
 BUTTON_OUTLINE_PADDING = 3             # px of padding around a candidate when scoring its white outline
-
-# Debug drawing
-DEBUG_NEED_MARKER_COLOR = (0, 255, 0)      # BGR
-DEBUG_NEED_MARKER_THICKNESS = 2
-DEBUG_BUTTON_MARKER_COLOR = (0, 0, 255)    # BGR
-DEBUG_BUTTON_MARKER_RADIUS = 8
-DEBUG_BUTTON_MARKER_THICKNESS = 2
-DEBUG_BUTTON_LABEL_OFFSET = (-5, -15)      # px offset of the number label from its marker
-DEBUG_BUTTON_LABEL_SCALE = 0.5
 
 # Color ranges (HSV): lower, upper
 PURPLE_RANGE = (np.array([130, 80, 80]), np.array([160, 255, 255]))

@@ -4,7 +4,9 @@ Plain functions, so tests/test_bot.py can run them anywhere. See docs/ARCHITECTU
 import glob
 import json
 import os
-from dataclasses import dataclass
+import re
+import shutil
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
@@ -26,10 +28,19 @@ class Config:
     guild_id: Optional[int]
     stale_status_minutes: float
     log_lines_max: int
+    onedrive_dir: str            # "": the capture zips are not copied anywhere
+    onedrive_keep_days: float
+    heartbeat_hours: float       # 0: no heartbeat
+    repo_dir: str                # "": the folder this repository is in
+    python: str                  # "": the Python that runs the bot
+    stop_timeout_seconds: float
+    auto_restart: bool
+    auto_restart_max_per_hour: int
 
 
 REQUIRED = ("token", "owner_id", "channel_id")
-DEFAULTS: dict[str, Any] = {"guild_id": None, "stale_status_minutes": 5, "log_lines_max": 40}
+DEFAULTS: dict[str, Any] = {"guild_id": None, "stale_status_minutes": 5, "log_lines_max": 40, "onedrive_dir": "", "onedrive_keep_days": 14, "heartbeat_hours": 0,
+            "repo_dir": "", "python": "", "stop_timeout_seconds": 30, "auto_restart": False, "auto_restart_max_per_hour": 3}
 
 
 def load_config(path: str) -> Config:
@@ -58,8 +69,25 @@ def load_config(path: str) -> Config:
         raise ConfigError("stale_status_minutes must be a positive number")
     if not isinstance(values["log_lines_max"], int) or values["log_lines_max"] < 1:
         raise ConfigError("log_lines_max must be a whole number of at least 1")
+    if not isinstance(values["onedrive_dir"], str):
+        raise ConfigError("onedrive_dir must be a folder path (a string), or left out")
+    for key in ("onedrive_keep_days", "heartbeat_hours"):
+        if not isinstance(values[key], (int, float)) or isinstance(values[key], bool) or values[key] < 0:
+            raise ConfigError(f"{key} must be a number, 0 or more")
+    for key in ("repo_dir", "python"):
+        if not isinstance(values[key], str):
+            raise ConfigError(f"{key} must be a path (a string), or left out")
+    if not isinstance(values["stop_timeout_seconds"], (int, float)) or isinstance(values["stop_timeout_seconds"], bool) or values["stop_timeout_seconds"] <= 0:
+        raise ConfigError("stop_timeout_seconds must be a positive number")
+    if not isinstance(values["auto_restart"], bool):
+        raise ConfigError("auto_restart must be true or false")
+    if not isinstance(values["auto_restart_max_per_hour"], int) or isinstance(values["auto_restart_max_per_hour"], bool) or values["auto_restart_max_per_hour"] < 1:
+        raise ConfigError("auto_restart_max_per_hour must be a whole number of at least 1")
     return Config(values["token"], values["owner_id"], values["channel_id"], values["guild_id"],
-                  float(values["stale_status_minutes"]), values["log_lines_max"])
+                  float(values["stale_status_minutes"]), values["log_lines_max"], values["onedrive_dir"].strip(),
+                  float(values["onedrive_keep_days"]), float(values["heartbeat_hours"]),
+                  values["repo_dir"].strip(), values["python"].strip(), float(values["stop_timeout_seconds"]),
+                  values["auto_restart"], values["auto_restart_max_per_hour"])
 
 
 def is_allowed(config: Config, user_id: int, channel_id: int) -> bool:
@@ -237,3 +265,300 @@ def looks_blank(rgb: bytes, sample: int = 20000) -> bool:
 def main_py_in(command_lines: list[str]) -> bool:
     """Whether one of the process command lines is the macro (`... main.py ...`), not the bot itself."""
     return any("main.py" in line and "discord_bot" not in line for line in command_lines)
+
+
+# --- alerts: what the macro writes that the bot watches (Phase 2) ---
+
+@dataclass(frozen=True)
+class Failure:
+    """A `FAILURE:` line of run_log.txt: when, in which run, why, and the screenshot's path relative to debug/ (None if it has none)."""
+    time: str
+    run: Optional[int]
+    reason: str
+    screenshot: Optional[str]
+
+
+FAILURE_LINE = re.compile(r"^\[(?P<time>[^\]]+)\] \[RUN (?P<run>\w+)\] FAILURE: (?P<detail>.*?)(?: \(screenshot: (?P<shot>[^)]+)\))?$")
+
+
+def parse_failure(line: str) -> Optional[Failure]:
+    """The failure a run-log line records, or None if it is another kind of line."""
+    found = FAILURE_LINE.match(line.strip())
+    if found is None:
+        return None
+    run = int(found["run"]) if found["run"].isdigit() else None
+    return Failure(found["time"], run, found["detail"], found["shot"])
+
+
+def failure_screenshot_path(failure: Failure) -> Optional[str]:
+    """The screenshot file of `failure` if it is one, still there, and inside the debug folder (a line is only text: it is not trusted with a path)."""
+    if not failure.screenshot:
+        return None
+    path = os.path.normpath(os.path.join(cfg.DEBUG_DIR, failure.screenshot))
+    inside = os.path.commonpath([path, os.path.normpath(cfg.DEBUG_DIR)]) == os.path.normpath(cfg.DEBUG_DIR)
+    return path if inside and os.path.isfile(path) else None
+
+
+def read_new_lines(path: str, offset: int) -> tuple[list[str], int]:
+    """The whole lines added to the text file since byte `offset`, and the offset after them. A file that is shorter than `offset` was
+    deleted or started again (Refresh debug does that): it is read from its start. A last line without its newline is left for next time."""
+    try:
+        size = os.path.getsize(path)
+        if size < offset:
+            offset = 0
+        with open(path, "rb") as f:
+            f.seek(offset)
+            data = f.read()
+    except OSError:
+        return [], 0
+    end = data.rfind(b"\n") + 1
+    return data[:end].decode("utf-8", errors="replace").splitlines(), offset + end
+
+
+def file_end(path: str) -> int:
+    """The size of the file in bytes (0 if there is none): where to start reading its new lines from, to skip what it already holds."""
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
+class RateLimiter:
+    """At most one post per `gap` seconds. `check(now)` says whether to post now and how many were held back since the last post, so the post can
+    say "and N more"; the held ones are not kept."""
+
+    def __init__(self, gap: float) -> None:
+        self.gap = gap
+        self.last: Optional[float] = None
+        self.held = 0
+
+    def check(self, now: float) -> tuple[bool, int]:
+        if self.last is None or now - self.last >= self.gap:
+            held, self.held, self.last = self.held, 0, now
+            return True, held
+        self.held += 1
+        return False, 0
+
+
+def failure_text(failure: Failure, held: int = 0) -> str:
+    text = f"**Failure** (run {failure.run if failure.run is not None else '?'}, {failure.time}): {failure.reason}"
+    return text + (f"\n({held} more failure{'s' if held != 1 else ''} since the last post)" if held else "")
+
+
+def is_stale(status: Optional[dict[str, Any]], now: datetime, stale_minutes: float) -> Optional[bool]:
+    """Whether status.json has gone `stale_minutes` without an update; None when there is no status or no readable update time (nothing to say)."""
+    if status is None:
+        return None
+    try:
+        age = (now - datetime.strptime(str(status.get("updated")), TIME_FORMAT)).total_seconds()
+    except ValueError:
+        return None
+    return age > stale_minutes * 60
+
+
+def stale_alert(was_stale: bool, status: Optional[dict[str, Any]], now: datetime, stale_minutes: float) -> tuple[bool, Optional[str]]:
+    """The new "is stale" state and what to post for the change: once when the macro stops updating, once when it is updating again."""
+    stale = is_stale(status, now, stale_minutes)
+    if stale is None or stale == was_stale:
+        return was_stale, None
+    if stale:
+        assert status is not None
+        return True, f"**The macro is not updating** - its last update was {status.get('updated')} (stuck, stopped, or the PC is asleep or locked)."
+    return False, "The macro is updating again."
+
+
+def heartbeat_due(last: Optional[float], hours: float, now: float) -> bool:
+    """Whether a heartbeat post is due: `hours` is not 0 and that long has passed since `last` (None: never, so it is due at once)."""
+    return hours > 0 and (last is None or now - last >= hours * 3600)
+
+
+def captures_dir() -> str:
+    return cfg.RUN_CAPTURES_DIR
+
+
+def run_charts(runs_dir: str = "") -> list[str]:
+    """The run charts (RUNS_DIR/run<N>.png) there are now, oldest first."""
+    return sorted(glob.glob(os.path.join(runs_dir or cfg.RUNS_DIR, "run*.png")), key=os.path.getmtime)
+
+
+# --- the bot's memory between starts (bot_state.json): where it got to ---
+
+def state_path() -> str:
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bot_state.json")
+
+
+@dataclass
+class BotState:
+    log_offset: Optional[int] = None                         # None: never started - begin at the end of the run log, not at its start
+    charts: list[str] = field(default_factory=list)          # run charts already posted (or there when the bot first started)
+    captures: list[str] = field(default_factory=list)        # capture folders already copied (or there when the bot first started)
+    stale: bool = False
+    last_heartbeat: Optional[float] = None
+    desired_state: Optional[str] = None                      # "running" or "stopped" after the bot's /start and /stop, None before: a macro that is gone is a crash only if it should run
+    crash_reported: bool = False                             # the macro's process is gone and that was posted
+    restarts: list[float] = field(default_factory=list)      # when the bot restarted the macro by itself (the last hour counts)
+
+
+def load_state(path: str) -> BotState:
+    """The saved state, with the default for anything missing or of the wrong kind (no file: all defaults)."""
+    data = read_json(path) or {}
+    state = BotState()
+    for key in ("log_offset", "last_heartbeat"):
+        if isinstance(data.get(key), (int, float)) and not isinstance(data.get(key), bool):
+            setattr(state, key, data[key])
+    for key in ("charts", "captures"):
+        if isinstance(data.get(key), list):
+            setattr(state, key, [item for item in data[key] if isinstance(item, str)])
+    if isinstance(data.get("restarts"), list):
+        state.restarts = [item for item in data["restarts"] if isinstance(item, (int, float)) and not isinstance(item, bool)]
+    for key in ("stale", "crash_reported"):
+        if isinstance(data.get(key), bool):
+            setattr(state, key, data[key])
+    if data.get("desired_state") in ("running", "stopped"):
+        state.desired_state = data["desired_state"]
+    return state
+
+
+def save_state(path: str, state: BotState) -> None:
+    """Write the state to `path` all at once (a half-written file would read as no state: everything posted again)."""
+    temp = path + ".tmp"
+    with open(temp, "w", encoding="utf-8") as f:
+        json.dump(state.__dict__, f)
+    os.replace(temp, path)
+
+
+# --- capture zips -> OneDrive (Phase 3) ---
+
+CAPTURE_NAME = re.compile(r"^(hauntlet_2|ghost_gallery)_(\d{8}_\d{6})")
+
+
+def capture_folders(captures_dir: str) -> list[str]:
+    """The capture folders in `captures_dir` (named like a capture's), oldest first - by the time in the name, not the minigame's."""
+    named = [(match[2], folder) for folder in glob.glob(os.path.join(captures_dir, "*"))
+             if (match := CAPTURE_NAME.match(os.path.basename(folder))) and os.path.isdir(folder)]
+    return [folder for _, folder in sorted(named)]
+
+
+@dataclass(frozen=True)
+class Capture:
+    name: str            # the capture's folder name
+    outcome: str
+    zips: tuple[str, ...]
+    megabytes: float
+
+
+def ready_captures(captures_dir: str, done: set[str], now: float, settle: float) -> list[Capture]:
+    """The captures in `captures_dir` that are ready to copy and not in `done`: `info.json` has an `outcome` (the recording is over) and there are
+    zips, none changed in the last `settle` seconds (they are written on a thread, so they can be there before they are complete). Oldest first."""
+    found = []
+    for folder in capture_folders(captures_dir):
+        name = os.path.basename(folder)
+        if name in done:
+            continue
+        info = read_json(os.path.join(folder, "info.json"))
+        zips = sorted(glob.glob(os.path.join(folder, "zips", "*.zip")))
+        if not info or not info.get("outcome") or not zips:
+            continue
+        if any(now - os.path.getmtime(z) < settle for z in zips):
+            continue
+        found.append(Capture(name, str(info["outcome"]), tuple(zips), sum(os.path.getsize(z) for z in zips) / 1048576))
+    return found
+
+
+def copy_capture(capture: Capture, onedrive_dir: str) -> list[str]:
+    """Copy the capture's zips into onedrive_dir/<capture name>/ (the OneDrive app uploads them from there). The names of the files copied."""
+    target = os.path.join(onedrive_dir, capture.name)
+    os.makedirs(target, exist_ok=True)
+    for zipfile_path in capture.zips:
+        shutil.copy2(zipfile_path, os.path.join(target, os.path.basename(zipfile_path)))
+    return [os.path.basename(z) for z in capture.zips]
+
+
+def capture_text(capture: Capture) -> str:
+    label = cfg.MINIGAME_LABELS.get(next((n for n in cfg.MINIGAME_LABELS if capture.name.startswith(n)), ""), capture.name)
+    return f"{label} capture `{capture.name}`: {capture.outcome} - {len(capture.zips)} zip{'s' if len(capture.zips) != 1 else ''}, {capture.megabytes:.0f} MB. Zips posted to OneDrive."
+
+
+def old_copies(onedrive_dir: str, keep_days: float, now: float) -> list[str]:
+    """The copied captures in `onedrive_dir` last changed more than `keep_days` ago - only folders named like a capture's (nothing else in the folder
+    is ever listed), and none when `keep_days` is 0 (keep everything)."""
+    if keep_days <= 0:
+        return []
+    old = []
+    for folder in glob.glob(os.path.join(onedrive_dir, "*")):
+        if CAPTURE_NAME.match(os.path.basename(folder)) and os.path.isdir(folder) and now - os.path.getmtime(folder) > keep_days * 86400:
+            old.append(folder)
+    return sorted(old)
+
+
+def captures_text(captures_dir: str, done: set[str], limit: int = 10) -> str:
+    """The /captures message: the newest `limit` captures on this PC, each with its outcome, zip count and size, and whether it is in OneDrive."""
+    rows = []
+    for folder in reversed(capture_folders(captures_dir)):
+        name = os.path.basename(folder)
+        info = read_json(os.path.join(folder, "info.json")) or {}
+        zips = glob.glob(os.path.join(folder, "zips", "*.zip"))
+        size = sum(os.path.getsize(z) for z in zips) / 1048576
+        rows.append(f"{name}: {info.get('outcome', 'not finished')}, {len(zips)} zips, {size:.0f} MB, " + ("in OneDrive" if name in done else "not in OneDrive"))
+        if len(rows) == limit:
+            break
+    return "\n".join(rows) if rows else "No minigame captures on this PC."
+
+
+# --- control: start, stop, restart the macro (Phase 4) ---
+
+def write_command(path: str, command: str, now: float) -> None:
+    """Leave `command` (one of magic_numbers.COMMANDS) for the macro to find at `path`: {"command": ..., "time": ...}, written all at once. The
+    macro removes the file once it has read it, and ignores a command that is old (COMMAND_MAX_AGE)."""
+    if command not in cfg.COMMANDS:
+        raise ValueError(f"not a command the macro knows: {command!r}")
+    temp = path + ".tmp"
+    with open(temp, "w", encoding="utf-8") as f:
+        json.dump({"command": command, "time": now}, f)
+    os.replace(temp, path)
+
+
+def macro_pids(processes: list[tuple[int, str]]) -> list[int]:
+    """The ids of the processes of `processes` = (id, command line) that are the macro (`... main.py ...`, not the bot)."""
+    return [pid for pid, line in processes if main_py_in([line])]
+
+
+def parse_process_lines(output: str) -> list[tuple[int, str]]:
+    """(id, command line) of each line `<id> <command line>` of `pgrep -af`'s or the PowerShell listing's output; other lines are skipped."""
+    found = []
+    for line in output.splitlines():
+        head, _, rest = line.strip().partition(" ")
+        if head.isdigit():
+            found.append((int(head), rest))
+    return found
+
+
+def restart_allowed(history: list[float], now: float, per_hour: int) -> tuple[bool, list[float]]:
+    """Whether the bot may restart the macro by itself once more: fewer than `per_hour` restarts in the last hour. Returns that and the history
+    to keep (the last hour's, with this restart added when allowed)."""
+    recent = [t for t in history if now - t < 3600]
+    if len(recent) >= per_hour:
+        return False, recent
+    return True, recent + [now]
+
+
+def crash_check(desired: Optional[str], running: Optional[bool], reported: bool) -> tuple[bool, Optional[str]]:
+    """Whether the macro's process is gone when the bot's /start (and not /stop) says it should be there: the new "reported" state and "alert" or
+    "recovered" when that changes. Nothing is known (None) when the process check can't tell, or `/start` was never used."""
+    if desired != "running":
+        return False, None                                   # (stopped on purpose, or the bot never started it: no crash to report)
+    if running is None:
+        return reported, None
+    if not running and not reported:
+        return True, "alert"
+    if running and reported:
+        return False, "recovered"
+    return reported, None
+
+
+def started_since(status: Optional[dict[str, Any]], since: datetime) -> bool:
+    """Whether status.json was written at or after `since` - the macro that was just started is running its loop (it writes the status when it starts)."""
+    try:
+        return status is not None and datetime.strptime(str(status.get("updated")), TIME_FORMAT) >= since.replace(microsecond=0)
+    except ValueError:
+        return False

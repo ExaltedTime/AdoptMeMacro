@@ -15,7 +15,7 @@ from __future__ import annotations
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
-import os, re, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib, shutil, zipfile
+import os, re, sys, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib, shutil, zipfile
 import datetime
 import logging
 import logging.handlers
@@ -361,18 +361,17 @@ state = State()
 # ============================================================================
 
 def migrate_debug_layout() -> None:
-    """Move what an older version left in debug/ into the images/ and logs/
-    subfolders (see IMAGES_DIR / LOGS_DIR), if it isn't there already. Never
-    raises."""
-    moves = [(name, cfg.LOGS_DIR) for name in ("run_log.txt", "run_counter.txt", "output.log", "output.log.old", "status.json")]
-    moves += [(name, cfg.IMAGES_DIR) for name in ("failures",)]
+    """Move what an older version left in debug/ into the logs/ and failures/ subfolders (see LOGS_DIR / FAILURE_DIR), if it isn't
+    there already, and drop the images/ folder it had (the debug_*.png views are not made any more). Never raises."""
+    moves = [(os.path.join(cfg.DEBUG_DIR, name), os.path.join(cfg.LOGS_DIR, name))
+             for name in ("run_log.txt", "run_counter.txt", "output.log", "output.log.old", "status.json")]
+    old_images = os.path.join(cfg.DEBUG_DIR, "images")
+    moves += [(os.path.join(old_images, "failures"), cfg.FAILURE_DIR)]
     try:
-        moves += [(name, cfg.IMAGES_DIR) for name in os.listdir(cfg.DEBUG_DIR) if name.startswith("debug_") and name.endswith(".png")]
-        for name, folder in moves:
-            source, target = os.path.join(cfg.DEBUG_DIR, name), os.path.join(folder, name)
+        for source, target in moves:
             if os.path.exists(source) and not os.path.exists(target):
                 os.replace(source, target)
-        for old_folder in (os.path.join(cfg.LOGS_DIR, "runs"), os.path.join(cfg.IMAGES_DIR, "reports"), os.path.join(cfg.DEBUG_DIR, "reports")):       # run logs and run charts: now together in RUNS_DIR
+        for old_folder in (os.path.join(cfg.LOGS_DIR, "runs"), os.path.join(old_images, "reports"), os.path.join(cfg.DEBUG_DIR, "reports")):       # run logs and run charts: now together in RUNS_DIR
             if os.path.isdir(old_folder):
                 os.makedirs(cfg.RUNS_DIR, exist_ok=True)
                 for name in os.listdir(old_folder):
@@ -380,6 +379,13 @@ def migrate_debug_layout() -> None:
                         os.replace(os.path.join(old_folder, name), os.path.join(cfg.RUNS_DIR, name))
                 if not os.listdir(old_folder):
                     os.rmdir(old_folder)
+        for folder in (cfg.DEBUG_DIR, old_images):
+            if os.path.isdir(folder):
+                for name in os.listdir(folder):
+                    if name.startswith("debug_") and name.endswith(".png"):
+                        os.remove(os.path.join(folder, name))
+        if os.path.isdir(old_images) and not os.listdir(old_images):
+            os.rmdir(old_images)
     except OSError as error:
         logger.warning(f"Couldn't move the old debug files: {error}")
 
@@ -401,9 +407,29 @@ def refresh_debug() -> int:
             removed += 1
         except OSError as error:   # a locked file (a video still open, say): leave it, carry on with the rest
             logger.warning(f"Couldn't delete {name}: {error}")
-    for directory in (cfg.IMAGES_DIR, cfg.LOGS_DIR, cfg.RUNS_DIR):
+    for directory in (cfg.LOGS_DIR, cfg.RUNS_DIR, cfg.FAILURE_DIR):
         os.makedirs(directory, exist_ok=True)
     return removed
+
+def read_command() -> Optional[str]:
+    """The command waiting in COMMANDS_PATH (written by the Discord bot: {"command": ..., "time": ...}), or None. The file is always removed once
+    read; a command that isn't one of COMMANDS, or is older than COMMAND_MAX_AGE seconds (left over from before the macro started, say), is none.
+    Never raises. See docs/ARCHITECTURE.md#remote-control."""
+    try:
+        with open(cfg.COMMANDS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = None
+    try:
+        os.remove(cfg.COMMANDS_PATH)
+    except OSError:
+        pass
+    if not isinstance(data, dict) or data.get("command") not in cfg.COMMANDS:
+        return None
+    sent = data.get("time")
+    if not isinstance(sent, (int, float)) or abs(time.time() - sent) > cfg.COMMAND_MAX_AGE:
+        return None
+    return str(data["command"])
 
 def next_run_number() -> int:
     """Return a fresh run number, persisted in RUN_COUNTER_PATH so numbers
@@ -759,7 +785,7 @@ def strip_changed_fraction(before: Image, after: Image) -> float:
     changed = cv2.absdiff(before, after).max(axis=2) > cfg.NEED_STRIP_CHANGED_LEVEL
     return np.count_nonzero(changed) / changed.size
 
-def detect_need_icons(save_debug: bool = False, fresh: bool = False) -> tuple[list[tuple[int, int, int]], Image]:
+def detect_need_icons(fresh: bool = False) -> tuple[list[tuple[int, int, int]], Image]:
     """Find the round need icons in the top-left strip by Hough circles: ((cx, cy, radius)
     left to right, the captured image). The search is skipped while the strip is
     practically unchanged; `fresh` always searches. See docs/ARCHITECTURE.md#need-icon-detection.
@@ -786,12 +812,6 @@ def detect_need_icons(save_debug: bool = False, fresh: bool = False) -> tuple[li
                                        minRadius=cfg.NEED_ICON_MIN_RADIUS, maxRadius=cfg.NEED_ICON_MAX_RADIUS)
             found = [] if circles is None else sorted((int(x), int(y), int(r)) for x, y, r in circles[0])
             cache.update(strip=top_strip, found=found, reuses=0)
-
-    if save_debug:
-        debug_img = top_strip.copy()
-        for cx, cy, r in found:
-            cv2.circle(debug_img, (cx, cy), r, cfg.DEBUG_NEED_MARKER_COLOR, cfg.DEBUG_NEED_MARKER_THICKNESS)
-        cv2.imwrite(os.path.join(cfg.IMAGES_DIR, "debug_needs.png"), debug_img)
 
     return found, img
 
@@ -1047,7 +1067,7 @@ def release_all_inputs() -> None:
 # BUTTON DETECTION
 # ============================================================================
 
-def detect_buttons(save_debug: bool = False) -> list[Point]:
+def detect_buttons() -> list[Point]:
     """Detect purple, white-outlined action buttons in the middle of the screen.
     Assumes the character is already positioned where the buttons are visible."""
     if not focus_roblox_click():
@@ -1107,19 +1127,8 @@ def detect_buttons(save_debug: bool = False) -> list[Point]:
     candidates = sorted(candidates[:cfg.BUTTON_MAX_COUNT], key=lambda t: t[0])
     positions = [(cx, cy) for cx, cy, _, _ in candidates]
 
-    if save_debug:
-        debug_img = img.copy()
-        for i, (cx, cy) in enumerate(positions):
-            cv2.circle(debug_img, (cx, cy), cfg.DEBUG_BUTTON_MARKER_RADIUS,
-                       cfg.DEBUG_BUTTON_MARKER_COLOR, cfg.DEBUG_BUTTON_MARKER_THICKNESS)
-            label_pos = (cx + cfg.DEBUG_BUTTON_LABEL_OFFSET[0], cy + cfg.DEBUG_BUTTON_LABEL_OFFSET[1])
-            cv2.putText(debug_img, str(i + 1), label_pos, cv2.FONT_HERSHEY_SIMPLEX,
-                        cfg.DEBUG_BUTTON_LABEL_SCALE, cfg.DEBUG_BUTTON_MARKER_COLOR, cfg.DEBUG_BUTTON_MARKER_THICKNESS)
-        cv2.imwrite(os.path.join(cfg.IMAGES_DIR, "debug_buttons.png"), debug_img)
-
     if not positions:
-        logger.warning("No buttons detected. Check debug_buttons.png in the debug/ folder to see "
-              "whether PURPLE_RANGE / BUTTON_BAND_X / BUTTON_BAND_Y need adjusting.")
+        logger.warning("No buttons detected. Check whether PURPLE_RANGE / BUTTON_BAND_X / BUTTON_BAND_Y need adjusting.")
 
     return positions
 
@@ -1132,29 +1141,51 @@ def click_button(button_x: float, button_y: float, need_name: str) -> bool:
     hover_click(button_x, button_y)
     return True
 
+def name_buttons_by_position(positions: list[Point]) -> dict[str, Point]:
+    """The buttons of `positions` named by the BUTTON_SLOTS_X each is within BUTTON_SLOT_TOLERANCE of - {} if one is near none of them, or
+    two are near the same one (they are then not the buttons, or not all of them)."""
+    named: dict[str, Point] = {}
+    for x, y in positions:
+        near = [name for name, slot in zip(cfg.BUTTON_NAMES, cfg.BUTTON_SLOTS_X) if abs(x - slot) <= cfg.BUTTON_SLOT_TOLERANCE and name not in named]
+        if len(near) != 1:
+            return {}
+        named[near[0]] = (x, y)
+    return named
+
 def refresh_button_mapping() -> bool:
     """Detect the action buttons and cache them in state.button_positions, clearing any
-    previous mapping first so a failed detection never leaves a stale one.
+    previous mapping first so a failed detection never leaves a stale one. Anything but all five buttons is a failed
+    detection - tried once more after BUTTON_SCAN_RETRY_WAIT seconds, then False with nothing mapped.
     See docs/ARCHITECTURE.md#button-detection.
     """
     state.button_positions.clear()
 
-    positions = detect_buttons(save_debug=True)
+    positions = detect_buttons()
+    if len(positions) != len(cfg.BUTTON_NAMES):
+        log_run_event(f"button scan found {len(positions)} of {len(cfg.BUTTON_NAMES)}: "
+                      + ", ".join(f"({x}, {y})" for x, y in positions) + f" - looking again in {cfg.BUTTON_SCAN_RETRY_WAIT:g}s")
+        wait_interruptible(cfg.BUTTON_SCAN_RETRY_WAIT)
+        positions = detect_buttons()
     if not positions:
         logger.error("No buttons detected")
         respawn_character()
         return False
 
     logger.info(f"Detected {len(positions)} button(s)")
-    if len(positions) != len(cfg.BUTTON_NAMES):
-        # The buttons are named by their order left to right, so a missed one shifts every name after it.
-        log_run_event(f"button scan found {len(positions)} of {len(cfg.BUTTON_NAMES)}: "
-                      + ", ".join(f"({x}, {y})" for x, y in positions))
-    for i, (cx, cy) in enumerate(positions):
-        if i < len(cfg.BUTTON_NAMES):
-            name = cfg.BUTTON_NAMES[i]
-            state.button_positions[name] = (cx, cy)
-            logger.info(f"Button {i + 1}: '{name}' @ ({cx}, {cy})")
+    if len(positions) == len(cfg.BUTTON_NAMES):
+        named = dict(zip(cfg.BUTTON_NAMES, positions))
+    else:
+        # The buttons are named by their order left to right, so a missed one (hidden by the character or a beam of light) would shift
+        # every name after it: they are named by where they are instead, if each is where one of the buttons is, else none is made.
+        named = name_buttons_by_position(positions)
+        log_run_event(f"button scan found {len(positions)} of {len(cfg.BUTTON_NAMES)} again: "
+                      + ", ".join(f"({x}, {y})" for x, y in positions)
+                      + (f" - named by position, no {', '.join(n for n in cfg.BUTTON_NAMES if n not in named)}" if named else " - not where the buttons are, none mapped"))
+        if not named:
+            return False
+    for name, (cx, cy) in named.items():
+        state.button_positions[name] = (cx, cy)
+        logger.info(f"Button '{name}' @ ({cx}, {cy})")
 
     logger.info("Button mapping refreshed")
     return True
@@ -1581,21 +1612,6 @@ def moving_blobs(img_a: Image, img_b: Image, top_percent: float = cfg.FOCUS_PET_
         blobs.append((x, top + y, w, h, int(area)))
     return blobs, mask, top
 
-def save_focus_pet_debug(img: Image, blobs: list[tuple[int, int, int, int, int]], mask: Image, top: int, name: str = "debug_focus_pet.png", ignore: Sequence[Box] = ()) -> None:
-    """Write debug/<name>: `img` (the second frame) with the searched region
-    marked, the changed pixels in red, and a numbered box around every blob -
-    so what focus_pet() thinks moved, and so where it clicks, can be seen."""
-    marked = img.copy()
-    region = marked[top:]
-    region[mask > 0] = (0, 0, 255)
-    cv2.line(marked, (0, top), (marked.shape[1], top), cfg.FOCUS_PET_DEBUG_COLOR, 1)
-    for left, box_top, right, bottom in ignore:   # ignored areas, in blue
-        cv2.rectangle(marked, (left, box_top), (right, bottom), (255, 0, 0), 2)
-    for i, (x, y, w, h, area) in enumerate(blobs, 1):
-        cv2.rectangle(marked, (x, y), (x + w, y + h), cfg.FOCUS_PET_DEBUG_COLOR, 2)
-        cv2.putText(marked, f"{i}: {area}", (x, max(12, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cfg.FOCUS_PET_DEBUG_COLOR, 2)
-    cv2.imwrite(os.path.join(cfg.IMAGES_DIR, name), marked)
-
 def detect_pet_focus(img: Image) -> bool:
     """True if the pet focus view (its BACK button) is showing in `img`."""
     return popup_visible(img, "pet_focus")
@@ -1617,9 +1633,8 @@ def focus_pet(click_duration: float = cfg.CLICK_MOVE_DURATION) -> bool:
     logger.debug(f"Focus_pet: {len(blobs)} moving blob(s), {changed} changed px below y={top}")
     for i, (x, y, w, h, area) in enumerate(blobs, 1):
         logger.debug(f"Focus_pet:   #{i} center ({x + w // 2}, {y + h // 2}), {w}x{h}, area {area}")
-    save_focus_pet_debug(img_b, blobs, mask, top, ignore=ignore)
     if not blobs:
-        logger.debug("Focus_pet: nothing moved, pet not found (see debug/debug_focus_pet.png)")
+        logger.debug("Focus_pet: nothing moved, pet not found")
         return False
     for i, (x, y, w, h, _) in enumerate(blobs, 1):
         logger.debug(f"Focus_pet: clicking #{i} at ({x + w // 2}, {y + h // 2})...")
@@ -1630,8 +1645,6 @@ def focus_pet(click_duration: float = cfg.CLICK_MOVE_DURATION) -> bool:
             break
     else:
         wait_interruptible(cfg.FOCUS_PET_MENU_WAIT)
-    after = grab_screen()
-    save_focus_pet_debug(after, blobs, np.zeros_like(mask), top, name="debug_focus_pet_after.png", ignore=ignore)
     return True
 
 def is_backpack_tab_selected(pos: Point) -> bool:
@@ -2043,7 +2056,7 @@ def process_needs() -> bool:
     if not focus_roblox_click():
         return False
 
-    found_icons, full_img = detect_need_icons(save_debug=True)
+    found_icons, full_img = detect_need_icons()
     if not found_icons:
         record_detection([])
         note_idle_check()
@@ -2197,7 +2210,6 @@ def close_backpack_if_open(step: str = "") -> bool:
     img = grab_screen()
     logger.debug(f"Backpack left open, closing it... (expanded: {detect_backpack_expanded(img)}, "
           f"normal: {detect_backpack_normal(img)})")
-    cv2.imwrite(os.path.join(cfg.IMAGES_DIR, "debug_backpack_open.png"), img)
     if detect_backpack_expanded(img):
         # Its BACK button closes it entirely; the key would only shrink it first.
         back = popup_found(img, "backpack_back")
@@ -2241,9 +2253,8 @@ def close_backpack_if_stuck(in_task: bool) -> bool:
         state.backpack_strikes = 0
         return False
     state.backpack_strikes += 1
-    if state.backpack_strikes == 1:                             # the sighting that may be a false one: keep what the screen looked like
+    if state.backpack_strikes == 1:
         logger.debug("The backpack was seen open (the first of the sightings that count as stuck)")
-        cv2.imwrite(os.path.join(cfg.IMAGES_DIR, "debug_backpack_first_sighting.png"), img)
     if state.backpack_strikes < cfg.BACKPACK_CLOSE_CONFIRMATIONS:
         return True
     state.backpack_strikes = 0
@@ -2502,17 +2513,21 @@ def detect_minigame_overlay(img: Image) -> Optional[str]:
 
 class MinigameWatch:
     """Keeps track of whether the minigame being played is on screen (its
-    overlay - detect_minigame_overlay()), fed one screenshot at a time by
-    minigame_won(). `problem` says why to stop, or None."""
+    overlay - detect_minigame_overlay()) and whether the game disconnected
+    (detect_disconnect()), fed one screenshot at a time by minigame_won().
+    `problem` says why to stop, or None."""
 
     def __init__(self, name: str) -> None:
         self.name = name
         self.began = time.time()
         self.last_seen: Optional[float] = None
         self.start_grace_from: Optional[float] = None   # set once the start wait is over
+        self.disconnected = False                       # the "Disconnected" dialog has been seen
 
     def update(self, img: Image) -> None:
-        if detect_minigame_overlay(img) == self.name:
+        if detect_disconnect(img):
+            self.disconnected = True
+        elif detect_minigame_overlay(img) == self.name:
             self.last_seen = time.time()
 
     def start_wait_over(self) -> None:
@@ -2521,6 +2536,8 @@ class MinigameWatch:
     @property
     def problem(self) -> Optional[str]:
         now = time.time()
+        if self.disconnected:
+            return "disconnected from the game"
         if self.last_seen is not None and now - self.last_seen > cfg.MINIGAME_OVERLAY_LOST_TIMEOUT:
             return f"left the minigame (its overlay was gone for {cfg.MINIGAME_OVERLAY_LOST_TIMEOUT:g}s)"
         if (self.last_seen is None and self.start_grace_from is not None
@@ -2585,7 +2602,6 @@ class HauntletRun:
         self.rooms = 0                                # numbers seen
         self.tvs: Optional[list[tuple[int, int]]] = None   # of the last look: None if the timer was hidden
         self.empty_looks = 0                          # looks in a row at a room without TVs
-        self.learned: set[str] = set()                # unknown items seen (and saved) so far
         self.doors_missing_reported = False           # the failure for a room with no doors found has been logged
 
     @property
@@ -2683,11 +2699,21 @@ def find_fork_doorways(img: Image) -> Optional[tuple[int, int]]:
             spans[-1][1] = int(x)
         else:
             spans.append([int(x), int(x)])
-    spans = [span for span in spans if cfg.HAUNTLET_OPENING_WIDTH[0] <= span[1] - span[0] + 1 <= cfg.HAUNTLET_OPENING_WIDTH[1]]
-    if len(spans) != 2:
-        return None
-    left, right = ((a + b) // 2 for a, b in spans)
-    return (left, right) if cfg.HAUNTLET_OPENING_GAP[0] <= right - left <= cfg.HAUNTLET_OPENING_GAP[1] else None
+    whole = [span for span in spans if cfg.HAUNTLET_OPENING_WIDTH[0] <= span[1] - span[0] + 1 <= cfg.HAUNTLET_OPENING_WIDTH[1]]
+    if len(whole) == 2:
+        left, right = ((a + b) // 2 for a, b in whole)
+        return (left, right) if cfg.HAUNTLET_OPENING_GAP[0] <= right - left <= cfg.HAUNTLET_OPENING_GAP[1] else None
+    # Seen at an angle the second doorway shows only as a narrow piece (its far side is lit, not dark): one whole opening that isn't
+    # too wide, with exactly one narrow piece the distance away that the doorways are of each other, is the pair.
+    pairs = []
+    for opening in whole:
+        if opening[1] - opening[0] + 1 > cfg.HAUNTLET_OPENING_MAIN_MAX:
+            continue
+        for piece in spans:
+            if cfg.HAUNTLET_OPENING_PIECE[0] <= piece[1] - piece[0] + 1 <= cfg.HAUNTLET_OPENING_PIECE[1] and \
+                    cfg.HAUNTLET_OPENING_PIECE_GAP[0] <= abs((piece[0] + piece[1]) // 2 - (opening[0] + opening[1]) // 2) <= cfg.HAUNTLET_OPENING_PIECE_GAP[1]:
+                pairs.append(sorted(((opening[0] + opening[1]) // 2, (piece[0] + piece[1]) // 2)))
+    return (pairs[0][0], pairs[0][1]) if len(pairs) == 1 else None
 
 def player_in_circle(img: Image, circles: list[tuple[int, int, int, int]]) -> bool:
     """Whether the player stands in one of the three circles - and so has picked that door, and is locked in place for a few moments:
@@ -2743,8 +2769,7 @@ def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun, wat
         logger.debug(f"Hauntlet 2: room {run.room}, the door is picked already (its circle was stepped in): going to the same one")
         return run.picked, img
     hearts = read_hauntlet_hearts(img)
-    items = read_hauntlet_items(img, learn=len(run.learned) < cfg.HAUNTLET_LEARN_LIMIT)
-    run.learned |= {item.name for item in items if item.name.startswith("unknown_")}
+    items = read_hauntlet_items(img)
     names = {1: ("ahead",), 2: ("left", "right"), 3: ("left", "middle", "right")}[len(doors)]
     ghost: Optional[int] = None
     used: list[str] = []
@@ -3492,6 +3517,7 @@ def play_minigame(name: str) -> bool:
         respawn_character()
         return False
     started = time.time()
+    failures_before = run_stats.failures
     watch = MinigameWatch(name)
     state.minigame_detail = {}
     before = read_candy_corn_settled(cfg.CANDY_CORN_BEFORE_TRIES)      # in the lobby the total is on screen (after the white of the teleport): what the run earned is the difference
@@ -3507,13 +3533,17 @@ def play_minigame(name: str) -> bool:
     finally:
         release_all_inputs()
         bring_macro_window_to_front()
-        result = minigame_result(name, outcome, finished, time.time() - started, before, after)
+        result = minigame_result(name, outcome, finished, time.time() - started, before, after, run_stats.failures - failures_before)
         finish_run_capture(capture, outcome, result)
     record_minigame_result(result)
     if finished:
         log_run_event(f"minigame finished: {label} ({time.time() - started:.0f}s)")
         save_minigame_result(name)
         click_nice_until_gone()
+    elif watch.disconnected:
+        log_run_event(f"{label} ended by a disconnect")      # (the failure is the rejoin's to log)
+        state.last_detection = time.time()
+        return False
     else:
         reason = watch.problem or f"did not reach the victory screen within {cfg.MINIGAME_MAX_DURATION:g}s"
         log_failure(f"{label} {reason}")
@@ -4067,13 +4097,16 @@ def mark_run_capture(reason: str) -> None:
 
 def run_capture_suffix(outcome: str, result: dict[str, Any]) -> str:
     """What is added to a recording's folder name when the run is over, to tell it from the others: the candy corn earned (`_2105cc`, or
-    `_cc-unread`), the room reached in Hauntlet 2 (`_room10`) and `_failed` for a run that did not finish."""
+    `_cc-unread`), the room reached in Hauntlet 2 (`_room10`), `_failed` for a run that did not finish and `_failures` for one that did
+    with failures logged on the way."""
     earned = result.get("earned")
     parts = [f"{earned}cc" if earned is not None else "cc-unread"]
     if result.get("room") is not None:
         parts.append(f"room{result['room']}")
     if not outcome.startswith("finished"):
         parts.append("failed")
+    elif result.get("failures"):
+        parts.append("failures")
     return "_" + "_".join(parts)
 
 def finish_run_capture(capture: Optional[InputCapture], outcome: str, result: Optional[dict[str, Any]] = None) -> None:
@@ -4104,16 +4137,18 @@ def finish_run_capture(capture: Optional[InputCapture], outcome: str, result: Op
     except Exception as error:
         logger.warning(f"Couldn't finish recording the minigame: {error}")
 
-def captures_to_keep(runs: list[tuple[str, Optional[int], float]]) -> set[str]:
-    """Of the recordings of one minigame, `runs` = (folder, candy corn earned or None, when it started), the ones to keep: the
-    latest, the RUN_CAPTURES_BEST that earned most and the RUN_CAPTURES_WORST that earned least (a run whose candy corn wasn't read
-    counts as the worst)."""
+def captures_to_keep(runs: list[tuple[str, Optional[int], float, bool]]) -> set[str]:
+    """Of the recordings of one minigame, `runs` = (folder, candy corn earned or None, when it started, whether it failed - did not finish
+    or had a failure logged), the ones to keep: the latest, the RUN_CAPTURES_FAILED latest that failed, the RUN_CAPTURES_BEST that earned
+    most and the RUN_CAPTURES_WORST that earned least (a run whose candy corn wasn't read counts as the worst)."""
     if not runs:
         return set()
-    def earned(run: tuple[str, Optional[int], float]) -> tuple[int, float]:
+    def earned(run: tuple[str, Optional[int], float, bool]) -> tuple[int, float]:
         return (-1 if run[1] is None else run[1], run[2])
     ranked = sorted(runs, key=earned)
     keep = {max(runs, key=lambda run: run[2])[0]}
+    failed = sorted((run for run in runs if run[3]), key=lambda run: run[2])
+    keep |= {run[0] for run in failed[max(0, len(failed) - cfg.RUN_CAPTURES_FAILED):]}
     keep |= {run[0] for run in ranked[:cfg.RUN_CAPTURES_WORST]}
     keep |= {run[0] for run in ranked[len(ranked) - cfg.RUN_CAPTURES_BEST:]}
     return keep
@@ -4138,18 +4173,19 @@ def prune_run_captures(label: str) -> None:
                 started = time.mktime(time.strptime(name[len(label) + 1:][:15], "%Y%m%d_%H%M%S"))     # (the folder's name says when; its time changes as files go in and out)
             except ValueError:
                 started = os.path.getmtime(folder)
-            runs.append((folder, info.get("earned"), started))
+            failed = info.get("finished") is False or bool(info.get("failures"))
+            runs.append((folder, info.get("earned"), started, failed))
         for folder in {run[0] for run in runs} - captures_to_keep(runs):
             shutil.rmtree(folder, ignore_errors=True)
     except Exception as error:
         logger.warning(f"Couldn't tidy the recordings: {error}")
 
-def minigame_result(name: str, outcome: str, finished: bool, seconds: float, before: Optional[int], after: Optional[int]) -> dict[str, Any]:
+def minigame_result(name: str, outcome: str, finished: bool, seconds: float, before: Optional[int], after: Optional[int], failures: int = 0) -> dict[str, Any]:
     """What a minigame run came to: how it ended, and the candy corn it earned - the HUD total after less the total before, None when either
-    wasn't read - plus what its player noted (state.minigame_detail: the room reached in Hauntlet 2)."""
+    wasn't read - the `failures` logged while it ran, plus what its player noted (state.minigame_detail: the room reached in Hauntlet 2)."""
     earned = after - before if before is not None and after is not None and after >= before else None
     return {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "run": state.run_number, "minigame": name, "outcome": outcome, "finished": finished,
-            "seconds": round(seconds), "candy_corn_before": before, "candy_corn_after": after, "earned": earned, **state.minigame_detail}
+            "seconds": round(seconds), "candy_corn_before": before, "candy_corn_after": after, "earned": earned, "failures": failures, **state.minigame_detail}
 
 def record_minigame_result(result: dict[str, Any]) -> None:
     """Note a finished minigame run's `result` (minigame_result()): a line of RUNS_DIR/results/results.jsonl and one in the run log - then the
@@ -4241,7 +4277,7 @@ def read_hauntlet_room(img: Image) -> Optional[int]:
 
 @dataclass
 class HauntletItem:
-    """An item slot on the Hauntlet 2 screen: its `name` (a folder of HAUNTLET_ITEM_DIR, or unknown_<n>), the `count`
+    """An item slot on the Hauntlet 2 screen: its `name` (a folder of HAUNTLET_ITEM_DIR, or "unknown"), the `count`
     on its badge (None if the badge couldn't be read), and the slot's centre `pos`."""
     name: str
     count: Optional[int]
@@ -4289,17 +4325,6 @@ def identify_item(crop: Image) -> tuple[Optional[str], float]:
                     best_name, best = name, score
     return (best_name if best >= cfg.HAUNTLET_ITEM_MATCH else None), best
 
-def learn_hauntlet_item(crop: Image) -> str:
-    """Save `crop` as a new item, unknown_<n>/1.png in HAUNTLET_ITEM_DIR, to be renamed (the folder) to what it is.
-    Returns the name."""
-    os.makedirs(cfg.HAUNTLET_ITEM_DIR, exist_ok=True)
-    taken = {int(n[len("unknown_"):]) for n in os.listdir(cfg.HAUNTLET_ITEM_DIR) if n.startswith("unknown_") and n[len("unknown_"):].isdigit()}
-    name = f"unknown_{max(taken, default=0) + 1}"
-    os.makedirs(os.path.join(cfg.HAUNTLET_ITEM_DIR, name))
-    cv2.imwrite(os.path.join(cfg.HAUNTLET_ITEM_DIR, name, "1.png"), crop if crop.ndim == 2 else cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY))
-    logger.info(f"New Hauntlet 2 item saved as {name} in {cfg.HAUNTLET_ITEM_DIR} - rename the folder to what it is")
-    return name
-
 def read_item_count(img: Image, x: int, y: int) -> Optional[int]:
     """The number on the "x2" badge of the slot centred at (x, y), or None if it can't be read (no badge, or a glyph
     that matches none of the saved ones)."""
@@ -4336,10 +4361,9 @@ def read_item_count(img: Image, x: int, y: int) -> Optional[int]:
         text += name
     return int(text[1:]) if text.startswith("x") and text[1:].isdigit() else None
 
-def read_hauntlet_items(img: Image, learn: bool = False) -> list[HauntletItem]:
+def read_hauntlet_items(img: Image) -> list[HauntletItem]:
     """The items in the slots along the bottom of `img`, left to right: each one's name, count and position. An item
-    that matches none of the saved ones is named "unknown" - or, with `learn`, saved with learn_hauntlet_item() and
-    named after the folder it got. Names in HAUNTLET_NOT_ITEMS (the lobby's backpack button) are left out."""
+    that matches none of the saved ones is named "unknown". Names in HAUNTLET_NOT_ITEMS (the lobby's backpack button) are left out."""
     items = []
     for x, y, radius in find_item_slots(img):
         half = cfg.HAUNTLET_ITEM_CROP // 2
@@ -4348,7 +4372,7 @@ def read_hauntlet_items(img: Image, learn: bool = False) -> list[HauntletItem]:
             continue
         name, _ = identify_item(crop)
         if name is None:
-            name = learn_hauntlet_item(crop) if learn else "unknown"
+            name = "unknown"
         if name not in cfg.HAUNTLET_NOT_ITEMS:
             items.append(HauntletItem(name, read_item_count(img, x, y), (x, y)))
     return items
@@ -4437,25 +4461,36 @@ def find_door_tvs(img: Image) -> list[tuple[int, int]]:
     the row they make - [] when there isn't one (a fork's hall, a close-up, a transition). With the camera close the
     middle TV can be off the top of the screen or behind the room panel: two TVs far enough apart to be the outer ones
     (HAUNTLET_TV_PAIR_GAP) and centred on the screen (the player stands in front of the middle door) give the middle one
-    halfway between."""
+    halfway between. Two neighbours high up (in the row of the room panel) with the third where the panel is give the third
+    there: the panel hides its glow."""
     low, high = cfg.HAUNTLET_TV_GLOW
     mask = cv2.inRange(img, (low[2], low[1], low[0]), (high[2], high[1], high[0]))   # BGR
     left, top, right, bottom = cfg.HAUNTLET_TV_HUD_BOX
     mask[top:bottom, left:right] = 0
     count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    found = sorted((float(centres[i][0]), float(centres[i][1])) for i in range(1, count)
+    blobs = sorted((float(centres[i][0]), float(centres[i][1]), float(stats[i, cv2.CC_STAT_AREA])) for i in range(1, count)
                    if cfg.HAUNTLET_TV_AREA[0] <= stats[i, cv2.CC_STAT_AREA] <= cfg.HAUNTLET_TV_AREA[1])
+    found = [(x, y) for x, y, _ in blobs]
     for first, middle, last in itertools.combinations(found, 3):                   # (not only neighbours: a stray glow can sit between)
         gaps = (middle[0] - first[0], last[0] - middle[0])
         if (abs(first[1] - middle[1]) <= cfg.HAUNTLET_TV_ROW_TOLERANCE and abs(middle[1] - last[1]) <= cfg.HAUNTLET_TV_ROW_TOLERANCE
                 and all(cfg.HAUNTLET_TV_SPACING[0] <= gap <= cfg.HAUNTLET_TV_SPACING[1] for gap in gaps)
                 and abs(gaps[0] - gaps[1]) <= cfg.HAUNTLET_TV_SPACING_TOLERANCE * max(gaps)):
             return [(int(x), int(y)) for x, y in (first, middle, last)]
-    for first, last in zip(found, found[1:]):
+    for (first, last), size in zip(zip(found, found[1:]), (((a + b) / 2) ** 0.5 for (_, _, a), (_, _, b) in zip(blobs, blobs[1:]))):
+        far_apart = last[0] - first[0] >= cfg.HAUNTLET_TV_PAIR_RATIO * size       # twice the neighbours' gap for the TVs' size
         if (abs(first[1] - last[1]) <= cfg.HAUNTLET_TV_ROW_TOLERANCE
                 and cfg.HAUNTLET_TV_PAIR_GAP[0] <= last[0] - first[0] <= cfg.HAUNTLET_TV_PAIR_GAP[1]
-                and abs((first[0] + last[0]) / 2 - cfg.REFERENCE_CENTER_X) <= cfg.HAUNTLET_TV_PAIR_OFF_CENTER):
+                and (far_apart or abs((first[0] + last[0]) / 2 - cfg.REFERENCE_CENTER_X) <= cfg.HAUNTLET_TV_PAIR_OFF_CENTER)):
             return [(int(first[0]), int(first[1])), (int((first[0] + last[0]) / 2), int((first[1] + last[1]) / 2)), (int(last[0]), int(last[1]))]
+    hud_left, _, hud_right, hud_bottom = cfg.HAUNTLET_TV_HUD_BOX
+    for first, second in zip(found, found[1:]):                                  # two neighbours, the third behind the room panel
+        gap = second[0] - first[0]
+        if abs(first[1] - second[1]) > cfg.HAUNTLET_TV_ROW_TOLERANCE or not cfg.HAUNTLET_TV_SPACING[0] <= gap <= cfg.HAUNTLET_TV_SPACING[1] or second[1] > hud_bottom:
+            continue
+        for order in ((first, second, (second[0] + gap, second[1])), ((first[0] - gap, first[1]), first, second)):
+            if hud_left <= order[0][0] <= hud_right or hud_left <= order[2][0] <= hud_right:
+                return [(int(x), int(y)) for x, y in order]
     return []
 
 def hauntlet_shadow_eyes(door: Image) -> bool:
@@ -4483,8 +4518,12 @@ def hauntlet_door_kind(img: Image, x: int, y: int, scale: float) -> Optional[str
         left, top, right, bottom = box
         return img[max(0, int(y + top * scale)):int(y + bottom * scale), max(0, int(x + left * scale)):int(x + right * scale)]
     light = region(cfg.HAUNTLET_LOCK_LIGHT_BOX).astype(int)
-    if light.size and np.count_nonzero((light[..., 2] >= cfg.HAUNTLET_LOCK_LIGHT_RED) & (light[..., 1] <= cfg.HAUNTLET_LOCK_LIGHT_OTHER) & (light[..., 0] <= cfg.HAUNTLET_LOCK_LIGHT_OTHER)) >= cfg.HAUNTLET_LOCK_LIGHT_MIN:
-        return "locked"
+    if light.size:
+        red = ((light[..., 2] >= cfg.HAUNTLET_LOCK_LIGHT_RED) & (light[..., 1] <= cfg.HAUNTLET_LOCK_LIGHT_OTHER) & (light[..., 0] <= cfg.HAUNTLET_LOCK_LIGHT_OTHER)).astype(np.uint8)
+        for area, width, height in cv2.connectedComponentsWithStats(red)[2][1:, 2:5][:, [2, 0, 1]]:     # the light is a small round patch: a red wall is not
+            if (cfg.HAUNTLET_LOCK_LIGHT_MIN <= area <= cfg.HAUNTLET_LOCK_LIGHT_MAX
+                    and max(width, height) <= cfg.HAUNTLET_LOCK_LIGHT_ROUND * min(width, height)):
+                return "locked"
     if hauntlet_shadow_eyes(region(cfg.HAUNTLET_SHADOW_BOX)):
         return "shadow"
     door = region(cfg.HAUNTLET_DOOR_BOX)
@@ -5300,6 +5339,39 @@ class AdoptMeGUI:
         self.watch_stop_hotkey()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
+    def start_remote_control(self, loop: bool) -> None:
+        """Begin looking for commands in COMMANDS_PATH every COMMAND_POLL_MS (see poll_commands()), and with `loop` (the --loop argument) start the
+        loop once the window is up, as if the loop button was pressed. Commands left from before are dropped first."""
+        read_command()
+        self.root.after(cfg.COMMAND_POLL_MS, self.poll_commands)
+        if loop:
+            self.root.after(cfg.START_LOOP_DELAY_MS, self.start_loop_from_outside)
+
+    def start_loop_from_outside(self) -> None:
+        """Start the loop, as the loop button does (`start` command, or the --loop argument)."""
+        if self.is_running:
+            logger.info("Start asked for, but the macro is already running")
+            return
+        log_run_event("started from outside (the Discord bot)")
+        self.run_async(run_workflow_loop)
+
+    def poll_commands(self) -> None:
+        """Do the command waiting in COMMANDS_PATH, if any (Tk's thread): `start` the loop, `stop` it (the cooperative stop, same as [STOP]) or
+        `exit` (stop, release every key and the mouse, and close the window - what the X button does). Looks again COMMAND_POLL_MS later."""
+        command = read_command()
+        if command is not None:
+            logger.info(f"Command from outside: {command}")
+        if command == "exit":
+            self.close()
+            return
+        if command == "start":
+            self.start_loop_from_outside()
+        elif command == "stop":
+            if self.is_running:
+                log_run_event("stopped from outside (the Discord bot)")
+            self.stop()
+        self.root.after(cfg.COMMAND_POLL_MS, self.poll_commands)
+
     def close(self) -> None:
         """The window's X button: stop whatever is running and let go of every key and the mouse before the
         process ends - the worker is a daemon thread, which dies with the process before its own cleanup can run
@@ -5689,4 +5761,5 @@ class AdoptMeGUI:
 if __name__ == "__main__":
     root = tk.Tk()
     gui = AdoptMeGUI(root)
+    gui.start_remote_control(loop="--loop" in sys.argv[1:])
     root.mainloop()

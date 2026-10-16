@@ -525,11 +525,11 @@ def test_a_log_that_cannot_be_written_cannot_leave_the_ui_disabled(macro, monkey
 
 def test_refresh_debug_carries_on_past_a_locked_entry(macro, monkeypatch, tmp_path):
     debug = tmp_path / "debug"
-    for folder in ("images", "logs", "recordings"):
+    for folder in ("failures", "logs", "recordings"):
         (debug / folder).mkdir(parents=True)
         (debug / folder / "x.txt").write_text("x")
     (debug / ".config").write_text("{}")
-    for name, value in (("DEBUG_DIR", str(debug)), ("IMAGES_DIR", str(debug / "images")), ("LOGS_DIR", str(debug / "logs")),
+    for name, value in (("DEBUG_DIR", str(debug)), ("FAILURE_DIR", str(debug / "failures")), ("LOGS_DIR", str(debug / "logs")),
                         ("GAME_CONFIG_PATH", str(debug / ".config"))):
         monkeypatch.setattr(macro.cfg, name, value)
     real_rmtree = macro.shutil.rmtree
@@ -540,8 +540,8 @@ def test_refresh_debug_carries_on_past_a_locked_entry(macro, monkeypatch, tmp_pa
         real_rmtree(path, *args, **kwargs)
 
     monkeypatch.setattr(macro.shutil, "rmtree", rmtree)
-    assert macro.refresh_debug() == 2                                  # images and logs went, recordings stayed
-    assert (debug / "images").is_dir() and (debug / "logs").is_dir() and (debug / ".config").exists()
+    assert macro.refresh_debug() == 2                                  # failures and logs went, recordings stayed
+    assert (debug / "failures").is_dir() and (debug / "logs").is_dir() and (debug / ".config").exists()
 
 
 def test_the_stop_hotkey_stops_even_if_the_log_cannot_be_written(macro, monkeypatch):
@@ -785,14 +785,12 @@ def test_setup_keeps_its_backpack_open_without_the_in_task_check_closing_it(macr
 def test_the_in_task_check_closes_a_backpack_seen_open_twice_but_not_one_a_handler_has_open_on_purpose(macro, monkeypatch, tmp_path):
     import numpy as np
     closed = []
-    monkeypatch.setattr(macro.cfg, "IMAGES_DIR", str(tmp_path))
     monkeypatch.setattr(macro, "is_roblox_focused", lambda: True)
     monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((20, 20, 3), np.uint8))
     monkeypatch.setattr(macro, "detect_backpack_open", lambda img: True)
     monkeypatch.setattr(macro, "close_backpack_if_open", lambda step="": closed.append(step))
     stuck = macro.close_backpack_if_stuck
     assert stuck(True) is True and closed == []                                            # one sighting is not enough...
-    assert (tmp_path / "debug_backpack_first_sighting.png").exists()                       # ...but what the screen looked like is kept
     assert stuck(True) is False and len(closed) == 1                                       # the second one closes it
     closed.clear()
     with macro.backpack_on_purpose():
@@ -1379,8 +1377,86 @@ def test_the_run_logs_and_charts_of_an_older_layout_are_moved_into_the_runs_fold
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("x")
     old = tmp_path / "old"
-    for name, value in (("DEBUG_DIR", old), ("LOGS_DIR", old / "logs"), ("IMAGES_DIR", old / "images"), ("RUNS_DIR", old / "runs")):
+    for name, folder in (("debug_needs.png", "images"), ("debug_buttons.png", ""), ("1/screen.png", "images/failures")):
+        path = tmp_path / "old" / folder / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x")
+    for name, value in (("DEBUG_DIR", old), ("LOGS_DIR", old / "logs"), ("FAILURE_DIR", old / "failures"), ("RUNS_DIR", old / "runs")):
         monkeypatch.setattr(cfg, name, str(value))
     macro.migrate_debug_layout()
+    assert (old / "failures" / "1" / "screen.png").exists() and not (old / "images").exists()          # the failures moved up; the debug images are gone
+    assert not (old / "debug_buttons.png").exists()
     assert sorted(os.listdir(old / "runs")) == ["run1.png", "run1.txt", "run2.png"]
     assert not (old / "logs" / "runs").exists() and not (old / "images" / "reports").exists() and not (old / "reports").exists()
+
+
+# --- commands from outside (the Discord bot): read_command(), poll_commands() ---
+
+def write_command(macro, command, age=0, **extra):
+    with open(macro.cfg.COMMANDS_PATH, "w", encoding="utf-8") as f:
+        json.dump({"command": command, "time": time.time() - age, **extra}, f)
+
+
+def test_a_fresh_command_is_read_once_and_the_file_is_removed(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "COMMANDS_PATH", str(tmp_path / "commands.json"))
+    assert macro.read_command() is None                                       # (no file)
+    for command in ("start", "stop", "exit"):
+        write_command(macro, command)
+        assert macro.read_command() == command and not os.path.exists(macro.cfg.COMMANDS_PATH)
+
+
+def test_a_command_that_is_old_unknown_or_unreadable_is_dropped_but_its_file_still_goes(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "COMMANDS_PATH", str(tmp_path / "commands.json"))
+    for write in (lambda: write_command(macro, "exit", age=macro.cfg.COMMAND_MAX_AGE + 5),      # left over from before the macro started
+                  lambda: write_command(macro, "format-c"),                                       # not in the fixed list
+                  lambda: write_command(macro, "stop", time="soon"),
+                  lambda: open(macro.cfg.COMMANDS_PATH, "w").write("{not json"),
+                  lambda: open(macro.cfg.COMMANDS_PATH, "w").write("[\"exit\"]")):
+        write()
+        assert macro.read_command() is None and not os.path.exists(macro.cfg.COMMANDS_PATH)
+
+
+class FakeRoot:
+    def __init__(self):
+        self.scheduled = []
+    def after(self, ms, func):
+        self.scheduled.append((ms, func.__name__))
+
+
+def remote_gui(macro, monkeypatch, tmp_path, running=False):
+    monkeypatch.setattr(macro.cfg, "COMMANDS_PATH", str(tmp_path / "commands.json"))
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.root, gui.is_running, gui.calls = FakeRoot(), running, []
+    gui.run_async = lambda func: gui.calls.append(("run_async", func.__name__))
+    gui.stop = lambda: gui.calls.append(("stop",))
+    gui.close = lambda: gui.calls.append(("close",))
+    monkeypatch.setattr(macro, "log_run_event", lambda message: None)
+    return gui
+
+
+def test_the_commands_do_what_the_buttons_do_and_polling_goes_on_except_after_exit(macro, monkeypatch, tmp_path):
+    gui = remote_gui(macro, monkeypatch, tmp_path)
+    for command, expected in (("start", [("run_async", "run_workflow_loop")]), ("stop", [("stop",)]), ("exit", [("close",)])):
+        gui.calls.clear(), gui.root.scheduled.clear()
+        write_command(macro, command)
+        gui.poll_commands()
+        assert gui.calls == expected
+        assert gui.root.scheduled == ([] if command == "exit" else [(macro.cfg.COMMAND_POLL_MS, "poll_commands")])
+    gui.calls.clear()
+    gui.poll_commands()                                                       # nothing waiting: nothing done, polling goes on
+    assert gui.calls == [] and gui.root.scheduled[-1][1] == "poll_commands"
+
+
+def test_start_does_nothing_to_a_loop_that_is_running_and_the_loop_argument_starts_it_once_the_window_is_up(macro, monkeypatch, tmp_path):
+    gui = remote_gui(macro, monkeypatch, tmp_path, running=True)
+    write_command(macro, "start")
+    gui.poll_commands()
+    assert gui.calls == []
+    gui = remote_gui(macro, monkeypatch, tmp_path)
+    write_command(macro, "exit")                                              # (a command left from before is dropped, not done)
+    gui.start_remote_control(loop=True)
+    assert [name for _, name in gui.root.scheduled] == ["poll_commands", "start_loop_from_outside"] and not os.path.exists(macro.cfg.COMMANDS_PATH)
+    assert gui.calls == []
+    gui.root.scheduled.clear()
+    gui.start_remote_control(loop=False)
+    assert [name for _, name in gui.root.scheduled] == ["poll_commands"]

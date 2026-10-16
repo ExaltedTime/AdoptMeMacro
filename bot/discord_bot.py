@@ -10,13 +10,16 @@ import asyncio
 import io
 import logging
 import os
+import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime
 from typing import Optional
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+import magic_numbers as cfg  # noqa: E402
 
 import discord  # noqa: E402
 from discord import app_commands  # noqa: E402
@@ -138,6 +141,17 @@ def build(config: bot_lib.Config) -> discord.Client:
         await interaction.response.defer(thinking=True)
         await interaction.followup.send(f"```\n{bot_lib.results_text(bot_lib.read_results(bot_lib.results_path()))}\n```")
 
+    @command("captures", "The newest minigame captures and whether they are in OneDrive")
+    async def captures(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        done = set(bot_lib.load_state(bot_lib.state_path()).captures)
+        await interaction.followup.send(f"```\n{bot_lib.captures_text(bot_lib.captures_dir(), done)}\n```")
+
+    async def setup_hook() -> None:
+        client.loop.create_task(watch(client, config))
+
+    client.setup_hook = setup_hook  # type: ignore[method-assign]
+
     @client.event
     async def on_ready() -> None:
         await tree.sync(guild=guild)
@@ -145,6 +159,73 @@ def build(config: bot_lib.Config) -> discord.Client:
 
     client.tree = tree  # type: ignore[attr-defined]       # (kept, so the commands can be listed)
     return client
+
+
+async def post(channel: discord.abc.Messageable, text: str, path: Optional[str] = None) -> None:
+    """Send `text` to the channel, with the file at `path` if there is one and it is small enough for Discord."""
+    if path and os.path.getsize(path) <= cfg.BOT_MAX_UPLOAD_MB * 1048576:
+        await channel.send(text, file=discord.File(path))
+    else:
+        await channel.send(text)
+
+
+async def watch(client: discord.Client, config: bot_lib.Config) -> None:
+    """Every BOT_WATCH_INTERVAL seconds look at what the macro wrote and post what is new: failures (with their screenshot), a status that has gone
+    stale (and its recovery), run charts, a heartbeat - and copy finished captures' zips to OneDrive. A failure inside a look is logged and the watching
+    goes on. What it has dealt with is kept in bot_state.json, so a restart neither posts it again nor misses what came while it was down."""
+    await client.wait_until_ready()
+    channel = client.get_channel(config.channel_id) or await client.fetch_channel(config.channel_id)
+    path = bot_lib.state_path()
+    state = bot_lib.load_state(path)
+    limiter = bot_lib.RateLimiter(cfg.BOT_ALERT_GAP)
+    if state.log_offset is None:                                   # the first start: what is there already is not news
+        state.log_offset = bot_lib.file_end(bot_lib.run_log_path())
+        state.charts = [os.path.basename(c) for c in bot_lib.run_charts()]
+        state.captures = [os.path.basename(f) for f in os.listdir(bot_lib.captures_dir())] if os.path.isdir(bot_lib.captures_dir()) else []
+        bot_lib.save_state(path, state)
+    copying = bool(config.onedrive_dir)
+    if copying and not os.path.isdir(config.onedrive_dir):
+        await channel.send(f"onedrive_dir `{config.onedrive_dir}` is not a folder on this PC - the capture zips are not copied.")
+        copying = False
+    while not client.is_closed():
+        try:
+            await watch_once(channel, config, state, limiter, copying)
+            bot_lib.save_state(path, state)
+        except Exception:
+            log.exception("a look at the macro's files failed")
+        await asyncio.sleep(cfg.BOT_WATCH_INTERVAL)
+
+
+async def watch_once(channel: discord.abc.Messageable, config: bot_lib.Config, state: bot_lib.BotState, limiter: bot_lib.RateLimiter, copying: bool) -> None:
+    now = time.time()
+    assert state.log_offset is not None
+    lines, state.log_offset = bot_lib.read_new_lines(bot_lib.run_log_path(), state.log_offset)
+    for failure in filter(None, (bot_lib.parse_failure(line) for line in lines)):
+        post_now, held = limiter.check(now)
+        if post_now:
+            await post(channel, bot_lib.failure_text(failure, held), bot_lib.failure_screenshot_path(failure))
+    status = bot_lib.read_json(bot_lib.status_path())
+    state.stale, text = bot_lib.stale_alert(state.stale, status, datetime.now(), config.stale_status_minutes)
+    if text:
+        await channel.send(text)
+    for chart in bot_lib.run_charts():
+        if os.path.basename(chart) not in state.charts and now - os.path.getmtime(chart) >= cfg.BOT_FILE_SETTLE:
+            state.charts.append(os.path.basename(chart))
+            await post(channel, f"Run chart {os.path.basename(chart)}", chart)
+    if copying:
+        copied = False
+        for capture in bot_lib.ready_captures(bot_lib.captures_dir(), set(state.captures), now, cfg.BOT_CAPTURE_SETTLE):
+            await asyncio.to_thread(bot_lib.copy_capture, capture, config.onedrive_dir)
+            state.captures.append(capture.name)
+            copied = True
+            await channel.send(bot_lib.capture_text(capture))
+        if copied:
+            for folder in bot_lib.old_copies(config.onedrive_dir, config.onedrive_keep_days, now):
+                await asyncio.to_thread(shutil.rmtree, folder, True)
+    if bot_lib.heartbeat_due(state.last_heartbeat, config.heartbeat_hours, now):
+        running = await asyncio.to_thread(macro_process_running)
+        await channel.send("Heartbeat\n```\n" + bot_lib.status_text(status, datetime.now(), config.stale_status_minutes, running) + "\n```")
+        state.last_heartbeat = now
 
 
 def main() -> None:

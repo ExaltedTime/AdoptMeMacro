@@ -193,6 +193,11 @@ RUNS_DIR = os.path.join(DEBUG_DIR, "runs")                    # run<N>.txt (this
 for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
+BOT_WATCH_INTERVAL = 10                                     # seconds between the Discord bot's looks at what the macro wrote (failures, run charts, captures, status)
+BOT_ALERT_GAP = 60                                          # seconds: at most one failure post per this long, the rest counted ("N more failures")
+BOT_CAPTURE_SETTLE = 20                                     # seconds a capture's zips must be unchanged before they are copied (they are written on a thread)
+BOT_FILE_SETTLE = 5                                         # seconds a run chart must be unchanged before it is posted
+BOT_MAX_UPLOAD_MB = 8                                       # bigger files are not posted (Discord's limit for a bot is about 10 MB)
 RUN_LOG_PATH = os.path.join(LOGS_DIR, "run_log.txt")        # appended to, never overwritten
 RUN_COUNTER_PATH = os.path.join(LOGS_DIR, "run_counter.txt")  # holds the last-used run number
 GAME_CONFIG_PATH = os.path.join(DEBUG_DIR, ".config")       # persisted game state - see load_game_config()

@@ -172,3 +172,174 @@ def test_a_blank_grab_is_told_from_a_real_one():
 def test_the_macro_is_told_from_the_bot_in_a_process_list():
     assert bot_lib.main_py_in(["C:\\Python\\python.exe C:\\AdoptMeMacro\\main.py"]) and bot_lib.main_py_in(["python", "python main.py --loop"])
     assert not bot_lib.main_py_in(["python bot/discord_bot.py main.py-config"]) and not bot_lib.main_py_in([])
+
+
+# --- alerts (Phase 2) ---
+
+REAL_FAILURE = "[2026-10-16 12:37:30] [RUN 6] FAILURE: sleepy handler could not resolve it (screenshot: failures/20261016_123729_run6_sleepy_handler_could_not_resolve_it/screen.png)"
+
+
+def test_a_failure_line_is_read_and_other_lines_are_not(tmp_path):
+    failure = bot_lib.parse_failure(REAL_FAILURE)
+    assert (failure.time, failure.run, failure.reason) == ("2026-10-16 12:37:30", 6, "sleepy handler could not resolve it")
+    assert failure.screenshot == "failures/20261016_123729_run6_sleepy_handler_could_not_resolve_it/screen.png"
+    bare = bot_lib.parse_failure("[2026-10-16 11:25:15] [RUN 6] FAILURE: disconnected from the game - rejoining")
+    assert bare.reason == "disconnected from the game - rejoining" and bare.screenshot is None
+    assert bot_lib.parse_failure("[2026-10-16 11:25:15] [RUN None] FAILURE: x").run is None
+    assert bot_lib.parse_failure("[2026-10-16 12:37:27] [RUN 6] detected: sleepy") is None
+    assert bot_lib.parse_failure("[2026-10-16 12:37:27] [RUN 6] note: a FAILURE: in the middle") is None
+
+
+def test_a_failures_screenshot_is_only_taken_from_inside_the_debug_folder(macro_paths, tmp_path):
+    shot = tmp_path / "debug" / "failures" / "f1" / "screen.png"
+    shot.parent.mkdir(parents=True)
+    shot.write_bytes(b"png")
+    assert bot_lib.failure_screenshot_path(bot_lib.Failure("t", 1, "r", "failures/f1/screen.png")) == str(shot)
+    (tmp_path / "secret.txt").write_text("x")
+    assert bot_lib.failure_screenshot_path(bot_lib.Failure("t", 1, "r", "../secret.txt")) is None          # a line is only text
+    assert bot_lib.failure_screenshot_path(bot_lib.Failure("t", 1, "r", "failures/gone/screen.png")) is None
+    assert bot_lib.failure_screenshot_path(bot_lib.Failure("t", 1, "r", None)) is None
+
+
+@pytest.fixture
+def macro_paths(monkeypatch, tmp_path):
+    (tmp_path / "debug").mkdir()
+    monkeypatch.setattr(bot_lib.cfg, "DEBUG_DIR", str(tmp_path / "debug"))
+
+
+def test_new_lines_are_read_from_where_the_last_look_ended(tmp_path):
+    log = tmp_path / "run_log.txt"
+    log.write_text("one\ntwo\n")
+    lines, offset = bot_lib.read_new_lines(str(log), 0)
+    assert lines == ["one", "two"]
+    with open(log, "a") as f:
+        f.write("three\npart")
+    lines, offset = bot_lib.read_new_lines(str(log), offset)
+    assert lines == ["three"]                                                  # (a line still being written waits)
+    with open(log, "a") as f:
+        f.write("ial\n")
+    assert bot_lib.read_new_lines(str(log), offset)[0] == ["partial"]
+    assert bot_lib.read_new_lines(str(log), bot_lib.file_end(str(log))) == ([], bot_lib.file_end(str(log)))
+
+
+def test_a_log_that_was_deleted_or_started_again_is_read_from_its_start(tmp_path):
+    log = tmp_path / "run_log.txt"
+    log.write_text("a long first line of the old log\n")
+    offset = bot_lib.file_end(str(log))
+    log.write_text("new\n")                                                   # (Refresh debug, then the next run)
+    assert bot_lib.read_new_lines(str(log), offset)[0] == ["new"]
+    log.unlink()
+    assert bot_lib.read_new_lines(str(log), offset) == ([], 0)
+    assert bot_lib.file_end(str(log)) == 0
+
+
+def test_failures_are_posted_one_a_minute_and_the_rest_counted():
+    limiter = bot_lib.RateLimiter(60)
+    assert limiter.check(1000) == (True, 0)
+    assert [limiter.check(1000 + i) for i in (5, 20)] == [(False, 0), (False, 0)]
+    assert limiter.check(1061) == (True, 2)                                    # "and 2 more"
+    assert limiter.check(1062) == (False, 0) and limiter.check(1130) == (True, 1)
+    failure = bot_lib.Failure("2026-10-16 12:37:30", 6, "sleepy handler could not resolve it", None)
+    assert "run 6" in bot_lib.failure_text(failure) and "more" not in bot_lib.failure_text(failure)
+    assert "1 more failure since" in bot_lib.failure_text(failure, 1) and "3 more failures since" in bot_lib.failure_text(failure, 3)
+
+
+def test_a_stale_status_is_reported_once_and_so_is_its_recovery():
+    old = {"updated": (NOW - timedelta(minutes=9)).strftime(bot_lib.TIME_FORMAT)}
+    fresh = {"updated": (NOW - timedelta(seconds=20)).strftime(bot_lib.TIME_FORMAT)}
+    stale, text = bot_lib.stale_alert(False, old, NOW, 5)
+    assert stale and "not updating" in text and old["updated"] in text
+    assert bot_lib.stale_alert(True, old, NOW, 5) == (True, None)             # (said once)
+    stale, text = bot_lib.stale_alert(True, fresh, NOW, 5)
+    assert not stale and "updating again" in text
+    assert bot_lib.stale_alert(False, fresh, NOW, 5) == (False, None)
+    for nothing in (None, {}, {"updated": "yesterday"}):                      # (no status, or no time in it: nothing to say, the state stays)
+        assert bot_lib.stale_alert(True, nothing, NOW, 5) == (True, None)
+
+
+def test_a_heartbeat_is_due_when_switched_on_and_the_time_has_passed():
+    assert not bot_lib.heartbeat_due(None, 0, 1000)
+    assert bot_lib.heartbeat_due(None, 2, 1000)
+    assert not bot_lib.heartbeat_due(1000, 2, 1000 + 7199) and bot_lib.heartbeat_due(1000, 2, 1000 + 7200)
+
+
+def test_what_the_bot_has_dealt_with_is_kept_between_starts_and_a_bad_file_means_defaults(tmp_path):
+    path = str(tmp_path / "bot_state.json")
+    assert bot_lib.load_state(path) == bot_lib.BotState() and bot_lib.BotState().log_offset is None
+    state = bot_lib.BotState(log_offset=1234, charts=["run1.png"], captures=["hauntlet_2_20261016_100000"], stale=True, last_heartbeat=55.5)
+    bot_lib.save_state(path, state)
+    assert bot_lib.load_state(path) == state and not os.path.exists(path + ".tmp")
+    (tmp_path / "bot_state.json").write_text(json.dumps({"log_offset": "x", "charts": "run1.png", "captures": [1, "ok"], "stale": 1}))
+    assert bot_lib.load_state(path) == bot_lib.BotState(captures=["ok"])
+    (tmp_path / "bot_state.json").write_text("{broken")
+    assert bot_lib.load_state(path) == bot_lib.BotState()
+
+
+# --- captures to OneDrive (Phase 3) ---
+
+def make_capture(root, name, outcome="finished (the game over screen)", zips=("capture_part01.zip",), age=100, size=1048576):
+    import time
+    folder = root / name
+    (folder / "zips").mkdir(parents=True)
+    if outcome is not None:
+        (folder / "info.json").write_text(json.dumps({"outcome": outcome}))
+    for z in zips:
+        (folder / "zips" / z).write_bytes(b"x" * size)
+        os.utime(folder / "zips" / z, (time.time() - age, time.time() - age))
+    return folder
+
+
+def test_a_capture_is_ready_when_it_is_over_has_zips_and_they_have_stopped_changing(tmp_path):
+    import time
+    make_capture(tmp_path, "hauntlet_2_20261016_100000_9330cc_room23", zips=("a_part01.zip", "a_part02.zip"))
+    make_capture(tmp_path, "hauntlet_2_20261016_110000", outcome=None)                       # (still recording: no outcome yet)
+    make_capture(tmp_path, "hauntlet_2_20261016_120000", age=3)                                 # (a zip written a moment ago)
+    make_capture(tmp_path, "hauntlet_2_20261016_130000", zips=())                               # (no zips yet)
+    make_capture(tmp_path, "ghost_gallery_20261016_140000")
+    make_capture(tmp_path, "notes_20261016_150000")                                             # (not a capture's name)
+    make_capture(tmp_path, "hauntlet_2_20261016_160000")
+    ready = bot_lib.ready_captures(str(tmp_path), {"hauntlet_2_20261016_160000"}, time.time(), 20)
+    assert [c.name for c in ready] == ["hauntlet_2_20261016_100000_9330cc_room23", "ghost_gallery_20261016_140000"]          # (oldest first, by the time in the name)
+    assert len(ready[0].zips) == 2 and ready[0].megabytes == pytest.approx(2) and ready[0].outcome.startswith("finished")
+
+
+def test_a_captures_zips_are_copied_into_a_folder_of_its_name_and_the_post_says_so(tmp_path):
+    source, onedrive = tmp_path / "captures", tmp_path / "onedrive"
+    onedrive.mkdir()
+    make_capture(source, "hauntlet_2_20261016_100000_9330cc_room23", zips=("p1.zip", "p2.zip"))
+    import time
+    capture = bot_lib.ready_captures(str(source), set(), time.time(), 20)[0]
+    assert bot_lib.copy_capture(capture, str(onedrive)) == ["p1.zip", "p2.zip"]
+    assert sorted(os.listdir(onedrive / capture.name)) == ["p1.zip", "p2.zip"] and (source / capture.name / "zips" / "p1.zip").exists()
+    text = bot_lib.capture_text(capture)
+    assert "Hauntlet 2" in text and "2 zips" in text and "Zips posted to OneDrive." in text and "http" not in text
+
+
+def test_old_copies_are_only_capture_folders_older_than_the_days_kept(tmp_path):
+    import time
+    for name, days in (("hauntlet_2_20261001_100000", 20), ("ghost_gallery_20261015_100000", 2), ("my_notes", 40)):
+        (tmp_path / name).mkdir()
+        os.utime(tmp_path / name, (time.time() - days * 86400, time.time() - days * 86400))
+    (tmp_path / "hauntlet_2_20260101_000000").write_text("a file, not a folder")
+    assert bot_lib.old_copies(str(tmp_path), 14, time.time()) == [str(tmp_path / "hauntlet_2_20261001_100000")]
+    assert bot_lib.old_copies(str(tmp_path), 0, time.time()) == []                          # 0: keep everything
+
+
+def test_the_captures_message_lists_the_newest_with_where_they_are(tmp_path):
+    make_capture(tmp_path, "hauntlet_2_20261016_100000", size=2097152)
+    make_capture(tmp_path, "ghost_gallery_20261016_110000", outcome=None)
+    text = bot_lib.captures_text(str(tmp_path), {"hauntlet_2_20261016_100000"})
+    first, second = text.splitlines()
+    assert first.startswith("ghost_gallery_20261016_110000: not finished") and first.endswith("not in OneDrive")
+    assert second == "hauntlet_2_20261016_100000: finished (the game over screen), 1 zips, 2 MB, in OneDrive"
+    assert bot_lib.captures_text(str(tmp_path / "none"), set()) == "No minigame captures on this PC."
+
+
+def test_the_new_config_keys_are_read_and_checked(tmp_path):
+    config = bot_lib.load_config(write_config(tmp_path, onedrive_dir=" C:/OneDrive/AdoptMeMacro/captures ", onedrive_keep_days=7, heartbeat_hours=6))
+    assert (config.onedrive_dir, config.onedrive_keep_days, config.heartbeat_hours) == ("C:/OneDrive/AdoptMeMacro/captures", 7.0, 6.0)
+    config = bot_lib.load_config(write_config(tmp_path))
+    assert config.onedrive_dir == "" and config.heartbeat_hours == 0
+    for change in ({"onedrive_dir": 5}, {"onedrive_keep_days": -1}, {"heartbeat_hours": "2"}, {"heartbeat_hours": True}):
+        with pytest.raises(bot_lib.ConfigError):
+            bot_lib.load_config(write_config(tmp_path, **change))

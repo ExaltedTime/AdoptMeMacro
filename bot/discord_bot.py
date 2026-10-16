@@ -260,6 +260,42 @@ def build(config: bot_lib.Config) -> discord.Client:
         remember("running")
         await interaction.followup.send(f"{stopped}\n{await start_macro(config)}")
 
+    async def change_switch(interaction: discord.Interaction, kind: str, name: str, value: bool) -> None:
+        """Ask the running macro to change a switch (the command file) and say what the game config shows a moment later."""
+        await interaction.response.defer(thinking=True)
+        if not await asyncio.to_thread(current_macro_pids):
+            await interaction.followup.send("The macro isn't running - a switch can only be changed while its window is open (or by hand in the window).")
+            return
+        bot_lib.write_command(cfg.COMMANDS_PATH, "set", time.time(), **bot_lib.switch_command(kind, name, value))
+        if name == cfg.SHOW_DEBUG_LINES_OPTION:
+            await interaction.followup.send(f"Asked the macro to turn {name} {'on' if value else 'off'} (it is not kept in the config, so it can't be checked).")
+            return
+        for _ in range(5):
+            await asyncio.sleep(1)
+            if bot_lib.switch_states(bot_lib.read_json(cfg.GAME_CONFIG_PATH)).get(f"{kind}:{name}") == value:
+                await interaction.followup.send(f"{name} is now {'on' if value else 'off'}.")
+                return
+        await interaction.followup.send(f"Asked the macro to turn {name} {'on' if value else 'off'}, but the config doesn't show it yet.")
+
+    need_choices = [app_commands.Choice(name=name, value=name) for name in cfg.NEED_NAMES]
+    option_choices = [app_commands.Choice(name=name, value=name) for name in (*cfg.OPTION_SWITCHES, cfg.SHOW_DEBUG_LINES_OPTION)]
+
+    @command("need", "Switch a need on or off (the Debug tab's switches)")
+    @app_commands.choices(need=need_choices)
+    async def need_command(interaction: discord.Interaction, need: app_commands.Choice[str], on: bool) -> None:
+        await change_switch(interaction, "need", need.value, on)
+
+    @command("option", "Switch an option on or off (side quest, minigames, recording, debug lines in the output...)")
+    @app_commands.choices(option=option_choices)
+    async def option_command(interaction: discord.Interaction, option: app_commands.Choice[str], on: bool) -> None:
+        await change_switch(interaction, "option", option.value, on)
+
+    @command("options", "Which needs and options are on")
+    async def options(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        text = bot_lib.options_text(bot_lib.switch_states(bot_lib.read_json(cfg.GAME_CONFIG_PATH)))
+        await interaction.followup.send(f"```\n{text}\n```")
+
     @command("captures", "The newest minigame captures and whether they are in OneDrive")
     async def captures(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)

@@ -507,15 +507,46 @@ def captures_text(captures_dir: str, done: set[str], limit: int = 10) -> str:
 
 # --- control: start, stop, restart the macro (Phase 4) ---
 
-def write_command(path: str, command: str, now: float) -> None:
-    """Leave `command` (one of magic_numbers.COMMANDS) for the macro to find at `path`: {"command": ..., "time": ...}, written all at once. The
-    macro removes the file once it has read it, and ignores a command that is old (COMMAND_MAX_AGE)."""
+def write_command(path: str, command: str, now: float, **details: Any) -> None:
+    """Leave `command` (one of magic_numbers.COMMANDS) for the macro to find at `path`: {"command": ..., "time": ..., plus `details`}, written all at
+    once. The macro removes the file once it has read it, and ignores a command that is old (COMMAND_MAX_AGE) or a `set` for a switch it doesn't have."""
     if command not in cfg.COMMANDS:
         raise ValueError(f"not a command the macro knows: {command!r}")
     temp = path + ".tmp"
     with open(temp, "w", encoding="utf-8") as f:
-        json.dump({"command": command, "time": now}, f)
+        json.dump({"command": command, "time": now, **details}, f)
     os.replace(temp, path)
+
+
+def switch_command(kind: str, name: str, value: bool) -> dict[str, Any]:
+    """The details of a `set` command for the switch `name` (`kind` "need" or "option"); ValueError if there is no such switch."""
+    valid = {"need": cfg.NEED_NAMES, "option": (*cfg.OPTION_SWITCHES, cfg.SHOW_DEBUG_LINES_OPTION)}.get(kind, ())
+    if name not in valid:
+        raise ValueError(f"no {kind} switch called {name!r}")
+    return {"kind": kind, "name": name, "value": bool(value)}
+
+
+# The game config's defaults for the switches (main.py's _read_game_config(): side quest on, the rest off), for a config that doesn't have them yet.
+OPTION_DEFAULTS = {"side_quest_enabled": True}
+
+
+def switch_states(config: Optional[dict[str, Any]]) -> dict[str, bool]:
+    """Every switch the bot can change, as {"need:hungry": True, "option:side_quest": True, ...}, from the game config (None: not there - the
+    defaults). `show_debug_lines` is not kept in the config and isn't listed."""
+    config = config or {}
+    flags = config["needs_enabled"] if isinstance(config.get("needs_enabled"), dict) else {}
+    states = {f"need:{name}": bool(flags.get(name, name in cfg.ENABLED_NEEDS)) for name in cfg.NEED_NAMES}
+    for name, key in cfg.OPTION_SWITCHES.items():
+        states[f"option:{name}"] = bool(config.get(key, OPTION_DEFAULTS.get(key, False)))
+    return states
+
+
+def options_text(states: dict[str, bool]) -> str:
+    """The /options message: the options, then the needs that are off and those that are on."""
+    options = ", ".join(f"{key[7:]} {'on' if on else 'off'}" for key, on in states.items() if key.startswith("option:"))
+    needs_off = [key[5:] for key, on in states.items() if key.startswith("need:") and not on]
+    needs_on = [key[5:] for key, on in states.items() if key.startswith("need:") and on]
+    return f"Options: {options}\nNeeds off: {', '.join(needs_off) or 'none'}\nNeeds on: {', '.join(needs_on) or 'none'}"
 
 
 def macro_pids(processes: list[tuple[int, str]]) -> list[int]:

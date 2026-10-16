@@ -1402,7 +1402,7 @@ def test_a_fresh_command_is_read_once_and_the_file_is_removed(macro, monkeypatch
     assert macro.read_command() is None                                       # (no file)
     for command in ("start", "stop", "exit"):
         write_command(macro, command)
-        assert macro.read_command() == command and not os.path.exists(macro.cfg.COMMANDS_PATH)
+        assert macro.read_command()["command"] == command and not os.path.exists(macro.cfg.COMMANDS_PATH)
 
 
 def test_a_command_that_is_old_unknown_or_unreadable_is_dropped_but_its_file_still_goes(macro, monkeypatch, tmp_path):
@@ -1460,3 +1460,50 @@ def test_start_does_nothing_to_a_loop_that_is_running_and_the_loop_argument_star
     gui.root.scheduled.clear()
     gui.start_remote_control(loop=False)
     assert [name for _, name in gui.root.scheduled] == ["poll_commands"]
+
+
+def test_a_set_command_is_only_read_for_a_switch_that_exists_with_a_true_or_false_value(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "COMMANDS_PATH", str(tmp_path / "commands.json"))
+    good = [dict(kind="need", name="hungry", value=False), dict(kind="option", name="play_stitches_spotlight", value=True), dict(kind="option", name="show_debug_lines", value=False)]
+    for details in good:
+        write_command(macro, "set", **details)
+        assert macro.read_command() == {"command": "set", "time": pytest.approx(time.time(), abs=5), **details}
+    for details in (dict(kind="need", name="play_ghost_gallery", value=True), dict(kind="option", name="hungry", value=True), dict(kind="need", name="hungry", value="off"),
+                    dict(kind="need", name="hungry"), dict(kind="other", name="hungry", value=True), dict(kind="option", name="private_server_link", value=True), {}):
+        write_command(macro, "set", **details)
+        assert macro.read_command() is None, details
+
+
+def test_a_set_command_changes_the_switch_and_its_checkbox(macro, monkeypatch, tmp_path):
+    gui = remote_gui(macro, monkeypatch, tmp_path)
+    class Var:
+        def __init__(self): self.value = None
+        def set(self, value): self.value = value
+    gui.need_vars, gui.config_flag_vars, gui.show_debug_var = {"hungry": Var()}, {"side_quest_enabled": Var(), "ghost_gallery_enabled": Var()}, Var()
+    changes = []
+    gui.set_need_enabled = lambda name, value: changes.append(("need", name, value))
+    gui.set_config_flag = lambda key, value: changes.append((key, value))
+    gui.set_debug_lines_shown = lambda: changes.append(("debug lines", gui.show_debug_var.value))
+    for kind, name, value in (("need", "hungry", False), ("option", "side_quest", False), ("option", "play_ghost_gallery", True), ("option", "show_debug_lines", False),
+                              ("option", "play_stitches_spotlight", True)):
+        write_command(macro, "set", kind=kind, name=name, value=value)
+        gui.poll_commands()
+    assert changes == [("need", "hungry", False), ("side_quest_enabled", False), ("ghost_gallery_enabled", True), ("debug lines", False), ("stitches_spotlight_enabled", True)]
+    assert gui.need_vars["hungry"].value is False and gui.config_flag_vars["side_quest_enabled"].value is False and gui.config_flag_vars["ghost_gallery_enabled"].value is True
+    assert gui.show_debug_var.value is False                                              # (a switch with no checkbox of its own, like the stitches one, is only persisted)
+
+
+def test_the_need_names_a_command_may_switch_are_the_handlers_there_are(macro):
+    assert set(macro.cfg.NEED_NAMES) == set(macro.NEED_HANDLER_CLASSES) and len(macro.cfg.NEED_NAMES) == len(set(macro.cfg.NEED_NAMES))
+
+
+def test_a_minigame_that_has_no_player_yet_is_declined_even_when_switched_on(macro, monkeypatch):
+    import cv2
+    clicks, played = [], []
+    monkeypatch.setattr(macro, "grab_screen", lambda: cv2.imread(os.path.join(os.path.dirname(__file__), "popups", "stitches_spotlight.png")))
+    monkeypatch.setattr(macro, "load_game_config", lambda: {"stitches_spotlight_enabled": True})
+    monkeypatch.setattr(macro, "play_minigame", lambda name: played.append(name))
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(macro, "log_run_event", lambda message: None)
+    assert macro.identify_minigame(macro.grab_screen()) == "stitches_spotlight" and "stitches_spotlight" not in macro.MINIGAME_PLAYERS
+    assert macro.minigame_popup() == "dismissed" and played == [] and clicks[-1] == macro.cfg.MINIGAME_POPUP_NO_POS

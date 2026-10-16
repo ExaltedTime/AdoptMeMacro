@@ -410,3 +410,28 @@ def test_the_control_config_keys_and_state_are_read_and_checked(tmp_path):
     assert bot_lib.load_state(path) == state
     (tmp_path / "bot_state.json").write_text(json.dumps({"desired_state": "paused", "restarts": [1, "x", True], "crash_reported": "no"}))
     assert bot_lib.load_state(path) == bot_lib.BotState(restarts=[1])
+
+
+# --- changing the macro's switches (/need, /option, /options) ---
+
+def test_a_set_command_carries_its_switch_and_only_for_one_that_exists(tmp_path):
+    path = str(tmp_path / "commands.json")
+    bot_lib.write_command(path, "set", 5.0, **bot_lib.switch_command("need", "sick", False))
+    assert json.load(open(path)) == {"command": "set", "time": 5.0, "kind": "need", "name": "sick", "value": False}
+    assert bot_lib.switch_command("option", "play_stitches_spotlight", True)["name"] == "play_stitches_spotlight"
+    assert bot_lib.switch_command("option", "show_debug_lines", True)["value"] is True
+    for kind, name in (("need", "play_ghost_gallery"), ("option", "sick"), ("secret", "sick"), ("option", "private_server_link")):
+        with pytest.raises(ValueError):
+            bot_lib.switch_command(kind, name, True)
+
+
+def test_the_switches_are_read_from_the_game_config_with_the_defaults_for_what_is_missing():
+    states = bot_lib.switch_states(None)
+    assert states["option:side_quest"] is True and states["option:play_hauntlet_2"] is False and states["need:hungry"] is True
+    assert set(states) == {f"need:{n}" for n in bot_lib.cfg.NEED_NAMES} | {f"option:{n}" for n in bot_lib.cfg.OPTION_SWITCHES}
+    states = bot_lib.switch_states({"needs_enabled": {"hungry": False, "bored": True}, "side_quest_enabled": False, "ghost_gallery_enabled": True})
+    assert states["need:hungry"] is False and states["need:bored"] is True and states["need:sick"] is True   
+    assert states["option:side_quest"] is False and states["option:play_ghost_gallery"] is True
+    assert bot_lib.switch_states({"needs_enabled": "x"})["need:hungry"] is True                                   # (a bad config is the defaults)
+    text = bot_lib.options_text(bot_lib.switch_states({"needs_enabled": {"hungry": False}}))
+    assert "side_quest on" in text and "play_stitches_spotlight off" in text and text.splitlines()[1] == "Needs off: hungry"

@@ -640,9 +640,10 @@ new crop - plus an entry in `MINIGAME_LABELS` and a player in
 `MINIGAME_PLAYERS`.
 
 Each minigame has a switch in the game config (`hauntlet_2_enabled`,
-`ghost_gallery_enabled`, both **off** by default; "Play ..." checkboxes on the
-Options tab). `minigame_popup()`:
-- **switched off, or not recognised** - clicks `MINIGAME_POPUP_DONT_SHOW_POS`
+`ghost_gallery_enabled`, `stitches_spotlight_enabled`, all **off** by default; "Play ..." checkboxes on the
+Options tab). Stitches' Spotlight ("Stitches' Spotlight is starting soon!", `ref/halloween/stitches_spotlight.png`) is recognised but has no player in
+`MINIGAME_PLAYERS` yet: its checkbox says "(no player yet)", and its popup is declined like a switched-off one even if the switch is on. `minigame_popup()`:
+- **switched off, not recognised, or with no player yet** - clicks `MINIGAME_POPUP_DONT_SHOW_POS`
   ("Do not show again this session") and `MINIGAME_POPUP_NO_POS`;
 - **switched on, but a need is in its end wait** (`wait_until_need_gone()`, or `walk_alternating()` watching for its need; `end_wait()` marks it in `state.end_wait_need`) -
   the popup is left up for the need to clear and count as resolved, at most `MINIGAME_POPUP_END_WAIT` seconds from when it was first seen (`state.popup_held_since`):
@@ -1552,6 +1553,9 @@ the commands. It is started by hand, next to the macro: `python bot/discord_bot.
 | `/start` | starts the macro's loop: launches `python main.py --loop` if no `main.py` process is running, else leaves it the `start` command; then waits up to `BOT_START_CONFIRM` seconds for `status.json` to be written and says whether the loop showed |
 | `/stop` | asks the macro to exit (the `exit` command) and waits up to `stop_timeout_seconds` for its process to end; if it hasn't, kills it and releases the keys and mouse buttons from the bot |
 | `/restart` | `/stop`, then `/start` |
+| `/need <need> <on>` | switches a need on or off, as the Debug tab's checkbox does (the macro must be running: the command goes through the command file); says what the game config shows a moment later |
+| `/option <option> <on>` | the other switches: `side_quest`, `resume_on_focus_loss`, `record_next_run`, `play_<minigame>` and `show_debug_lines` (the output's debug lines, which is only a checkbox and so is not confirmed) |
+| `/options` | which options and needs are on, read from the game config (`debug/.config`, with the defaults for what is missing) |
 | `/captures` | the newest minigame captures on this PC, with their outcome, zips and size, and whether each has been copied to OneDrive |
 
 **What the bot posts by itself.** `watch()` looks at the macro's files every `BOT_WATCH_INTERVAL` seconds (`watch_once()`; a look that fails is logged and the watching goes on) and keeps what it has dealt with in `bot_state.json` (`BotState`: where it got to in `run_log.txt`, the run charts and captures done, whether the status is stale, the last heartbeat), so a restart neither posts things twice nor misses what came while it was down. On its first start, what exists already is taken as dealt with, so old failures, charts and captures are not posted.
@@ -1567,7 +1571,7 @@ the commands. It is started by hand, next to the macro: `python bot/discord_bot.
 `/start`, `/stop` and `/restart` need two small things in `main.py`, and no more of it:
 
 - **`python main.py --loop`** starts the loop once the window is up (`start_remote_control(loop=True)`, `START_LOOP_DELAY_MS` later), as if the loop button was pressed.
-- **A command file.** `poll_commands()` (a `root.after` timer, every `COMMAND_POLL_MS`, so on Tk's thread) reads `COMMANDS_PATH` (`debug/commands.json`, `{"command": ..., "time": ...}`; `read_command()`), which the bot wrote (`bot_lib.write_command()`, all at once). The file is removed whenever it is read. A command that is not one of `COMMANDS`, or is older than `COMMAND_MAX_AGE` seconds, is dropped - one left from before the macro started cannot close it. `start` starts the loop (nothing if it runs), `stop` is the [STOP] button, and **`exit`** is what the window's X button does: stop cooperatively, release every key and the mouse, close the window and end the process. Commands left from before are dropped when the macro starts. The list is fixed; the bot takes no argument that is run or opened.
+- **A command file.** `poll_commands()` (a `root.after` timer, every `COMMAND_POLL_MS`, so on Tk's thread) reads `COMMANDS_PATH` (`debug/commands.json`, `{"command": ..., "time": ...}`; `read_command()`), which the bot wrote (`bot_lib.write_command()`, all at once). The file is removed whenever it is read. A command that is not one of `COMMANDS`, or is older than `COMMAND_MAX_AGE` seconds, is dropped - one left from before the macro started cannot close it. `start` starts the loop (nothing if it runs), `stop` is the [STOP] button, **`exit`** is what the window's X button does: stop cooperatively, release every key and the mouse, close the window and end the process, and **`set`** changes a switch (`set_switch()`): the command carries `kind` (`need` or `option`), `name` and a true or false `value`, and is only read when the switch exists (`NEED_NAMES`; `OPTION_SWITCHES` and `SHOW_DEBUG_LINES_OPTION`) - the switch is persisted as its checkbox does it, and the checkbox in the window follows. Commands left from before are dropped when the macro starts. The list is fixed; the bot takes no argument that is run or opened.
 
 `/stop` uses `exit` and not `stop`, so that the process ending is the proof that the loop ended and the inputs were released; only if the process outlasts `stop_timeout_seconds` does the bot kill it (`kill_macro()`: `taskkill /F`, `SIGKILL` elsewhere) and release the keys itself (`release_inputs()`: the same list as `release_all_inputs()`, and a mouse button only if it is down). The macro's process is found by its command line (`main.py`, not the bot; `macro_pids()`).
 

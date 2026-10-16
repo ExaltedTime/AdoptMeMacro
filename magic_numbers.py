@@ -50,7 +50,7 @@ MINIGAME_POPUP_YES_POS = (1049, 612)
 # config ("<name>_enabled", off by default) - an off one is dismissed, an on one is played.
 MINIGAME_TITLE_BOX = (730, 410, 1200, 510)   # left, top, right, bottom
 MINIGAME_TITLE_MATCH_THRESHOLD = 0.85
-MINIGAME_LABELS = {"hauntlet_2": "Hauntlet 2", "ghost_gallery": "Ghost Gallery"}   # for the GUI and the logs
+MINIGAME_LABELS = {"hauntlet_2": "Hauntlet 2", "ghost_gallery": "Ghost Gallery", "stitches_spotlight": "Stitches' Spotlight"}   # for the GUI and the logs (Stitches' Spotlight is recognised but has no player yet: its popup is declined)
 
 # Playing one. Both end on the victory screen (a red "GAME OVER!" banner over a green NICE! button), which
 # is looked for every MINIGAME_VICTORY_CHECK_INTERVAL seconds, then the button is clicked.
@@ -194,11 +194,17 @@ for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
 COMMANDS_PATH = os.path.join(DEBUG_DIR, "commands.json")    # a command for the macro, written by the Discord bot (see read_command()); the macro removes it once read
-COMMANDS = ("start", "stop", "exit")                         # what it may hold: start the loop, stop it, or stop and close the window
+COMMANDS = ("start", "stop", "exit", "set")                  # what it may hold: start the loop, stop it, stop and close the window, or change a switch (see NEED_NAMES, OPTION_SWITCHES)
+NEED_NAMES = ("catch", "pet", "choose", "ride", "walk", "hungry", "thirsty", "dirty", "potty", "sleepy", "bored", "beach", "school", "cafe", "salon", "pizza", "camping", "sick")   # the Debug tab's need switches (the keys of main.py's NEED_HANDLER_CLASSES)
+OPTION_SWITCHES = {"side_quest": "side_quest_enabled", "resume_on_focus_loss": "resume_on_focus_loss", "record_next_run": "record_next_run",
+                   **{f"play_{name}": f"{name}_enabled" for name in MINIGAME_LABELS}}   # the other switches a command may change: name -> the game config's key ("show_debug_lines" too, which is only in the window)
+SHOW_DEBUG_LINES_OPTION = "show_debug_lines"
 COMMAND_POLL_MS = 1000                                      # how often the macro looks for one
 COMMAND_MAX_AGE = 30                                        # seconds: an older command is ignored (left over from before the macro was started)
 START_LOOP_DELAY_MS = 1500                                  # after the window is up, before the --loop argument starts the loop
 BOT_START_CONFIRM = 60                                     # seconds the bot waits, after /start, for the macro's loop to show in status.json
+BOT_GIT_TIMEOUT = 120                                       # seconds a git command of /update may take (a fetch over a slow connection)
+BOT_PIP_TIMEOUT = 900                                       # seconds pip may take to install the packages of an update
 BOT_WATCH_INTERVAL = 10                                     # seconds between the Discord bot's looks at what the macro wrote (failures, run charts, captures, status)
 BOT_ALERT_GAP = 60                                          # seconds: at most one failure post per this long, the rest counted ("N more failures")
 BOT_CAPTURE_SETTLE = 20                                     # seconds a capture's zips must be unchanged before they are copied (they are written on a thread)

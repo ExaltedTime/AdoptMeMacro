@@ -3,6 +3,8 @@ Discord; the macro's own writers (write_status(), record_minigame_result()) make
 here and not at the PC."""
 import json
 import os
+import subprocess
+import types
 from datetime import datetime, timedelta
 
 import pytest
@@ -28,10 +30,11 @@ def test_a_config_is_read_with_defaults_for_what_is_left_out(tmp_path):
     assert bot_lib.load_config(write_config(tmp_path, guild_id=333, stale_status_minutes=2.5, log_lines_max=10)).guild_id == 333
 
 
-def test_the_example_config_has_every_key_and_is_what_a_config_looks_like():
-    example = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bot_config.example.json")
-    keys = set(json.load(open(example)))
-    assert set(bot_lib.REQUIRED) | set(bot_lib.DEFAULTS) == keys
+def test_the_docs_list_every_config_key():
+    """There is no example file: docs/ARCHITECTURE.md is where the keys of bot_config.json are written down."""
+    docs = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs", "ARCHITECTURE.md"), encoding="utf-8").read()
+    section = docs[docs.index("## Discord bot"):]
+    assert [key for key in (*bot_lib.REQUIRED, *bot_lib.DEFAULTS) if f"`{key}`" not in section] == []
 
 
 @pytest.mark.parametrize("change, message", [
@@ -410,3 +413,137 @@ def test_the_control_config_keys_and_state_are_read_and_checked(tmp_path):
     assert bot_lib.load_state(path) == state
     (tmp_path / "bot_state.json").write_text(json.dumps({"desired_state": "paused", "restarts": [1, "x", True], "crash_reported": "no"}))
     assert bot_lib.load_state(path) == bot_lib.BotState(restarts=[1])
+
+
+# --- changing the macro's switches (/need, /option, /options) ---
+
+def test_a_set_command_carries_its_switch_and_only_for_one_that_exists(tmp_path):
+    path = str(tmp_path / "commands.json")
+    bot_lib.write_command(path, "set", 5.0, **bot_lib.switch_command("need", "sick", False))
+    assert json.load(open(path)) == {"command": "set", "time": 5.0, "kind": "need", "name": "sick", "value": False}
+    assert bot_lib.switch_command("option", "play_stitches_spotlight", True)["name"] == "play_stitches_spotlight"
+    assert bot_lib.switch_command("option", "show_debug_lines", True)["value"] is True
+    for kind, name in (("need", "play_ghost_gallery"), ("option", "sick"), ("secret", "sick"), ("option", "private_server_link")):
+        with pytest.raises(ValueError):
+            bot_lib.switch_command(kind, name, True)
+
+
+def test_the_switches_are_read_from_the_game_config_with_the_defaults_for_what_is_missing():
+    states = bot_lib.switch_states(None)
+    assert states["option:side_quest"] is True and states["option:play_hauntlet_2"] is False and states["need:hungry"] is True
+    assert set(states) == {f"need:{n}" for n in bot_lib.cfg.NEED_NAMES} | {f"option:{n}" for n in bot_lib.cfg.OPTION_SWITCHES}
+    states = bot_lib.switch_states({"needs_enabled": {"hungry": False, "bored": True}, "side_quest_enabled": False, "ghost_gallery_enabled": True})
+    assert states["need:hungry"] is False and states["need:bored"] is True and states["need:sick"] is True   
+    assert states["option:side_quest"] is False and states["option:play_ghost_gallery"] is True
+    assert bot_lib.switch_states({"needs_enabled": "x"})["need:hungry"] is True                                   # (a bad config is the defaults)
+    text = bot_lib.options_text(bot_lib.switch_states({"needs_enabled": {"hungry": False}}))
+    assert "side_quest on" in text and "play_stitches_spotlight off" in text and text.splitlines()[1] == "Needs off: hungry"
+
+
+# --- update and rollback (Phase 5) ---
+
+def git_in(folder):
+    """A bot_lib.GitRunner running the real git in `folder` (the tests make their own repositories)."""
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
+
+    def run(args):
+        done = subprocess.run(["git", *args], cwd=str(folder), capture_output=True, text=True, env=env)
+        return done.returncode, (done.stdout + done.stderr).strip()
+    return run
+
+
+def commit(run, folder, name, text, message="change"):
+    (folder / name).parent.mkdir(parents=True, exist_ok=True)
+    (folder / name).write_text(text)
+    assert run(["add", name])[0] == 0 and run(["commit", "-q", "-m", message])[0] == 0
+
+
+@pytest.fixture
+def repos(tmp_path):
+    """An upstream repository on `main` with two commits and the PC's clone of it."""
+    upstream, pc = tmp_path / "upstream", tmp_path / "pc"
+    upstream.mkdir()
+    up = git_in(upstream)
+    assert up(["init", "-q", "-b", "main"])[0] == 0
+    commit(up, upstream, "main.py", "one", "first")
+    commit(up, upstream, "bot/discord_bot.py", "bot one", "second")
+    assert subprocess.run(["git", "clone", "-q", str(upstream), str(pc)], capture_output=True).returncode == 0
+    return types.SimpleNamespace(up=up, upstream=upstream, pc=git_in(pc), pc_dir=pc)
+
+
+def test_the_update_plan_goes_ahead_only_over_a_clean_copy_and_only_forward():
+    plan = bot_lib.update_plan("a" * 40, "b" * 40, [], True, False, ["bbbbbbb fix", "ccccccc more"], "origin/main")
+    assert plan.kind == "update" and "aaaaaaa -> bbbbbbb" in plan.text and "bbbbbbb fix" in plan.text
+    assert bot_lib.update_plan("a" * 40, "a" * 40, [], True, True, [], "origin/main").kind == "up_to_date"
+    dirty = bot_lib.update_plan("a" * 40, "b" * 40, ["main.py", "x.py"], True, False, [], "origin/main")
+    assert dirty.kind == "dirty" and "main.py, x.py" in dirty.text and "Nothing was changed" in dirty.text
+    assert bot_lib.update_plan("a" * 40, "b" * 40, [], False, True, [], "origin/main").kind == "ahead"
+    assert bot_lib.update_plan("a" * 40, "b" * 40, [], False, False, [], "origin/main").kind == "diverged"
+    long_log = [f"{i:07d} commit" for i in range(20)]
+    assert bot_lib.update_plan("a" * 40, "b" * 40, [], True, False, long_log, "origin/main").text.endswith("... and 5 more")
+    assert bot_lib.files_text([f"f{i}" for i in range(10)]) == "f0, f1, f2, f3, f4, f5, f6, f7 and 2 more"
+
+
+def test_the_rollback_plan_goes_back_only_to_a_known_commit_over_a_clean_copy():
+    head, previous = "b" * 40, "a" * 40
+    assert bot_lib.rollback_plan(head, previous, [], True).kind == "rollback"
+    assert bot_lib.rollback_plan(head, None, [], False).kind == "none"
+    assert bot_lib.rollback_plan(head, previous, [], False).kind == "missing"
+    assert bot_lib.rollback_plan(head, head, [], True).kind == "same"
+    assert bot_lib.rollback_plan(head, previous, ["main.py"], True).kind == "dirty"
+
+
+def test_what_changed_says_whether_the_packages_and_the_bot_need_attention():
+    assert bot_lib.needs_pip(["main.py", "requirements.txt"]) and not bot_lib.needs_pip(["main.py"])
+    for restarts in (["bot/bot_lib.py"], ["magic_numbers.py"], ["requirements.txt"], ["main.py", "bot/discord_bot.py"]):
+        assert bot_lib.needs_bot_restart(restarts)
+    assert not bot_lib.needs_bot_restart(["main.py", "docs/ARCHITECTURE.md", "tests/test_bot.py", "robot/x.py"])
+    assert bot_lib.dirty_files(" M main.py\nM  bot/a.py\nR  old.py -> new.py\n") == ["main.py", "bot/a.py", "new.py"]
+
+
+def test_with_real_git_an_update_is_planned_and_done_only_forward_over_a_clean_copy(repos):
+    plan, move, head = bot_lib.make_plan(repos.pc, "origin", "main", None, False)
+    assert plan.kind == "up_to_date"
+    commit(repos.up, repos.upstream, "main.py", "two", "third: the macro")
+    commit(repos.up, repos.upstream, "requirements.txt", "numpy", "fourth: packages")
+    plan, move, head = bot_lib.make_plan(repos.pc, "origin", "main", None, False)
+    assert plan.kind == "update" and "fourth: packages" in plan.text and "third: the macro" in plan.text and move[:2] == ["merge", "--ff-only"]
+    (repos.pc_dir / "main.py").write_text("edited on the PC")
+    assert bot_lib.make_plan(repos.pc, "origin", "main", None, False)[0].kind == "dirty"                          # a tracked file changed here: not touched
+    assert repos.pc(["checkout", "main.py"])[0] == 0
+    (repos.pc_dir / "notes.txt").write_text("untracked")
+    assert bot_lib.make_plan(repos.pc, "origin", "main", None, False)[0].kind == "update"                         # (an untracked file is no reason)
+    assert bot_lib.git_ok(repos.pc, *move) is not None
+    assert (repos.pc_dir / "main.py").read_text() == "two" and (repos.pc_dir / "notes.txt").exists()
+    changed = bot_lib.git_ok(repos.pc, "diff", "--name-only", head, bot_lib.git_ok(repos.pc, "rev-parse", "HEAD").strip()).splitlines()
+    assert sorted(changed) == ["main.py", "requirements.txt"] and bot_lib.needs_pip(changed) and bot_lib.needs_bot_restart(changed)     # (new packages: the bot too)
+    plan, move, now = bot_lib.make_plan(repos.pc, "origin", "main", head, True)                                    # and back
+    assert plan.kind == "rollback" and move == ["reset", "--hard", head]
+    bot_lib.git_ok(repos.pc, *move)
+    assert (repos.pc_dir / "main.py").read_text() == "one" and not (repos.pc_dir / "requirements.txt").exists() and (repos.pc_dir / "notes.txt").exists()
+    assert bot_lib.make_plan(repos.pc, "origin", "main", head, True)[0].kind == "same"
+
+
+def test_with_real_git_a_copy_that_is_ahead_or_has_diverged_is_not_updated(repos):
+    commit(repos.pc, repos.pc_dir, "local.py", "only here", "a commit made on the PC")
+    assert bot_lib.make_plan(repos.pc, "origin", "main", None, False)[0].kind == "ahead"
+    commit(repos.up, repos.upstream, "main.py", "two", "upstream moved on")
+    plan, move, head = bot_lib.make_plan(repos.pc, "origin", "main", None, False)
+    assert plan.kind == "diverged" and "Nothing was changed" in plan.text
+    assert bot_lib.make_plan(repos.pc, "origin", "main", "0" * 40, True)[0].kind == "missing"
+    with pytest.raises(RuntimeError, match="fetch"):
+        bot_lib.make_plan(repos.pc, "origin", "no-such-branch", None, False)
+
+
+def test_the_update_source_is_a_name_git_cannot_take_for_an_option(tmp_path):
+    config = bot_lib.load_config(write_config(tmp_path))
+    assert (config.update_remote, config.update_branch) == ("origin", "main")
+    assert bot_lib.load_config(write_config(tmp_path, update_remote="upstream", update_branch="release/1.2")).update_branch == "release/1.2"
+    for change in ({"update_branch": "--upload-pack=x"}, {"update_branch": "a b"}, {"update_remote": ""}, {"update_branch": "a..b"}, {"update_branch": 5}, {"update_remote": "-x"}):
+        with pytest.raises(bot_lib.ConfigError):
+            bot_lib.load_config(write_config(tmp_path, **change))
+    path = str(tmp_path / "bot_state.json")
+    bot_lib.save_state(path, bot_lib.BotState(previous_commit="abc1234def"))
+    assert bot_lib.load_state(path).previous_commit == "abc1234def"
+    (tmp_path / "bot_state.json").write_text(json.dumps({"previous_commit": "--hard; rm -rf"}))
+    assert bot_lib.load_state(path).previous_commit is None                                                       # (a state file is not trusted with a git argument)

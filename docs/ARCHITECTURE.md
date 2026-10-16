@@ -640,9 +640,10 @@ new crop - plus an entry in `MINIGAME_LABELS` and a player in
 `MINIGAME_PLAYERS`.
 
 Each minigame has a switch in the game config (`hauntlet_2_enabled`,
-`ghost_gallery_enabled`, both **off** by default; "Play ..." checkboxes on the
-Options tab). `minigame_popup()`:
-- **switched off, or not recognised** - clicks `MINIGAME_POPUP_DONT_SHOW_POS`
+`ghost_gallery_enabled`, `stitches_spotlight_enabled`, all **off** by default; "Play ..." checkboxes on the
+Options tab). Stitches' Spotlight ("Stitches' Spotlight is starting soon!", `ref/halloween/stitches_spotlight.png`) is recognised but has no player in
+`MINIGAME_PLAYERS` yet: its checkbox says "(no player yet)", and its popup is declined like a switched-off one even if the switch is on. `minigame_popup()`:
+- **switched off, not recognised, or with no player yet** - clicks `MINIGAME_POPUP_DONT_SHOW_POS`
   ("Do not show again this session") and `MINIGAME_POPUP_NO_POS`;
 - **switched on, but a need is in its end wait** (`wait_until_need_gone()`, or `walk_alternating()` watching for its need; `end_wait()` marks it in `state.end_wait_need`) -
   the popup is left up for the need to clear and count as resolved, at most `MINIGAME_POPUP_END_WAIT` seconds from when it was first seen (`state.popup_held_since`):
@@ -1535,8 +1536,8 @@ the commands. It is started by hand, next to the macro: `python bot/discord_bot.
   `main_py_in()`. The paths it reads are the macro's own (`STATUS_PATH`, `RUN_LOG_PATH`, `RUNS_DIR` of `magic_numbers.py`), so a moved file moves for both.
 - **`bot/discord_bot.py`** is the glue that can't be tested away from Discord (discord.py, the screen grab, the process check): the commands below, registered
   for the one guild if `guild_id` is set (instant) or globally (up to an hour to show).
-- **`bot_config.json`** (untracked; `bot_config.example.json` has the keys): `token`, `owner_id`, `channel_id`, optionally `guild_id`, `stale_status_minutes`
-  (how long `status.json` may go without an update before `/status` says it is not updating), `log_lines_max` (what `/log` is capped at), `onedrive_dir` (where the capture zips are copied to; leave it out to copy nothing), `onedrive_keep_days` (copies older than that are deleted; 0 keeps them all) `heartbeat_hours` (0: no heartbeat), `repo_dir` and `python` (what `/start` launches `main.py` with; the bot's own folder and Python when left out), `stop_timeout_seconds`, `auto_restart` (default off) and `auto_restart_max_per_hour`.
+- **`bot_config.json`** (untracked, and there is no example file: this list is where the keys are written down; the file is JSON, paths with forward slashes): `token`, `owner_id`, `channel_id`, optionally `guild_id`, `stale_status_minutes`
+  (how long `status.json` may go without an update before `/status` says it is not updating), `log_lines_max` (what `/log` is capped at), `onedrive_dir` (where the capture zips are copied to; leave it out to copy nothing), `onedrive_keep_days` (copies older than that are deleted; 0 keeps them all), `heartbeat_hours` (0: no heartbeat), `repo_dir` and `python` (what `/start` launches `main.py` with; the bot's own folder and Python when left out), `stop_timeout_seconds`, `auto_restart` (default off), `auto_restart_max_per_hour`, `update_remote` and `update_branch` (what `/update` pulls: `origin` and `main`).
 - **Who is obeyed:** only `owner_id`, only in `channel_id`; anyone else's commands get no answer at all (`OwnerOnlyTree.interaction_check()`). The commands are a
   fixed list whose only arguments are numbers - nothing is run, no path is read from a message. The bot is created private ("Public Bot" off) and the token
   stays out of the repository (`.gitignore`).
@@ -1552,6 +1553,11 @@ the commands. It is started by hand, next to the macro: `python bot/discord_bot.
 | `/start` | starts the macro's loop: launches `python main.py --loop` if no `main.py` process is running, else leaves it the `start` command; then waits up to `BOT_START_CONFIRM` seconds for `status.json` to be written and says whether the loop showed |
 | `/stop` | asks the macro to exit (the `exit` command) and waits up to `stop_timeout_seconds` for its process to end; if it hasn't, kills it and releases the keys and mouse buttons from the bot |
 | `/restart` | `/stop`, then `/start` |
+| `/update` | pulls `update_remote`/`update_branch` (main) and restarts the macro - and the bot, if its own code changed - see [Update and rollback](#update-and-rollback) |
+| `/rollback` | goes back to the commit the PC was on before the last `/update`, and restarts the macro the same way |
+| `/need <need> <on>` | switches a need on or off, as the Debug tab's checkbox does (the macro must be running: the command goes through the command file); says what the game config shows a moment later |
+| `/option <option> <on>` | the other switches: `side_quest`, `resume_on_focus_loss`, `record_next_run`, `play_<minigame>` and `show_debug_lines` (the output's debug lines, which is only a checkbox and so is not confirmed) |
+| `/options` | which options and needs are on, read from the game config (`debug/.config`, with the defaults for what is missing) |
 | `/captures` | the newest minigame captures on this PC, with their outcome, zips and size, and whether each has been copied to OneDrive |
 
 **What the bot posts by itself.** `watch()` looks at the macro's files every `BOT_WATCH_INTERVAL` seconds (`watch_once()`; a look that fails is logged and the watching goes on) and keeps what it has dealt with in `bot_state.json` (`BotState`: where it got to in `run_log.txt`, the run charts and captures done, whether the status is stale, the last heartbeat), so a restart neither posts things twice nor misses what came while it was down. On its first start, what exists already is taken as dealt with, so old failures, charts and captures are not posted.
@@ -1567,13 +1573,27 @@ the commands. It is started by hand, next to the macro: `python bot/discord_bot.
 `/start`, `/stop` and `/restart` need two small things in `main.py`, and no more of it:
 
 - **`python main.py --loop`** starts the loop once the window is up (`start_remote_control(loop=True)`, `START_LOOP_DELAY_MS` later), as if the loop button was pressed.
-- **A command file.** `poll_commands()` (a `root.after` timer, every `COMMAND_POLL_MS`, so on Tk's thread) reads `COMMANDS_PATH` (`debug/commands.json`, `{"command": ..., "time": ...}`; `read_command()`), which the bot wrote (`bot_lib.write_command()`, all at once). The file is removed whenever it is read. A command that is not one of `COMMANDS`, or is older than `COMMAND_MAX_AGE` seconds, is dropped - one left from before the macro started cannot close it. `start` starts the loop (nothing if it runs), `stop` is the [STOP] button, and **`exit`** is what the window's X button does: stop cooperatively, release every key and the mouse, close the window and end the process. Commands left from before are dropped when the macro starts. The list is fixed; the bot takes no argument that is run or opened.
+- **A command file.** `poll_commands()` (a `root.after` timer, every `COMMAND_POLL_MS`, so on Tk's thread) reads `COMMANDS_PATH` (`debug/commands.json`, `{"command": ..., "time": ...}`; `read_command()`), which the bot wrote (`bot_lib.write_command()`, all at once). The file is removed whenever it is read. A command that is not one of `COMMANDS`, or is older than `COMMAND_MAX_AGE` seconds, is dropped - one left from before the macro started cannot close it. `start` starts the loop (nothing if it runs), `stop` is the [STOP] button, **`exit`** is what the window's X button does: stop cooperatively, release every key and the mouse, close the window and end the process, and **`set`** changes a switch (`set_switch()`): the command carries `kind` (`need` or `option`), `name` and a true or false `value`, and is only read when the switch exists (`NEED_NAMES`; `OPTION_SWITCHES` and `SHOW_DEBUG_LINES_OPTION`) - the switch is persisted as its checkbox does it, and the checkbox in the window follows. Commands left from before are dropped when the macro starts. The list is fixed; the bot takes no argument that is run or opened.
 
 `/stop` uses `exit` and not `stop`, so that the process ending is the proof that the loop ended and the inputs were released; only if the process outlasts `stop_timeout_seconds` does the bot kill it (`kill_macro()`: `taskkill /F`, `SIGKILL` elsewhere) and release the keys itself (`release_inputs()`: the same list as `release_all_inputs()`, and a mouse button only if it is down). The macro's process is found by its command line (`main.py`, not the bot; `macro_pids()`).
 
 **What the bot keeps in mind.** `/start` and `/restart` set `desired_state` in `bot_state.json` to `running`, `/stop` to `stopped`. A macro whose process is gone while it should be running is a crash, posted once (`crash_check()`) and again when it is back; a macro never started with `/start` (started by hand, say) is never reported as crashed, and one stopped with `/stop` is not. With `auto_restart` on, the bot restarts it by itself, at most `auto_restart_max_per_hour` times an hour (`restart_allowed()`); off by default, since a macro that stopped because Roblox lost focus usually means the PC is in use. A macro that is running but not writing `status.json` is the stale-status alert, not a crash. Whatever the macro prints on its error output goes to `debug/logs/macro_stderr.log`.
 
-Not built yet (the last phase of the plan): updating the macro (`/update`, `/rollback`).
+### Update and rollback
+
+`/update` takes whatever has been merged into `main` and runs it, from Discord, without a trip to the PC. It takes no argument: the remote and branch are the config's `update_remote` and `update_branch` (`origin` and `main`), and no other branch can be named in a message.
+
+1. **The plan, before anything is changed** (`make_plan()` over a `GitRunner`, so the tests run it against real repositories made in a temporary folder): `git fetch` of that branch (the only thing it changes), then `update_plan()` decides from the commits. Same commit: "already up to date". **Local changes to tracked files** (`git status --porcelain --untracked-files=no`; untracked files and the git-ignored `debug/` don't count): refused, naming them - nothing is ever discarded. The PC **ahead** of the branch, or the histories **diverged**: refused. Only a fast-forward goes ahead, and the plan lists the commits it brings (`git log --oneline`).
+2. **`apply_commit()`:** the macro is stopped as `/stop` does it (cooperatively, killed only if it will not end), `git merge --ff-only` moves the PC to the fetched commit, and the files that changed are listed (`git diff --name-only`). The commit the PC was on is kept in `bot_state.json` (`previous_commit`) before any of this, so a failure halfway can still be rolled back.
+3. If `requirements.txt` changed, `pip install -r requirements.txt` runs with the configured Python (`BOT_PIP_TIMEOUT`; the file is UTF-16, which pip reads); if it fails the macro is **not** started and `/rollback` is offered.
+4. The macro is started again (as `/start` does, waiting up to `BOT_START_CONFIRM` seconds for its status) **if it was running**; one that was stopped stays stopped. If the loop does not show, the end of `macro_stderr.log` is posted with the `/rollback` offer.
+5. **The bot restarts itself** when its own code changed - a file under `bot/`, `magic_numbers.py` (which it reads) or `requirements.txt` (`needs_bot_restart()`) - because Python does not reload a running program: it posts that, closes the Discord connection, and `main()` starts the same command again (`os.execv`; on Windows a new console window, since `execv` there leaves the terminal confused). The macro-side files alone (`main.py`, the references) need no bot restart.
+
+`/rollback` goes back to `previous_commit` with `git reset --hard`, with the same refusals (local changes to tracked files; no earlier commit; a commit that is no longer in this copy), then steps 2 to 5. It undoes one `/update`; a later `/update` pulls `main` again. The tests run both against real throwaway repositories: a clean update, an untracked file, a changed tracked file, ahead, diverged, a bad branch, and the way back.
+
+Nothing starts by itself with the PC: the bot is only ever started by hand, and the only time it starts itself is this restart after an update.
+
+Not built yet: nothing of the plan's phases is left.
 
 ## Automated checks
 
@@ -1585,7 +1605,7 @@ undefined names, unused imports, duplicate definitions), then
 that `magic_numbers.py` doesn't define, then `mypy main.py` (configured in
 `mypy.ini`: it also checks the bodies of functions without type hints, and
 ignores the Windows-only libraries it has no stubs for), then
-`python -m pytest -q`. Every top-level function and method in
+`python -m pytest -q -n auto`. Every top-level function and method in
 `main.py` has type hints (a few small nested helpers don't), using the aliases `Image` (a BGR screenshot or crop),
 `Point`, `Box` and `Color` defined under the imports. A few lines carry
 `# type: ignore[...]` for what the stubs get wrong (Windows-only calls, tkinter,
@@ -1594,7 +1614,10 @@ needs Windows, a screen and Roblox.
 
 ### Tests
 
-`tests/` holds the pytest tests (`python -m pytest -q`, also run by the Action).
+`tests/` holds the pytest tests (`python -m pytest -q`, also run by the Action, there as `-n auto` with `pytest-xdist`, which spreads them over the machine's cores;
+`pip install pytest-xdist` to do the same). The minigame players are tested by running them for minutes of fake time over real screenshots, so most of the time is
+detection on the same frames again and again: the `world` fixture answers each of `MEMOIZED_DETECTORS` once per frame (`memoized_detectors()`) and makes the frames
+read-only while they are remembered, so a test that changes one in place fails loudly (copy the frame first) instead of getting an old answer.
 `tests/conftest.py` stands in for the libraries that only work on Windows or
 with a screen (`pyautogui`, `pydirectinput`, `mss`, `pygetwindow`), so
 `main.py` imports anywhere, and its `macro` fixture gives each test a fresh

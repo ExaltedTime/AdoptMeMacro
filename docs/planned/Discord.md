@@ -1,7 +1,7 @@
 # Planned: Discord remote control
 
-Status: **phases 1 to 4 are built** (the read-only commands, alerts, OneDrive capture zips, start/stop/restart) and described in
-`docs/ARCHITECTURE.md#discord-bot`; **phase 5 (`/update`, `/rollback`, start-up with the PC) is not**. None of it has been run against a real Discord
+Status: **phases 1 to 5 are built** (the read-only commands, alerts, OneDrive capture zips, start/stop/restart, update and rollback) and described in
+`docs/ARCHITECTURE.md#discord-bot`; nothing starts by itself with the PC - the bot is only ever started by hand. None of it has been run against a real Discord
 server yet - the logic is tested, the Discord and Windows glue is not. Where the built bot differs from what the plan below says, a "**Built:**" note says
 how; the rest is the plan as it was written, from reading `main.py` and `docs/ARCHITECTURE.md`.
 
@@ -93,8 +93,8 @@ effectively remote control of the PC.
   silently. Use slash commands with `default_member_permissions`/an `owner_id` check, not text prefixes.
 - **A fixed list of commands. No `/run <anything>`, no shell, no file-path arguments.** Arguments are limited to
   choices from a fixed list (for example the minigame names) and numbers.
-- **The token and ids live in an untracked file** (`bot_config.json` or `.env`, added to `.gitignore`), with a
-  committed `bot_config.example.json` showing the keys. Never print the token. If it ever leaks, reset it in the
+- **The token and ids live in an untracked file** (`bot_config.json` or `.env`, added to `.gitignore`), with its
+  keys written down in `docs/ARCHITECTURE.md` (**Built:** no example file is committed). Never print the token. If it ever leaks, reset it in the
   Discord developer portal.
 - **Create the bot as private** ("Public Bot" off in the developer portal) and invite it only to a private server
   of yours, with just the permissions it needs (send messages, attach files, use slash commands).
@@ -207,7 +207,7 @@ Each phase is shippable and testable on its own; later phases build on earlier o
 2. Add `bot/` (or `discord_bot.py` plus a small `bot_lib.py` for the testable parts - see Phase 6) with:
    config loading (`bot_config.json`, validated, with a clear error for a missing key), the owner/channel check,
    and the commands `/status`, `/screenshot`, `/log`, `/report`.
-3. `.gitignore`: `bot_config.json`, `bot_state.json`. Commit `bot_config.example.json`.
+3. `.gitignore`: `bot_config.json`, `bot_state.json`. (**Built:** no example config is committed; its keys are documented instead.)
 4. Run it by hand next to the macro and try the commands from the phone.
 5. Add the process check (is `python main.py` running?) so `/status` can say "macro not running".
 
@@ -237,13 +237,13 @@ Each phase is shippable and testable on its own; later phases build on earlier o
 3. Test: start, stop mid-walk and check no key stays held (try holding nothing and watch the game), kill the
    macro's process by hand and check the alert and the optional auto-restart.
 
-### Phase 5 - Update and rollback - not built
+### Phase 5 - Update and rollback - built (not tried against a real server and PC)
 
 1. `/update` and `/rollback` as above, with the dirty-tree and diverged-history refusals.
 2. Test on a throwaway branch: a no-op update, an update that changes `requirements.txt`, an update that makes
    `main.py` fail on start (to prove the failed-start report and `/rollback` work).
-3. Start-up: a shortcut in the Windows Startup folder that runs the bot (which in turn starts the macro if
-   `desired_state` is running).
+3. ~~Start-up: a shortcut in the Windows Startup folder that runs the bot~~ **Dropped:** nothing starts with the PC; the bot is started by hand. (What **was** built:
+   `/update` restarts the bot itself when its own code changed.)
 
 ### Phase 6 - Tests, CI and docs
 
@@ -283,8 +283,8 @@ The CI (`.github/workflows/check.yml`) runs `pyflakes`, `tools/check_constants.p
 
 ## Decisions needed before building
 
-Decided so far: auto-restart off by default (and limited per hour when on); the screenshot is the Roblox window; no OneDrive links (the post says the zips were posted); the bot is
-started by hand. Still open: the branch `/update` may pull, and whether the bot starts with the PC.
+Decided: auto-restart off by default (and limited per hour when on); the screenshot is the Roblox window; no OneDrive links (the post says the zips were posted); the bot is
+started by hand and nothing starts with the PC; `/update` pulls `main` only and restarts the macro and, when its code changed, the bot.
 
 1. **Branch for `/update`**: only the main branch (safer: changes are merged first), or also a named
    `claude/...` branch (faster to try a fix, but runs unreviewed code)? Suggestion: main only by default, with

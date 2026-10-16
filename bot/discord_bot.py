@@ -167,6 +167,66 @@ async def start_macro(config: bot_lib.Config) -> str:
     return what + " No sign of its loop yet - see /status and /log."
 
 
+RESTART_BOT = False        # set by /update or /rollback when the bot's own code changed: main() starts the bot again once it has closed
+
+
+def repo_folder(config: bot_lib.Config) -> str:
+    return config.repo_dir or ROOT
+
+
+def run_command(command: list[str], folder: str, timeout: float) -> tuple[int, str]:
+    """Run `command` (a list: no shell) in `folder`; (exit code, its output). A program that isn't there or takes too long gives code -1 and why."""
+    try:
+        done = subprocess.run(command, cwd=folder, capture_output=True, text=True, errors="replace", timeout=timeout)
+        return done.returncode, (done.stdout + done.stderr).strip()
+    except (OSError, subprocess.SubprocessError) as error:
+        return -1, f"{command[0]}: {error}"
+
+
+async def git(config: bot_lib.Config, *args: str) -> str:
+    """The output of a git command of the repository that has to work (RuntimeError with git's message if it doesn't), run on a thread."""
+    return await asyncio.to_thread(bot_lib.git_ok, git_runner(config), *args)
+
+
+def git_runner(config: bot_lib.Config) -> bot_lib.GitRunner:
+    return lambda args: run_command(["git", *args], repo_folder(config), cfg.BOT_GIT_TIMEOUT)
+
+
+def output_tail(path: str, count: int = 12) -> str:
+    return bot_lib.tail_lines(path, count) or "(nothing)"
+
+
+async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say) -> None:
+    """The steps both /update and /rollback share, once the plan is made: stop the macro, move the repository (`move`: the git arguments), install
+    the packages if requirements.txt changed, start the macro again if it was running, and ask for the bot's own restart if its code changed.
+    `say` posts a message. A step that fails stops it there, with what to do."""
+    global RESTART_BOT
+    was_running = bool(await asyncio.to_thread(current_macro_pids))
+    if was_running:
+        await say(await stop_macro(config))
+    await git(config, *move)
+    new = (await git(config, "rev-parse", "HEAD")).strip()
+    changed = (await git(config, "diff", "--name-only", old, new)).splitlines()
+    await say(f"Now at {bot_lib.short(new)}. Changed: {bot_lib.files_text(changed) or 'nothing'}.")
+    if bot_lib.needs_pip(changed):
+        await say("requirements.txt changed - installing the packages...")
+        code, output = await asyncio.to_thread(run_command, [config.python or sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], repo_folder(config), cfg.BOT_PIP_TIMEOUT)
+        if code != 0:
+            await say(f"pip failed (exit {code}) - the macro was not started. Use /rollback.\n```\n{output[-1200:]}\n```")
+            return
+    if was_running:
+        result = await start_macro(config)
+        await say(result)
+        if "Its loop is running." not in result:
+            errors = output_tail(os.path.join(cfg.LOGS_DIR, "macro_stderr.log"))
+            await say(f"The macro does not look started. The end of its error output:\n```\n{errors}\n```\nUse /rollback to go back to {bot_lib.short(old)}.")
+    else:
+        await say("The macro was not running, so it was not started (/start).")
+    if bot_lib.needs_bot_restart(changed):
+        await say("The bot's own code changed - the bot restarts now.")
+        RESTART_BOT = True
+
+
 class OwnerOnlyTree(app_commands.CommandTree):
     """A command tree that obeys the owner in the one channel and nobody else (their commands get no answer at all)."""
 
@@ -259,6 +319,81 @@ def build(config: bot_lib.Config) -> discord.Client:
         stopped = await stop_macro(config)
         remember("running")
         await interaction.followup.send(f"{stopped}\n{await start_macro(config)}")
+
+    async def change_switch(interaction: discord.Interaction, kind: str, name: str, value: bool) -> None:
+        """Ask the running macro to change a switch (the command file) and say what the game config shows a moment later."""
+        await interaction.response.defer(thinking=True)
+        if not await asyncio.to_thread(current_macro_pids):
+            await interaction.followup.send("The macro isn't running - a switch can only be changed while its window is open (or by hand in the window).")
+            return
+        bot_lib.write_command(cfg.COMMANDS_PATH, "set", time.time(), **bot_lib.switch_command(kind, name, value))
+        if name == cfg.SHOW_DEBUG_LINES_OPTION:
+            await interaction.followup.send(f"Asked the macro to turn {name} {'on' if value else 'off'} (it is not kept in the config, so it can't be checked).")
+            return
+        for _ in range(5):
+            await asyncio.sleep(1)
+            if bot_lib.switch_states(bot_lib.read_json(cfg.GAME_CONFIG_PATH)).get(f"{kind}:{name}") == value:
+                await interaction.followup.send(f"{name} is now {'on' if value else 'off'}.")
+                return
+        await interaction.followup.send(f"Asked the macro to turn {name} {'on' if value else 'off'}, but the config doesn't show it yet.")
+
+    need_choices = [app_commands.Choice(name=name, value=name) for name in cfg.NEED_NAMES]
+    option_choices = [app_commands.Choice(name=name, value=name) for name in (*cfg.OPTION_SWITCHES, cfg.SHOW_DEBUG_LINES_OPTION)]
+
+    update_lock = asyncio.Lock()
+
+    async def change_code(interaction: discord.Interaction, rollback: bool) -> None:
+        """/update and /rollback: make the plan from what git says (nothing is changed unless it says go), then apply_commit() - one at a time."""
+        await interaction.response.defer(thinking=True)
+        if update_lock.locked():
+            await interaction.followup.send("An update or rollback is already going on.")
+            return
+        async with update_lock:
+            state = client.bot_state  # type: ignore[attr-defined]
+            try:
+                plan, move, head = await asyncio.to_thread(bot_lib.make_plan, git_runner(config), config.update_remote, config.update_branch, state.previous_commit, rollback)
+            except RuntimeError as error:
+                await interaction.followup.send(f"Nothing was changed. {error}")
+                return
+            await interaction.followup.send(f"```\n{plan.text}\n```")
+            if plan.kind not in ("update", "rollback"):
+                return
+            if not rollback:
+                state.previous_commit = head
+            else:
+                state.previous_commit = None
+            bot_lib.save_state(bot_lib.state_path(), state)
+            try:
+                await apply_commit(config, move, head, lambda text: interaction.followup.send(text))
+            except RuntimeError as error:
+                await interaction.followup.send(f"**Stopped:** {error}\nThe macro may be stopped - see /status.")
+                return
+        if RESTART_BOT:
+            await client.close()
+
+    @command("update", "Pull the latest main, restart the macro (and the bot if its code changed)")
+    async def update(interaction: discord.Interaction) -> None:
+        await change_code(interaction, rollback=False)
+
+    @command("rollback", "Go back to the commit before the last /update and restart the macro")
+    async def rollback(interaction: discord.Interaction) -> None:
+        await change_code(interaction, rollback=True)
+
+    @command("need", "Switch a need on or off (the Debug tab's switches)")
+    @app_commands.choices(need=need_choices)
+    async def need_command(interaction: discord.Interaction, need: app_commands.Choice[str], on: bool) -> None:
+        await change_switch(interaction, "need", need.value, on)
+
+    @command("option", "Switch an option on or off (side quest, minigames, recording, debug lines in the output...)")
+    @app_commands.choices(option=option_choices)
+    async def option_command(interaction: discord.Interaction, option: app_commands.Choice[str], on: bool) -> None:
+        await change_switch(interaction, "option", option.value, on)
+
+    @command("options", "Which needs and options are on")
+    async def options(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        text = bot_lib.options_text(bot_lib.switch_states(bot_lib.read_json(cfg.GAME_CONFIG_PATH)))
+        await interaction.followup.send(f"```\n{text}\n```")
 
     @command("captures", "The newest minigame captures and whether they are in OneDrive")
     async def captures(interaction: discord.Interaction) -> None:
@@ -369,6 +504,12 @@ def main() -> None:
     except bot_lib.ConfigError as error:
         sys.exit(str(error))
     build(config).run(config.token, log_handler=None)
+    if RESTART_BOT:                       # (the client has closed: the new bot is the only one logged in)
+        log.info("restarting the bot with the updated code")
+        if os.name == "nt":
+            subprocess.Popen([sys.executable, *sys.argv], creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))   # (os.execv on Windows leaves the terminal confused)
+        else:
+            os.execv(sys.executable, [sys.executable, *sys.argv])
 
 
 if __name__ == "__main__":

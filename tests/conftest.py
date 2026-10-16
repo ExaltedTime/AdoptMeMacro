@@ -2,11 +2,15 @@
 screen (pyautogui, pydirectinput, mss, pygetwindow - and tkinter if it isn't
 installed), so main.py can be imported anywhere, and gives each test its own
 fresh State/RunStats and its own log/debug folders."""
+import contextlib
+import copy
 import importlib
 import os
 import sys
 import types
+from typing import Any
 
+import numpy as np
 import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -68,6 +72,42 @@ def macro(tmp_path, monkeypatch):
     main._NEED_STRIP_CACHE.update(strip=None, found=[], reuses=0)
 
 
+# What the minigame players ask of a frame again and again - the same frame is "on screen" for many looks - and what costs most of the time of
+# the tests that run them: each is answered once per frame (see memoized_detectors()).
+MEMOIZED_DETECTORS = ("find_ghost_blobs", "find_ghost_alerts", "ghost_boss_bar_visible", "ghost_boss_shielded", "find_door_tvs", "find_door_circles",
+                      "find_fork_doorways", "find_hauntlet_doors", "read_hauntlet_hearts", "read_hauntlet_items", "read_hauntlet_room", "hauntlet_timer_visible")
+
+
+@contextlib.contextmanager
+def memoized_detectors(monkeypatch, names=MEMOIZED_DETECTORS):
+    """Within the block the functions `names` of main.py answer once for each frame (a numpy array, by identity, with the other arguments) and give
+    a copy of that answer after. The frames are made read-only while they are remembered - a test that changes one in place would get an old
+    answer otherwise, so it fails loudly instead (copy the frame first) - and writable again at the end."""
+    remembered: dict[tuple, Any] = {}
+    frozen = []
+
+    def memoized(name, function):
+        def wrapper(img, *args, **kwargs):
+            if not isinstance(img, np.ndarray):
+                return function(img, *args, **kwargs)
+            key = (name, id(img), args, tuple(sorted(kwargs.items())))
+            if key not in remembered:
+                if img.flags.writeable:
+                    img.flags.writeable = False
+                    frozen.append(img)
+                remembered[key] = (img, function(img, *args, **kwargs))           # (the frame is kept: its id stays its own)
+            return copy.copy(remembered[key][1])
+        return wrapper
+
+    for name in names:
+        monkeypatch.setattr(main, name, memoized(name, getattr(main, name)))
+    try:
+        yield
+    finally:
+        for img in frozen:
+            img.flags.writeable = True
+
+
 class Clock:
     """A time that only moves when the macro waits."""
     def __init__(self):
@@ -110,4 +150,5 @@ def world(macro, monkeypatch):
     monkeypatch.setattr(macro.pydirectinput, "moveRel", lambda dx, dy, **k: world.mouse.append(("rel", dx, dy)), raising=False)
     monkeypatch.setattr(macro.pydirectinput, "press", lambda key, **k: world.keys.append(("press", key, clock.now)), raising=False)
     monkeypatch.setattr(macro, "to_screen", lambda x, y: (x, y))
-    return world
+    with memoized_detectors(monkeypatch):
+        yield world

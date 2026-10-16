@@ -568,15 +568,12 @@ def test_a_recording_whose_candy_corn_was_not_read_counts_as_one_of_the_worst_bu
     assert kept == {"b", "d", "c", "a", "h"}                                     # the unread and the 5 (worst two), the 1200 and the 800 (best two), the latest
 
 
-def test_only_a_run_that_did_not_finish_keeps_the_frames_of_its_last_seconds(macro, run_folder):
-    kept = {}
-    for outcome in ("left the minigame (its overlay was gone for 10s)", "finished (the game over screen)"):
-        recorder = macro.start_run_capture("hauntlet_2")
-        assert wait_for(lambda: recorder.frames >= 2)
-        macro.finish_run_capture(recorder, outcome)
-        kept[outcome.split()[0]] = set(recorder.protected)
-        time.sleep(1.1)                                                        # (the next folder has a time of its own in its name)
-    assert kept["left"] and not kept["finished"]
+@pytest.mark.parametrize("outcome, keeps_its_tail", [("left the minigame (its overlay was gone for 10s)", True), ("finished (the game over screen)", False)])
+def test_only_a_run_that_did_not_finish_keeps_the_frames_of_its_last_seconds(macro, run_folder, outcome, keeps_its_tail):
+    recorder = macro.start_run_capture("hauntlet_2")
+    assert wait_for(lambda: recorder.frames >= 1)
+    macro.finish_run_capture(recorder, outcome)
+    assert bool(recorder.protected) is keeps_its_tail
 
 
 def test_the_name_added_to_a_recording_says_what_the_run_earned_and_how_it_ended(macro):

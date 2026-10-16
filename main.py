@@ -411,10 +411,11 @@ def refresh_debug() -> int:
         os.makedirs(directory, exist_ok=True)
     return removed
 
-def read_command() -> Optional[str]:
+def read_command() -> Optional[dict[str, Any]]:
     """The command waiting in COMMANDS_PATH (written by the Discord bot: {"command": ..., "time": ...}), or None. The file is always removed once
     read; a command that isn't one of COMMANDS, or is older than COMMAND_MAX_AGE seconds (left over from before the macro started, say), is none.
-    Never raises. See docs/ARCHITECTURE.md#remote-control."""
+    A `set` command must also name a switch that exists (`kind` "need" and a NEED_NAMES name, or "option" and an OPTION_SWITCHES name or
+    SHOW_DEBUG_LINES_OPTION) and give it a true or false `value`. Never raises. See docs/ARCHITECTURE.md#remote-control."""
     try:
         with open(cfg.COMMANDS_PATH, encoding="utf-8") as f:
             data = json.load(f)
@@ -429,7 +430,11 @@ def read_command() -> Optional[str]:
     sent = data.get("time")
     if not isinstance(sent, (int, float)) or abs(time.time() - sent) > cfg.COMMAND_MAX_AGE:
         return None
-    return str(data["command"])
+    if data["command"] == "set":
+        names = {"need": cfg.NEED_NAMES, "option": (*cfg.OPTION_SWITCHES, cfg.SHOW_DEBUG_LINES_OPTION)}.get(str(data.get("kind")), ())
+        if data.get("name") not in names or not isinstance(data.get("value"), bool):
+            return None
+    return data
 
 def next_run_number() -> int:
     """Return a fresh run number, persisted in RUN_COUNTER_PATH so numbers
@@ -3577,7 +3582,7 @@ def minigame_popup(play: bool = True) -> Optional[str]:
         state.popup_held_since = None
         return None
     name = identify_minigame(img)
-    if name is not None and load_game_config().get(f"{name}_enabled", False):
+    if name is not None and name in MINIGAME_PLAYERS and load_game_config().get(f"{name}_enabled", False):    # (one with no player yet is declined, switched on or not)
         if play and state.end_wait_need is not None:
             # A need is in its end wait: give it the time to clear (and count as resolved) before the minigame abandons it.
             state.popup_held_since = state.popup_held_since or time.time()
@@ -5356,9 +5361,11 @@ class AdoptMeGUI:
         self.run_async(run_workflow_loop)
 
     def poll_commands(self) -> None:
-        """Do the command waiting in COMMANDS_PATH, if any (Tk's thread): `start` the loop, `stop` it (the cooperative stop, same as [STOP]) or
-        `exit` (stop, release every key and the mouse, and close the window - what the X button does). Looks again COMMAND_POLL_MS later."""
-        command = read_command()
+        """Do the command waiting in COMMANDS_PATH, if any (Tk's thread): `start` the loop, `stop` it (the cooperative stop, same as [STOP]), `exit`
+        (stop, release every key and the mouse, and close the window - what the X button does) or `set` a switch (set_switch()). Looks again
+        COMMAND_POLL_MS later."""
+        data = read_command()
+        command = data["command"] if data else None
         if command is not None:
             logger.info(f"Command from outside: {command}")
         if command == "exit":
@@ -5370,7 +5377,24 @@ class AdoptMeGUI:
             if self.is_running:
                 log_run_event("stopped from outside (the Discord bot)")
             self.stop()
+        elif command == "set" and data:
+            self.set_switch(data["kind"], data["name"], data["value"])
         self.root.after(cfg.COMMAND_POLL_MS, self.poll_commands)
+
+    def set_switch(self, kind: str, name: str, value: bool) -> None:
+        """Change a switch as its checkbox does - persist it and tick or untick the checkbox in the window: a need's (the Debug tab), or an option (the
+        Options tab, the Debug tab's Other subtab, and `show_debug_lines`, which is only a checkbox)."""
+        if kind == "need":
+            self.set_need_enabled(name, value)
+            self.need_vars[name].set(value)
+        elif name == cfg.SHOW_DEBUG_LINES_OPTION:
+            self.show_debug_var.set(value)
+            self.set_debug_lines_shown()
+        else:
+            key = cfg.OPTION_SWITCHES[name]
+            self.set_config_flag(key, value)
+            if key in self.config_flag_vars:
+                self.config_flag_vars[key].set(value)
 
     def close(self) -> None:
         """The window's X button: stop whatever is running and let go of every key and the mouse before the
@@ -5487,7 +5511,7 @@ class AdoptMeGUI:
         self.config_flag_vars: dict[str, tk.BooleanVar] = {}
         for label, key in (("Run side quest", "side_quest_enabled"),
                            ("Resume after focus loss", "resume_on_focus_loss"),
-                           *((f"Play {label}", f"{name}_enabled") for name, label in cfg.MINIGAME_LABELS.items())):
+                           *((f"Play {label}" + ("" if name in MINIGAME_PLAYERS else " (no player yet)"), f"{name}_enabled") for name, label in cfg.MINIGAME_LABELS.items())):
             self.add_config_checkbox(options_tab, label, key, config)
 
         tk.Label(options_tab, text="Private server link", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),

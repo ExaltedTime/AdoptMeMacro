@@ -378,6 +378,11 @@ def stale_alert(was_stale: bool, status: Optional[dict[str, Any]], now: datetime
     return False, "The macro is updating again."
 
 
+def loop_idle(status: Optional[dict[str, Any]]) -> bool:
+    """True if status.json says the macro is running nothing (stopped on purpose, or open with no loop): see main.mark_stopped()."""
+    return status is not None and bool(status.get("stopped"))
+
+
 def heartbeat_due(last: Optional[float], hours: float, now: float) -> bool:
     """Whether a heartbeat post is due: `hours` is not 0 and that long has passed since `last` (None: never, so it is due at once)."""
     return hours > 0 and (last is None or now - last >= hours * 3600)
@@ -497,15 +502,16 @@ def resolve_pull(source: str, item: Optional[str]) -> tuple[str, str]:
 
 def pull_files(path: str, name: str) -> list[tuple[str, str]]:
     """(file on this PC, path inside the destination folder) for everything `path` is: a file; a folder's files, all of them - except a minigame
-    capture (a folder with a zips/ folder, where the frames are the same again as the zips): its zips, info.json and events.jsonl."""
+    capture (a folder with a zips/ folder, where the frames are the same again as the zips, and the first zip holds info.json and events.jsonl): its zips
+    alone, wherever in the folder it is."""
     if os.path.isfile(path):
         return [(path, name)]
-    if os.path.isdir(os.path.join(path, "zips")):
-        wanted = [os.path.join(path, "info.json"), os.path.join(path, "events.jsonl"), *sorted(glob.glob(os.path.join(path, "zips", "*.zip")))]
-        return [(f, os.path.join(name, os.path.relpath(f, path))) for f in wanted if os.path.isfile(f)]
     found = []
-    for root, _, files in os.walk(path):
-        for file in files:
+    for root, folders, files in os.walk(path):
+        if "zips" in folders:
+            folders[:] = ["zips"]
+            files = []
+        for file in sorted(files):
             full = os.path.join(root, file)
             found.append((full, os.path.join(name, os.path.relpath(full, path))))
     return found

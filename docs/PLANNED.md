@@ -25,7 +25,7 @@ Suggestions from reading through the code, none of them started. Roughly in orde
 
 ## Stitches' Spotlight
 
-- [ ] Check the first player in the game (`play_stitches_spotlight()`): whether W/A/S/D as the screen shows it walks towards the candy corn found, whether planks are found as cover (`stitches_covered()`) and the player lives behind them, and whether wall stripes and lights fool `find_candy_corn()`. The camera is never turned yet; the key `E` the human pressed ten times is not understood.
+- [ ] Check the first player in the game (`play_stitches_spotlight()`): that the left and right arrow keys turn the camera towards the middle as `STITCHES_TURN_KEYS` assumes, that D then keeps the character on the ring, and how the ring line is found when the room is red. Then the searchlight (hide behind planks) and the candy corn off the ring. The key `E` (a speed boost, by the game's message) is not used.
 
 ## Hauntlet 2
 

@@ -696,7 +696,7 @@ out `MINIGAME_MAX_DURATION`. The watch also looks for the "Disconnected" dialog 
 - `play_ghost_gallery()` waits until the game's overlay shows (at most `MINIGAME_START_WAIT`), then finds the ghosts on screen, aims the
   mouse at one and holds the button on it, and on the boss in the boss phase, until victory. See
   [Playing Ghost Gallery](#playing-ghost-gallery).
-- `play_stitches_spotlight()` waits for the overlay, then walks towards the nearest candy corn until victory. See
+- `play_stitches_spotlight()` waits for the overlay, then holds D and keeps the camera on the middle of the ring until victory. See
   [Playing Stitches' Spotlight](#playing-stitches-spotlight).
 
 A handler only counts as resolved (and only then triggers a respawn) if
@@ -1378,21 +1378,22 @@ by anything but distance (the human often picked the second or third nearest); i
 
 ### Playing Stitches' Spotlight
 
-First version, from one human-played round (a two-minute round; the overlay shows TIME LEFT, the title and the Candy Corn count). Candy corn lies
-about the stage; searchlights sweep it and tint what they cover red, and a player standing in the red loses. Dark grey planks stand about the stage
-and hide the player from the light (they break now and then). The count is never read: the player only has to collect some.
+First version, from two human-played rounds (a two-minute round; the overlay shows TIME LEFT, the title and the Candy Corn count). The player runs on a
+ring walkway round a central drum (with a bunny on it that moves, so the drum is not a landmark to match); candy corn lies along the ring and on the platforms
+at its sides, searchlights sweep it and tint what they cover red, and dark grey planks hide the player from the light. The count is never read.
 
-`play_stitches_spotlight()` waits for the overlay (`MINIGAME_START_WAIT`), then looks every `STITCHES_LOOK_INTERVAL` and acts on `stitches_key()`:
-- **the searchlight on the character** - red (`STITCHES_RED_HUE_MAX`, `STITCHES_RED_MIN_SATURATION`/`_VALUE`) fills at least `STITCHES_DANGER_FRACTION` of
-  `STITCHES_RED_BOX`, the area around the character. With planks filling `STITCHES_COVER_BOX` in front of it (`stitches_covered()`: dark, unsaturated
-  pixels, `STITCHES_COVER_FRACTION`) the player stays where it is; otherwise it holds a sideways key for `STITCHES_FLEE_STEP`, away from the redder half;
-- **otherwise** - `find_candy_corn()` finds candy corn by its orange-yellow (`STITCHES_CANDY_*`: hue, saturation, value, blob size, and a fill ratio that
-  rules out the thin stripes on the walls) inside `STITCHES_SEARCH_BOX`; the nearest piece further than `STITCHES_CANDY_REACHED` from
-  `STITCHES_CHARACTER` is walked to, a `STITCHES_STEP` at a time, along the axis it is furthest on (W/A/S/D as the screen shows it, the camera
-  being left alone). With none in sight a random direction is walked for `STITCHES_WANDER_STEP`.
+`play_stitches_spotlight()` waits for the overlay (`MINIGAME_START_WAIT`), holds `KEY_STITCHES_WALK` (D: a strafe, which round a middle the camera looks at is
+a walk round the ring) until victory, and every `STITCHES_CENTER_INTERVAL` turns the camera towards the middle (`stitches_camera_turn()`). Where the middle is
+comes from the ring's own edge: a gold line (`STITCHES_LINE_*`: hue, saturation and value of its dim olive-gold, looked for in `STITCHES_LINE_BOX`), fitted
+with a line (`stitches_ring_angle()`). A ground line across the camera's view runs straight across the screen, so when the camera looks at the middle of the
+ring the line is level. A line that falls to the right means the middle is to the right, and `STITCHES_TURN_KEYS` (left, right) turns the camera that way
+for up to `STITCHES_TURN_HOLD_MAX`, less the nearer the line is to level; within `STITCHES_LINE_DEADBAND` degrees nothing is done. With fewer than
+`STITCHES_LINE_MIN_PIXELS` of the line in sight (in a searchlight's red it is not found, and with the camera turned away) the camera is left alone.
+The red and the planks are not handled, and no candy corn is looked for: the magnet picks up what the walk passes.
 
-Not yet known from play: whether the camera stays behind the character (steering assumes up on the screen is W), how well planks are found as
-cover, and whether the stripes and lights on the walls fool the candy finder. The tests use frames of the round (`tests/stitches_spotlight/`).
+Not yet known from play: whether the left and right arrow keys turn the camera the way the table of `STITCHES_TURN_KEYS` says, whether D holds the
+character on the ring with those turns, how the round goes when the red is on the ring, and what the `E` key (a speed boost, by the game's message) is worth.
+The tests use frames of a round (`tests/stitches_spotlight/`).
 
 ### Candy corn
 
@@ -1577,7 +1578,11 @@ the commands. It is started by hand, next to the macro: `python bot/discord_bot.
 | `/stop` | asks the macro to stop its loop (the `stop` command, the [STOP] button); its window stays open |
 | `/exit` | asks the macro to exit (the `exit` command) and waits up to `stop_timeout_seconds` for its process to end; if it hasn't, kills it and releases the keys and mouse buttons from the bot |
 | `/restart` | `/exit`, then `/loop` |
-| `/rejoin` | the macro leaves the game and rejoins it (its loop is stopped first; `/start` again afterwards) |
+| `/rejoin` | the macro leaves the game and rejoins it (its loop is stopped first; `/loop` again afterwards) |
+| `/setup` | the macro runs Setup (its loop is stopped first; `/loop` again afterwards) |
+| `/trade_hub` | the macro travels to the Trading Hub (`travel_to_trade_hub()`: the Trading Hub Phone from the backpack's Toys, used, TRAVEL TO HUB, Yes; the loop is stopped first). The clicks are the positions of a human's run (`TRADE_HUB_*`) |
+| `/leave_trade_hub` | the macro leaves the Trading Hub for a regular server (`leave_trade_hub()`: GO HOME, REGULAR SERVER) |
+| `/refresh_debug` | the macro empties its debug folder (the game config stays), as the Refresh debug button does without asking; refused while its loop runs (the status says `stopped` when it does not: `loop_idle()`) |
 | `/update` | pulls `update_remote`/`update_branch` (main) and restarts the macro - and the bot, if its own code changed - see [Update and rollback](#update-and-rollback) |
 | `/rollback` | goes back to the commit the PC was on before the last `/update`, and restarts the macro the same way |
 | `/need <need> <on>` | switches a need on or off, as the Debug tab's checkbox does (the macro must be running: the command goes through the command file); says what the game config shows a moment later |
@@ -1593,14 +1598,14 @@ the commands. It is started by hand, next to the macro: `python bot/discord_bot.
 - **A run chart:** each new `run<N>.png` in `RUNS_DIR`, once it has been unchanged for `BOT_FILE_SETTLE` seconds.
 - **A heartbeat:** the `/status` text every `heartbeat_hours`, so silence means trouble; off by default.
 
-**Pulling things into OneDrive (`/pull`).** Nothing is copied to OneDrive by itself (it was, once: a finished capture's zips; that was taken out). `/pull` takes a `folder` from the fixed list `PULL_SOURCES` - `failures`, `logs`, `runs`, `minigame_captures`, `captures`, `recordings`; the game config (`debug/.config`, which holds the private server link) is not in it - and optionally an `item`: left out, the newest entry of the folder; `*`, the whole folder; or an entry picked from the autocomplete (newest first). An item is only accepted if it is exactly the name of an entry in that folder (`resolve_pull()`: `..`, a slash or a drive letter get nowhere). It copies the files into `onedrive_dir/<folder>/` (`pull_files()`, `copy_pull()`) and says how many files and megabytes; the OneDrive app on the PC uploads them. A minigame capture is copied as its zips, `info.json` and `events.jsonl` - not its frames, which are the same again as the zips. A pull of more than `BOT_MAX_PULL_MB` copies nothing, and an existing copy of the same file is replaced.
+**Pulling things into OneDrive (`/pull`).** Nothing is copied to OneDrive by itself (it was, once: a finished capture's zips; that was taken out). `/pull` takes a `folder` from the fixed list `PULL_SOURCES` - `failures`, `logs`, `runs`, `minigame_captures`, `captures`, `recordings`; the game config (`debug/.config`, which holds the private server link) is not in it - and optionally an `item`: left out, the newest entry of the folder; `*`, the whole folder; or an entry picked from the autocomplete (newest first). An item is only accepted if it is exactly the name of an entry in that folder (`resolve_pull()`: `..`, a slash or a drive letter get nowhere). It copies the files into `onedrive_dir/<folder>/` (`pull_files()`, `copy_pull()`) and says how many files and megabytes; the OneDrive app on the PC uploads them. A minigame capture is copied as its zips alone (the first holds `info.json` and `events.jsonl`) - not its frames, which are the same again as the zips; with `*`, the zips of every capture in the folder. A pull of more than `BOT_MAX_PULL_MB` copies nothing, and an existing copy of the same file is replaced.
 
 ### Remote control
 
 `/start`, `/loop`, `/stop`, `/exit` and `/restart` need two small things in `main.py`, and no more of it:
 
 - **`python main.py --loop`** starts the loop once the window is up (`start_remote_control(loop=True)`, `START_LOOP_DELAY_MS` later), as if the loop button was pressed.
-- **A command file.** `poll_commands()` (a `root.after` timer, every `COMMAND_POLL_MS`, so on Tk's thread) reads `COMMANDS_PATH` (`debug/commands.json`, `{"command": ..., "time": ...}`; `read_command()`), which the bot wrote (`bot_lib.write_command()`, all at once). The file is removed whenever it is read. A command that is not one of `COMMANDS`, or is older than `COMMAND_MAX_AGE` seconds, is dropped - one left from before the macro started cannot close it. `start` starts the loop (nothing if it runs), `stop` is the [STOP] button, **`exit`** is what the window's X button does: stop cooperatively, release every key and the mouse, close the window and end the process, and **`set`** changes a switch (`set_switch()`): the command carries `kind` (`need` or `option`), `name` and a true or false `value`, and is only read when the switch exists (`NEED_NAMES`; `OPTION_SWITCHES` and `SHOW_DEBUG_LINES_OPTION`) - the switch is persisted as its checkbox does it, and the checkbox in the window follows. **`rejoin`** is the Leave & rejoin button (`rejoin_from_outside()`): a running loop is stopped first and the rejoin starts once it has ended (looked for every `REJOIN_STOP_POLL_MS`, for up to `REJOIN_STOP_WAIT_MS`); the loop is not started again afterwards, `/loop` does that. Commands left from before are dropped when the macro starts. The list is fixed; the bot takes no argument that is run or opened.
+- **A command file.** `poll_commands()` (a `root.after` timer, every `COMMAND_POLL_MS`, so on Tk's thread) reads `COMMANDS_PATH` (`debug/commands.json`, `{"command": ..., "time": ...}`; `read_command()`), which the bot wrote (`bot_lib.write_command()`, all at once). The file is removed whenever it is read. A command that is not one of `COMMANDS`, or is older than `COMMAND_MAX_AGE` seconds, is dropped - one left from before the macro started cannot close it. `start` starts the loop (nothing if it runs), `stop` is the [STOP] button, **`exit`** is what the window's X button does: stop cooperatively, release every key and the mouse, close the window and end the process, and **`set`** changes a switch (`set_switch()`): the command carries `kind` (`need` or `option`), `name` and a true or false `value`, and is only read when the switch exists (`NEED_NAMES`; `OPTION_SWITCHES` and `SHOW_DEBUG_LINES_OPTION`) - the switch is persisted as its checkbox does it, and the checkbox in the window follows. **`rejoin`** and **`setup`** are the Leave & rejoin and Setup buttons, and **`trade_hub`** and **`leave_trade_hub`** the Trading Hub trips (`act_from_outside()`, `OUTSIDE_ACTIONS`): a running loop is stopped first and the action starts once it has ended (looked for every `REJOIN_STOP_POLL_MS`, for up to `REJOIN_STOP_WAIT_MS`); the loop is not started again afterwards, `/loop` does that. **`refresh_debug`** is the Refresh debug button (`refresh_debug_from_outside()`), done only when nothing is running, and the status file is written again after it. Commands left from before are dropped when the macro starts. The list is fixed; the bot takes no argument that is run or opened.
 
 `/exit` uses `exit` and not `stop`, so that the process ending is the proof that the loop ended and the inputs were released; only if the process outlasts `stop_timeout_seconds` does the bot kill it (`kill_macro()`: `taskkill /F`, `SIGKILL` elsewhere) and release the keys itself (`release_inputs()`: the same list as `release_all_inputs()`, and a mouse button only if it is down). The macro's process is found by its command line (`main.py`, not the bot; `macro_pids()`).
 

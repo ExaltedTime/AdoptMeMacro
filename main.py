@@ -1466,6 +1466,40 @@ def disable_trades() -> bool:
     logger.info("Trades disabled")
     return True
 
+def click_steps(steps: Sequence[tuple[str, tuple[int, int]]]) -> bool:
+    """Click each (what, position) in turn with UI_SETTLE after it, logging it; False (nothing more clicked) if Roblox can't be focused first."""
+    if not focus_roblox():
+        return False
+    for label, pos in steps:
+        logger.debug(f"{label}...")
+        hover_click(*pos)
+        wait_interruptible(cfg.UI_SETTLE)
+    return True
+
+def travel_to_trade_hub() -> bool:
+    """From the house (or anywhere the backpack opens): equip the Trading Hub Phone from the backpack's Toys, use it (a click in the world, as the game
+    does with a held toy), TRAVEL TO HUB and Yes. The clicks are the positions of a human's run; the game then loads the Trading Hub."""
+    if not focus_roblox():
+        return False
+    logger.debug("Opening backpack...")
+    pydirectinput.press(cfg.KEY_BACKPACK)
+    wait_interruptible(cfg.UI_SETTLE)
+    steps = [("Toys tab", cfg.TRADE_HUB_TOYS_TAB_POS), ("Trading Hub Phone", cfg.TRADE_HUB_PHONE_POS), ("Equip", cfg.TRADE_HUB_EQUIP_POS)]
+    if not click_steps(steps):
+        return False
+    close_backpack("the Trading Hub Phone")
+    if not click_steps([("Using the phone", cfg.TRADE_HUB_USE_POS), ("Travel to hub", cfg.TRADE_HUB_TRAVEL_POS), ("Yes", cfg.TRADE_HUB_YES_POS)]):
+        return False
+    log_run_event("travelling to the Trading Hub")
+    return True
+
+def leave_trade_hub() -> bool:
+    """In the Trading Hub: the GO HOME button at the top and REGULAR SERVER in what opens; the game then loads a regular server."""
+    if not click_steps([("Go home button", cfg.TRADE_HUB_HOME_POS), ("Regular server", cfg.TRADE_HUB_REGULAR_SERVER_POS)]):
+        return False
+    log_run_event("leaving the Trading Hub")
+    return True
+
 def parse_server_link(link: str) -> Optional[tuple[str, str]]:
     """Turn a private server link (share or older form) into (type, code), or None.
     See docs/ARCHITECTURE.md#side-actions.
@@ -3420,77 +3454,52 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
         stop_walking()
     return False
 
-def find_candy_corn(img: Image) -> list[Point]:
-    """Where candy corn lies in `img` (Stitches' Spotlight): small blobs of its orange-yellow within STITCHES_SEARCH_BOX, which are
-    not thin stripes. Not read, only found."""
-    left, top, right, bottom = cfg.STITCHES_SEARCH_BOX
+def stitches_ring_angle(img: Image) -> Optional[float]:
+    """The slope, in degrees, of the gold line along the ring walkway's inner edge in `img` (Stitches' Spotlight): 0 when it runs straight across the screen,
+    which it does when the camera looks at the middle of the ring; positive when it falls to the right (the middle is to the right), negative when it
+    rises. None when too little of it shows (STITCHES_LINE_MIN_PIXELS: it is not seen in the red of a searchlight, or with the camera turned from the ring)."""
+    left, top, right, bottom = cfg.STITCHES_LINE_BOX
     hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
     hue, saturation, value = hsv[..., 0], hsv[..., 1], hsv[..., 2]
-    mask = ((hue >= cfg.STITCHES_CANDY_HUE[0]) & (hue <= cfg.STITCHES_CANDY_HUE[1])
-            & (saturation >= cfg.STITCHES_CANDY_MIN_SATURATION) & (value >= cfg.STITCHES_CANDY_MIN_VALUE)).astype(np.uint8)
-    count, _, stats, centres = cv2.connectedComponentsWithStats(mask)
-    pieces = []
-    for i in range(1, count):
-        width, height, area = int(stats[i][2]), int(stats[i][3]), int(stats[i][4])
-        if (cfg.STITCHES_CANDY_AREA[0] <= area <= cfg.STITCHES_CANDY_AREA[1] and max(width, height) <= cfg.STITCHES_CANDY_MAX_SIDE
-                and area >= cfg.STITCHES_CANDY_MIN_FILL * width * height):
-            pieces.append((int(centres[i][0]) + left, int(centres[i][1]) + top))
-    return pieces
+    mask = ((hue >= cfg.STITCHES_LINE_HUE[0]) & (hue <= cfg.STITCHES_LINE_HUE[1]) & (saturation >= cfg.STITCHES_LINE_MIN_SATURATION)
+            & (value >= cfg.STITCHES_LINE_VALUE[0]) & (value <= cfg.STITCHES_LINE_VALUE[1]))
+    ys, xs = np.nonzero(mask)
+    if len(xs) < cfg.STITCHES_LINE_MIN_PIXELS:
+        return None
+    dx, dy = cv2.fitLine(np.column_stack([xs, ys]).astype(np.float32), cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()[:2]
+    angle = math.degrees(math.atan2(dy, dx))
+    return angle - 180 if angle > 90 else angle + 180 if angle < -90 else angle
 
-def stitches_red(img: Image) -> tuple[float, float]:
-    """How much of the left and of the right half of STITCHES_RED_BOX (around the character) is the searchlight's red: (left, right) fractions."""
-    left, top, right, bottom = cfg.STITCHES_RED_BOX
-    hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
-    hue, saturation, value = hsv[..., 0], hsv[..., 1], hsv[..., 2]
-    red = (((hue <= cfg.STITCHES_RED_HUE_MAX[0]) | (hue >= cfg.STITCHES_RED_HUE_MAX[1]))
-           & (saturation >= cfg.STITCHES_RED_MIN_SATURATION) & (value >= cfg.STITCHES_RED_MIN_VALUE))
-    middle = red.shape[1] // 2
-    return float(red[:, :middle].mean()), float(red[:, middle:].mean())
-
-def stitches_covered(img: Image) -> bool:
-    """True if planks (dark, grey) fill STITCHES_COVER_BOX, in front of the character: the player is hidden from the searchlight."""
-    left, top, right, bottom = cfg.STITCHES_COVER_BOX
-    hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
-    plank = (hsv[..., 1] <= cfg.STITCHES_COVER_MAX_SATURATION) & (hsv[..., 2] >= cfg.STITCHES_COVER_VALUE[0]) & (hsv[..., 2] <= cfg.STITCHES_COVER_VALUE[1])
-    return float(plank.mean()) >= cfg.STITCHES_COVER_FRACTION
-
-def stitches_key(img: Image) -> Optional[tuple[str, float]]:
-    """What to do about what is on screen in Stitches' Spotlight: (key to hold, seconds) or None to wait where the player is.
-    The searchlight on the character (red over STITCHES_DANGER_FRACTION of the box around it): behind planks, stay; else a step sideways away
-    from the red. Otherwise a step towards the nearest piece of candy corn (the further of the two axes first), or at random if there is none."""
-    left_red, right_red = stitches_red(img)
-    if (left_red + right_red) / 2 >= cfg.STITCHES_DANGER_FRACTION:
-        if stitches_covered(img):
-            return None
-        return ("d" if left_red > right_red else "a"), cfg.STITCHES_FLEE_STEP
-    cx, cy = cfg.STITCHES_CHARACTER
-    pieces = [piece for piece in find_candy_corn(img) if math.hypot(piece[0] - cx, piece[1] - cy) > cfg.STITCHES_CANDY_REACHED]
-    if not pieces:
-        return random.choice(cfg.MOVE_KEYS), cfg.STITCHES_WANDER_STEP
-    px, py = min(pieces, key=lambda piece: math.hypot(piece[0] - cx, piece[1] - cy))
-    dx, dy = px - cx, py - cy
-    if abs(dx) >= abs(dy) and abs(dx) > cfg.STITCHES_STEER_DEADBAND:
-        return ("d" if dx > 0 else "a"), cfg.STITCHES_STEP
-    return ("s" if dy > 0 else "w"), cfg.STITCHES_STEP
+def stitches_camera_turn(img: Image) -> Optional[tuple[str, float]]:
+    """(key, seconds) that turns the camera towards the middle of the ring (STITCHES_TURN_KEYS: left, right), longer the further off the ring's line is
+    from straight across (up to STITCHES_TURN_HOLD_MAX), or None when it is within STITCHES_LINE_DEADBAND or not seen."""
+    angle = stitches_ring_angle(img)
+    if angle is None or abs(angle) <= cfg.STITCHES_LINE_DEADBAND:
+        return None
+    return cfg.STITCHES_TURN_KEYS[angle > 0], cfg.STITCHES_TURN_HOLD_MAX * min(abs(angle), 90.0) / 90.0
 
 def play_stitches_spotlight(deadline: float, watch: MinigameWatch) -> bool:
-    """Stitches' Spotlight: once its overlay shows (or the start wait is over), look at the screen every STITCHES_LOOK_INTERVAL and walk
-    (stitches_key()) towards the nearest candy corn, staying still behind planks or stepping aside while the searchlight's red is on the
-    character. The candy corn count is not read. True if won before `deadline`. See docs/ARCHITECTURE.md#playing-stitches-spotlight."""
+    """Stitches' Spotlight: once its overlay shows (or the start wait is over), walk round the ring by holding D (KEY_STITCHES_WALK) and, every
+    STITCHES_CENTER_INTERVAL, turn the camera until the ring's gold edge line runs straight across the screen, i.e. the camera looks at the middle
+    (stitches_camera_turn()); that keeps the walk on the ring. Nothing is read or avoided: the candy corn on the way is picked up by walking over it.
+    True if won before `deadline`. See docs/ARCHITECTURE.md#playing-stitches-spotlight."""
     logger.debug(f"Stitches' Spotlight: waiting for it to start (at most {cfg.MINIGAME_START_WAIT:g}s)...")
     waited_until = time.time() + cfg.MINIGAME_START_WAIT
     while time.time() < waited_until and watch.last_seen is None:
         minigame_wait(cfg.GHOST_START_LOOK_INTERVAL, watch)
     watch.start_wait_over()
-    while time.time() < deadline and not watch.problem:
-        img = minigame_look(watch)
-        if detect_minigame_victory(img):
-            return True
-        action = stitches_key(img)
-        if action is None:
-            wait_interruptible(cfg.STITCHES_LOOK_INTERVAL)
-        else:
-            hold_key(*action)
+    pydirectinput.keyDown(cfg.KEY_STITCHES_WALK)
+    try:
+        while time.time() < deadline and not watch.problem:
+            img = minigame_look(watch)
+            if detect_minigame_victory(img):
+                return True
+            turn = stitches_camera_turn(img)
+            if turn is not None:
+                hold_key(*turn)
+            wait_interruptible(cfg.STITCHES_CENTER_INTERVAL)
+    finally:
+        pydirectinput.keyUp(cfg.KEY_STITCHES_WALK)
     return False
 
 MINIGAME_PLAYERS = {"hauntlet_2": play_hauntlet_2, "ghost_gallery": play_ghost_gallery, "stitches_spotlight": play_stitches_spotlight}
@@ -5393,6 +5402,8 @@ class DebugCapture(logging.Handler):
         self.text.insert(tk.END, line + "\n", level)
         self.at_line_start = True
 
+OUTSIDE_ACTIONS: dict[str, Callable[[], Any]] = {"rejoin": leave_and_rejoin, "setup": setup_game, "trade_hub": travel_to_trade_hub, "leave_trade_hub": leave_trade_hub}   # the commands that do what a button does (AdoptMeGUI.act_from_outside())
+
 class AdoptMeGUI:
     def __init__(self, root: tk.Tk) -> None:
         state.macro_window = self
@@ -5445,7 +5456,7 @@ class AdoptMeGUI:
 
     def poll_commands(self) -> None:
         """Do the command waiting in COMMANDS_PATH, if any (Tk's thread): `start` the loop, `stop` it (the cooperative stop, same as [STOP]), `exit`
-        (stop, release every key and the mouse, and close the window - what the X button does) or `set` a switch (set_switch()). Looks again
+        (stop, release every key and the mouse, and close the window - what the X button does) `set` a switch (set_switch()), `rejoin`, `setup`, `trade_hub` or `leave_trade_hub` (act_from_outside()), or `refresh_debug`. Looks again
         COMMAND_POLL_MS later."""
         data = read_command()
         command = data["command"] if data else None
@@ -5462,24 +5473,34 @@ class AdoptMeGUI:
             self.stop()
         elif command == "set" and data:
             self.set_switch(data["kind"], data["name"], data["value"])
-        elif command == "rejoin":
+        elif command in OUTSIDE_ACTIONS:
             self.rejoin_waits = 0
-            self.rejoin_from_outside()
+            self.act_from_outside(command)
+        elif command == "refresh_debug":
+            self.refresh_debug_from_outside()
         self.root.after(cfg.COMMAND_POLL_MS, self.poll_commands)
 
-    def rejoin_from_outside(self) -> None:
-        """Leave and rejoin the game, as the Leave & rejoin button does (`rejoin` command). A running loop is stopped first and the rejoin starts once it has
-        ended, looking again every REJOIN_STOP_POLL_MS for up to REJOIN_STOP_WAIT_MS."""
+    def act_from_outside(self, command: str) -> None:
+        """Do what the button of the same name does (OUTSIDE_ACTIONS: `rejoin` is Leave & rejoin, `setup` is Setup). A running loop is stopped first and
+        the action starts once it has ended, looking again every REJOIN_STOP_POLL_MS for up to REJOIN_STOP_WAIT_MS."""
         if self.is_running:
             self.stop()
             if self.rejoin_waits * cfg.REJOIN_STOP_POLL_MS >= cfg.REJOIN_STOP_WAIT_MS:
-                logger.warning("Rejoin asked for, but the running loop did not stop")
+                logger.warning(f"{command} asked for, but the running loop did not stop")
                 return
             self.rejoin_waits += 1
-            self.root.after(cfg.REJOIN_STOP_POLL_MS, self.rejoin_from_outside)
+            self.root.after(cfg.REJOIN_STOP_POLL_MS, lambda: self.act_from_outside(command))
             return
-        log_run_event("rejoin asked for from outside (the Discord bot)")
-        self.run_async(leave_and_rejoin)
+        log_run_event(f"{command} asked for from outside (the Discord bot)")
+        self.run_async(OUTSIDE_ACTIONS[command])
+
+    def refresh_debug_from_outside(self) -> None:
+        """Empty the debug folder as the Refresh debug button does, without asking; not while something is running, which is writing there."""
+        if self.is_running:
+            logger.warning("Refresh debug asked for, but the macro is running - stop it first")
+            return
+        logger.debug(f"Debug folder refreshed ({refresh_debug()} entries removed)")
+        mark_stopped()                                           # (the status file went with the rest)
 
     def set_switch(self, kind: str, name: str, value: bool) -> None:
         """Change a switch as its checkbox does - persist it and tick or untick the checkbox in the window: a need's (the Debug tab), or an option (the

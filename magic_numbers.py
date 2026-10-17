@@ -197,7 +197,7 @@ for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
 COMMANDS_PATH = os.path.join(DEBUG_DIR, "commands.json")    # a command for the macro, written by the Discord bot (see read_command()); the macro removes it once read
-COMMANDS = ("start", "stop", "exit", "set", "rejoin")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), or leave and rejoin the game
+COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, or travel to / leave the Trading Hub
 NEED_NAMES = ("catch", "pet", "choose", "ride", "walk", "hungry", "thirsty", "dirty", "potty", "sleepy", "bored", "beach", "school", "cafe", "salon", "pizza", "camping", "sick")   # the Debug tab's need switches (the keys of main.py's NEED_HANDLER_CLASSES)
 OPTION_SWITCHES = {"side_quest": "side_quest_enabled", "resume_on_focus_loss": "resume_on_focus_loss", "record_next_run": "record_next_run",
                    **{f"play_{name}": f"{name}_enabled" for name in MINIGAME_LABELS}}   # the other switches a command may change: name -> the game config's key ("show_debug_lines" too, which is only in the window)
@@ -315,29 +315,16 @@ GHOST_BOSS_BAR_GOLD = ((15, 150, 160), (30, 255, 255))
 GHOST_BOSS_BAR_MIN = 3000
 GHOST_BOSS_BAR_IGNORE = (680, 150, 1240, 275)  # the bar itself, in the boss phase: its crest and its ghost icons are the same cyan
 GHOST_LOOK_INTERVAL = 0.06
-STITCHES_LOOK_INTERVAL = 0.3                 # Stitches' Spotlight: between looks at the screen
-STITCHES_CHARACTER = (960, 600)              # where the player's character stands on the screen
-STITCHES_SEARCH_BOX = (250, 260, 1670, 920)  # where candy corn is looked for (not the HUD, the buttons, or the far wall's stripes)
-STITCHES_CANDY_HUE = (14, 26)                # candy corn's orange-yellow (OpenCV hue), with at least the saturation and value below
-STITCHES_CANDY_MIN_SATURATION = 150
-STITCHES_CANDY_MIN_VALUE = 170
-STITCHES_CANDY_AREA = (15, 260)              # a piece's blob size in pixels; a bigger blob is a wall stripe or a light
-STITCHES_CANDY_MAX_SIDE = 40
-STITCHES_CANDY_MIN_FILL = 0.35               # of its bounding box (a stripe is thin and long)
-STITCHES_CANDY_REACHED = 70                  # a piece this close to the character is being picked up already (the magnet): the next one is chosen
-STITCHES_STEER_DEADBAND = 45                 # a piece this near straight ahead (or beside) needs no sideways (or forward) key
-STITCHES_STEP = 0.35                         # how long a movement key is held to walk towards a piece
-STITCHES_WANDER_STEP = 0.6                   # and when there is none in sight
-STITCHES_RED_BOX = (830, 420, 1090, 680)     # around the character: red here is the searchlight on the player
-STITCHES_RED_HUE_MAX = (6, 172)              # OpenCV hue at most the first or at least the second is red, with the saturation and value below
-STITCHES_RED_MIN_SATURATION = 110
-STITCHES_RED_MIN_VALUE = 110
-STITCHES_DANGER_FRACTION = 0.2               # of STITCHES_RED_BOX that is red: the searchlight is on the character
-STITCHES_COVER_BOX = (890, 300, 1030, 520)   # the dark grey planks to hide behind show here, in front of the character
-STITCHES_COVER_MAX_SATURATION = 70
-STITCHES_COVER_VALUE = (35, 120)
-STITCHES_COVER_FRACTION = 0.4                # of STITCHES_COVER_BOX that is plank: the player is behind cover and stays where it is
-STITCHES_FLEE_STEP = 0.5                     # how long a sideways key is held to get out of the red
+KEY_STITCHES_WALK = "d"                      # Stitches' Spotlight: held all round, to walk round the ring
+STITCHES_CENTER_INTERVAL = 0.5               # between looks at the ring's edge line, to turn the camera towards the middle
+STITCHES_LINE_BOX = (500, 560, 1500, 1010)   # where the ring walkway's gold edge line is looked for (below the horizon, round the character)
+STITCHES_LINE_HUE = (26, 40)                 # the line's dim olive-gold (OpenCV hue), with the saturation and value below (candy corn is brighter and more orange)
+STITCHES_LINE_MIN_SATURATION = 110
+STITCHES_LINE_VALUE = (85, 175)
+STITCHES_LINE_MIN_PIXELS = 3500              # less of it than this is not a line to go by
+STITCHES_LINE_DEADBAND = 12.0                # degrees from straight across that need no turn
+STITCHES_TURN_KEYS = ("left", "right")       # (the camera is turned towards a line that falls to the right by the second)
+STITCHES_TURN_HOLD_MAX = 0.2                 # seconds a turn key is held for a line 90 degrees off, less for less
 GHOST_START_LOOK_INTERVAL = 0.5              # while waiting for the game to begin
 GHOST_INTRO_WAIT = 6.0                       # after its overlay shows, the game's own intro camera (a look at the ceiling) runs this long; the zoom and tilt come after, or are undone
 # The boss can't be hurt while its bar shows two or three ghost icons instead of its health: the bar's cyan fill (BGR (255, 222, 0),
@@ -838,6 +825,16 @@ SETUP_TRADES_INTERACTION_TAB_POS = (1022, 436)
 SETUP_TRADES_SETTING_POS = (1029, 549)
 SETUP_TRADES_NO_ONE_POS = (1028, 604)
 SETUP_TRADES_CLOSE_POS = (1121, 358)
+
+# travel_to_trade_hub() and leave_trade_hub(): the clicks of a human's run (the backpack opens with the key; the Trading Hub Phone is the first of the Toys' Special row).
+TRADE_HUB_TOYS_TAB_POS = (762, 855)
+TRADE_HUB_PHONE_POS = (895, 738)
+TRADE_HUB_EQUIP_POS = (999, 840)
+TRADE_HUB_USE_POS = (1217, 521)            # anywhere in the world: a held toy is used by a click
+TRADE_HUB_TRAVEL_POS = (1040, 595)         # the phone's TRAVEL TO HUB
+TRADE_HUB_YES_POS = (1050, 665)            # "Travel to the Trade Hub?"
+TRADE_HUB_HOME_POS = (1372, 97)            # the GO HOME button at the top of the Trading Hub
+TRADE_HUB_REGULAR_SERVER_POS = (917, 540)  # REGULAR SERVER in "You are in the Trading Hub. Go to a Regular Server?"
 
 # leave_and_rejoin(), modelled on how Natro Macro (a Bee Swarm Simulator macro) reconnects: close
 # Roblox properly (esc, l, enter, then kill any leftover process), start the game again through a

@@ -1400,7 +1400,7 @@ def write_command(macro, command, age=0, **extra):
 def test_a_fresh_command_is_read_once_and_the_file_is_removed(macro, monkeypatch, tmp_path):
     monkeypatch.setattr(macro.cfg, "COMMANDS_PATH", str(tmp_path / "commands.json"))
     assert macro.read_command() is None                                       # (no file)
-    for command in ("start", "stop", "exit", "rejoin"):
+    for command in ("start", "stop", "exit", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub"):
         write_command(macro, command)
         assert macro.read_command()["command"] == command and not os.path.exists(macro.cfg.COMMANDS_PATH)
 
@@ -1447,23 +1447,53 @@ def test_the_commands_do_what_the_buttons_do_and_polling_goes_on_except_after_ex
     assert gui.calls == [] and gui.root.scheduled[-1][1] == "poll_commands"
 
 
-def test_rejoin_runs_the_rejoin_and_first_stops_a_running_loop_but_gives_up_if_it_does_not_end(macro, monkeypatch, tmp_path):
-    gui = remote_gui(macro, monkeypatch, tmp_path)
-    write_command(macro, "rejoin")
-    gui.poll_commands()
-    assert gui.calls == [("run_async", "leave_and_rejoin")]
-    gui = remote_gui(macro, monkeypatch, tmp_path, running=True)
-    write_command(macro, "rejoin")
-    gui.poll_commands()
-    assert gui.calls == [("stop",)] and ("rejoin_from_outside" in [name for _, name in gui.root.scheduled])
-    gui.is_running = False                                                    # the loop has ended: the next look does the rejoin
-    gui.rejoin_from_outside()
-    assert gui.calls[-1] == ("run_async", "leave_and_rejoin")
+def test_rejoin_and_setup_run_what_their_buttons_run_and_first_stop_a_running_loop_but_give_up_if_it_does_not_end(macro, monkeypatch, tmp_path):
+    for command, action in (("rejoin", "leave_and_rejoin"), ("setup", "setup_game"), ("trade_hub", "travel_to_trade_hub"), ("leave_trade_hub", "leave_trade_hub")):
+        gui = remote_gui(macro, monkeypatch, tmp_path)
+        write_command(macro, command)
+        gui.poll_commands()
+        assert gui.calls == [("run_async", action)]
+        gui = remote_gui(macro, monkeypatch, tmp_path, running=True)
+        write_command(macro, command)
+        gui.poll_commands()
+        assert gui.calls == [("stop",)] and len(gui.root.scheduled) == 2
+        gui.is_running = False                                                # the loop has ended: the next look does it
+        gui.act_from_outside(command)
+        assert gui.calls[-1] == ("run_async", action)
     gui = remote_gui(macro, monkeypatch, tmp_path, running=True)              # a loop that never ends
     gui.rejoin_waits = macro.cfg.REJOIN_STOP_WAIT_MS // macro.cfg.REJOIN_STOP_POLL_MS
     gui.root.scheduled.clear()
-    gui.rejoin_from_outside()
-    assert gui.root.scheduled == [] and ("run_async", "leave_and_rejoin") not in gui.calls
+    gui.act_from_outside("setup")
+    assert gui.root.scheduled == [] and ("run_async", "setup_game") not in gui.calls
+
+
+def test_the_trade_hub_trips_click_the_recorded_positions_in_order(macro, monkeypatch):
+    cfg, clicks, keys = macro.cfg, [], []
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, **k: clicks.append((x, y)))
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
+    monkeypatch.setattr(macro, "log_run_event", lambda message: None)
+    monkeypatch.setattr(macro, "close_backpack", lambda step: keys.append("closed"))
+    monkeypatch.setattr(macro.pydirectinput, "press", lambda key: keys.append(key))
+    assert macro.travel_to_trade_hub() and keys == [cfg.KEY_BACKPACK, "closed"]
+    assert clicks == [cfg.TRADE_HUB_TOYS_TAB_POS, cfg.TRADE_HUB_PHONE_POS, cfg.TRADE_HUB_EQUIP_POS, cfg.TRADE_HUB_USE_POS, cfg.TRADE_HUB_TRAVEL_POS, cfg.TRADE_HUB_YES_POS]
+    clicks.clear()
+    assert macro.leave_trade_hub() and clicks == [cfg.TRADE_HUB_HOME_POS, cfg.TRADE_HUB_REGULAR_SERVER_POS]
+    clicks.clear(), keys.clear()
+    monkeypatch.setattr(macro, "focus_roblox", lambda: False)                  # (Roblox cannot be focused: nothing is clicked)
+    assert not macro.travel_to_trade_hub() and not macro.leave_trade_hub() and clicks == [] and keys == []
+
+
+def test_refresh_debug_is_done_when_nothing_runs_and_the_status_is_written_again(macro, monkeypatch, tmp_path):
+    done = []
+    monkeypatch.setattr(macro, "refresh_debug", lambda: done.append("refreshed") or 3)
+    monkeypatch.setattr(macro, "mark_stopped", lambda: done.append("status"))
+    for running, expected in ((True, []), (False, ["refreshed", "status"])):
+        done.clear()
+        gui = remote_gui(macro, monkeypatch, tmp_path, running=running)
+        write_command(macro, "refresh_debug")
+        gui.poll_commands()
+        assert done == expected
 
 
 def test_start_does_nothing_to_a_loop_that_is_running_and_the_loop_argument_starts_it_once_the_window_is_up(macro, monkeypatch, tmp_path):

@@ -247,6 +247,10 @@ def test_failures_are_posted_one_a_minute_and_the_rest_counted():
     assert "1 more failure since" in bot_lib.failure_text(failure, 1) and "3 more failures since" in bot_lib.failure_text(failure, 3)
 
 
+def test_the_loop_is_idle_only_when_the_status_says_so():
+    assert bot_lib.loop_idle({"stopped": "2026-10-17 12:00:00"}) and not bot_lib.loop_idle({"stopped": None}) and not bot_lib.loop_idle(None)
+
+
 def test_a_macro_stopped_on_purpose_is_not_reported_as_not_updating():
     old = {"updated": (NOW - timedelta(minutes=30)).strftime(bot_lib.TIME_FORMAT), "stopped": "2026-10-17 12:00:00"}
     assert bot_lib.stale_alert(False, old, NOW, 5) == (False, None)
@@ -345,10 +349,13 @@ def test_what_can_be_pulled_is_what_is_in_the_folder_newest_first_and_nothing_el
             bot_lib.resolve_pull(source, item)
 
 
-def test_a_capture_is_pulled_as_its_zips_and_info_not_its_frames_and_other_things_as_all_their_files(debug_folders):
+def test_a_capture_is_pulled_as_its_zips_alone_not_its_frames_and_other_things_as_all_their_files(debug_folders):
     make_capture(debug_folders / "minigame_captures", "hauntlet_2_20261016_100000_9330cc_room23", zips=("p1.zip", "p2.zip"))
     path, name = bot_lib.resolve_pull("minigame_captures", None)
-    assert sorted(rel for _, rel in bot_lib.pull_files(path, name)) == sorted(os.path.join(name, r) for r in ("info.json", "events.jsonl", os.path.join("zips", "p1.zip"), os.path.join("zips", "p2.zip")))
+    assert sorted(rel for _, rel in bot_lib.pull_files(path, name)) == sorted(os.path.join(name, r) for r in (os.path.join("zips", "p1.zip"), os.path.join("zips", "p2.zip")))
+    make_capture(debug_folders / "minigame_captures", "ghost_gallery_20261016_110000")
+    path, name = bot_lib.resolve_pull("minigame_captures", bot_lib.PULL_ALL)                  # (everything: still only the zips, of every capture)
+    assert {os.path.splitext(rel)[1] for _, rel in bot_lib.pull_files(path, name)} == {".zip"}
     touch(debug_folders / "failures" / "f1" / "screen.png", 1)
     touch(debug_folders / "failures" / "f1" / "sub" / "info.txt", 1)
     path, name = bot_lib.resolve_pull("failures", "f1")

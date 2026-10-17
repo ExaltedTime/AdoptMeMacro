@@ -529,6 +529,7 @@ class RunStats:
     focus_resumes: int = 0
     last_resolved: Optional[dict[str, str]] = None                   # {"need", "time"}
     last_failure: Optional[dict[str, Optional[str]]] = None          # {"time", "reason", "screenshot"}
+    stopped: Optional[str] = None                                    # when what was running was ended by the user ([STOP], the window's X, the Discord bot) or finished: no more updates are due
 
     def reset(self) -> None:
         """Start afresh (a workflow was just started)."""
@@ -628,6 +629,12 @@ def write_status() -> None:
         os.replace(tmp, cfg.STATUS_PATH)
     except (OSError, TypeError):
         pass
+
+def mark_stopped() -> None:
+    """Note in the status file that the macro is no longer running anything on purpose, so that the status not being updated any more is not
+    taken for a stuck macro (the Discord bot's alert)."""
+    run_stats.stopped = time.strftime("%Y-%m-%d %H:%M:%S")
+    write_status()
 
 def log_failure(reason: str, screenshot: bool = True) -> None:
     """Record that something went wrong: print it, add it to the run log,
@@ -5420,11 +5427,13 @@ class AdoptMeGUI:
 
     def start_remote_control(self, loop: bool) -> None:
         """Begin looking for commands in COMMANDS_PATH every COMMAND_POLL_MS (see poll_commands()), and with `loop` (the --loop argument) start the
-        loop once the window is up, as if the loop button was pressed. Commands left from before are dropped first."""
+        loop once the window is up, as if the loop button was pressed; without it the status file says that nothing is running. Commands left from before are dropped first."""
         read_command()
         self.root.after(cfg.COMMAND_POLL_MS, self.poll_commands)
         if loop:
             self.root.after(cfg.START_LOOP_DELAY_MS, self.start_loop_from_outside)
+        else:
+            mark_stopped()                                       # a window up with no loop going: the status of an earlier run is not one that is due an update
 
     def start_loop_from_outside(self) -> None:
         """Start the loop, as the loop button does (`start` command, or the --loop argument)."""
@@ -5495,6 +5504,7 @@ class AdoptMeGUI:
             state.capture.stop()
             state.capture = None
         STOP_EVENT.set()
+        mark_stopped()
         time.sleep(cfg.STOP_CHECK_INTERVAL * 3)   # the worker notices the stop within a check or two and releases what it holds
         release_all_inputs()
         self.root.destroy()
@@ -5694,6 +5704,7 @@ class AdoptMeGUI:
             try:
                 func()
                 final_status = "[DONE]"
+                mark_stopped()
             except StopRequested:
                 # Must be caught before the generic Exception handler below -
                 # StopRequested is itself an Exception subclass, so if the
@@ -5701,6 +5712,7 @@ class AdoptMeGUI:
                 # misreport a clean stop as "[ERROR]".
                 record(log_run_event, "stopped by the user")
                 final_status = "[STOPPED]"
+                mark_stopped()
             except TaskInterrupted as interruption:
                 # The GUI's Setup button ran setup_game() with the in-task checks on, and a disconnect made them
                 # rejoin the game - which ran setup itself. The action is done, not crashed.
@@ -5712,6 +5724,7 @@ class AdoptMeGUI:
                 if stop_pressed_soon():
                     record(log_run_event, "stopped by the user")
                     final_status = "[STOPPED]"
+                    mark_stopped()
                 else:
                     record(log_failure, "stopped: Roblox lost focus")
                     final_status = "[STOPPED: Roblox not focused]"

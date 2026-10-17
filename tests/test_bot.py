@@ -247,6 +247,14 @@ def test_failures_are_posted_one_a_minute_and_the_rest_counted():
     assert "1 more failure since" in bot_lib.failure_text(failure, 1) and "3 more failures since" in bot_lib.failure_text(failure, 3)
 
 
+def test_a_macro_stopped_on_purpose_is_not_reported_as_not_updating():
+    old = {"updated": (NOW - timedelta(minutes=30)).strftime(bot_lib.TIME_FORMAT), "stopped": "2026-10-17 12:00:00"}
+    assert bot_lib.stale_alert(False, old, NOW, 5) == (False, None)
+    assert bot_lib.stale_alert(True, old, NOW, 5) == (False, None)             # (stopped while it was flagged: no "updating again" either)
+    text = bot_lib.status_text(old, NOW, 5, True)
+    assert "stopped at 2026-10-17 12:00:00" in text and "NOT UPDATING" not in text
+
+
 def test_a_stale_status_is_reported_once_and_so_is_its_recovery():
     old = {"updated": (NOW - timedelta(minutes=9)).strftime(bot_lib.TIME_FORMAT)}
     fresh = {"updated": (NOW - timedelta(seconds=20)).strftime(bot_lib.TIME_FORMAT)}

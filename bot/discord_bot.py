@@ -102,12 +102,12 @@ def release_inputs() -> None:
                 pass
 
 
-def launch_macro(config: bot_lib.Config) -> int:
-    """Start `main.py --loop` (the repository's, with the configured Python) as a process of its own, in this desktop session; what it prints on its
+def launch_macro(config: bot_lib.Config, loop: bool = True) -> int:
+    """Start `main.py` (the repository's, with the configured Python; `--loop` if `loop`) as a process of its own, in this desktop session; what it prints on its
     error output is appended to debug/logs/macro_stderr.log. Returns its process id."""
     folder = config.repo_dir or ROOT
     with open(os.path.join(cfg.LOGS_DIR, "macro_stderr.log"), "ab") as errors:
-        process = subprocess.Popen([config.python or sys.executable, os.path.join(folder, "main.py"), "--loop"], cwd=folder,
+        process = subprocess.Popen([config.python or sys.executable, os.path.join(folder, "main.py"), *(["--loop"] if loop else [])], cwd=folder,
                                    stdout=subprocess.DEVNULL, stderr=errors)
     return process.pid
 
@@ -146,6 +146,27 @@ async def stop_macro(config: bot_lib.Config) -> str:
     with contextlib.suppress(OSError):
         os.remove(cfg.COMMANDS_PATH)
     return f"The macro did not stop within {config.stop_timeout_seconds:g} s - it was killed and its keys and mouse buttons released."
+
+
+async def open_macro(config: bot_lib.Config) -> str:
+    """Start the macro with its window up and no loop going (`main.py`), unless it is running already."""
+    if await asyncio.to_thread(current_macro_pids):
+        return "The macro is already running."
+    await asyncio.to_thread(launch_macro, config, False)
+    deadline = time.time() + cfg.BOT_START_CONFIRM
+    while time.time() < deadline:
+        await asyncio.sleep(2)
+        if await asyncio.to_thread(current_macro_pids):
+            return "Started the macro (its window is up, no loop going - /loop starts the loop)."
+    return "Started the macro, but its process is not there - see /log and macro_stderr.log."
+
+
+async def stop_loop(config: bot_lib.Config) -> str:
+    """Ask the running macro to stop its loop (the [STOP] button); its window stays open."""
+    if not await asyncio.to_thread(current_macro_pids):
+        return "The macro is not running."
+    bot_lib.write_command(cfg.COMMANDS_PATH, "stop", time.time())
+    return "Asked the macro to stop (its keys are released; its window stays open - /exit closes it)."
 
 
 async def start_macro(config: bot_lib.Config) -> str:
@@ -220,7 +241,7 @@ async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say) -
             errors = output_tail(os.path.join(cfg.LOGS_DIR, "macro_stderr.log"))
             await say(f"The macro does not look started. The end of its error output:\n```\n{errors}\n```\nUse /rollback to go back to {bot_lib.short(old)}.")
     else:
-        await say("The macro was not running, so it was not started (/start).")
+        await say("The macro was not running, so it was not started (/loop).")
     if bot_lib.needs_bot_restart(changed):
         await say("The bot's own code changed - the bot restarts now.")
         RESTART_BOT = True
@@ -299,19 +320,30 @@ def build(config: bot_lib.Config) -> discord.Client:
         state.desired_state, state.crash_reported = desired, False
         bot_lib.save_state(bot_lib.state_path(), state)
 
-    @command("start", "Start the macro's loop (launches the macro if it is not running)")
+    @command("start", "Start the macro with its window up and no loop going")
     async def start(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        remember("running")
+        await interaction.followup.send(await open_macro(config))
+
+    @command("loop", "Start the macro's loop (launches the macro if it is not running)")
+    async def loop(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         remember("running")
         await interaction.followup.send(await start_macro(config))
 
-    @command("stop", "Stop the macro: its keys are released and its window closed")
+    @command("stop", "Stop the macro's loop (its window stays open)")
     async def stop(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        await interaction.followup.send(await stop_loop(config))
+
+    @command("exit", "Close the macro: its loop is stopped, its keys are released and its window closed")
+    async def exit_macro(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         remember("stopped")
         await interaction.followup.send(await stop_macro(config))
 
-    @command("restart", "Stop the macro, then start it")
+    @command("restart", "Close the macro, then start it with its loop")
     async def restart(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         remember("stopped")
@@ -326,7 +358,7 @@ def build(config: bot_lib.Config) -> discord.Client:
             await interaction.followup.send("The macro isn't running - /start it first (a rejoin is done by its window).")
             return
         bot_lib.write_command(cfg.COMMANDS_PATH, "rejoin", time.time())
-        await interaction.followup.send("Asked the macro to leave and rejoin. Its loop is stopped; /start it again once it is back in the game.")
+        await interaction.followup.send("Asked the macro to leave and rejoin. Its loop is stopped; /loop it again once it is back in the game.")
 
     async def change_switch(interaction: discord.Interaction, kind: str, name: str, value: bool) -> None:
         """Ask the running macro to change a switch (the command file) and say what the game config shows a moment later."""
@@ -504,7 +536,7 @@ async def watch_once(channel: discord.abc.Messageable, config: bot_lib.Config, s
                 state.crash_reported = False
             else:
                 limit = " (the limit of automatic restarts this hour is used)" if config.auto_restart else ""
-                await channel.send(f"**The macro's process is gone** while it should be running{limit}. /start starts it again.")
+                await channel.send(f"**The macro's process is gone** while it should be running{limit}. /start or /loop starts it again.")
         elif event == "recovered":
             await channel.send("The macro's process is running again.")
     if bot_lib.heartbeat_due(state.last_heartbeat, config.heartbeat_hours, now):

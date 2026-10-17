@@ -1477,8 +1477,21 @@ def test_start_does_nothing_to_a_loop_that_is_running_and_the_loop_argument_star
     assert [name for _, name in gui.root.scheduled] == ["poll_commands", "start_loop_from_outside"] and not os.path.exists(macro.cfg.COMMANDS_PATH)
     assert gui.calls == []
     gui.root.scheduled.clear()
+    marked = []
+    monkeypatch.setattr(macro, "mark_stopped", lambda: marked.append(True))
+    gui.start_remote_control(loop=True)
+    assert marked == []
+    gui.root.scheduled.clear()
     gui.start_remote_control(loop=False)
-    assert [name for _, name in gui.root.scheduled] == ["poll_commands"]
+    assert [name for _, name in gui.root.scheduled] == ["poll_commands"] and marked == [True]       # (no loop: the status says nothing is running)
+
+
+def test_stopping_on_purpose_is_written_to_the_status_and_a_new_run_clears_it(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "STATUS_PATH", str(tmp_path / "status.json"))
+    macro.mark_stopped()
+    assert json.load(open(macro.cfg.STATUS_PATH))["stopped"]
+    macro.reset_run_stats()
+    assert json.load(open(macro.cfg.STATUS_PATH))["stopped"] is None
 
 
 def test_a_set_command_is_only_read_for_a_switch_that_exists_with_a_true_or_false_value(macro, monkeypatch, tmp_path):

@@ -160,7 +160,9 @@ def status_text(status: Optional[dict[str, Any]], now: datetime, stale_minutes: 
         age = (now - datetime.strptime(str(status.get("updated")), TIME_FORMAT)).total_seconds()
     except ValueError:
         age = None
-    if age is None:
+    if status.get("stopped"):
+        lines.append(f"Macro: stopped at {status['stopped']} (on purpose - nothing is running)")
+    elif age is None:
         lines.append("Macro: status has no update time")
     elif age > stale_minutes * 60:
         lines.append(f"Macro: NOT UPDATING - last update {age_text(age)} ago (stuck, stopped or the PC is asleep)")
@@ -363,7 +365,10 @@ def is_stale(status: Optional[dict[str, Any]], now: datetime, stale_minutes: flo
 
 
 def stale_alert(was_stale: bool, status: Optional[dict[str, Any]], now: datetime, stale_minutes: float) -> tuple[bool, Optional[str]]:
-    """The new "is stale" state and what to post for the change: once when the macro stops updating, once when it is updating again."""
+    """The new "is stale" state and what to post for the change: once when the macro stops updating, once when it is updating again. A macro that
+    was stopped on purpose (its status says `stopped`) is not stale, and nothing is posted for it."""
+    if status is not None and status.get("stopped"):
+        return False, None
     stale = is_stale(status, now, stale_minutes)
     if stale is None or stale == was_stale:
         return was_stale, None
@@ -399,7 +404,7 @@ class BotState:
     charts: list[str] = field(default_factory=list)          # run charts already posted (or there when the bot first started)
     stale: bool = False
     last_heartbeat: Optional[float] = None
-    desired_state: Optional[str] = None                      # "running" or "stopped" after the bot's /start and /stop, None before: a macro that is gone is a crash only if it should run
+    desired_state: Optional[str] = None                      # "running" or "stopped" after the bot's /start, /loop and /exit, None before: a macro that is gone is a crash only if it should run
     crash_reported: bool = False                             # the macro's process is gone and that was posted
     restarts: list[float] = field(default_factory=list)      # when the bot restarted the macro by itself (the last hour counts)
     previous_commit: Optional[str] = None                    # the commit the PC was on before the last /update: what /rollback goes back to
@@ -590,7 +595,7 @@ def restart_allowed(history: list[float], now: float, per_hour: int) -> tuple[bo
 
 
 def crash_check(desired: Optional[str], running: Optional[bool], reported: bool) -> tuple[bool, Optional[str]]:
-    """Whether the macro's process is gone when the bot's /start (and not /stop) says it should be there: the new "reported" state and "alert" or
+    """Whether the macro's process is gone when the bot's /start or /loop (and not /exit) says it should be there: the new "reported" state and "alert" or
     "recovered" when that changes. Nothing is known (None) when the process check can't tell, or `/start` was never used."""
     if desired != "running":
         return False, None                                   # (stopped on purpose, or the bot never started it: no crash to report)

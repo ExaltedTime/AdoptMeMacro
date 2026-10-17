@@ -3,6 +3,7 @@ Discord; the macro's own writers (write_status(), record_minigame_result()) make
 here and not at the PC."""
 import json
 import os
+import pathlib
 import subprocess
 import types
 from datetime import datetime, timedelta
@@ -592,3 +593,16 @@ def test_the_update_source_is_a_name_git_cannot_take_for_an_option(tmp_path):
     assert bot_lib.load_state(path).previous_commit == "abc1234def"
     (tmp_path / "bot_state.json").write_text(json.dumps({"previous_commit": "--hard; rm -rf"}))
     assert bot_lib.load_state(path).previous_commit is None                                                       # (a state file is not trusted with a git argument)
+
+
+def test_every_slash_command_has_a_name_and_descriptions_discord_accepts():
+    """Discord refuses the whole upload (and the bot never gets its commands) for a description over 100 characters or a bad name."""
+    import re
+    source = (pathlib.Path(__file__).parent.parent / "bot" / "discord_bot.py").read_text(encoding="utf-8")
+    commands = re.findall(r'@command\("([^"]+)", "((?:[^"\\]|\\.)*)"\)', source)
+    assert len(commands) >= 20
+    for name, description in commands:
+        assert re.fullmatch(r"[a-z0-9_-]{1,32}", name) and 1 <= len(description) <= 100, name
+    for described in re.findall(r'@app_commands\.describe\((.*)\)', source):
+        for value in re.findall(r'="((?:[^"\\]|\\.)*)"', described):
+            assert 1 <= len(value) <= 100, value

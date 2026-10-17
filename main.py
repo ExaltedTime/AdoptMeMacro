@@ -1466,6 +1466,40 @@ def disable_trades() -> bool:
     logger.info("Trades disabled")
     return True
 
+def click_steps(steps: Sequence[tuple[str, tuple[int, int]]]) -> bool:
+    """Click each (what, position) in turn with UI_SETTLE after it, logging it; False (nothing more clicked) if Roblox can't be focused first."""
+    if not focus_roblox():
+        return False
+    for label, pos in steps:
+        logger.debug(f"{label}...")
+        hover_click(*pos)
+        wait_interruptible(cfg.UI_SETTLE)
+    return True
+
+def travel_to_trade_hub() -> bool:
+    """From the house (or anywhere the backpack opens): equip the Trading Hub Phone from the backpack's Toys, use it (a click in the world, as the game
+    does with a held toy), TRAVEL TO HUB and Yes. The clicks are the positions of a human's run; the game then loads the Trading Hub."""
+    if not focus_roblox():
+        return False
+    logger.debug("Opening backpack...")
+    pydirectinput.press(cfg.KEY_BACKPACK)
+    wait_interruptible(cfg.UI_SETTLE)
+    steps = [("Toys tab", cfg.TRADE_HUB_TOYS_TAB_POS), ("Trading Hub Phone", cfg.TRADE_HUB_PHONE_POS), ("Equip", cfg.TRADE_HUB_EQUIP_POS)]
+    if not click_steps(steps):
+        return False
+    close_backpack("the Trading Hub Phone")
+    if not click_steps([("Using the phone", cfg.TRADE_HUB_USE_POS), ("Travel to hub", cfg.TRADE_HUB_TRAVEL_POS), ("Yes", cfg.TRADE_HUB_YES_POS)]):
+        return False
+    log_run_event("travelling to the Trading Hub")
+    return True
+
+def leave_trade_hub() -> bool:
+    """In the Trading Hub: the GO HOME button at the top and REGULAR SERVER in what opens; the game then loads a regular server."""
+    if not click_steps([("Go home button", cfg.TRADE_HUB_HOME_POS), ("Regular server", cfg.TRADE_HUB_REGULAR_SERVER_POS)]):
+        return False
+    log_run_event("leaving the Trading Hub")
+    return True
+
 def parse_server_link(link: str) -> Optional[tuple[str, str]]:
     """Turn a private server link (share or older form) into (type, code), or None.
     See docs/ARCHITECTURE.md#side-actions.
@@ -5368,7 +5402,7 @@ class DebugCapture(logging.Handler):
         self.text.insert(tk.END, line + "\n", level)
         self.at_line_start = True
 
-OUTSIDE_ACTIONS: dict[str, Callable[[], Any]] = {"rejoin": leave_and_rejoin, "setup": setup_game}   # the commands that do what a button does (AdoptMeGUI.act_from_outside())
+OUTSIDE_ACTIONS: dict[str, Callable[[], Any]] = {"rejoin": leave_and_rejoin, "setup": setup_game, "trade_hub": travel_to_trade_hub, "leave_trade_hub": leave_trade_hub}   # the commands that do what a button does (AdoptMeGUI.act_from_outside())
 
 class AdoptMeGUI:
     def __init__(self, root: tk.Tk) -> None:
@@ -5422,7 +5456,7 @@ class AdoptMeGUI:
 
     def poll_commands(self) -> None:
         """Do the command waiting in COMMANDS_PATH, if any (Tk's thread): `start` the loop, `stop` it (the cooperative stop, same as [STOP]), `exit`
-        (stop, release every key and the mouse, and close the window - what the X button does) `set` a switch (set_switch()), `rejoin` or `setup` (act_from_outside()), or `refresh_debug`. Looks again
+        (stop, release every key and the mouse, and close the window - what the X button does) `set` a switch (set_switch()), `rejoin`, `setup`, `trade_hub` or `leave_trade_hub` (act_from_outside()), or `refresh_debug`. Looks again
         COMMAND_POLL_MS later."""
         data = read_command()
         command = data["command"] if data else None

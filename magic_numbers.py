@@ -197,7 +197,7 @@ for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
 COMMANDS_PATH = os.path.join(DEBUG_DIR, "commands.json")    # a command for the macro, written by the Discord bot (see read_command()); the macro removes it once read
-COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, or empty the debug folder
+COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, or travel to / leave the Trading Hub
 NEED_NAMES = ("catch", "pet", "choose", "ride", "walk", "hungry", "thirsty", "dirty", "potty", "sleepy", "bored", "beach", "school", "cafe", "salon", "pizza", "camping", "sick")   # the Debug tab's need switches (the keys of main.py's NEED_HANDLER_CLASSES)
 OPTION_SWITCHES = {"side_quest": "side_quest_enabled", "resume_on_focus_loss": "resume_on_focus_loss", "record_next_run": "record_next_run",
                    **{f"play_{name}": f"{name}_enabled" for name in MINIGAME_LABELS}}   # the other switches a command may change: name -> the game config's key ("show_debug_lines" too, which is only in the window)
@@ -825,6 +825,16 @@ SETUP_TRADES_INTERACTION_TAB_POS = (1022, 436)
 SETUP_TRADES_SETTING_POS = (1029, 549)
 SETUP_TRADES_NO_ONE_POS = (1028, 604)
 SETUP_TRADES_CLOSE_POS = (1121, 358)
+
+# travel_to_trade_hub() and leave_trade_hub(): the clicks of a human's run (the backpack opens with the key; the Trading Hub Phone is the first of the Toys' Special row).
+TRADE_HUB_TOYS_TAB_POS = (762, 855)
+TRADE_HUB_PHONE_POS = (895, 738)
+TRADE_HUB_EQUIP_POS = (999, 840)
+TRADE_HUB_USE_POS = (1217, 521)            # anywhere in the world: a held toy is used by a click
+TRADE_HUB_TRAVEL_POS = (1040, 595)         # the phone's TRAVEL TO HUB
+TRADE_HUB_YES_POS = (1050, 665)            # "Travel to the Trade Hub?"
+TRADE_HUB_HOME_POS = (1372, 97)            # the GO HOME button at the top of the Trading Hub
+TRADE_HUB_REGULAR_SERVER_POS = (917, 540)  # REGULAR SERVER in "You are in the Trading Hub. Go to a Regular Server?"
 
 # leave_and_rejoin(), modelled on how Natro Macro (a Bee Swarm Simulator macro) reconnects: close
 # Roblox properly (esc, l, enter, then kill any leftover process), start the game again through a

@@ -369,6 +369,22 @@ def build(config: bot_lib.Config) -> discord.Client:
         bot_lib.write_command(cfg.COMMANDS_PATH, "setup", time.time())
         await interaction.followup.send("Asked the macro to run Setup. Its loop is stopped; /loop it again once Setup is done.")
 
+    async def ask_macro(interaction: discord.Interaction, command_name: str, said: str) -> None:
+        await interaction.response.defer(thinking=True)
+        if not await asyncio.to_thread(current_macro_pids):
+            await interaction.followup.send("The macro isn't running - /start it first (it is done by its window).")
+            return
+        bot_lib.write_command(cfg.COMMANDS_PATH, command_name, time.time())
+        await interaction.followup.send(said)
+
+    @command("trade_hub", "Have the macro travel to the Trading Hub (stops its loop first)")
+    async def trade_hub(interaction: discord.Interaction) -> None:
+        await ask_macro(interaction, "trade_hub", "Asked the macro to travel to the Trading Hub. Its loop is stopped; /leave_trade_hub and /loop when you want it back.")
+
+    @command("leave_trade_hub", "Have the macro leave the Trading Hub for a regular server")
+    async def leave_trade_hub(interaction: discord.Interaction) -> None:
+        await ask_macro(interaction, "leave_trade_hub", "Asked the macro to leave the Trading Hub for a regular server.")
+
     @command("refresh_debug", "Empty the macro's debug folder (logs, captures, failures); the game config stays. Not while its loop runs")
     async def refresh_debug(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)

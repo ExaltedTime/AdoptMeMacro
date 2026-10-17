@@ -510,12 +510,12 @@ these windows - the macro's paycheck clicks don't close them, and their green
 buttons look like CASH OUT.
 (`load_templates()` reads each folder's crops once and re-reads them only when a file is added, changed or removed.)
 `dismiss_stray_windows()` recognises each by a crop of its title
-in `ref/popups/` (`trading_hub.png`, `star_rewards.png`, `star_rewards_claim.png`; matched within the
+in `ref/popups/` (`trading_hub.png`, `star_rewards.png`, `star_rewards_claim.png`, `task_board.png`; matched within the
 `box` in `STRAY_WINDOWS`, at least `STRAY_WINDOW_MATCH_THRESHOLD`) and clicks
 its `close_pos`; for the Trading Hub it first clicks the popup's green Okay
 (`STRAY_OKAY_*`) if that's showing. The Star Rewards has two views, each its own entry: the one that opens by itself once a day (`star_rewards_claim`) has only a green CLAIM! button and no X, so it is closed
 by clicking CLAIM!; the calendar one that the star icon opens (`star_rewards`) is closed by its red X. Only the calendar one was handled at first, with the X clicked wherever the window
-was - which closes nothing in the daily view, the one the macro meets (real screenshots of both are `tests/popups/star_rewards_claim.png` and `star_rewards.png`; the crops are cut from them). A new window is a new crop plus an entry in
+was - which closes nothing in the daily view, the one the macro meets (real screenshots of both are `tests/popups/star_rewards_claim.png` and `star_rewards.png`; the crops are cut from them). The **Task Board** (`task_board`: opened by a notification such as "Trading Hub: Your listing got an offer!", on its Alerts tab; its "TASK BOARD" plate is the same on every tab) is only closed, by its red X, for now. The real screenshots of the Trading Hub, the Task Board and both Star Rewards views are in `tests/popups/` - they are the Roblox screenshots (which lack the window's 23-row title bar) with 23 black rows added on top, to be the macro's frames, and the crops in `ref/popups/` are cut from them (the Trading Hub crop was already pixel-identical to the same place in a new screenshot, so it was kept). A new window is a new crop plus an entry in
 `STRAY_WINDOWS`. `setup_game()` also closes any before it starts, since an open
 one would take its clicks.
 
@@ -667,7 +667,7 @@ Options tab). Stitches' Spotlight ("Stitches' Spotlight is starting soon!", `ref
 the recording and in the readers' way). No needs can be seen while a minigame runs, so both end on the
 GAME OVER! screen instead - a red GAME OVER! banner over a green NICE! button,
 found by exact color (`detect_minigame_victory()`, checked every
-`MINIGAME_VICTORY_CHECK_INTERVAL`), which is the same for both. Every run ends on it, so reaching it is *finishing*, not winning (a real win, which gives a crypt key, shows the same screen; the macro can't tell them apart): what a run earned is the candy corn on the card. `save_minigame_result()` saves that card (`MINIGAME_RESULT_BOX` of the screen) as `runs/results/run<N>_<minigame>_<time>.png`, the newest `MAX_RESULT_SHOTS` kept, before NICE! is clicked. While it plays, `minigame_popup_checks()` runs `dismiss_stray_windows()` (and `detect_paycheck()` if it closed nothing) at most every `MINIGAME_POPUP_CHECK_INTERVAL`, including during the start waits (`minigame_wait()`) - the in-task `unscrew()` can't, since the minigame is played from it. Then NICE!
+`MINIGAME_VICTORY_CHECK_INTERVAL`), which is the same for both (the tests use real, lossless screenshots of it for both minigames, one with the next game's countdown over the banner: `tests/popups/win_screen_*.png`, `game_over.png`, and the crops `tests/fixtures/win_banner.png` and `win_button.png`; the banner is about eight times and the button about three times the pixels the checks ask for, so no threshold needed moving). Every run ends on it, so reaching it is *finishing*, not winning (a real win, which gives a crypt key, shows the same screen; the macro can't tell them apart): what a run earned is the candy corn on the card. `save_minigame_result()` saves that card (`MINIGAME_RESULT_BOX` of the screen) as `runs/results/run<N>_<minigame>_<time>.png`, the newest `MAX_RESULT_SHOTS` kept, before NICE! is clicked. While it plays, `minigame_popup_checks()` runs `dismiss_stray_windows()` (and `detect_paycheck()` if it closed nothing) at most every `MINIGAME_POPUP_CHECK_INTERVAL`, including during the start waits (`minigame_wait()`) - the in-task `unscrew()` can't, since the minigame is played from it. Then NICE!
 (`MINIGAME_VICTORY_BUTTON_POS`) is clicked and `MINIGAME_FINISH_WAIT` waited
 out (`click_nice_until_gone()`, which looks again and clicks up to
 `MINIGAME_VICTORY_CLICK_TRIES` times while the win screen is still up, logging a

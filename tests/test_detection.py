@@ -195,16 +195,25 @@ def test_stray_windows_are_recognised_and_closed(macro, monkeypatch, name):
     assert config["close_pos"] in macro.clicks
 
 
-@pytest.mark.parametrize("shot, name, closed_at", [("star_rewards_claim", "star_rewards_claim", (959, 675)), ("star_rewards", "star_rewards", (1209, 441))])
-def test_the_two_views_of_the_star_rewards_are_each_closed_where_they_close(macro, monkeypatch, shot, name, closed_at):
-    """Real screenshots: the daily one has only a CLAIM! button (no X), the calendar one that the star icon opens has a red X. Each is told from
-    the other, and clicked where its own way out is - the X was clicked on both before, which closes only one of them."""
+@pytest.mark.parametrize("shot, name, closed_at", [("star_rewards_claim", "star_rewards_claim", (959, 675)), ("star_rewards", "star_rewards", (1209, 441)),
+                                                   ("trading_hub", "trading_hub", (1278, 339)), ("task_board_alerts", "task_board", (1318, 369))])
+def test_each_stray_window_is_told_from_the_others_in_a_real_screenshot_and_closed_where_it_closes(macro, monkeypatch, shot, name, closed_at):
+    """Real screenshots (the Roblox ones, which lack the window's title bar, with 23 rows added on top as the macro's frames have). The Star Rewards
+    that opens by itself once a day has only a CLAIM! button (no X), the calendar one that the star icon opens has a red X: each is clicked where its
+    own way out is - the X was clicked on both before, which closes only one of them. The Trading Hub and the Task Board close with their X."""
     screen = screenshot(shot)
     monkeypatch.setattr(macro, "grab_screen", lambda: screen)
     monkeypatch.setattr(macro.time, "sleep", lambda s: None)
     assert macro.dismiss_stray_windows() == name
     assert macro.clicks == [closed_at]
     assert {k for k in macro.cfg.STRAY_WINDOWS if macro.popup_visible(screen, k)} == {name}
+
+
+def test_the_win_screens_of_both_minigames_are_recognised_in_real_screenshots_and_nothing_else_is(macro):
+    for name in ("win_screen_ghost_gallery", "win_screen_hauntlet_2", "game_over"):            # (the second has the next game's countdown over the banner's top)
+        assert macro.detect_minigame_victory(screenshot(name)) is True, name
+    for name in ("trading_hub", "task_board_alerts", "star_rewards", "star_rewards_claim", "hauntlet_house", "ghost_house", "paycheck", "backpack_open"):
+        assert macro.detect_minigame_victory(screenshot(name)) is False, name
 
 
 def test_an_empty_screen_has_no_stray_window(macro, monkeypatch):

@@ -5341,6 +5341,7 @@ class AdoptMeGUI:
         logger.info("=" * 60)
 
         self.is_running = False
+        self.rejoin_waits = 0                    # looks so far for the loop to stop, before a rejoin asked for from outside
         self.watch_stop_hotkey()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
@@ -5379,7 +5380,24 @@ class AdoptMeGUI:
             self.stop()
         elif command == "set" and data:
             self.set_switch(data["kind"], data["name"], data["value"])
+        elif command == "rejoin":
+            self.rejoin_waits = 0
+            self.rejoin_from_outside()
         self.root.after(cfg.COMMAND_POLL_MS, self.poll_commands)
+
+    def rejoin_from_outside(self) -> None:
+        """Leave and rejoin the game, as the Leave & rejoin button does (`rejoin` command). A running loop is stopped first and the rejoin starts once it has
+        ended, looking again every REJOIN_STOP_POLL_MS for up to REJOIN_STOP_WAIT_MS."""
+        if self.is_running:
+            self.stop()
+            if self.rejoin_waits * cfg.REJOIN_STOP_POLL_MS >= cfg.REJOIN_STOP_WAIT_MS:
+                logger.warning("Rejoin asked for, but the running loop did not stop")
+                return
+            self.rejoin_waits += 1
+            self.root.after(cfg.REJOIN_STOP_POLL_MS, self.rejoin_from_outside)
+            return
+        log_run_event("rejoin asked for from outside (the Discord bot)")
+        self.run_async(leave_and_rejoin)
 
     def set_switch(self, kind: str, name: str, value: bool) -> None:
         """Change a switch as its checkbox does - persist it and tick or untick the checkbox in the window: a need's (the Debug tab), or an option (the

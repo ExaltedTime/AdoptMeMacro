@@ -1400,7 +1400,7 @@ def write_command(macro, command, age=0, **extra):
 def test_a_fresh_command_is_read_once_and_the_file_is_removed(macro, monkeypatch, tmp_path):
     monkeypatch.setattr(macro.cfg, "COMMANDS_PATH", str(tmp_path / "commands.json"))
     assert macro.read_command() is None                                       # (no file)
-    for command in ("start", "stop", "exit"):
+    for command in ("start", "stop", "exit", "rejoin"):
         write_command(macro, command)
         assert macro.read_command()["command"] == command and not os.path.exists(macro.cfg.COMMANDS_PATH)
 
@@ -1445,6 +1445,25 @@ def test_the_commands_do_what_the_buttons_do_and_polling_goes_on_except_after_ex
     gui.calls.clear()
     gui.poll_commands()                                                       # nothing waiting: nothing done, polling goes on
     assert gui.calls == [] and gui.root.scheduled[-1][1] == "poll_commands"
+
+
+def test_rejoin_runs_the_rejoin_and_first_stops_a_running_loop_but_gives_up_if_it_does_not_end(macro, monkeypatch, tmp_path):
+    gui = remote_gui(macro, monkeypatch, tmp_path)
+    write_command(macro, "rejoin")
+    gui.poll_commands()
+    assert gui.calls == [("run_async", "leave_and_rejoin")]
+    gui = remote_gui(macro, monkeypatch, tmp_path, running=True)
+    write_command(macro, "rejoin")
+    gui.poll_commands()
+    assert gui.calls == [("stop",)] and ("rejoin_from_outside" in [name for _, name in gui.root.scheduled])
+    gui.is_running = False                                                    # the loop has ended: the next look does the rejoin
+    gui.rejoin_from_outside()
+    assert gui.calls[-1] == ("run_async", "leave_and_rejoin")
+    gui = remote_gui(macro, monkeypatch, tmp_path, running=True)              # a loop that never ends
+    gui.rejoin_waits = macro.cfg.REJOIN_STOP_WAIT_MS // macro.cfg.REJOIN_STOP_POLL_MS
+    gui.root.scheduled.clear()
+    gui.rejoin_from_outside()
+    assert gui.root.scheduled == [] and ("run_async", "leave_and_rejoin") not in gui.calls
 
 
 def test_start_does_nothing_to_a_loop_that_is_running_and_the_loop_argument_starts_it_once_the_window_is_up(macro, monkeypatch, tmp_path):

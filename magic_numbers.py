@@ -197,13 +197,15 @@ for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
 COMMANDS_PATH = os.path.join(DEBUG_DIR, "commands.json")    # a command for the macro, written by the Discord bot (see read_command()); the macro removes it once read
-COMMANDS = ("start", "stop", "exit", "set")                  # what it may hold: start the loop, stop it, stop and close the window, or change a switch (see NEED_NAMES, OPTION_SWITCHES)
+COMMANDS = ("start", "stop", "exit", "set", "rejoin")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), or leave and rejoin the game
 NEED_NAMES = ("catch", "pet", "choose", "ride", "walk", "hungry", "thirsty", "dirty", "potty", "sleepy", "bored", "beach", "school", "cafe", "salon", "pizza", "camping", "sick")   # the Debug tab's need switches (the keys of main.py's NEED_HANDLER_CLASSES)
 OPTION_SWITCHES = {"side_quest": "side_quest_enabled", "resume_on_focus_loss": "resume_on_focus_loss", "record_next_run": "record_next_run",
                    **{f"play_{name}": f"{name}_enabled" for name in MINIGAME_LABELS}}   # the other switches a command may change: name -> the game config's key ("show_debug_lines" too, which is only in the window)
 SHOW_DEBUG_LINES_OPTION = "show_debug_lines"
 COMMAND_POLL_MS = 1000                                      # how often the macro looks for one
 COMMAND_MAX_AGE = 30                                        # seconds: an older command is ignored (left over from before the macro was started)
+REJOIN_STOP_POLL_MS = 500                                   # a rejoin asked for while the loop runs: how often to see whether it has stopped
+REJOIN_STOP_WAIT_MS = 15000                                 # and how long to wait for that before giving up
 START_LOOP_DELAY_MS = 1500                                  # after the window is up, before the --loop argument starts the loop
 BOT_START_CONFIRM = 60                                     # seconds the bot waits, after /start, for the macro's loop to show in status.json
 BOT_MAX_PULL_MB = 2000                                      # /pull copies nothing that comes to more than this (OneDrive's free space is small)

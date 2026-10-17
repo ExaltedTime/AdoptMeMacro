@@ -319,6 +319,15 @@ def build(config: bot_lib.Config) -> discord.Client:
         remember("running")
         await interaction.followup.send(f"{stopped}\n{await start_macro(config)}")
 
+    @command("rejoin", "Have the macro leave the game and rejoin it (stops its loop first)")
+    async def rejoin(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        if not await asyncio.to_thread(current_macro_pids):
+            await interaction.followup.send("The macro isn't running - /start it first (a rejoin is done by its window).")
+            return
+        bot_lib.write_command(cfg.COMMANDS_PATH, "rejoin", time.time())
+        await interaction.followup.send("Asked the macro to leave and rejoin. Its loop is stopped; /start it again once it is back in the game.")
+
     async def change_switch(interaction: discord.Interaction, kind: str, name: str, value: bool) -> None:
         """Ask the running macro to change a switch (the command file) and say what the game config shows a moment later."""
         await interaction.response.defer(thinking=True)

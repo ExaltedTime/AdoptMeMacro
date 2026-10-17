@@ -134,6 +134,8 @@ Automatic posts (no command needed):
 
 ## Capture zips -> OneDrive
 
+**Built differently:** nothing is copied automatically (the watcher below was built and then taken out, with the housekeeping and the link). `/pull <folder> [item]` copies on request what the user names out of any folder of `debug/` (failures, logs, runs, minigame captures, captures, recordings - not `.config`) into `onedrive_dir/<folder>/`; a minigame capture goes as its zips, `info.json` and `events.jsonl`. See `docs/ARCHITECTURE.md#discord-bot`. What follows is the original plan.
+
 The simplest approach needs no Microsoft API:
 
 1. Set `onedrive_dir` in the bot config to a folder **inside the PC's synced OneDrive folder**, for example
@@ -219,7 +221,7 @@ Each phase is shippable and testable on its own; later phases build on earlier o
 2. Post with the failure's `screen.png`; rate-limit; heartbeat option.
 3. Test by forcing a failure (the Debug tab's handler tests, or stopping Roblox) and watching the post arrive.
 
-### Phase 3 - OneDrive capture zips - built, without links (not tried against a real server)
+### Phase 3 - OneDrive capture zips - built as an on-request `/pull`, not automatic and without links (not tried against a real server)
 
 1. `onedrive_dir` in the config; the watcher from the "Capture zips -> OneDrive" section above; `/captures` and
    `/capture-link`.

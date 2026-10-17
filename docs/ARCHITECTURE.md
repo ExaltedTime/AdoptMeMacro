@@ -1428,7 +1428,7 @@ exact values and rationale):
 | Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN/MAX_RADIUS`, `NEED_ICON_HOUGH_*`, `NEED_STRIP_*` (when the circle search is skipped) |
 | Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_MATCH_RADIUS_FRACTION`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
-| Discord bot | `COMMANDS_PATH`, `COMMANDS`, `COMMAND_POLL_MS`, `COMMAND_MAX_AGE`, `START_LOOP_DELAY_MS`, `BOT_START_CONFIRM`, `BOT_WATCH_INTERVAL`, `BOT_ALERT_GAP`, `BOT_CAPTURE_SETTLE`, `BOT_FILE_SETTLE`, `BOT_MAX_UPLOAD_MB` |
+| Discord bot | `PULL_SOURCES`, `BOT_MAX_PULL_MB`, `COMMANDS_PATH`, `COMMANDS`, `COMMAND_POLL_MS`, `COMMAND_MAX_AGE`, `START_LOOP_DELAY_MS`, `BOT_START_CONFIRM`, `BOT_WATCH_INTERVAL`, `BOT_ALERT_GAP`, `BOT_FILE_SETTLE`, `BOT_MAX_UPLOAD_MB` |
 | Debug logging | `OUTPUT_LOG_PATH`, `RUNS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
 | Hauntlet 2 reader | `HAUNTLET_ROOM_BOX`, `HAUNTLET_DIGIT_*`, `HAUNTLET_ROOM_MAX_DIGITS`, `HAUNTLET_SLOT_*`, `HAUNTLET_ITEM_*`, `HAUNTLET_BADGE_*`, `HAUNTLET_COUNT_*`, `HAUNTLET_NOT_ITEMS`, `HAUNTLET_HEART_*`, `HAUNTLET_*_DIR` |
@@ -1529,7 +1529,7 @@ resolution or Roblox's UI, look at the screenshot of a failure (`failures/`) and
 ## Discord bot
 
 `bot/` is a separate program, not part of `main.py`: a Discord bot that answers questions about the macro from anywhere (a phone, say). It is the first
-four phases of the plan in `docs/planned/Discord.md`: the read-only commands, alerts, copying the capture zips to OneDrive, and starting and stopping the macro. It runs **on the PC the macro runs on**, in the same logged-in desktop session, because it reads the
+four phases of the plan in `docs/planned/Discord.md`: the read-only commands, alerts, pulling things out of the debug folder into OneDrive on request, starting and stopping the macro, and updating it. It runs **on the PC the macro runs on**, in the same logged-in desktop session, because it reads the
 macro's files and grabs its screen; it connects out to Discord, so no port needs opening, and the Discord app itself is only on whatever device is used to type
 the commands. It is started by hand, next to the macro: `python bot/discord_bot.py [path to bot_config.json]`.
 
@@ -1539,7 +1539,7 @@ the commands. It is started by hand, next to the macro: `python bot/discord_bot.
 - **`bot/discord_bot.py`** is the glue that can't be tested away from Discord (discord.py, the screen grab, the process check): the commands below, registered
   for the one guild if `guild_id` is set (instant) or globally (up to an hour to show).
 - **`bot_config.json`** (untracked, and there is no example file: this list is where the keys are written down; the file is JSON, paths with forward slashes): `token`, `owner_id`, `channel_id`, optionally `guild_id`, `stale_status_minutes`
-  (how long `status.json` may go without an update before `/status` says it is not updating), `log_lines_max` (what `/log` is capped at), `onedrive_dir` (where the capture zips are copied to; leave it out to copy nothing), `onedrive_keep_days` (copies older than that are deleted; 0 keeps them all), `heartbeat_hours` (0: no heartbeat), `repo_dir` and `python` (what `/start` launches `main.py` with; the bot's own folder and Python when left out), `stop_timeout_seconds`, `auto_restart` (default off), `auto_restart_max_per_hour`, `update_remote` and `update_branch` (what `/update` pulls: `origin` and `main`).
+  (how long `status.json` may go without an update before `/status` says it is not updating), `log_lines_max` (what `/log` is capped at), `onedrive_dir` (the folder inside the synced OneDrive folder that `/pull` copies into; leave it out and `/pull` says there is nowhere to copy to), `heartbeat_hours` (0: no heartbeat), `repo_dir` and `python` (what `/start` launches `main.py` with; the bot's own folder and Python when left out), `stop_timeout_seconds`, `auto_restart` (default off), `auto_restart_max_per_hour`, `update_remote` and `update_branch` (what `/update` pulls: `origin` and `main`).
 - **Who is obeyed:** only `owner_id`, only in `channel_id`; anyone else's commands get no answer at all (`OwnerOnlyTree.interaction_check()`). The commands are a
   fixed list whose only arguments are numbers - nothing is run, no path is read from a message. The bot is created private ("Public Bot" off) and the token
   stays out of the repository (`.gitignore`).
@@ -1560,7 +1560,8 @@ the commands. It is started by hand, next to the macro: `python bot/discord_bot.
 | `/need <need> <on>` | switches a need on or off, as the Debug tab's checkbox does (the macro must be running: the command goes through the command file); says what the game config shows a moment later |
 | `/option <option> <on>` | the other switches: `side_quest`, `resume_on_focus_loss`, `record_next_run`, `play_<minigame>` and `show_debug_lines` (the output's debug lines, which is only a checkbox and so is not confirmed) |
 | `/options` | which options and needs are on, read from the game config (`debug/.config`, with the defaults for what is missing) |
-| `/captures` | the newest minigame captures on this PC, with their outcome, zips and size, and whether each has been copied to OneDrive |
+| `/captures` | the newest minigame captures on this PC, with their outcome, zips and size |
+| `/pull <folder> [item]` | copies something out of the debug folder into OneDrive - see below; nothing is copied to OneDrive unless this is used |
 
 **What the bot posts by itself.** `watch()` looks at the macro's files every `BOT_WATCH_INTERVAL` seconds (`watch_once()`; a look that fails is logged and the watching goes on) and keeps what it has dealt with in `bot_state.json` (`BotState`: where it got to in `run_log.txt`, the run charts and captures done, whether the status is stale, the last heartbeat), so a restart neither posts things twice nor misses what came while it was down. On its first start, what exists already is taken as dealt with, so old failures, charts and captures are not posted.
 
@@ -1568,7 +1569,8 @@ the commands. It is started by hand, next to the macro: `python bot/discord_bot.
 - **The macro stops updating:** once, when `status.json` has not been updated for `stale_status_minutes` (the macro is stuck, stopped, or the PC asleep or locked), and once when it updates again (`stale_alert()`).
 - **A run chart:** each new `run<N>.png` in `RUNS_DIR`, once it has been unchanged for `BOT_FILE_SETTLE` seconds.
 - **A heartbeat:** the `/status` text every `heartbeat_hours`, so silence means trouble; off by default.
-- **A capture is copied to OneDrive:** when `onedrive_dir` is set (and is a folder), a capture in `RUN_CAPTURES_DIR` is ready once its `info.json` has an `outcome` and none of its `zips/` has changed for `BOT_CAPTURE_SETTLE` seconds (the zips are written on a thread, so they can appear before they are complete; `ready_captures()`). Its zips are copied to `onedrive_dir/<capture name>/` (`copy_capture()`) - the OneDrive app on the PC uploads them from there - and the post says `Zips posted to OneDrive.` with the capture's name, outcome, zip count and size; there is no link (open the folder in OneDrive). Copies older than `onedrive_keep_days` are then deleted (`old_copies()`: only folders named like a capture's, nothing else in the folder). Discord takes about 10 MB from a bot, so the 25 MB parts can't be posted.
+
+**Pulling things into OneDrive (`/pull`).** Nothing is copied to OneDrive by itself (it was, once: a finished capture's zips; that was taken out). `/pull` takes a `folder` from the fixed list `PULL_SOURCES` - `failures`, `logs`, `runs`, `minigame_captures`, `captures`, `recordings`; the game config (`debug/.config`, which holds the private server link) is not in it - and optionally an `item`: left out, the newest entry of the folder; `*`, the whole folder; or an entry picked from the autocomplete (newest first). An item is only accepted if it is exactly the name of an entry in that folder (`resolve_pull()`: `..`, a slash or a drive letter get nowhere). It copies the files into `onedrive_dir/<folder>/` (`pull_files()`, `copy_pull()`) and says how many files and megabytes; the OneDrive app on the PC uploads them. A minigame capture is copied as its zips, `info.json` and `events.jsonl` - not its frames, which are the same again as the zips. A pull of more than `BOT_MAX_PULL_MB` copies nothing, and an existing copy of the same file is replaced.
 
 ### Remote control
 
@@ -1629,7 +1631,7 @@ clicks instead of making them. They cover:
 
 - `test_pure.py` - the small pure functions (server link parsing, durations,
   colour masks, axis rounding, failure kinds);
-- `test_bot.py` - the Discord bot's logic (`bot/bot_lib.py`): the config, who is obeyed, the messages made from the files `write_status()` and `record_minigame_result()` write, and the alert, OneDrive and control logic (failure lines, log offsets, rate limiting, stale status, captures ready and copied, the command file, crash and restart decisions);
+- `test_bot.py` - the Discord bot's logic (`bot/bot_lib.py`): the config, who is obeyed, the messages made from the files `write_status()` and `record_minigame_result()` write, and the alert, `/pull` and control logic (failure lines, log offsets, rate limiting, stale status, what can be pulled and how, the command file, crash and restart decisions, update and rollback against real git repositories);
 - `test_state.py` - the output log's levels, rotation and reopening, the console handler, stuck-need disabling, `process_needs()` (resolved, unresolvable and not-cleared cases), the sick handler on real screenshots (`tests/sick/`: the prompt, the dialog, the pet view), `RunStats`, `status.json`, the
   failure folders, the quiet and idle-respawn checks (including that a respawn
   leaves the 20-minute rejoin clock alone), stopping, and the open `output.log`;

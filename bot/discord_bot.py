@@ -11,7 +11,6 @@ import contextlib
 import io
 import logging
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -395,11 +394,35 @@ def build(config: bot_lib.Config) -> discord.Client:
         text = bot_lib.options_text(bot_lib.switch_states(bot_lib.read_json(cfg.GAME_CONFIG_PATH)))
         await interaction.followup.send(f"```\n{text}\n```")
 
-    @command("captures", "The newest minigame captures and whether they are in OneDrive")
+    pull_folders = [app_commands.Choice(name=name, value=name) for name in cfg.PULL_SOURCES]
+
+    @command("pull", "Copy something from the debug folder into OneDrive (the newest of a folder, or one you pick)")
+    @app_commands.choices(folder=pull_folders)
+    @app_commands.describe(folder="Which folder of debug/", item="Which one - leave out for the newest; * is everything in the folder")
+    async def pull(interaction: discord.Interaction, folder: app_commands.Choice[str], item: Optional[str] = None) -> None:
+        await interaction.response.defer(thinking=True)
+        if not config.onedrive_dir or not os.path.isdir(config.onedrive_dir):
+            await interaction.followup.send("onedrive_dir is not set, or is not a folder on this PC - there is nowhere to copy to.")
+            return
+        try:
+            path, name = bot_lib.resolve_pull(folder.value, item)
+            files = await asyncio.to_thread(bot_lib.pull_files, path, name)
+            megabytes = await asyncio.to_thread(bot_lib.copy_pull, files, config.onedrive_dir, folder.value, cfg.BOT_MAX_PULL_MB)
+        except (ValueError, OSError) as error:
+            await interaction.followup.send(f"Nothing copied: {error}")
+            return
+        await interaction.followup.send(f"Copied `{name}` ({len(files)} file{'s' if len(files) != 1 else ''}, {megabytes:.0f} MB) to OneDrive, in `{folder.value}/`. The OneDrive app on the PC uploads it from there.")
+
+    @pull.autocomplete("item")
+    async def pull_items(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        source = getattr(interaction.namespace, "folder", None)
+        names = [bot_lib.PULL_ALL, *bot_lib.pull_entries(source or "")]
+        return [app_commands.Choice(name=("* (everything in the folder)" if n == bot_lib.PULL_ALL else n)[:100], value=n) for n in names if current.lower() in n.lower()][:25]
+
+    @command("captures", "The newest minigame captures on the PC (/pull minigame_captures copies one to OneDrive)")
     async def captures(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
-        done = set(bot_lib.load_state(bot_lib.state_path()).captures)
-        await interaction.followup.send(f"```\n{bot_lib.captures_text(bot_lib.captures_dir(), done)}\n```")
+        await interaction.followup.send(f"```\n{bot_lib.captures_text(bot_lib.captures_dir())}\n```")
 
     async def setup_hook() -> None:
         client.loop.create_task(watch(client, config))
@@ -425,7 +448,7 @@ async def post(channel: discord.abc.Messageable, text: str, path: Optional[str] 
 
 async def watch(client: discord.Client, config: bot_lib.Config) -> None:
     """Every BOT_WATCH_INTERVAL seconds look at what the macro wrote and post what is new: failures (with their screenshot), a status that has gone
-    stale (and its recovery), run charts, a heartbeat - and copy finished captures' zips to OneDrive. A failure inside a look is logged and the watching
+    stale (and its recovery), run charts, a heartbeat, a macro that is gone. A failure inside a look is logged and the watching
     goes on. What it has dealt with is kept in bot_state.json, so a restart neither posts it again nor misses what came while it was down."""
     await client.wait_until_ready()
     channel = client.get_channel(config.channel_id) or await client.fetch_channel(config.channel_id)
@@ -435,22 +458,17 @@ async def watch(client: discord.Client, config: bot_lib.Config) -> None:
     if state.log_offset is None:                                   # the first start: what is there already is not news
         state.log_offset = bot_lib.file_end(bot_lib.run_log_path())
         state.charts = [os.path.basename(c) for c in bot_lib.run_charts()]
-        state.captures = [os.path.basename(f) for f in os.listdir(bot_lib.captures_dir())] if os.path.isdir(bot_lib.captures_dir()) else []
         bot_lib.save_state(path, state)
-    copying = bool(config.onedrive_dir)
-    if copying and not os.path.isdir(config.onedrive_dir):
-        await channel.send(f"onedrive_dir `{config.onedrive_dir}` is not a folder on this PC - the capture zips are not copied.")
-        copying = False
     while not client.is_closed():
         try:
-            await watch_once(channel, config, state, limiter, copying)
+            await watch_once(channel, config, state, limiter)
             bot_lib.save_state(path, state)
         except Exception:
             log.exception("a look at the macro's files failed")
         await asyncio.sleep(cfg.BOT_WATCH_INTERVAL)
 
 
-async def watch_once(channel: discord.abc.Messageable, config: bot_lib.Config, state: bot_lib.BotState, limiter: bot_lib.RateLimiter, copying: bool) -> None:
+async def watch_once(channel: discord.abc.Messageable, config: bot_lib.Config, state: bot_lib.BotState, limiter: bot_lib.RateLimiter) -> None:
     now = time.time()
     assert state.log_offset is not None
     lines, state.log_offset = bot_lib.read_new_lines(bot_lib.run_log_path(), state.log_offset)
@@ -466,16 +484,6 @@ async def watch_once(channel: discord.abc.Messageable, config: bot_lib.Config, s
         if os.path.basename(chart) not in state.charts and now - os.path.getmtime(chart) >= cfg.BOT_FILE_SETTLE:
             state.charts.append(os.path.basename(chart))
             await post(channel, f"Run chart {os.path.basename(chart)}", chart)
-    if copying:
-        copied = False
-        for capture in bot_lib.ready_captures(bot_lib.captures_dir(), set(state.captures), now, cfg.BOT_CAPTURE_SETTLE):
-            await asyncio.to_thread(bot_lib.copy_capture, capture, config.onedrive_dir)
-            state.captures.append(capture.name)
-            copied = True
-            await channel.send(bot_lib.capture_text(capture))
-        if copied:
-            for folder in bot_lib.old_copies(config.onedrive_dir, config.onedrive_keep_days, now):
-                await asyncio.to_thread(shutil.rmtree, folder, True)
     if state.desired_state == "running":
         running = await asyncio.to_thread(macro_process_running)
         state.crash_reported, event = bot_lib.crash_check(state.desired_state, running, state.crash_reported)

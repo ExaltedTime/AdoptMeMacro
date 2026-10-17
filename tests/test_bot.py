@@ -269,81 +269,111 @@ def test_a_heartbeat_is_due_when_switched_on_and_the_time_has_passed():
 def test_what_the_bot_has_dealt_with_is_kept_between_starts_and_a_bad_file_means_defaults(tmp_path):
     path = str(tmp_path / "bot_state.json")
     assert bot_lib.load_state(path) == bot_lib.BotState() and bot_lib.BotState().log_offset is None
-    state = bot_lib.BotState(log_offset=1234, charts=["run1.png"], captures=["hauntlet_2_20261016_100000"], stale=True, last_heartbeat=55.5)
+    state = bot_lib.BotState(log_offset=1234, charts=["run1.png"], stale=True, last_heartbeat=55.5)
     bot_lib.save_state(path, state)
     assert bot_lib.load_state(path) == state and not os.path.exists(path + ".tmp")
-    (tmp_path / "bot_state.json").write_text(json.dumps({"log_offset": "x", "charts": "run1.png", "captures": [1, "ok"], "stale": 1}))
-    assert bot_lib.load_state(path) == bot_lib.BotState(captures=["ok"])
+    (tmp_path / "bot_state.json").write_text(json.dumps({"log_offset": "x", "charts": "run1.png", "stale": 1}))
+    assert bot_lib.load_state(path) == bot_lib.BotState()
     (tmp_path / "bot_state.json").write_text("{broken")
     assert bot_lib.load_state(path) == bot_lib.BotState()
 
 
-# --- captures to OneDrive (Phase 3) ---
+# --- captures, and /pull into OneDrive ---
 
-def make_capture(root, name, outcome="finished (the game over screen)", zips=("capture_part01.zip",), age=100, size=1048576):
-    import time
+def make_capture(root, name, outcome="finished (the game over screen)", zips=("capture_part01.zip",), size=1048576):
     folder = root / name
     (folder / "zips").mkdir(parents=True)
+    (folder / "frame_000001_0.5.png").write_bytes(b"f" * size)                         # (the frames: the same again as the zips)
     if outcome is not None:
         (folder / "info.json").write_text(json.dumps({"outcome": outcome}))
+    (folder / "events.jsonl").write_text("{}\n")
     for z in zips:
         (folder / "zips" / z).write_bytes(b"x" * size)
-        os.utime(folder / "zips" / z, (time.time() - age, time.time() - age))
     return folder
 
 
-def test_a_capture_is_ready_when_it_is_over_has_zips_and_they_have_stopped_changing(tmp_path):
-    import time
+def test_the_captures_message_lists_the_newest_first_by_the_time_in_the_name(tmp_path):
     make_capture(tmp_path, "hauntlet_2_20261016_100000_9330cc_room23", zips=("a_part01.zip", "a_part02.zip"))
-    make_capture(tmp_path, "hauntlet_2_20261016_110000", outcome=None)                       # (still recording: no outcome yet)
-    make_capture(tmp_path, "hauntlet_2_20261016_120000", age=3)                                 # (a zip written a moment ago)
-    make_capture(tmp_path, "hauntlet_2_20261016_130000", zips=())                               # (no zips yet)
-    make_capture(tmp_path, "ghost_gallery_20261016_140000")
-    make_capture(tmp_path, "notes_20261016_150000")                                             # (not a capture's name)
-    make_capture(tmp_path, "hauntlet_2_20261016_160000")
-    ready = bot_lib.ready_captures(str(tmp_path), {"hauntlet_2_20261016_160000"}, time.time(), 20)
-    assert [c.name for c in ready] == ["hauntlet_2_20261016_100000_9330cc_room23", "ghost_gallery_20261016_140000"]          # (oldest first, by the time in the name)
-    assert len(ready[0].zips) == 2 and ready[0].megabytes == pytest.approx(2) and ready[0].outcome.startswith("finished")
-
-
-def test_a_captures_zips_are_copied_into_a_folder_of_its_name_and_the_post_says_so(tmp_path):
-    source, onedrive = tmp_path / "captures", tmp_path / "onedrive"
-    onedrive.mkdir()
-    make_capture(source, "hauntlet_2_20261016_100000_9330cc_room23", zips=("p1.zip", "p2.zip"))
-    import time
-    capture = bot_lib.ready_captures(str(source), set(), time.time(), 20)[0]
-    assert bot_lib.copy_capture(capture, str(onedrive)) == ["p1.zip", "p2.zip"]
-    assert sorted(os.listdir(onedrive / capture.name)) == ["p1.zip", "p2.zip"] and (source / capture.name / "zips" / "p1.zip").exists()
-    text = bot_lib.capture_text(capture)
-    assert "Hauntlet 2" in text and "2 zips" in text and "Zips posted to OneDrive." in text and "http" not in text
-
-
-def test_old_copies_are_only_capture_folders_older_than_the_days_kept(tmp_path):
-    import time
-    for name, days in (("hauntlet_2_20261001_100000", 20), ("ghost_gallery_20261015_100000", 2), ("my_notes", 40)):
-        (tmp_path / name).mkdir()
-        os.utime(tmp_path / name, (time.time() - days * 86400, time.time() - days * 86400))
-    (tmp_path / "hauntlet_2_20260101_000000").write_text("a file, not a folder")
-    assert bot_lib.old_copies(str(tmp_path), 14, time.time()) == [str(tmp_path / "hauntlet_2_20261001_100000")]
-    assert bot_lib.old_copies(str(tmp_path), 0, time.time()) == []                          # 0: keep everything
-
-
-def test_the_captures_message_lists_the_newest_with_where_they_are(tmp_path):
-    make_capture(tmp_path, "hauntlet_2_20261016_100000", size=2097152)
     make_capture(tmp_path, "ghost_gallery_20261016_110000", outcome=None)
-    text = bot_lib.captures_text(str(tmp_path), {"hauntlet_2_20261016_100000"})
-    first, second = text.splitlines()
-    assert first.startswith("ghost_gallery_20261016_110000: not finished") and first.endswith("not in OneDrive")
-    assert second == "hauntlet_2_20261016_100000: finished (the game over screen), 1 zips, 2 MB, in OneDrive"
-    assert bot_lib.captures_text(str(tmp_path / "none"), set()) == "No minigame captures on this PC."
+    make_capture(tmp_path, "notes_20261016_150000")                                             # (not a capture's name)
+    (tmp_path / "hauntlet_2_20261016_090000").write_text("a file, not a folder")
+    first, second = bot_lib.captures_text(str(tmp_path)).splitlines()
+    assert first == "ghost_gallery_20261016_110000: not finished, 1 zips, 1 MB"
+    assert second == "hauntlet_2_20261016_100000_9330cc_room23: finished (the game over screen), 2 zips, 2 MB"
+    assert bot_lib.captures_text(str(tmp_path / "none")) == "No minigame captures on this PC."
+
+
+@pytest.fixture
+def debug_folders(tmp_path, monkeypatch):
+    """The folders /pull takes from, in tmp_path, with a capture, failures, logs and a game config (which must never be reachable)."""
+    root = tmp_path / "debug"
+    for name in ("failures", "logs", "runs", "minigame_captures", "captures", "recordings"):
+        (root / name).mkdir(parents=True)
+    monkeypatch.setattr(bot_lib.cfg, "PULL_SOURCES", {name: str(root / name) for name in ("failures", "logs", "runs", "minigame_captures", "captures", "recordings")})
+    (root / ".config").write_text('{"private_server_link": "secret"}')
+    return root
+
+
+def touch(path, age, text="x"):
+    import time
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    os.utime(path, (time.time() - age, time.time() - age))
+
+
+def test_what_can_be_pulled_is_what_is_in_the_folder_newest_first_and_nothing_else(debug_folders):
+    touch(debug_folders / "failures" / "f_old" / "screen.png", 300)
+    touch(debug_folders / "failures" / "f_new" / "screen.png", 10)
+    os.utime(debug_folders / "failures" / "f_old", (1000, 1000)), os.utime(debug_folders / "failures" / "f_new", (2000, 2000))
+    touch(debug_folders / "failures" / ".hidden", 5)
+    assert bot_lib.pull_entries("failures") == ["f_new", "f_old"]
+    assert bot_lib.pull_entries("nothing") == [] and bot_lib.pull_entries("logs") == []
+    assert bot_lib.resolve_pull("failures", None) == (str(debug_folders / "failures" / "f_new"), "f_new")             # no item: the newest
+    assert bot_lib.resolve_pull("failures", "f_old")[1] == "f_old"
+    assert bot_lib.resolve_pull("failures", bot_lib.PULL_ALL) == (str(debug_folders / "failures"), "failures")
+    for source, item in (("failures", "../.config"), ("failures", ".."), ("failures", "f_new/screen.png"), ("failures", "/etc/passwd"), ("failures", "C:\\x"),
+                         ("failures", ".hidden"), ("failures", "nope"), ("logs", None), ("debug", None), (".config", None), ("../x", None)):
+        with pytest.raises(ValueError):
+            bot_lib.resolve_pull(source, item)
+
+
+def test_a_capture_is_pulled_as_its_zips_and_info_not_its_frames_and_other_things_as_all_their_files(debug_folders):
+    make_capture(debug_folders / "minigame_captures", "hauntlet_2_20261016_100000_9330cc_room23", zips=("p1.zip", "p2.zip"))
+    path, name = bot_lib.resolve_pull("minigame_captures", None)
+    assert sorted(rel for _, rel in bot_lib.pull_files(path, name)) == sorted(os.path.join(name, r) for r in ("info.json", "events.jsonl", os.path.join("zips", "p1.zip"), os.path.join("zips", "p2.zip")))
+    touch(debug_folders / "failures" / "f1" / "screen.png", 1)
+    touch(debug_folders / "failures" / "f1" / "sub" / "info.txt", 1)
+    path, name = bot_lib.resolve_pull("failures", "f1")
+    assert sorted(rel for _, rel in bot_lib.pull_files(path, name)) == sorted([os.path.join("f1", "screen.png"), os.path.join("f1", "sub", "info.txt")])
+    touch(debug_folders / "logs" / "run_log.txt", 1)
+    path, name = bot_lib.resolve_pull("logs", "run_log.txt")
+    assert bot_lib.pull_files(path, name) == [(path, "run_log.txt")]
+
+
+def test_pulled_files_are_copied_into_a_folder_of_the_source_and_a_too_big_pull_copies_nothing(debug_folders, tmp_path):
+    onedrive = tmp_path / "onedrive"
+    onedrive.mkdir()
+    make_capture(debug_folders / "minigame_captures", "hauntlet_2_20261016_100000", zips=("p1.zip", "p2.zip"))
+    path, name = bot_lib.resolve_pull("minigame_captures", None)
+    files = bot_lib.pull_files(path, name)
+    assert bot_lib.copy_pull(files, str(onedrive), "minigame_captures", 100) == pytest.approx(2, abs=0.01)
+    assert sorted(os.listdir(onedrive / "minigame_captures" / name / "zips")) == ["p1.zip", "p2.zip"] and (debug_folders / "minigame_captures" / name / "zips" / "p1.zip").exists()
+    bot_lib.copy_pull(files, str(onedrive), "minigame_captures", 100)                            # (again: replaces, no error)
+    other = tmp_path / "other"
+    other.mkdir()
+    with pytest.raises(ValueError, match="more than the 1 MB"):
+        bot_lib.copy_pull(files, str(other), "minigame_captures", 1)
+    assert os.listdir(other) == []
+    with pytest.raises(ValueError, match="no files"):
+        bot_lib.copy_pull([], str(other), "logs", 100)
 
 
 def test_the_new_config_keys_are_read_and_checked(tmp_path):
-    config = bot_lib.load_config(write_config(tmp_path, onedrive_dir=" C:/OneDrive/AdoptMeMacro/captures ", onedrive_keep_days=7, heartbeat_hours=6))
-    assert (config.onedrive_dir, config.onedrive_keep_days, config.heartbeat_hours) == ("C:/OneDrive/AdoptMeMacro/captures", 7.0, 6.0)
+    config = bot_lib.load_config(write_config(tmp_path, onedrive_dir=" C:/OneDrive/AdoptMeMacro/captures ", heartbeat_hours=6))
+    assert (config.onedrive_dir, config.heartbeat_hours) == ("C:/OneDrive/AdoptMeMacro/captures", 6.0)
     config = bot_lib.load_config(write_config(tmp_path))
     assert config.onedrive_dir == "" and config.heartbeat_hours == 0
-    for change in ({"onedrive_dir": 5}, {"onedrive_keep_days": -1}, {"heartbeat_hours": "2"}, {"heartbeat_hours": True}):
+    for change in ({"onedrive_dir": 5}, {"heartbeat_hours": -1}, {"heartbeat_hours": "2"}, {"heartbeat_hours": True}):
         with pytest.raises(bot_lib.ConfigError):
             bot_lib.load_config(write_config(tmp_path, **change))
 

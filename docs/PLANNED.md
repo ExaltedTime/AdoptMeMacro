@@ -32,7 +32,7 @@ Suggestions from reading through the code, none of them started. Roughly in orde
 
 ## Discord bot
 
-- [ ] Run the bot (all five phases are built) against a real Discord server and the real macro: the commands from a phone, a forced failure for the alert, a capture copied to OneDrive, `/start` and `/stop` (and that no key stays held in the game after a stop), `/update` and `/rollback` on a spare branch, and the bot restarting itself after an update (on Windows it opens a new console window). Only the logic is tested - and the update steps against real git repositories - not the Discord and Windows glue.
+- [ ] Run the bot (all five phases are built) against a real Discord server and the real macro: the commands from a phone, a forced failure for the alert, a `/pull` into OneDrive, `/start` and `/stop` (and that no key stays held in the game after a stop), `/update` and `/rollback` on a spare branch, and the bot restarting itself after an update (on Windows it opens a new console window). Only the logic is tested - and the update steps against real git repositories - not the Discord and Windows glue.
 
 ## Hauntlet 2
 

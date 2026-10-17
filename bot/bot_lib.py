@@ -29,7 +29,6 @@ class Config:
     stale_status_minutes: float
     log_lines_max: int
     onedrive_dir: str            # "": the capture zips are not copied anywhere
-    onedrive_keep_days: float
     heartbeat_hours: float       # 0: no heartbeat
     repo_dir: str                # "": the folder this repository is in
     python: str                  # "": the Python that runs the bot
@@ -42,7 +41,7 @@ class Config:
 
 GIT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")      # a remote or branch name: nothing git could take for an option, no spaces
 REQUIRED = ("token", "owner_id", "channel_id")
-DEFAULTS: dict[str, Any] = {"guild_id": None, "stale_status_minutes": 5, "log_lines_max": 40, "onedrive_dir": "", "onedrive_keep_days": 14, "heartbeat_hours": 0,
+DEFAULTS: dict[str, Any] = {"guild_id": None, "stale_status_minutes": 5, "log_lines_max": 40, "onedrive_dir": "", "heartbeat_hours": 0,
             "repo_dir": "", "python": "", "stop_timeout_seconds": 30, "auto_restart": False, "auto_restart_max_per_hour": 3,
             "update_remote": "origin", "update_branch": "main"}
 
@@ -75,7 +74,7 @@ def load_config(path: str) -> Config:
         raise ConfigError("log_lines_max must be a whole number of at least 1")
     if not isinstance(values["onedrive_dir"], str):
         raise ConfigError("onedrive_dir must be a folder path (a string), or left out")
-    for key in ("onedrive_keep_days", "heartbeat_hours"):
+    for key in ("heartbeat_hours",):
         if not isinstance(values[key], (int, float)) or isinstance(values[key], bool) or values[key] < 0:
             raise ConfigError(f"{key} must be a number, 0 or more")
     for key in ("repo_dir", "python"):
@@ -92,7 +91,7 @@ def load_config(path: str) -> Config:
             raise ConfigError(f"{key} must be a name of letters, digits and . _ / - (not starting with a dash), not {values[key]!r}")
     return Config(values["token"], values["owner_id"], values["channel_id"], values["guild_id"],
                   float(values["stale_status_minutes"]), values["log_lines_max"], values["onedrive_dir"].strip(),
-                  float(values["onedrive_keep_days"]), float(values["heartbeat_hours"]),
+                  float(values["heartbeat_hours"]),
                   values["repo_dir"].strip(), values["python"].strip(), float(values["stop_timeout_seconds"]),
                   values["auto_restart"], values["auto_restart_max_per_hour"], values["update_remote"], values["update_branch"])
 
@@ -398,7 +397,6 @@ def state_path() -> str:
 class BotState:
     log_offset: Optional[int] = None                         # None: never started - begin at the end of the run log, not at its start
     charts: list[str] = field(default_factory=list)          # run charts already posted (or there when the bot first started)
-    captures: list[str] = field(default_factory=list)        # capture folders already copied (or there when the bot first started)
     stale: bool = False
     last_heartbeat: Optional[float] = None
     desired_state: Optional[str] = None                      # "running" or "stopped" after the bot's /start and /stop, None before: a macro that is gone is a crash only if it should run
@@ -414,7 +412,7 @@ def load_state(path: str) -> BotState:
     for key in ("log_offset", "last_heartbeat"):
         if isinstance(data.get(key), (int, float)) and not isinstance(data.get(key), bool):
             setattr(state, key, data[key])
-    for key in ("charts", "captures"):
+    for key in ("charts",):
         if isinstance(data.get(key), list):
             setattr(state, key, [item for item in data[key] if isinstance(item, str)])
     if isinstance(data.get("previous_commit"), str) and re.fullmatch(r"[0-9a-f]{7,64}", data["previous_commit"]):
@@ -437,7 +435,7 @@ def save_state(path: str, state: BotState) -> None:
     os.replace(temp, path)
 
 
-# --- capture zips -> OneDrive (Phase 3) ---
+# --- captures, and pulling things out of the debug folder into OneDrive (/captures, /pull) ---
 
 CAPTURE_NAME = re.compile(r"^(hauntlet_2|ghost_gallery)_(\d{8}_\d{6})")
 
@@ -449,70 +447,78 @@ def capture_folders(captures_dir: str) -> list[str]:
     return [folder for _, folder in sorted(named)]
 
 
-@dataclass(frozen=True)
-class Capture:
-    name: str            # the capture's folder name
-    outcome: str
-    zips: tuple[str, ...]
-    megabytes: float
-
-
-def ready_captures(captures_dir: str, done: set[str], now: float, settle: float) -> list[Capture]:
-    """The captures in `captures_dir` that are ready to copy and not in `done`: `info.json` has an `outcome` (the recording is over) and there are
-    zips, none changed in the last `settle` seconds (they are written on a thread, so they can be there before they are complete). Oldest first."""
-    found = []
-    for folder in capture_folders(captures_dir):
-        name = os.path.basename(folder)
-        if name in done:
-            continue
-        info = read_json(os.path.join(folder, "info.json"))
-        zips = sorted(glob.glob(os.path.join(folder, "zips", "*.zip")))
-        if not info or not info.get("outcome") or not zips:
-            continue
-        if any(now - os.path.getmtime(z) < settle for z in zips):
-            continue
-        found.append(Capture(name, str(info["outcome"]), tuple(zips), sum(os.path.getsize(z) for z in zips) / 1048576))
-    return found
-
-
-def copy_capture(capture: Capture, onedrive_dir: str) -> list[str]:
-    """Copy the capture's zips into onedrive_dir/<capture name>/ (the OneDrive app uploads them from there). The names of the files copied."""
-    target = os.path.join(onedrive_dir, capture.name)
-    os.makedirs(target, exist_ok=True)
-    for zipfile_path in capture.zips:
-        shutil.copy2(zipfile_path, os.path.join(target, os.path.basename(zipfile_path)))
-    return [os.path.basename(z) for z in capture.zips]
-
-
-def capture_text(capture: Capture) -> str:
-    label = cfg.MINIGAME_LABELS.get(next((n for n in cfg.MINIGAME_LABELS if capture.name.startswith(n)), ""), capture.name)
-    return f"{label} capture `{capture.name}`: {capture.outcome} - {len(capture.zips)} zip{'s' if len(capture.zips) != 1 else ''}, {capture.megabytes:.0f} MB. Zips posted to OneDrive."
-
-
-def old_copies(onedrive_dir: str, keep_days: float, now: float) -> list[str]:
-    """The copied captures in `onedrive_dir` last changed more than `keep_days` ago - only folders named like a capture's (nothing else in the folder
-    is ever listed), and none when `keep_days` is 0 (keep everything)."""
-    if keep_days <= 0:
-        return []
-    old = []
-    for folder in glob.glob(os.path.join(onedrive_dir, "*")):
-        if CAPTURE_NAME.match(os.path.basename(folder)) and os.path.isdir(folder) and now - os.path.getmtime(folder) > keep_days * 86400:
-            old.append(folder)
-    return sorted(old)
-
-
-def captures_text(captures_dir: str, done: set[str], limit: int = 10) -> str:
-    """The /captures message: the newest `limit` captures on this PC, each with its outcome, zip count and size, and whether it is in OneDrive."""
+def captures_text(captures_dir: str, limit: int = 10) -> str:
+    """The /captures message: the newest `limit` minigame captures on this PC, each with its outcome, zip count and size."""
     rows = []
     for folder in reversed(capture_folders(captures_dir)):
-        name = os.path.basename(folder)
         info = read_json(os.path.join(folder, "info.json")) or {}
         zips = glob.glob(os.path.join(folder, "zips", "*.zip"))
-        size = sum(os.path.getsize(z) for z in zips) / 1048576
-        rows.append(f"{name}: {info.get('outcome', 'not finished')}, {len(zips)} zips, {size:.0f} MB, " + ("in OneDrive" if name in done else "not in OneDrive"))
+        rows.append(f"{os.path.basename(folder)}: {info.get('outcome', 'not finished')}, {len(zips)} zips, {sum(os.path.getsize(z) for z in zips) / 1048576:.0f} MB")
         if len(rows) == limit:
             break
     return "\n".join(rows) if rows else "No minigame captures on this PC."
+
+
+PULL_ALL = "*"           # the item that means everything in the folder
+
+
+def pull_entries(source: str, limit: int = 24) -> list[str]:
+    """The names of what is in the debug folder `source` (a key of magic_numbers.PULL_SOURCES) that /pull can take, newest first, at most `limit`."""
+    folder = cfg.PULL_SOURCES.get(source)
+    if folder is None or not os.path.isdir(folder):
+        return []
+    names = [name for name in os.listdir(folder) if not name.startswith(".") and not name.endswith(".tmp")]
+    return sorted(names, key=lambda name: os.path.getmtime(os.path.join(folder, name)), reverse=True)[:limit]
+
+
+def resolve_pull(source: str, item: Optional[str]) -> tuple[str, str]:
+    """(path, name) of what /pull `item` of `source` means: the newest entry when `item` is None, the whole folder for PULL_ALL, else the entry of
+    that exact name - which must be in the folder (a name is checked against what is there, so no path - `..`, a slash, a drive - gets anywhere).
+    ValueError if the folder is unknown or empty or there is no such entry."""
+    folder = cfg.PULL_SOURCES.get(source)
+    if folder is None:
+        raise ValueError(f"there is no folder called {source!r} to pull from")
+    if item == PULL_ALL:
+        return folder, source
+    names = pull_entries(source, limit=10 ** 6)
+    if not names:
+        raise ValueError(f"{source} has nothing in it")
+    if item is None:
+        item = names[0]
+    if item not in names:
+        raise ValueError(f"{source} has no {item!r}")
+    return os.path.join(folder, item), item
+
+
+def pull_files(path: str, name: str) -> list[tuple[str, str]]:
+    """(file on this PC, path inside the destination folder) for everything `path` is: a file; a folder's files, all of them - except a minigame
+    capture (a folder with a zips/ folder, where the frames are the same again as the zips): its zips, info.json and events.jsonl."""
+    if os.path.isfile(path):
+        return [(path, name)]
+    if os.path.isdir(os.path.join(path, "zips")):
+        wanted = [os.path.join(path, "info.json"), os.path.join(path, "events.jsonl"), *sorted(glob.glob(os.path.join(path, "zips", "*.zip")))]
+        return [(f, os.path.join(name, os.path.relpath(f, path))) for f in wanted if os.path.isfile(f)]
+    found = []
+    for root, _, files in os.walk(path):
+        for file in files:
+            full = os.path.join(root, file)
+            found.append((full, os.path.join(name, os.path.relpath(full, path))))
+    return found
+
+
+def copy_pull(files: list[tuple[str, str]], onedrive_dir: str, source: str, max_mb: float) -> float:
+    """Copy `files` into onedrive_dir/<source>/ (the OneDrive app uploads them from there); the megabytes copied. ValueError, and nothing copied, if
+    there are none or they come to more than `max_mb`."""
+    if not files:
+        raise ValueError("there are no files to copy")
+    total = sum(os.path.getsize(src) for src, _ in files) / 1048576
+    if total > max_mb:
+        raise ValueError(f"that is {total:.0f} MB - more than the {max_mb:g} MB one /pull will copy; pull a smaller one")
+    for src, relative in files:
+        target = os.path.join(onedrive_dir, source, relative)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        shutil.copy2(src, target)
+    return total
 
 
 # --- control: start, stop, restart the macro (Phase 4) ---

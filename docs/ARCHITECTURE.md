@@ -696,7 +696,7 @@ out `MINIGAME_MAX_DURATION`. The watch also looks for the "Disconnected" dialog 
 - `play_ghost_gallery()` waits until the game's overlay shows (at most `MINIGAME_START_WAIT`), then finds the ghosts on screen, aims the
   mouse at one and holds the button on it, and on the boss in the boss phase, until victory. See
   [Playing Ghost Gallery](#playing-ghost-gallery).
-- `play_stitches_spotlight()` waits for the overlay, then walks towards the nearest candy corn until victory. See
+- `play_stitches_spotlight()` waits for the overlay, then holds D and keeps the camera on the middle of the ring until victory. See
   [Playing Stitches' Spotlight](#playing-stitches-spotlight).
 
 A handler only counts as resolved (and only then triggers a respawn) if
@@ -1378,21 +1378,22 @@ by anything but distance (the human often picked the second or third nearest); i
 
 ### Playing Stitches' Spotlight
 
-First version, from one human-played round (a two-minute round; the overlay shows TIME LEFT, the title and the Candy Corn count). Candy corn lies
-about the stage; searchlights sweep it and tint what they cover red, and a player standing in the red loses. Dark grey planks stand about the stage
-and hide the player from the light (they break now and then). The count is never read: the player only has to collect some.
+First version, from two human-played rounds (a two-minute round; the overlay shows TIME LEFT, the title and the Candy Corn count). The player runs on a
+ring walkway round a central drum (with a bunny on it that moves, so the drum is not a landmark to match); candy corn lies along the ring and on the platforms
+at its sides, searchlights sweep it and tint what they cover red, and dark grey planks hide the player from the light. The count is never read.
 
-`play_stitches_spotlight()` waits for the overlay (`MINIGAME_START_WAIT`), then looks every `STITCHES_LOOK_INTERVAL` and acts on `stitches_key()`:
-- **the searchlight on the character** - red (`STITCHES_RED_HUE_MAX`, `STITCHES_RED_MIN_SATURATION`/`_VALUE`) fills at least `STITCHES_DANGER_FRACTION` of
-  `STITCHES_RED_BOX`, the area around the character. With planks filling `STITCHES_COVER_BOX` in front of it (`stitches_covered()`: dark, unsaturated
-  pixels, `STITCHES_COVER_FRACTION`) the player stays where it is; otherwise it holds a sideways key for `STITCHES_FLEE_STEP`, away from the redder half;
-- **otherwise** - `find_candy_corn()` finds candy corn by its orange-yellow (`STITCHES_CANDY_*`: hue, saturation, value, blob size, and a fill ratio that
-  rules out the thin stripes on the walls) inside `STITCHES_SEARCH_BOX`; the nearest piece further than `STITCHES_CANDY_REACHED` from
-  `STITCHES_CHARACTER` is walked to, a `STITCHES_STEP` at a time, along the axis it is furthest on (W/A/S/D as the screen shows it, the camera
-  being left alone). With none in sight a random direction is walked for `STITCHES_WANDER_STEP`.
+`play_stitches_spotlight()` waits for the overlay (`MINIGAME_START_WAIT`), holds `KEY_STITCHES_WALK` (D: a strafe, which round a middle the camera looks at is
+a walk round the ring) until victory, and every `STITCHES_CENTER_INTERVAL` turns the camera towards the middle (`stitches_camera_turn()`). Where the middle is
+comes from the ring's own edge: a gold line (`STITCHES_LINE_*`: hue, saturation and value of its dim olive-gold, looked for in `STITCHES_LINE_BOX`), fitted
+with a line (`stitches_ring_angle()`). A ground line across the camera's view runs straight across the screen, so when the camera looks at the middle of the
+ring the line is level. A line that falls to the right means the middle is to the right, and `STITCHES_TURN_KEYS` (left, right) turns the camera that way
+for up to `STITCHES_TURN_HOLD_MAX`, less the nearer the line is to level; within `STITCHES_LINE_DEADBAND` degrees nothing is done. With fewer than
+`STITCHES_LINE_MIN_PIXELS` of the line in sight (in a searchlight's red it is not found, and with the camera turned away) the camera is left alone.
+The red and the planks are not handled, and no candy corn is looked for: the magnet picks up what the walk passes.
 
-Not yet known from play: whether the camera stays behind the character (steering assumes up on the screen is W), how well planks are found as
-cover, and whether the stripes and lights on the walls fool the candy finder. The tests use frames of the round (`tests/stitches_spotlight/`).
+Not yet known from play: whether the left and right arrow keys turn the camera the way the table of `STITCHES_TURN_KEYS` says, whether D holds the
+character on the ring with those turns, how the round goes when the red is on the ring, and what the `E` key (a speed boost, by the game's message) is worth.
+The tests use frames of a round (`tests/stitches_spotlight/`).
 
 ### Candy corn
 

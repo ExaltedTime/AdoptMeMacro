@@ -1,10 +1,11 @@
-"""Playing Stitches' Spotlight: where candy corn lies, whether the searchlight is on the character or planks hide it, and what is done about it.
-Frames are real captures of a round (tests/stitches_spotlight/); time and the keyboard are faked."""
+"""Playing Stitches' Spotlight: the ring's gold edge line and the camera turns it asks for. Frames are real captures of a round (tests/stitches_spotlight/);
+time and the keyboard are faked."""
 import os
 import time
 
 import cv2
 import numpy as np
+import pytest
 
 HERE = os.path.join(os.path.dirname(__file__), "stitches_spotlight")
 
@@ -13,46 +14,40 @@ def shot(name):
     return cv2.imread(os.path.join(HERE, f"{name}.png"))
 
 
-def test_the_searchlight_on_the_character_is_told_from_a_safe_screen_and_from_hiding_behind_planks(macro):
-    for name, red, covered in (("safe", False, False), ("red_on_character", True, False), ("behind_planks", False, True)):
-        left, right = macro.stitches_red(shot(name))
-        assert ((left + right) / 2 >= macro.cfg.STITCHES_DANGER_FRACTION) == red, name
-        assert macro.stitches_covered(shot(name)) == covered, name
+def test_the_ring_line_falls_to_the_right_when_the_middle_is_to_the_right_and_rises_when_it_is_to_the_left(macro):
+    for name in ("ring_falls_right_a", "ring_falls_right_b"):
+        assert macro.stitches_ring_angle(shot(name)) > macro.cfg.STITCHES_LINE_DEADBAND, name
+    for name in ("ring_rises_a", "ring_rises_b"):
+        assert macro.stitches_ring_angle(shot(name)) < -macro.cfg.STITCHES_LINE_DEADBAND, name
 
 
-def test_candy_corn_is_found_on_the_screen_and_not_in_the_hud_or_as_stripes(macro):
-    pieces = macro.find_candy_corn(shot("red_on_character"))
-    assert len(pieces) >= 10
-    left, top, right, bottom = macro.cfg.STITCHES_SEARCH_BOX
-    assert all(left <= x < right and top <= y < bottom for x, y in pieces)
-    assert macro.find_candy_corn(np.zeros((1080, 1920, 3), np.uint8)) == []
+def test_no_line_is_gone_by_where_it_is_not_seen(macro):
+    assert macro.stitches_ring_angle(shot("in_the_red")) is None                 # (the searchlight's red covers it)
+    assert macro.stitches_ring_angle(np.zeros((1080, 1920, 3), np.uint8)) is None
+    assert macro.stitches_camera_turn(shot("in_the_red")) is None
 
 
-def test_in_the_red_the_player_steps_away_from_it_but_behind_planks_stays_put(macro, monkeypatch):
-    img = shot("red_on_character")
-    left, right = macro.stitches_red(img)
-    key, seconds = macro.stitches_key(img)
-    assert key == ("d" if left > right else "a") and seconds == macro.cfg.STITCHES_FLEE_STEP
-    monkeypatch.setattr(macro, "stitches_covered", lambda img: True)
-    assert macro.stitches_key(img) is None
+def test_the_camera_is_turned_towards_the_side_the_line_says_and_not_when_it_is_straight(macro, monkeypatch):
+    left_key, right_key = macro.cfg.STITCHES_TURN_KEYS
+    assert macro.stitches_camera_turn(shot("ring_falls_right_a"))[0] == right_key
+    assert macro.stitches_camera_turn(shot("ring_rises_a"))[0] == left_key
+    for angle, expected in ((5.0, None), (-11.0, None), (45.0, (right_key, 0.5)), (-45.0, (left_key, 0.5)), (89.0, (right_key, 1.0)), (-80.0, (left_key, 1.0))):
+        monkeypatch.setattr(macro, "stitches_ring_angle", lambda img, angle=angle: angle)
+        turn = macro.stitches_camera_turn(None)
+        assert turn is None if expected is None else (turn[0], turn[1] / macro.cfg.STITCHES_TURN_HOLD_MAX) == (expected[0], pytest.approx(expected[1], abs=0.02) if expected[1] == 0.5 else pytest.approx(min(abs(angle), 90) / 90, abs=0.02)), angle
 
 
-def test_out_of_the_red_the_player_walks_towards_the_nearest_candy_or_wanders_without_any(macro, monkeypatch):
-    cx, cy = macro.cfg.STITCHES_CHARACTER
-    for piece, expected in (((cx + 300, cy + 20), "d"), ((cx - 300, cy), "a"), ((cx, cy - 250), "w"), ((cx + 10, cy + 200), "s")):
-        monkeypatch.setattr(macro, "find_candy_corn", lambda img, piece=piece: [piece, (cx + 900, cy + 400)])
-        assert macro.stitches_key(shot("safe"))[0] == expected
-    monkeypatch.setattr(macro, "find_candy_corn", lambda img: [(cx + 10, cy + 10)])      # one already under the character (the magnet has it)
-    assert macro.stitches_key(shot("safe"))[0] in macro.cfg.MOVE_KEYS
-
-
-def test_the_player_holds_keys_until_the_victory_screen_shows(macro, monkeypatch):
-    held, looks = [], iter([shot("safe"), shot("safe"), cv2.imread(os.path.join(os.path.dirname(__file__), "fixtures", "win_banner.png"))])
-    monkeypatch.setattr(macro, "hold_key", lambda key, duration: held.append(key))
-    monkeypatch.setattr(macro, "minigame_wait", lambda duration, watch: None)
+def test_the_player_holds_the_walking_key_all_round_and_lets_go_of_it_at_the_end(macro, monkeypatch):
+    events, looks = [], iter([shot("ring_falls_right_a"), shot("in_the_red"), shot("in_the_red")])
+    monkeypatch.setattr(macro.pydirectinput, "keyDown", lambda key: events.append(("down", key)))
+    monkeypatch.setattr(macro.pydirectinput, "keyUp", lambda key: events.append(("up", key)))
+    monkeypatch.setattr(macro, "hold_key", lambda key, duration: events.append(("turn", key)))
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
     monkeypatch.setattr(macro, "minigame_look", lambda watch: next(looks))
-    monkeypatch.setattr(macro, "detect_minigame_victory", lambda img: img.shape[0] != 1080)
+    won = iter([False, False, True])
+    monkeypatch.setattr(macro, "detect_minigame_victory", lambda img: next(won))
     watch = macro.MinigameWatch("stitches_spotlight")
     watch.last_seen = time.time()
     assert macro.play_stitches_spotlight(10 ** 12, watch) is True
-    assert len(held) == 2
+    walk = macro.cfg.KEY_STITCHES_WALK
+    assert events == [("down", walk), ("turn", macro.cfg.STITCHES_TURN_KEYS[1]), ("up", walk)]

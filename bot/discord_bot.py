@@ -385,7 +385,7 @@ def build(config: bot_lib.Config) -> discord.Client:
     async def leave_trade_hub(interaction: discord.Interaction) -> None:
         await ask_macro(interaction, "leave_trade_hub", "Asked the macro to leave the Trading Hub for a regular server.")
 
-    @command("refresh_debug", "Empty the macro's debug folder (logs, captures, failures); the game config stays. Not while its loop runs")
+    @command("refresh_debug", "Empty the macro's debug folder (the game config stays); not while its loop runs")
     async def refresh_debug(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         if not await asyncio.to_thread(current_macro_pids):

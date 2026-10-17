@@ -1518,6 +1518,7 @@ def test_the_need_names_a_command_may_switch_are_the_handlers_there_are(macro):
 
 def test_a_minigame_that_has_no_player_yet_is_declined_even_when_switched_on(macro, monkeypatch):
     import cv2
+    monkeypatch.delitem(macro.MINIGAME_PLAYERS, "stitches_spotlight")                         # (one that is recognised but cannot be played)
     clicks, played = [], []
     monkeypatch.setattr(macro, "grab_screen", lambda: cv2.imread(os.path.join(os.path.dirname(__file__), "popups", "stitches_spotlight.png")))
     monkeypatch.setattr(macro, "load_game_config", lambda: {"stitches_spotlight_enabled": True})

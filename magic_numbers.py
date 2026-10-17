@@ -50,7 +50,7 @@ MINIGAME_POPUP_YES_POS = (1049, 612)
 # config ("<name>_enabled", off by default) - an off one is dismissed, an on one is played.
 MINIGAME_TITLE_BOX = (730, 410, 1200, 510)   # left, top, right, bottom
 MINIGAME_TITLE_MATCH_THRESHOLD = 0.85
-MINIGAME_LABELS = {"hauntlet_2": "Hauntlet 2", "ghost_gallery": "Ghost Gallery", "stitches_spotlight": "Stitches' Spotlight"}   # for the GUI and the logs (Stitches' Spotlight is recognised but has no player yet: its popup is declined)
+MINIGAME_LABELS = {"hauntlet_2": "Hauntlet 2", "ghost_gallery": "Ghost Gallery", "stitches_spotlight": "Stitches' Spotlight"}   # for the GUI and the logs
 
 # Playing one. Both end on the victory screen (a red "GAME OVER!" banner over a green NICE! button), which
 # is looked for every MINIGAME_VICTORY_CHECK_INTERVAL seconds, then the button is clicked.
@@ -66,7 +66,7 @@ MINIGAME_VICTORY_BUTTON_POS = (966, 762)
 # MINIGAME_OVERLAY_THRESHOLD) say whether the game is on: one that was seen and then isn't, for
 # MINIGAME_OVERLAY_LOST_TIMEOUT seconds, was left (game over, kicked out) - and one never seen within
 # MINIGAME_OVERLAY_START_GRACE seconds after its start wait never started.
-MINIGAME_OVERLAYS = {"hauntlet_2": (1040, 40, 1210, 135), "ghost_gallery": (840, 25, 1080, 120)}   # name: search box
+MINIGAME_OVERLAYS = {"hauntlet_2": (1040, 40, 1210, 135), "ghost_gallery": (840, 25, 1080, 120), "stitches_spotlight": (860, 25, 1065, 125)}   # name: search box
 MINIGAME_OVERLAY_THRESHOLD = 0.7
 MINIGAME_OVERLAY_LOST_TIMEOUT = 10.0
 MINIGAME_OVERLAY_START_GRACE = 60.0
@@ -315,6 +315,29 @@ GHOST_BOSS_BAR_GOLD = ((15, 150, 160), (30, 255, 255))
 GHOST_BOSS_BAR_MIN = 3000
 GHOST_BOSS_BAR_IGNORE = (680, 150, 1240, 275)  # the bar itself, in the boss phase: its crest and its ghost icons are the same cyan
 GHOST_LOOK_INTERVAL = 0.06
+STITCHES_LOOK_INTERVAL = 0.3                 # Stitches' Spotlight: between looks at the screen
+STITCHES_CHARACTER = (960, 600)              # where the player's character stands on the screen
+STITCHES_SEARCH_BOX = (250, 260, 1670, 920)  # where candy corn is looked for (not the HUD, the buttons, or the far wall's stripes)
+STITCHES_CANDY_HUE = (14, 26)                # candy corn's orange-yellow (OpenCV hue), with at least the saturation and value below
+STITCHES_CANDY_MIN_SATURATION = 150
+STITCHES_CANDY_MIN_VALUE = 170
+STITCHES_CANDY_AREA = (15, 260)              # a piece's blob size in pixels; a bigger blob is a wall stripe or a light
+STITCHES_CANDY_MAX_SIDE = 40
+STITCHES_CANDY_MIN_FILL = 0.35               # of its bounding box (a stripe is thin and long)
+STITCHES_CANDY_REACHED = 70                  # a piece this close to the character is being picked up already (the magnet): the next one is chosen
+STITCHES_STEER_DEADBAND = 45                 # a piece this near straight ahead (or beside) needs no sideways (or forward) key
+STITCHES_STEP = 0.35                         # how long a movement key is held to walk towards a piece
+STITCHES_WANDER_STEP = 0.6                   # and when there is none in sight
+STITCHES_RED_BOX = (830, 420, 1090, 680)     # around the character: red here is the searchlight on the player
+STITCHES_RED_HUE_MAX = (6, 172)              # OpenCV hue at most the first or at least the second is red, with the saturation and value below
+STITCHES_RED_MIN_SATURATION = 110
+STITCHES_RED_MIN_VALUE = 110
+STITCHES_DANGER_FRACTION = 0.2               # of STITCHES_RED_BOX that is red: the searchlight is on the character
+STITCHES_COVER_BOX = (890, 300, 1030, 520)   # the dark grey planks to hide behind show here, in front of the character
+STITCHES_COVER_MAX_SATURATION = 70
+STITCHES_COVER_VALUE = (35, 120)
+STITCHES_COVER_FRACTION = 0.4                # of STITCHES_COVER_BOX that is plank: the player is behind cover and stays where it is
+STITCHES_FLEE_STEP = 0.5                     # how long a sideways key is held to get out of the red
 GHOST_START_LOOK_INTERVAL = 0.5              # while waiting for the game to begin
 GHOST_INTRO_WAIT = 6.0                       # after its overlay shows, the game's own intro camera (a look at the ceiling) runs this long; the zoom and tilt come after, or are undone
 # The boss can't be hurt while its bar shows two or three ghost icons instead of its health: the bar's cyan fill (BGR (255, 222, 0),

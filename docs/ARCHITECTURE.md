@@ -643,8 +643,7 @@ new crop - plus an entry in `MINIGAME_LABELS` and a player in
 
 Each minigame has a switch in the game config (`hauntlet_2_enabled`,
 `ghost_gallery_enabled`, `stitches_spotlight_enabled`, all **off** by default; "Play ..." checkboxes on the
-Options tab). Stitches' Spotlight ("Stitches' Spotlight is starting soon!", `ref/halloween/stitches_spotlight.png`) is recognised but has no player in
-`MINIGAME_PLAYERS` yet: its checkbox says "(no player yet)", and its popup is declined like a switched-off one even if the switch is on. `minigame_popup()`:
+Options tab). A minigame that is recognised but has no player in `MINIGAME_PLAYERS` gets "(no player yet)" on its checkbox, and its popup is declined like a switched-off one even if the switch is on. `minigame_popup()`:
 - **switched off, not recognised, or with no player yet** - clicks `MINIGAME_POPUP_DONT_SHOW_POS`
   ("Do not show again this session") and `MINIGAME_POPUP_NO_POS`;
 - **switched on, but a need is in its end wait** (`wait_until_need_gone()`, or `walk_alternating()` watching for its need; `end_wait()` marks it in `state.end_wait_need`) -
@@ -697,6 +696,8 @@ out `MINIGAME_MAX_DURATION`. The watch also looks for the "Disconnected" dialog 
 - `play_ghost_gallery()` waits until the game's overlay shows (at most `MINIGAME_START_WAIT`), then finds the ghosts on screen, aims the
   mouse at one and holds the button on it, and on the boss in the boss phase, until victory. See
   [Playing Ghost Gallery](#playing-ghost-gallery).
+- `play_stitches_spotlight()` waits for the overlay, then walks towards the nearest candy corn until victory. See
+  [Playing Stitches' Spotlight](#playing-stitches-spotlight).
 
 A handler only counts as resolved (and only then triggers a respawn) if
 `handle()` returns `True`. `ButtonNeedHandler` returns `False` if
@@ -1375,6 +1376,24 @@ the start's tilt, where the furniture is (the box is a guess), and the walking's
 once the camera is out (`GHOST_IGNORE_BOXES` has the character's place in a human's zoomed-out run). **What it does not do:** dodge, react to being knocked down, or choose between ghosts
 by anything but distance (the human often picked the second or third nearest); it can't tell furniture from floor.
 
+### Playing Stitches' Spotlight
+
+First version, from one human-played round (a two-minute round; the overlay shows TIME LEFT, the title and the Candy Corn count). Candy corn lies
+about the stage; searchlights sweep it and tint what they cover red, and a player standing in the red loses. Dark grey planks stand about the stage
+and hide the player from the light (they break now and then). The count is never read: the player only has to collect some.
+
+`play_stitches_spotlight()` waits for the overlay (`MINIGAME_START_WAIT`), then looks every `STITCHES_LOOK_INTERVAL` and acts on `stitches_key()`:
+- **the searchlight on the character** - red (`STITCHES_RED_HUE_MAX`, `STITCHES_RED_MIN_SATURATION`/`_VALUE`) fills at least `STITCHES_DANGER_FRACTION` of
+  `STITCHES_RED_BOX`, the area around the character. With planks filling `STITCHES_COVER_BOX` in front of it (`stitches_covered()`: dark, unsaturated
+  pixels, `STITCHES_COVER_FRACTION`) the player stays where it is; otherwise it holds a sideways key for `STITCHES_FLEE_STEP`, away from the redder half;
+- **otherwise** - `find_candy_corn()` finds candy corn by its orange-yellow (`STITCHES_CANDY_*`: hue, saturation, value, blob size, and a fill ratio that
+  rules out the thin stripes on the walls) inside `STITCHES_SEARCH_BOX`; the nearest piece further than `STITCHES_CANDY_REACHED` from
+  `STITCHES_CHARACTER` is walked to, a `STITCHES_STEP` at a time, along the axis it is furthest on (W/A/S/D as the screen shows it, the camera
+  being left alone). With none in sight a random direction is walked for `STITCHES_WANDER_STEP`.
+
+Not yet known from play: whether the camera stays behind the character (steering assumes up on the screen is W), how well planks are found as
+cover, and whether the stripes and lights on the walls fool the candy finder. The tests use frames of the round (`tests/stitches_spotlight/`).
+
 ### Candy corn
 
 What a minigame run earns is read, not guessed. **The HUD's candy corn total** (top right, red digits on a white flag - on screen in the lobby, in the world and on the GAME OVER! screen, not at home or in a minigame) is read by `read_candy_corn()`:
@@ -1432,6 +1451,7 @@ exact values and rationale):
 | Debug logging | `OUTPUT_LOG_PATH`, `RUNS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
 | Hauntlet 2 reader | `HAUNTLET_ROOM_BOX`, `HAUNTLET_DIGIT_*`, `HAUNTLET_ROOM_MAX_DIGITS`, `HAUNTLET_SLOT_*`, `HAUNTLET_ITEM_*`, `HAUNTLET_BADGE_*`, `HAUNTLET_COUNT_*`, `HAUNTLET_NOT_ITEMS`, `HAUNTLET_HEART_*`, `HAUNTLET_*_DIR` |
+| Stitches' Spotlight play | `STITCHES_*` |
 | Ghost Gallery play | `GHOST_COLOR`, `GHOST_COLOR_FAR`, `GHOST_CLOSE`, `GHOST_MIN_AREA`, `GHOST_IGNORE_BOXES`, `GHOST_CHARACTER`, `GHOST_STICK`, `GHOST_BOSS_BAR_*`, `GHOST_BOSS_FILL*`, `GHOST_LOOK_INTERVAL`, `GHOST_START_LOOK_INTERVAL`, `GHOST_FURNITURE_*`, `GHOST_CAMERA_*`, `GHOST_START_TILT`, `GHOST_MOVE_*`, `GHOST_START_FORWARD`, `GHOST_TOWARD_MARGIN`, `GHOST_BOSS_TURN_DRAG`, `GHOST_EMBLEM_*`, `GHOST_SELF_*`, `GHOST_SMALL_MAX`, `GHOST_BOSS_MIN`, `GHOST_REGRAB_PERIOD`, `GHOST_OUTLINE_*`, `GHOST_JUMP_*`, `GHOST_SCORE_*`, `GHOST_SPOT_TRIAL`, `GHOST_BAD_SPOT_*`, `GHOST_RING`, `GHOST_STALL*`, `GHOST_ALERT_*`, `GHOST_SKIP_*`, `GHOST_HIDE_TRIES`, `GHOST_BOSS_TRIAL`, `KEY_ZOOM_OUT`, `MINIGAME_ZOOM_OUT_DURATION` |
 | Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_SHADOW_*`, `HAUNTLET_CIRCLE_*`, `HAUNTLET_IN_CIRCLE`, `HAUNTLET_LOCK_WAIT`, `HAUNTLET_STILL_*`, `HAUNTLET_UNSTICK_*`, `HAUNTLET_START_*`, `HAUNTLET_DARK_*`, `HAUNTLET_PLANK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_*`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_ITEM_*`, `HAUNTLET_LOW_HEARTS`, `HAUNTLET_PHONE_CHANCE`, `HAUNTLET_ARROW_*`, `HAUNTLET_LEARN_LIMIT` |
 | Candy corn | `CANDY_CORN_*`, `MINIGAME_RESULT_BOX`, `MAX_RESULT_SHOTS` |

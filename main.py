@@ -15,7 +15,7 @@ from __future__ import annotations
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
-import os, re, sys, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib, shutil, zipfile
+import math, os, re, sys, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib, shutil, zipfile
 import datetime
 import logging
 import logging.handlers
@@ -529,6 +529,7 @@ class RunStats:
     focus_resumes: int = 0
     last_resolved: Optional[dict[str, str]] = None                   # {"need", "time"}
     last_failure: Optional[dict[str, Optional[str]]] = None          # {"time", "reason", "screenshot"}
+    stopped: Optional[str] = None                                    # when what was running was ended by the user ([STOP], the window's X, the Discord bot) or finished: no more updates are due
 
     def reset(self) -> None:
         """Start afresh (a workflow was just started)."""
@@ -628,6 +629,12 @@ def write_status() -> None:
         os.replace(tmp, cfg.STATUS_PATH)
     except (OSError, TypeError):
         pass
+
+def mark_stopped() -> None:
+    """Note in the status file that the macro is no longer running anything on purpose, so that the status not being updated any more is not
+    taken for a stuck macro (the Discord bot's alert)."""
+    run_stats.stopped = time.strftime("%Y-%m-%d %H:%M:%S")
+    write_status()
 
 def log_failure(reason: str, screenshot: bool = True) -> None:
     """Record that something went wrong: print it, add it to the run log,
@@ -3413,7 +3420,80 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
         stop_walking()
     return False
 
-MINIGAME_PLAYERS = {"hauntlet_2": play_hauntlet_2, "ghost_gallery": play_ghost_gallery}
+def find_candy_corn(img: Image) -> list[Point]:
+    """Where candy corn lies in `img` (Stitches' Spotlight): small blobs of its orange-yellow within STITCHES_SEARCH_BOX, which are
+    not thin stripes. Not read, only found."""
+    left, top, right, bottom = cfg.STITCHES_SEARCH_BOX
+    hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
+    hue, saturation, value = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    mask = ((hue >= cfg.STITCHES_CANDY_HUE[0]) & (hue <= cfg.STITCHES_CANDY_HUE[1])
+            & (saturation >= cfg.STITCHES_CANDY_MIN_SATURATION) & (value >= cfg.STITCHES_CANDY_MIN_VALUE)).astype(np.uint8)
+    count, _, stats, centres = cv2.connectedComponentsWithStats(mask)
+    pieces = []
+    for i in range(1, count):
+        width, height, area = int(stats[i][2]), int(stats[i][3]), int(stats[i][4])
+        if (cfg.STITCHES_CANDY_AREA[0] <= area <= cfg.STITCHES_CANDY_AREA[1] and max(width, height) <= cfg.STITCHES_CANDY_MAX_SIDE
+                and area >= cfg.STITCHES_CANDY_MIN_FILL * width * height):
+            pieces.append((int(centres[i][0]) + left, int(centres[i][1]) + top))
+    return pieces
+
+def stitches_red(img: Image) -> tuple[float, float]:
+    """How much of the left and of the right half of STITCHES_RED_BOX (around the character) is the searchlight's red: (left, right) fractions."""
+    left, top, right, bottom = cfg.STITCHES_RED_BOX
+    hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
+    hue, saturation, value = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    red = (((hue <= cfg.STITCHES_RED_HUE_MAX[0]) | (hue >= cfg.STITCHES_RED_HUE_MAX[1]))
+           & (saturation >= cfg.STITCHES_RED_MIN_SATURATION) & (value >= cfg.STITCHES_RED_MIN_VALUE))
+    middle = red.shape[1] // 2
+    return float(red[:, :middle].mean()), float(red[:, middle:].mean())
+
+def stitches_covered(img: Image) -> bool:
+    """True if planks (dark, grey) fill STITCHES_COVER_BOX, in front of the character: the player is hidden from the searchlight."""
+    left, top, right, bottom = cfg.STITCHES_COVER_BOX
+    hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
+    plank = (hsv[..., 1] <= cfg.STITCHES_COVER_MAX_SATURATION) & (hsv[..., 2] >= cfg.STITCHES_COVER_VALUE[0]) & (hsv[..., 2] <= cfg.STITCHES_COVER_VALUE[1])
+    return float(plank.mean()) >= cfg.STITCHES_COVER_FRACTION
+
+def stitches_key(img: Image) -> Optional[tuple[str, float]]:
+    """What to do about what is on screen in Stitches' Spotlight: (key to hold, seconds) or None to wait where the player is.
+    The searchlight on the character (red over STITCHES_DANGER_FRACTION of the box around it): behind planks, stay; else a step sideways away
+    from the red. Otherwise a step towards the nearest piece of candy corn (the further of the two axes first), or at random if there is none."""
+    left_red, right_red = stitches_red(img)
+    if (left_red + right_red) / 2 >= cfg.STITCHES_DANGER_FRACTION:
+        if stitches_covered(img):
+            return None
+        return ("d" if left_red > right_red else "a"), cfg.STITCHES_FLEE_STEP
+    cx, cy = cfg.STITCHES_CHARACTER
+    pieces = [piece for piece in find_candy_corn(img) if math.hypot(piece[0] - cx, piece[1] - cy) > cfg.STITCHES_CANDY_REACHED]
+    if not pieces:
+        return random.choice(cfg.MOVE_KEYS), cfg.STITCHES_WANDER_STEP
+    px, py = min(pieces, key=lambda piece: math.hypot(piece[0] - cx, piece[1] - cy))
+    dx, dy = px - cx, py - cy
+    if abs(dx) >= abs(dy) and abs(dx) > cfg.STITCHES_STEER_DEADBAND:
+        return ("d" if dx > 0 else "a"), cfg.STITCHES_STEP
+    return ("s" if dy > 0 else "w"), cfg.STITCHES_STEP
+
+def play_stitches_spotlight(deadline: float, watch: MinigameWatch) -> bool:
+    """Stitches' Spotlight: once its overlay shows (or the start wait is over), look at the screen every STITCHES_LOOK_INTERVAL and walk
+    (stitches_key()) towards the nearest candy corn, staying still behind planks or stepping aside while the searchlight's red is on the
+    character. The candy corn count is not read. True if won before `deadline`. See docs/ARCHITECTURE.md#playing-stitches-spotlight."""
+    logger.debug(f"Stitches' Spotlight: waiting for it to start (at most {cfg.MINIGAME_START_WAIT:g}s)...")
+    waited_until = time.time() + cfg.MINIGAME_START_WAIT
+    while time.time() < waited_until and watch.last_seen is None:
+        minigame_wait(cfg.GHOST_START_LOOK_INTERVAL, watch)
+    watch.start_wait_over()
+    while time.time() < deadline and not watch.problem:
+        img = minigame_look(watch)
+        if detect_minigame_victory(img):
+            return True
+        action = stitches_key(img)
+        if action is None:
+            wait_interruptible(cfg.STITCHES_LOOK_INTERVAL)
+        else:
+            hold_key(*action)
+    return False
+
+MINIGAME_PLAYERS = {"hauntlet_2": play_hauntlet_2, "ghost_gallery": play_ghost_gallery, "stitches_spotlight": play_stitches_spotlight}
 
 def click_nice_until_gone() -> bool:
     """Click the win screen's NICE! until it is gone (up to MINIGAME_VICTORY_CLICK_TRIES).
@@ -5341,16 +5421,19 @@ class AdoptMeGUI:
         logger.info("=" * 60)
 
         self.is_running = False
+        self.rejoin_waits = 0                    # looks so far for the loop to stop, before a rejoin asked for from outside
         self.watch_stop_hotkey()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
     def start_remote_control(self, loop: bool) -> None:
         """Begin looking for commands in COMMANDS_PATH every COMMAND_POLL_MS (see poll_commands()), and with `loop` (the --loop argument) start the
-        loop once the window is up, as if the loop button was pressed. Commands left from before are dropped first."""
+        loop once the window is up, as if the loop button was pressed; without it the status file says that nothing is running. Commands left from before are dropped first."""
         read_command()
         self.root.after(cfg.COMMAND_POLL_MS, self.poll_commands)
         if loop:
             self.root.after(cfg.START_LOOP_DELAY_MS, self.start_loop_from_outside)
+        else:
+            mark_stopped()                                       # a window up with no loop going: the status of an earlier run is not one that is due an update
 
     def start_loop_from_outside(self) -> None:
         """Start the loop, as the loop button does (`start` command, or the --loop argument)."""
@@ -5379,7 +5462,24 @@ class AdoptMeGUI:
             self.stop()
         elif command == "set" and data:
             self.set_switch(data["kind"], data["name"], data["value"])
+        elif command == "rejoin":
+            self.rejoin_waits = 0
+            self.rejoin_from_outside()
         self.root.after(cfg.COMMAND_POLL_MS, self.poll_commands)
+
+    def rejoin_from_outside(self) -> None:
+        """Leave and rejoin the game, as the Leave & rejoin button does (`rejoin` command). A running loop is stopped first and the rejoin starts once it has
+        ended, looking again every REJOIN_STOP_POLL_MS for up to REJOIN_STOP_WAIT_MS."""
+        if self.is_running:
+            self.stop()
+            if self.rejoin_waits * cfg.REJOIN_STOP_POLL_MS >= cfg.REJOIN_STOP_WAIT_MS:
+                logger.warning("Rejoin asked for, but the running loop did not stop")
+                return
+            self.rejoin_waits += 1
+            self.root.after(cfg.REJOIN_STOP_POLL_MS, self.rejoin_from_outside)
+            return
+        log_run_event("rejoin asked for from outside (the Discord bot)")
+        self.run_async(leave_and_rejoin)
 
     def set_switch(self, kind: str, name: str, value: bool) -> None:
         """Change a switch as its checkbox does - persist it and tick or untick the checkbox in the window: a need's (the Debug tab), or an option (the
@@ -5404,6 +5504,7 @@ class AdoptMeGUI:
             state.capture.stop()
             state.capture = None
         STOP_EVENT.set()
+        mark_stopped()
         time.sleep(cfg.STOP_CHECK_INTERVAL * 3)   # the worker notices the stop within a check or two and releases what it holds
         release_all_inputs()
         self.root.destroy()
@@ -5603,6 +5704,7 @@ class AdoptMeGUI:
             try:
                 func()
                 final_status = "[DONE]"
+                mark_stopped()
             except StopRequested:
                 # Must be caught before the generic Exception handler below -
                 # StopRequested is itself an Exception subclass, so if the
@@ -5610,6 +5712,7 @@ class AdoptMeGUI:
                 # misreport a clean stop as "[ERROR]".
                 record(log_run_event, "stopped by the user")
                 final_status = "[STOPPED]"
+                mark_stopped()
             except TaskInterrupted as interruption:
                 # The GUI's Setup button ran setup_game() with the in-task checks on, and a disconnect made them
                 # rejoin the game - which ran setup itself. The action is done, not crashed.
@@ -5621,6 +5724,7 @@ class AdoptMeGUI:
                 if stop_pressed_soon():
                     record(log_run_event, "stopped by the user")
                     final_status = "[STOPPED]"
+                    mark_stopped()
                 else:
                     record(log_failure, "stopped: Roblox lost focus")
                     final_status = "[STOPPED: Roblox not focused]"

@@ -510,10 +510,12 @@ these windows - the macro's paycheck clicks don't close them, and their green
 buttons look like CASH OUT.
 (`load_templates()` reads each folder's crops once and re-reads them only when a file is added, changed or removed.)
 `dismiss_stray_windows()` recognises each by a crop of its title
-in `ref/popups/` (`trading_hub.png`, `star_rewards.png`; matched within the
+in `ref/popups/` (`trading_hub.png`, `star_rewards.png`, `star_rewards_claim.png`, `task_board.png`; matched within the
 `box` in `STRAY_WINDOWS`, at least `STRAY_WINDOW_MATCH_THRESHOLD`) and clicks
 its `close_pos`; for the Trading Hub it first clicks the popup's green Okay
-(`STRAY_OKAY_*`) if that's showing. A new window is a new crop plus an entry in
+(`STRAY_OKAY_*`) if that's showing. The Star Rewards has two views, each its own entry: the one that opens by itself once a day (`star_rewards_claim`) has only a green CLAIM! button and no X, so it is closed
+by clicking CLAIM!; the calendar one that the star icon opens (`star_rewards`) is closed by its red X. Only the calendar one was handled at first, with the X clicked wherever the window
+was - which closes nothing in the daily view, the one the macro meets (real screenshots of both are `tests/popups/star_rewards_claim.png` and `star_rewards.png`; the crops are cut from them). The **Task Board** (`task_board`: opened by a notification such as "Trading Hub: Your listing got an offer!", on its Alerts tab; its "TASK BOARD" plate is the same on every tab) is only closed, by its red X, for now. The real screenshots of the Trading Hub, the Task Board and both Star Rewards views are in `tests/popups/` - they are the Roblox screenshots (which lack the window's 23-row title bar) with 23 black rows added on top, to be the macro's frames, and the crops in `ref/popups/` are cut from them (the Trading Hub crop was already pixel-identical to the same place in a new screenshot, so it was kept). A new window is a new crop plus an entry in
 `STRAY_WINDOWS`. `setup_game()` also closes any before it starts, since an open
 one would take its clicks.
 
@@ -641,8 +643,7 @@ new crop - plus an entry in `MINIGAME_LABELS` and a player in
 
 Each minigame has a switch in the game config (`hauntlet_2_enabled`,
 `ghost_gallery_enabled`, `stitches_spotlight_enabled`, all **off** by default; "Play ..." checkboxes on the
-Options tab). Stitches' Spotlight ("Stitches' Spotlight is starting soon!", `ref/halloween/stitches_spotlight.png`) is recognised but has no player in
-`MINIGAME_PLAYERS` yet: its checkbox says "(no player yet)", and its popup is declined like a switched-off one even if the switch is on. `minigame_popup()`:
+Options tab). A minigame that is recognised but has no player in `MINIGAME_PLAYERS` gets "(no player yet)" on its checkbox, and its popup is declined like a switched-off one even if the switch is on. `minigame_popup()`:
 - **switched off, not recognised, or with no player yet** - clicks `MINIGAME_POPUP_DONT_SHOW_POS`
   ("Do not show again this session") and `MINIGAME_POPUP_NO_POS`;
 - **switched on, but a need is in its end wait** (`wait_until_need_gone()`, or `walk_alternating()` watching for its need; `end_wait()` marks it in `state.end_wait_need`) -
@@ -665,7 +666,7 @@ Options tab). Stitches' Spotlight ("Stitches' Spotlight is starting soon!", `ref
 the recording and in the readers' way). No needs can be seen while a minigame runs, so both end on the
 GAME OVER! screen instead - a red GAME OVER! banner over a green NICE! button,
 found by exact color (`detect_minigame_victory()`, checked every
-`MINIGAME_VICTORY_CHECK_INTERVAL`), which is the same for both. Every run ends on it, so reaching it is *finishing*, not winning (a real win, which gives a crypt key, shows the same screen; the macro can't tell them apart): what a run earned is the candy corn on the card. `save_minigame_result()` saves that card (`MINIGAME_RESULT_BOX` of the screen) as `runs/results/run<N>_<minigame>_<time>.png`, the newest `MAX_RESULT_SHOTS` kept, before NICE! is clicked. While it plays, `minigame_popup_checks()` runs `dismiss_stray_windows()` (and `detect_paycheck()` if it closed nothing) at most every `MINIGAME_POPUP_CHECK_INTERVAL`, including during the start waits (`minigame_wait()`) - the in-task `unscrew()` can't, since the minigame is played from it. Then NICE!
+`MINIGAME_VICTORY_CHECK_INTERVAL`), which is the same for both (the tests use real, lossless screenshots of it for both minigames, one with the next game's countdown over the banner: `tests/popups/win_screen_*.png`, `game_over.png`, and the crops `tests/fixtures/win_banner.png` and `win_button.png`; the banner is about eight times and the button about three times the pixels the checks ask for, so no threshold needed moving). Every run ends on it, so reaching it is *finishing*, not winning (a real win, which gives a crypt key, shows the same screen; the macro can't tell them apart): what a run earned is the candy corn on the card. `save_minigame_result()` saves that card (`MINIGAME_RESULT_BOX` of the screen) as `runs/results/run<N>_<minigame>_<time>.png`, the newest `MAX_RESULT_SHOTS` kept, before NICE! is clicked. While it plays, `minigame_popup_checks()` runs `dismiss_stray_windows()` (and `detect_paycheck()` if it closed nothing) at most every `MINIGAME_POPUP_CHECK_INTERVAL`, including during the start waits (`minigame_wait()`) - the in-task `unscrew()` can't, since the minigame is played from it. Then NICE!
 (`MINIGAME_VICTORY_BUTTON_POS`) is clicked and `MINIGAME_FINISH_WAIT` waited
 out (`click_nice_until_gone()`, which looks again and clicks up to
 `MINIGAME_VICTORY_CLICK_TRIES` times while the win screen is still up, logging a
@@ -695,6 +696,8 @@ out `MINIGAME_MAX_DURATION`. The watch also looks for the "Disconnected" dialog 
 - `play_ghost_gallery()` waits until the game's overlay shows (at most `MINIGAME_START_WAIT`), then finds the ghosts on screen, aims the
   mouse at one and holds the button on it, and on the boss in the boss phase, until victory. See
   [Playing Ghost Gallery](#playing-ghost-gallery).
+- `play_stitches_spotlight()` waits for the overlay, then walks towards the nearest candy corn until victory. See
+  [Playing Stitches' Spotlight](#playing-stitches-spotlight).
 
 A handler only counts as resolved (and only then triggers a respawn) if
 `handle()` returns `True`. `ButtonNeedHandler` returns `False` if
@@ -1373,6 +1376,24 @@ the start's tilt, where the furniture is (the box is a guess), and the walking's
 once the camera is out (`GHOST_IGNORE_BOXES` has the character's place in a human's zoomed-out run). **What it does not do:** dodge, react to being knocked down, or choose between ghosts
 by anything but distance (the human often picked the second or third nearest); it can't tell furniture from floor.
 
+### Playing Stitches' Spotlight
+
+First version, from one human-played round (a two-minute round; the overlay shows TIME LEFT, the title and the Candy Corn count). Candy corn lies
+about the stage; searchlights sweep it and tint what they cover red, and a player standing in the red loses. Dark grey planks stand about the stage
+and hide the player from the light (they break now and then). The count is never read: the player only has to collect some.
+
+`play_stitches_spotlight()` waits for the overlay (`MINIGAME_START_WAIT`), then looks every `STITCHES_LOOK_INTERVAL` and acts on `stitches_key()`:
+- **the searchlight on the character** - red (`STITCHES_RED_HUE_MAX`, `STITCHES_RED_MIN_SATURATION`/`_VALUE`) fills at least `STITCHES_DANGER_FRACTION` of
+  `STITCHES_RED_BOX`, the area around the character. With planks filling `STITCHES_COVER_BOX` in front of it (`stitches_covered()`: dark, unsaturated
+  pixels, `STITCHES_COVER_FRACTION`) the player stays where it is; otherwise it holds a sideways key for `STITCHES_FLEE_STEP`, away from the redder half;
+- **otherwise** - `find_candy_corn()` finds candy corn by its orange-yellow (`STITCHES_CANDY_*`: hue, saturation, value, blob size, and a fill ratio that
+  rules out the thin stripes on the walls) inside `STITCHES_SEARCH_BOX`; the nearest piece further than `STITCHES_CANDY_REACHED` from
+  `STITCHES_CHARACTER` is walked to, a `STITCHES_STEP` at a time, along the axis it is furthest on (W/A/S/D as the screen shows it, the camera
+  being left alone). With none in sight a random direction is walked for `STITCHES_WANDER_STEP`.
+
+Not yet known from play: whether the camera stays behind the character (steering assumes up on the screen is W), how well planks are found as
+cover, and whether the stripes and lights on the walls fool the candy finder. The tests use frames of the round (`tests/stitches_spotlight/`).
+
 ### Candy corn
 
 What a minigame run earns is read, not guessed. **The HUD's candy corn total** (top right, red digits on a white flag - on screen in the lobby, in the world and on the GAME OVER! screen, not at home or in a minigame) is read by `read_candy_corn()`:
@@ -1426,10 +1447,11 @@ exact values and rationale):
 | Need-icon detection | `NEED_ICON_TOP_PERCENT`, `NEED_ICON_WIDTH_PERCENT`, `NEED_ICON_BLANK_*`, `NEED_ICON_MIN/MAX_RADIUS`, `NEED_ICON_HOUGH_*`, `NEED_STRIP_*` (when the circle search is skipped) |
 | Need-icon matching | `ICON_MATCH_THRESHOLD`, `ICON_BW_THRESHOLD`, `ICON_CLAHE_*`, `ICON_COMPARE_SIZE`, `ICON_MATCH_RADIUS_FRACTION`, `ICON_CROP_RADIUS`, `ICON_SHIFT_TOLERANCE`, `MATCH_ONLY_LEFT_HALF` |
 | Button detection | `BUTTON_BAND_X/Y`, `BUTTON_MIN_AREA`, `BUTTON_MIN_CIRCULARITY`, `BUTTON_MAX_COUNT`, `BUTTON_NAMES`, `BUTTON_LOOSE_*_FACTOR`, `BUTTON_PURPLE_*_ITERATIONS`, `BUTTON_OUTLINE_PADDING` |
-| Discord bot | `COMMANDS_PATH`, `COMMANDS`, `COMMAND_POLL_MS`, `COMMAND_MAX_AGE`, `START_LOOP_DELAY_MS`, `BOT_START_CONFIRM`, `BOT_WATCH_INTERVAL`, `BOT_ALERT_GAP`, `BOT_CAPTURE_SETTLE`, `BOT_FILE_SETTLE`, `BOT_MAX_UPLOAD_MB` |
+| Discord bot | `PULL_SOURCES`, `BOT_MAX_PULL_MB`, `COMMANDS_PATH`, `COMMANDS`, `COMMAND_POLL_MS`, `COMMAND_MAX_AGE`, `REJOIN_STOP_POLL_MS`, `REJOIN_STOP_WAIT_MS`, `START_LOOP_DELAY_MS`, `BOT_START_CONFIRM`, `BOT_WATCH_INTERVAL`, `BOT_ALERT_GAP`, `BOT_FILE_SETTLE`, `BOT_MAX_UPLOAD_MB` |
 | Debug logging | `OUTPUT_LOG_PATH`, `RUNS_DIR`, `FAILURE_DIR`, `STATUS_PATH`, `OUTPUT_LOG_MAX_BYTES`, `MAX_FAILURE_FOLDERS`, `MAX_REPORTS`, `CONSOLE_MAX_LINES`, `QUIET_LOG_INTERVAL`, `RESOURCE_LOG_INTERVAL` |
 | Recovery | `DISABLED_NEEDS_REJOIN_THRESHOLD`, `NO_PROGRESS_REJOIN_INTERVAL`, `NO_DETECTION_RESPAWN_INTERVAL`, `DISCONNECT_*`, `WHITE_SCREEN_*`, `REJOIN_*`, `ROBLOX_*`, `FOCUS_RESUME_*`, `PAYCHECK_DISMISS_POS_*` |
 | Hauntlet 2 reader | `HAUNTLET_ROOM_BOX`, `HAUNTLET_DIGIT_*`, `HAUNTLET_ROOM_MAX_DIGITS`, `HAUNTLET_SLOT_*`, `HAUNTLET_ITEM_*`, `HAUNTLET_BADGE_*`, `HAUNTLET_COUNT_*`, `HAUNTLET_NOT_ITEMS`, `HAUNTLET_HEART_*`, `HAUNTLET_*_DIR` |
+| Stitches' Spotlight play | `STITCHES_*` |
 | Ghost Gallery play | `GHOST_COLOR`, `GHOST_COLOR_FAR`, `GHOST_CLOSE`, `GHOST_MIN_AREA`, `GHOST_IGNORE_BOXES`, `GHOST_CHARACTER`, `GHOST_STICK`, `GHOST_BOSS_BAR_*`, `GHOST_BOSS_FILL*`, `GHOST_LOOK_INTERVAL`, `GHOST_START_LOOK_INTERVAL`, `GHOST_FURNITURE_*`, `GHOST_CAMERA_*`, `GHOST_START_TILT`, `GHOST_MOVE_*`, `GHOST_START_FORWARD`, `GHOST_TOWARD_MARGIN`, `GHOST_BOSS_TURN_DRAG`, `GHOST_EMBLEM_*`, `GHOST_SELF_*`, `GHOST_SMALL_MAX`, `GHOST_BOSS_MIN`, `GHOST_REGRAB_PERIOD`, `GHOST_OUTLINE_*`, `GHOST_JUMP_*`, `GHOST_SCORE_*`, `GHOST_SPOT_TRIAL`, `GHOST_BAD_SPOT_*`, `GHOST_RING`, `GHOST_STALL*`, `GHOST_ALERT_*`, `GHOST_SKIP_*`, `GHOST_HIDE_TRIES`, `GHOST_BOSS_TRIAL`, `KEY_ZOOM_OUT`, `MINIGAME_ZOOM_OUT_DURATION` |
 | Hauntlet 2 play | `HAUNTLET_TIMER_*`, `HAUNTLET_TV_*`, `HAUNTLET_DOOR_*`, `HAUNTLET_LOCK_LIGHT_*`, `HAUNTLET_MYSTERY_BRIGHTNESS`, `HAUNTLET_SHADOW_*`, `HAUNTLET_CIRCLE_*`, `HAUNTLET_IN_CIRCLE`, `HAUNTLET_LOCK_WAIT`, `HAUNTLET_STILL_*`, `HAUNTLET_UNSTICK_*`, `HAUNTLET_START_*`, `HAUNTLET_DARK_*`, `HAUNTLET_PLANK_*`, `HAUNTLET_LEFT_KEY`, `HAUNTLET_RIGHT_KEY`, `HAUNTLET_STRAFE_*`, `HAUNTLET_WALK_MAX`, `HAUNTLET_LOOK_INTERVAL`, `HAUNTLET_ROOM_SETTLE`, `HAUNTLET_ROOM_TIMEOUT`, `HAUNTLET_FORK_EVERY`, `HAUNTLET_DOORS_TIMEOUT`, `HAUNTLET_ITEM_*`, `HAUNTLET_LOW_HEARTS`, `HAUNTLET_PHONE_CHANCE`, `HAUNTLET_ARROW_*`, `HAUNTLET_LEARN_LIMIT` |
 | Candy corn | `CANDY_CORN_*`, `MINIGAME_RESULT_BOX`, `MAX_RESULT_SHOTS` |
@@ -1527,7 +1549,7 @@ resolution or Roblox's UI, look at the screenshot of a failure (`failures/`) and
 ## Discord bot
 
 `bot/` is a separate program, not part of `main.py`: a Discord bot that answers questions about the macro from anywhere (a phone, say). It is the first
-four phases of the plan in `docs/planned/Discord.md`: the read-only commands, alerts, copying the capture zips to OneDrive, and starting and stopping the macro. It runs **on the PC the macro runs on**, in the same logged-in desktop session, because it reads the
+four phases of the plan in `docs/planned/Discord.md`: the read-only commands, alerts, pulling things out of the debug folder into OneDrive on request, starting and stopping the macro, and updating it. It runs **on the PC the macro runs on**, in the same logged-in desktop session, because it reads the
 macro's files and grabs its screen; it connects out to Discord, so no port needs opening, and the Discord app itself is only on whatever device is used to type
 the commands. It is started by hand, next to the macro: `python bot/discord_bot.py [path to bot_config.json]`.
 
@@ -1537,7 +1559,7 @@ the commands. It is started by hand, next to the macro: `python bot/discord_bot.
 - **`bot/discord_bot.py`** is the glue that can't be tested away from Discord (discord.py, the screen grab, the process check): the commands below, registered
   for the one guild if `guild_id` is set (instant) or globally (up to an hour to show).
 - **`bot_config.json`** (untracked, and there is no example file: this list is where the keys are written down; the file is JSON, paths with forward slashes): `token`, `owner_id`, `channel_id`, optionally `guild_id`, `stale_status_minutes`
-  (how long `status.json` may go without an update before `/status` says it is not updating), `log_lines_max` (what `/log` is capped at), `onedrive_dir` (where the capture zips are copied to; leave it out to copy nothing), `onedrive_keep_days` (copies older than that are deleted; 0 keeps them all), `heartbeat_hours` (0: no heartbeat), `repo_dir` and `python` (what `/start` launches `main.py` with; the bot's own folder and Python when left out), `stop_timeout_seconds`, `auto_restart` (default off), `auto_restart_max_per_hour`, `update_remote` and `update_branch` (what `/update` pulls: `origin` and `main`).
+  (how long `status.json` may go without an update before `/status` says it is not updating), `log_lines_max` (what `/log` is capped at), `onedrive_dir` (the folder inside the synced OneDrive folder that `/pull` copies into; leave it out and `/pull` says there is nowhere to copy to), `heartbeat_hours` (0: no heartbeat), `repo_dir` and `python` (what `/start` launches `main.py` with; the bot's own folder and Python when left out), `stop_timeout_seconds`, `auto_restart` (default off), `auto_restart_max_per_hour`, `update_remote` and `update_branch` (what `/update` pulls: `origin` and `main`).
 - **Who is obeyed:** only `owner_id`, only in `channel_id`; anyone else's commands get no answer at all (`OwnerOnlyTree.interaction_check()`). The commands are a
   fixed list whose only arguments are numbers - nothing is run, no path is read from a message. The bot is created private ("Public Bot" off) and the token
   stays out of the repository (`.gitignore`).
@@ -1550,43 +1572,48 @@ the commands. It is started by hand, next to the macro: `python bot/discord_bot.
 | `/report` | the newest run chart in `RUNS_DIR` |
 | `/results` | each minigame's runs, best, worst and average candy corn, the deepest Hauntlet 2 room and the latest, from `runs/results/results.jsonl` |
 
-| `/start` | starts the macro's loop: launches `python main.py --loop` if no `main.py` process is running, else leaves it the `start` command; then waits up to `BOT_START_CONFIRM` seconds for `status.json` to be written and says whether the loop showed |
-| `/stop` | asks the macro to exit (the `exit` command) and waits up to `stop_timeout_seconds` for its process to end; if it hasn't, kills it and releases the keys and mouse buttons from the bot |
-| `/restart` | `/stop`, then `/start` |
+| `/start` | starts the macro with its window up and no loop going (`python main.py`), unless it is running; waits up to `BOT_START_CONFIRM` seconds for the process |
+| `/loop` | starts the macro's loop: launches `python main.py --loop` if no `main.py` process is running, else leaves it the `start` command; then waits up to `BOT_START_CONFIRM` seconds for `status.json` to be written and says whether the loop showed |
+| `/stop` | asks the macro to stop its loop (the `stop` command, the [STOP] button); its window stays open |
+| `/exit` | asks the macro to exit (the `exit` command) and waits up to `stop_timeout_seconds` for its process to end; if it hasn't, kills it and releases the keys and mouse buttons from the bot |
+| `/restart` | `/exit`, then `/loop` |
+| `/rejoin` | the macro leaves the game and rejoins it (its loop is stopped first; `/start` again afterwards) |
 | `/update` | pulls `update_remote`/`update_branch` (main) and restarts the macro - and the bot, if its own code changed - see [Update and rollback](#update-and-rollback) |
 | `/rollback` | goes back to the commit the PC was on before the last `/update`, and restarts the macro the same way |
 | `/need <need> <on>` | switches a need on or off, as the Debug tab's checkbox does (the macro must be running: the command goes through the command file); says what the game config shows a moment later |
 | `/option <option> <on>` | the other switches: `side_quest`, `resume_on_focus_loss`, `record_next_run`, `play_<minigame>` and `show_debug_lines` (the output's debug lines, which is only a checkbox and so is not confirmed) |
 | `/options` | which options and needs are on, read from the game config (`debug/.config`, with the defaults for what is missing) |
-| `/captures` | the newest minigame captures on this PC, with their outcome, zips and size, and whether each has been copied to OneDrive |
+| `/captures` | the newest minigame captures on this PC, with their outcome, zips and size |
+| `/pull <folder> [item]` | copies something out of the debug folder into OneDrive - see below; nothing is copied to OneDrive unless this is used |
 
 **What the bot posts by itself.** `watch()` looks at the macro's files every `BOT_WATCH_INTERVAL` seconds (`watch_once()`; a look that fails is logged and the watching goes on) and keeps what it has dealt with in `bot_state.json` (`BotState`: where it got to in `run_log.txt`, the run charts and captures done, whether the status is stale, the last heartbeat), so a restart neither posts things twice nor misses what came while it was down. On its first start, what exists already is taken as dealt with, so old failures, charts and captures are not posted.
 
 - **A failure:** a new `FAILURE:` line in `run_log.txt` (`parse_failure()`) is posted with its reason and its screenshot (`failure_screenshot_path()`: only a file inside `debug/`, not whatever path a line names; not posted when bigger than `BOT_MAX_UPLOAD_MB`). At most one post per `BOT_ALERT_GAP` seconds (`RateLimiter`): the next post says how many more there were. A log that is shorter than the offset was deleted or started again (**Refresh debug**), and is read from its start (`read_new_lines()`; a line still being written waits for the next look).
-- **The macro stops updating:** once, when `status.json` has not been updated for `stale_status_minutes` (the macro is stuck, stopped, or the PC asleep or locked), and once when it updates again (`stale_alert()`).
+- **The macro stops updating:** once, when `status.json` has not been updated for `stale_status_minutes` (the macro is stuck, or the PC asleep or locked; not when it was stopped on purpose - [STOP], the window's X, `/stop`, `/exit` - or is open with no loop going, which `mark_stopped()` writes into the status as `stopped`, and a new run clears), and once when it updates again (`stale_alert()`).
 - **A run chart:** each new `run<N>.png` in `RUNS_DIR`, once it has been unchanged for `BOT_FILE_SETTLE` seconds.
 - **A heartbeat:** the `/status` text every `heartbeat_hours`, so silence means trouble; off by default.
-- **A capture is copied to OneDrive:** when `onedrive_dir` is set (and is a folder), a capture in `RUN_CAPTURES_DIR` is ready once its `info.json` has an `outcome` and none of its `zips/` has changed for `BOT_CAPTURE_SETTLE` seconds (the zips are written on a thread, so they can appear before they are complete; `ready_captures()`). Its zips are copied to `onedrive_dir/<capture name>/` (`copy_capture()`) - the OneDrive app on the PC uploads them from there - and the post says `Zips posted to OneDrive.` with the capture's name, outcome, zip count and size; there is no link (open the folder in OneDrive). Copies older than `onedrive_keep_days` are then deleted (`old_copies()`: only folders named like a capture's, nothing else in the folder). Discord takes about 10 MB from a bot, so the 25 MB parts can't be posted.
+
+**Pulling things into OneDrive (`/pull`).** Nothing is copied to OneDrive by itself (it was, once: a finished capture's zips; that was taken out). `/pull` takes a `folder` from the fixed list `PULL_SOURCES` - `failures`, `logs`, `runs`, `minigame_captures`, `captures`, `recordings`; the game config (`debug/.config`, which holds the private server link) is not in it - and optionally an `item`: left out, the newest entry of the folder; `*`, the whole folder; or an entry picked from the autocomplete (newest first). An item is only accepted if it is exactly the name of an entry in that folder (`resolve_pull()`: `..`, a slash or a drive letter get nowhere). It copies the files into `onedrive_dir/<folder>/` (`pull_files()`, `copy_pull()`) and says how many files and megabytes; the OneDrive app on the PC uploads them. A minigame capture is copied as its zips, `info.json` and `events.jsonl` - not its frames, which are the same again as the zips. A pull of more than `BOT_MAX_PULL_MB` copies nothing, and an existing copy of the same file is replaced.
 
 ### Remote control
 
-`/start`, `/stop` and `/restart` need two small things in `main.py`, and no more of it:
+`/start`, `/loop`, `/stop`, `/exit` and `/restart` need two small things in `main.py`, and no more of it:
 
 - **`python main.py --loop`** starts the loop once the window is up (`start_remote_control(loop=True)`, `START_LOOP_DELAY_MS` later), as if the loop button was pressed.
-- **A command file.** `poll_commands()` (a `root.after` timer, every `COMMAND_POLL_MS`, so on Tk's thread) reads `COMMANDS_PATH` (`debug/commands.json`, `{"command": ..., "time": ...}`; `read_command()`), which the bot wrote (`bot_lib.write_command()`, all at once). The file is removed whenever it is read. A command that is not one of `COMMANDS`, or is older than `COMMAND_MAX_AGE` seconds, is dropped - one left from before the macro started cannot close it. `start` starts the loop (nothing if it runs), `stop` is the [STOP] button, **`exit`** is what the window's X button does: stop cooperatively, release every key and the mouse, close the window and end the process, and **`set`** changes a switch (`set_switch()`): the command carries `kind` (`need` or `option`), `name` and a true or false `value`, and is only read when the switch exists (`NEED_NAMES`; `OPTION_SWITCHES` and `SHOW_DEBUG_LINES_OPTION`) - the switch is persisted as its checkbox does it, and the checkbox in the window follows. Commands left from before are dropped when the macro starts. The list is fixed; the bot takes no argument that is run or opened.
+- **A command file.** `poll_commands()` (a `root.after` timer, every `COMMAND_POLL_MS`, so on Tk's thread) reads `COMMANDS_PATH` (`debug/commands.json`, `{"command": ..., "time": ...}`; `read_command()`), which the bot wrote (`bot_lib.write_command()`, all at once). The file is removed whenever it is read. A command that is not one of `COMMANDS`, or is older than `COMMAND_MAX_AGE` seconds, is dropped - one left from before the macro started cannot close it. `start` starts the loop (nothing if it runs), `stop` is the [STOP] button, **`exit`** is what the window's X button does: stop cooperatively, release every key and the mouse, close the window and end the process, and **`set`** changes a switch (`set_switch()`): the command carries `kind` (`need` or `option`), `name` and a true or false `value`, and is only read when the switch exists (`NEED_NAMES`; `OPTION_SWITCHES` and `SHOW_DEBUG_LINES_OPTION`) - the switch is persisted as its checkbox does it, and the checkbox in the window follows. **`rejoin`** is the Leave & rejoin button (`rejoin_from_outside()`): a running loop is stopped first and the rejoin starts once it has ended (looked for every `REJOIN_STOP_POLL_MS`, for up to `REJOIN_STOP_WAIT_MS`); the loop is not started again afterwards, `/loop` does that. Commands left from before are dropped when the macro starts. The list is fixed; the bot takes no argument that is run or opened.
 
-`/stop` uses `exit` and not `stop`, so that the process ending is the proof that the loop ended and the inputs were released; only if the process outlasts `stop_timeout_seconds` does the bot kill it (`kill_macro()`: `taskkill /F`, `SIGKILL` elsewhere) and release the keys itself (`release_inputs()`: the same list as `release_all_inputs()`, and a mouse button only if it is down). The macro's process is found by its command line (`main.py`, not the bot; `macro_pids()`).
+`/exit` uses `exit` and not `stop`, so that the process ending is the proof that the loop ended and the inputs were released; only if the process outlasts `stop_timeout_seconds` does the bot kill it (`kill_macro()`: `taskkill /F`, `SIGKILL` elsewhere) and release the keys itself (`release_inputs()`: the same list as `release_all_inputs()`, and a mouse button only if it is down). The macro's process is found by its command line (`main.py`, not the bot; `macro_pids()`).
 
-**What the bot keeps in mind.** `/start` and `/restart` set `desired_state` in `bot_state.json` to `running`, `/stop` to `stopped`. A macro whose process is gone while it should be running is a crash, posted once (`crash_check()`) and again when it is back; a macro never started with `/start` (started by hand, say) is never reported as crashed, and one stopped with `/stop` is not. With `auto_restart` on, the bot restarts it by itself, at most `auto_restart_max_per_hour` times an hour (`restart_allowed()`); off by default, since a macro that stopped because Roblox lost focus usually means the PC is in use. A macro that is running but not writing `status.json` is the stale-status alert, not a crash. Whatever the macro prints on its error output goes to `debug/logs/macro_stderr.log`.
+**What the bot keeps in mind.** `/start`, `/loop` and `/restart` set `desired_state` in `bot_state.json` to `running`, `/exit` to `stopped` (`/stop` leaves it: the process is meant to stay). A macro whose process is gone while it should be running is a crash, posted once (`crash_check()`) and again when it is back; a macro never started with `/start` (started by hand, say) is never reported as crashed, and one closed with `/exit` is not. With `auto_restart` on, the bot restarts it by itself, at most `auto_restart_max_per_hour` times an hour (`restart_allowed()`); off by default, since a macro that stopped because Roblox lost focus usually means the PC is in use. A macro that is running but not writing `status.json` is the stale-status alert, not a crash. Whatever the macro prints on its error output goes to `debug/logs/macro_stderr.log`.
 
 ### Update and rollback
 
 `/update` takes whatever has been merged into `main` and runs it, from Discord, without a trip to the PC. It takes no argument: the remote and branch are the config's `update_remote` and `update_branch` (`origin` and `main`), and no other branch can be named in a message.
 
 1. **The plan, before anything is changed** (`make_plan()` over a `GitRunner`, so the tests run it against real repositories made in a temporary folder): `git fetch` of that branch (the only thing it changes), then `update_plan()` decides from the commits. Same commit: "already up to date". **Local changes to tracked files** (`git status --porcelain --untracked-files=no`; untracked files and the git-ignored `debug/` don't count): refused, naming them - nothing is ever discarded. The PC **ahead** of the branch, or the histories **diverged**: refused. Only a fast-forward goes ahead, and the plan lists the commits it brings (`git log --oneline`).
-2. **`apply_commit()`:** the macro is stopped as `/stop` does it (cooperatively, killed only if it will not end), `git merge --ff-only` moves the PC to the fetched commit, and the files that changed are listed (`git diff --name-only`). The commit the PC was on is kept in `bot_state.json` (`previous_commit`) before any of this, so a failure halfway can still be rolled back.
+2. **`apply_commit()`:** the macro is closed as `/exit` does it (cooperatively, killed only if it will not end), `git merge --ff-only` moves the PC to the fetched commit, and the files that changed are listed (`git diff --name-only`). The commit the PC was on is kept in `bot_state.json` (`previous_commit`) before any of this, so a failure halfway can still be rolled back.
 3. If `requirements.txt` changed, `pip install -r requirements.txt` runs with the configured Python (`BOT_PIP_TIMEOUT`; the file is UTF-16, which pip reads); if it fails the macro is **not** started and `/rollback` is offered.
-4. The macro is started again (as `/start` does, waiting up to `BOT_START_CONFIRM` seconds for its status) **if it was running**; one that was stopped stays stopped. If the loop does not show, the end of `macro_stderr.log` is posted with the `/rollback` offer.
+4. The macro is started again (as `/loop` does, waiting up to `BOT_START_CONFIRM` seconds for its status) **if it was running**; one that was stopped stays stopped. If the loop does not show, the end of `macro_stderr.log` is posted with the `/rollback` offer.
 5. **The bot restarts itself** when its own code changed - a file under `bot/`, `magic_numbers.py` (which it reads) or `requirements.txt` (`needs_bot_restart()`) - because Python does not reload a running program: it posts that, closes the Discord connection, and `main()` starts the same command again (`os.execv`; on Windows a new console window, since `execv` there leaves the terminal confused). The macro-side files alone (`main.py`, the references) need no bot restart.
 
 `/rollback` goes back to `previous_commit` with `git reset --hard`, with the same refusals (local changes to tracked files; no earlier commit; a commit that is no longer in this copy), then steps 2 to 5. It undoes one `/update`; a later `/update` pulls `main` again. The tests run both against real throwaway repositories: a clean update, an untracked file, a changed tracked file, ahead, diverged, a bad branch, and the way back.
@@ -1627,7 +1654,7 @@ clicks instead of making them. They cover:
 
 - `test_pure.py` - the small pure functions (server link parsing, durations,
   colour masks, axis rounding, failure kinds);
-- `test_bot.py` - the Discord bot's logic (`bot/bot_lib.py`): the config, who is obeyed, the messages made from the files `write_status()` and `record_minigame_result()` write, and the alert, OneDrive and control logic (failure lines, log offsets, rate limiting, stale status, captures ready and copied, the command file, crash and restart decisions);
+- `test_bot.py` - the Discord bot's logic (`bot/bot_lib.py`): the config, who is obeyed, the messages made from the files `write_status()` and `record_minigame_result()` write, and the alert, `/pull` and control logic (failure lines, log offsets, rate limiting, stale status, what can be pulled and how, the command file, crash and restart decisions, update and rollback against real git repositories);
 - `test_state.py` - the output log's levels, rotation and reopening, the console handler, stuck-need disabling, `process_needs()` (resolved, unresolvable and not-cleared cases), the sick handler on real screenshots (`tests/sick/`: the prompt, the dialog, the pet view), `RunStats`, `status.json`, the
   failure folders, the quiet and idle-respawn checks (including that a respawn
   leaves the 20-minute rejoin clock alone), stopping, and the open `output.log`;

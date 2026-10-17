@@ -195,6 +195,27 @@ def test_stray_windows_are_recognised_and_closed(macro, monkeypatch, name):
     assert config["close_pos"] in macro.clicks
 
 
+@pytest.mark.parametrize("shot, name, closed_at", [("star_rewards_claim", "star_rewards_claim", (959, 675)), ("star_rewards", "star_rewards", (1209, 441)),
+                                                   ("trading_hub", "trading_hub", (1278, 339)), ("task_board_alerts", "task_board", (1318, 369))])
+def test_each_stray_window_is_told_from_the_others_in_a_real_screenshot_and_closed_where_it_closes(macro, monkeypatch, shot, name, closed_at):
+    """Real screenshots (the Roblox ones, which lack the window's title bar, with 23 rows added on top as the macro's frames have). The Star Rewards
+    that opens by itself once a day has only a CLAIM! button (no X), the calendar one that the star icon opens has a red X: each is clicked where its
+    own way out is - the X was clicked on both before, which closes only one of them. The Trading Hub and the Task Board close with their X."""
+    screen = screenshot(shot)
+    monkeypatch.setattr(macro, "grab_screen", lambda: screen)
+    monkeypatch.setattr(macro.time, "sleep", lambda s: None)
+    assert macro.dismiss_stray_windows() == name
+    assert macro.clicks == [closed_at]
+    assert {k for k in macro.cfg.STRAY_WINDOWS if macro.popup_visible(screen, k)} == {name}
+
+
+def test_the_win_screens_of_both_minigames_are_recognised_in_real_screenshots_and_nothing_else_is(macro):
+    for name in ("win_screen_ghost_gallery", "win_screen_hauntlet_2", "game_over"):            # (the second has the next game's countdown over the banner's top)
+        assert macro.detect_minigame_victory(screenshot(name)) is True, name
+    for name in ("trading_hub", "task_board_alerts", "star_rewards", "star_rewards_claim", "hauntlet_house", "ghost_house", "paycheck", "backpack_open"):
+        assert macro.detect_minigame_victory(screenshot(name)) is False, name
+
+
 def test_an_empty_screen_has_no_stray_window(macro, monkeypatch):
     monkeypatch.setattr(macro, "grab_screen", blank)
     assert macro.dismiss_stray_windows() is None and not macro.clicks
@@ -396,10 +417,11 @@ def test_the_only_pets_message_is_found_by_its_letters_over_any_background(macro
 POPUP_SCREENSHOTS = {                    # real screenshots of a 1920x1080 window (tests/popups): name -> (is a minigame popup, which one)
     "hauntlet_house": (True, "hauntlet_2"),
     "ghost_house": (True, "ghost_gallery"),
-    "stitches_spotlight": (True, "stitches_spotlight"),   # a minigame with no player yet: recognised, so that its popup is declined by name
+    "stitches_spotlight": (True, "stitches_spotlight"),   
     "ghost_over_backpack": (True, "ghost_gallery"),      # the open backpack behind it has green buttons too: it was not found, with all the green taken together
     "paycheck": (False, None),                           # the paycheck's green CASH OUT, a green Okay, the win screen's NICE!: no red No beside them
-    "star_rewards": (False, None),
+    "star_rewards": (False, None),                       # the calendar view (real screenshot, lossless)
+    "star_rewards_claim": (False, None),                 # the view that opens by itself once a day, with its green CLAIM! button
     "game_over": (False, None),
     "teleport_nursery": (False, None),                   # the macro's own teleport dialogs (backpack -> category -> Yes) have a green Yes and a red No too: 30 of them were
     "teleport_dealership": (False, None),                # taken for a minigame popup and "dismissed" in a run, which broke the teleports and the needs after them

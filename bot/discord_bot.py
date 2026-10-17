@@ -11,7 +11,6 @@ import contextlib
 import io
 import logging
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -103,12 +102,12 @@ def release_inputs() -> None:
                 pass
 
 
-def launch_macro(config: bot_lib.Config) -> int:
-    """Start `main.py --loop` (the repository's, with the configured Python) as a process of its own, in this desktop session; what it prints on its
+def launch_macro(config: bot_lib.Config, loop: bool = True) -> int:
+    """Start `main.py` (the repository's, with the configured Python; `--loop` if `loop`) as a process of its own, in this desktop session; what it prints on its
     error output is appended to debug/logs/macro_stderr.log. Returns its process id."""
     folder = config.repo_dir or ROOT
     with open(os.path.join(cfg.LOGS_DIR, "macro_stderr.log"), "ab") as errors:
-        process = subprocess.Popen([config.python or sys.executable, os.path.join(folder, "main.py"), "--loop"], cwd=folder,
+        process = subprocess.Popen([config.python or sys.executable, os.path.join(folder, "main.py"), *(["--loop"] if loop else [])], cwd=folder,
                                    stdout=subprocess.DEVNULL, stderr=errors)
     return process.pid
 
@@ -147,6 +146,27 @@ async def stop_macro(config: bot_lib.Config) -> str:
     with contextlib.suppress(OSError):
         os.remove(cfg.COMMANDS_PATH)
     return f"The macro did not stop within {config.stop_timeout_seconds:g} s - it was killed and its keys and mouse buttons released."
+
+
+async def open_macro(config: bot_lib.Config) -> str:
+    """Start the macro with its window up and no loop going (`main.py`), unless it is running already."""
+    if await asyncio.to_thread(current_macro_pids):
+        return "The macro is already running."
+    await asyncio.to_thread(launch_macro, config, False)
+    deadline = time.time() + cfg.BOT_START_CONFIRM
+    while time.time() < deadline:
+        await asyncio.sleep(2)
+        if await asyncio.to_thread(current_macro_pids):
+            return "Started the macro (its window is up, no loop going - /loop starts the loop)."
+    return "Started the macro, but its process is not there - see /log and macro_stderr.log."
+
+
+async def stop_loop(config: bot_lib.Config) -> str:
+    """Ask the running macro to stop its loop (the [STOP] button); its window stays open."""
+    if not await asyncio.to_thread(current_macro_pids):
+        return "The macro is not running."
+    bot_lib.write_command(cfg.COMMANDS_PATH, "stop", time.time())
+    return "Asked the macro to stop (its keys are released; its window stays open - /exit closes it)."
 
 
 async def start_macro(config: bot_lib.Config) -> str:
@@ -221,7 +241,7 @@ async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say) -
             errors = output_tail(os.path.join(cfg.LOGS_DIR, "macro_stderr.log"))
             await say(f"The macro does not look started. The end of its error output:\n```\n{errors}\n```\nUse /rollback to go back to {bot_lib.short(old)}.")
     else:
-        await say("The macro was not running, so it was not started (/start).")
+        await say("The macro was not running, so it was not started (/loop).")
     if bot_lib.needs_bot_restart(changed):
         await say("The bot's own code changed - the bot restarts now.")
         RESTART_BOT = True
@@ -300,25 +320,45 @@ def build(config: bot_lib.Config) -> discord.Client:
         state.desired_state, state.crash_reported = desired, False
         bot_lib.save_state(bot_lib.state_path(), state)
 
-    @command("start", "Start the macro's loop (launches the macro if it is not running)")
+    @command("start", "Start the macro with its window up and no loop going")
     async def start(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        remember("running")
+        await interaction.followup.send(await open_macro(config))
+
+    @command("loop", "Start the macro's loop (launches the macro if it is not running)")
+    async def loop(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         remember("running")
         await interaction.followup.send(await start_macro(config))
 
-    @command("stop", "Stop the macro: its keys are released and its window closed")
+    @command("stop", "Stop the macro's loop (its window stays open)")
     async def stop(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        await interaction.followup.send(await stop_loop(config))
+
+    @command("exit", "Close the macro: its loop is stopped, its keys are released and its window closed")
+    async def exit_macro(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         remember("stopped")
         await interaction.followup.send(await stop_macro(config))
 
-    @command("restart", "Stop the macro, then start it")
+    @command("restart", "Close the macro, then start it with its loop")
     async def restart(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         remember("stopped")
         stopped = await stop_macro(config)
         remember("running")
         await interaction.followup.send(f"{stopped}\n{await start_macro(config)}")
+
+    @command("rejoin", "Have the macro leave the game and rejoin it (stops its loop first)")
+    async def rejoin(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        if not await asyncio.to_thread(current_macro_pids):
+            await interaction.followup.send("The macro isn't running - /start it first (a rejoin is done by its window).")
+            return
+        bot_lib.write_command(cfg.COMMANDS_PATH, "rejoin", time.time())
+        await interaction.followup.send("Asked the macro to leave and rejoin. Its loop is stopped; /loop it again once it is back in the game.")
 
     async def change_switch(interaction: discord.Interaction, kind: str, name: str, value: bool) -> None:
         """Ask the running macro to change a switch (the command file) and say what the game config shows a moment later."""
@@ -395,11 +435,35 @@ def build(config: bot_lib.Config) -> discord.Client:
         text = bot_lib.options_text(bot_lib.switch_states(bot_lib.read_json(cfg.GAME_CONFIG_PATH)))
         await interaction.followup.send(f"```\n{text}\n```")
 
-    @command("captures", "The newest minigame captures and whether they are in OneDrive")
+    pull_folders = [app_commands.Choice(name=name, value=name) for name in cfg.PULL_SOURCES]
+
+    @command("pull", "Copy something from the debug folder into OneDrive (the newest of a folder, or one you pick)")
+    @app_commands.choices(folder=pull_folders)
+    @app_commands.describe(folder="Which folder of debug/", item="Which one - leave out for the newest; * is everything in the folder")
+    async def pull(interaction: discord.Interaction, folder: app_commands.Choice[str], item: Optional[str] = None) -> None:
+        await interaction.response.defer(thinking=True)
+        if not config.onedrive_dir or not os.path.isdir(config.onedrive_dir):
+            await interaction.followup.send("onedrive_dir is not set, or is not a folder on this PC - there is nowhere to copy to.")
+            return
+        try:
+            path, name = bot_lib.resolve_pull(folder.value, item)
+            files = await asyncio.to_thread(bot_lib.pull_files, path, name)
+            megabytes = await asyncio.to_thread(bot_lib.copy_pull, files, config.onedrive_dir, folder.value, cfg.BOT_MAX_PULL_MB)
+        except (ValueError, OSError) as error:
+            await interaction.followup.send(f"Nothing copied: {error}")
+            return
+        await interaction.followup.send(f"Copied `{name}` ({len(files)} file{'s' if len(files) != 1 else ''}, {megabytes:.0f} MB) to OneDrive, in `{folder.value}/`. The OneDrive app on the PC uploads it from there.")
+
+    @pull.autocomplete("item")
+    async def pull_items(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        source = getattr(interaction.namespace, "folder", None)
+        names = [bot_lib.PULL_ALL, *bot_lib.pull_entries(source or "")]
+        return [app_commands.Choice(name=("* (everything in the folder)" if n == bot_lib.PULL_ALL else n)[:100], value=n) for n in names if current.lower() in n.lower()][:25]
+
+    @command("captures", "The newest minigame captures on the PC (/pull minigame_captures copies one to OneDrive)")
     async def captures(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
-        done = set(bot_lib.load_state(bot_lib.state_path()).captures)
-        await interaction.followup.send(f"```\n{bot_lib.captures_text(bot_lib.captures_dir(), done)}\n```")
+        await interaction.followup.send(f"```\n{bot_lib.captures_text(bot_lib.captures_dir())}\n```")
 
     async def setup_hook() -> None:
         client.loop.create_task(watch(client, config))
@@ -425,7 +489,7 @@ async def post(channel: discord.abc.Messageable, text: str, path: Optional[str] 
 
 async def watch(client: discord.Client, config: bot_lib.Config) -> None:
     """Every BOT_WATCH_INTERVAL seconds look at what the macro wrote and post what is new: failures (with their screenshot), a status that has gone
-    stale (and its recovery), run charts, a heartbeat - and copy finished captures' zips to OneDrive. A failure inside a look is logged and the watching
+    stale (and its recovery), run charts, a heartbeat, a macro that is gone. A failure inside a look is logged and the watching
     goes on. What it has dealt with is kept in bot_state.json, so a restart neither posts it again nor misses what came while it was down."""
     await client.wait_until_ready()
     channel = client.get_channel(config.channel_id) or await client.fetch_channel(config.channel_id)
@@ -435,22 +499,17 @@ async def watch(client: discord.Client, config: bot_lib.Config) -> None:
     if state.log_offset is None:                                   # the first start: what is there already is not news
         state.log_offset = bot_lib.file_end(bot_lib.run_log_path())
         state.charts = [os.path.basename(c) for c in bot_lib.run_charts()]
-        state.captures = [os.path.basename(f) for f in os.listdir(bot_lib.captures_dir())] if os.path.isdir(bot_lib.captures_dir()) else []
         bot_lib.save_state(path, state)
-    copying = bool(config.onedrive_dir)
-    if copying and not os.path.isdir(config.onedrive_dir):
-        await channel.send(f"onedrive_dir `{config.onedrive_dir}` is not a folder on this PC - the capture zips are not copied.")
-        copying = False
     while not client.is_closed():
         try:
-            await watch_once(channel, config, state, limiter, copying)
+            await watch_once(channel, config, state, limiter)
             bot_lib.save_state(path, state)
         except Exception:
             log.exception("a look at the macro's files failed")
         await asyncio.sleep(cfg.BOT_WATCH_INTERVAL)
 
 
-async def watch_once(channel: discord.abc.Messageable, config: bot_lib.Config, state: bot_lib.BotState, limiter: bot_lib.RateLimiter, copying: bool) -> None:
+async def watch_once(channel: discord.abc.Messageable, config: bot_lib.Config, state: bot_lib.BotState, limiter: bot_lib.RateLimiter) -> None:
     now = time.time()
     assert state.log_offset is not None
     lines, state.log_offset = bot_lib.read_new_lines(bot_lib.run_log_path(), state.log_offset)
@@ -466,16 +525,6 @@ async def watch_once(channel: discord.abc.Messageable, config: bot_lib.Config, s
         if os.path.basename(chart) not in state.charts and now - os.path.getmtime(chart) >= cfg.BOT_FILE_SETTLE:
             state.charts.append(os.path.basename(chart))
             await post(channel, f"Run chart {os.path.basename(chart)}", chart)
-    if copying:
-        copied = False
-        for capture in bot_lib.ready_captures(bot_lib.captures_dir(), set(state.captures), now, cfg.BOT_CAPTURE_SETTLE):
-            await asyncio.to_thread(bot_lib.copy_capture, capture, config.onedrive_dir)
-            state.captures.append(capture.name)
-            copied = True
-            await channel.send(bot_lib.capture_text(capture))
-        if copied:
-            for folder in bot_lib.old_copies(config.onedrive_dir, config.onedrive_keep_days, now):
-                await asyncio.to_thread(shutil.rmtree, folder, True)
     if state.desired_state == "running":
         running = await asyncio.to_thread(macro_process_running)
         state.crash_reported, event = bot_lib.crash_check(state.desired_state, running, state.crash_reported)
@@ -487,7 +536,7 @@ async def watch_once(channel: discord.abc.Messageable, config: bot_lib.Config, s
                 state.crash_reported = False
             else:
                 limit = " (the limit of automatic restarts this hour is used)" if config.auto_restart else ""
-                await channel.send(f"**The macro's process is gone** while it should be running{limit}. /start starts it again.")
+                await channel.send(f"**The macro's process is gone** while it should be running{limit}. /start or /loop starts it again.")
         elif event == "recovered":
             await channel.send("The macro's process is running again.")
     if bot_lib.heartbeat_due(state.last_heartbeat, config.heartbeat_hours, now):

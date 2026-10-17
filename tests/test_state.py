@@ -1400,7 +1400,7 @@ def write_command(macro, command, age=0, **extra):
 def test_a_fresh_command_is_read_once_and_the_file_is_removed(macro, monkeypatch, tmp_path):
     monkeypatch.setattr(macro.cfg, "COMMANDS_PATH", str(tmp_path / "commands.json"))
     assert macro.read_command() is None                                       # (no file)
-    for command in ("start", "stop", "exit"):
+    for command in ("start", "stop", "exit", "rejoin"):
         write_command(macro, command)
         assert macro.read_command()["command"] == command and not os.path.exists(macro.cfg.COMMANDS_PATH)
 
@@ -1447,6 +1447,25 @@ def test_the_commands_do_what_the_buttons_do_and_polling_goes_on_except_after_ex
     assert gui.calls == [] and gui.root.scheduled[-1][1] == "poll_commands"
 
 
+def test_rejoin_runs_the_rejoin_and_first_stops_a_running_loop_but_gives_up_if_it_does_not_end(macro, monkeypatch, tmp_path):
+    gui = remote_gui(macro, monkeypatch, tmp_path)
+    write_command(macro, "rejoin")
+    gui.poll_commands()
+    assert gui.calls == [("run_async", "leave_and_rejoin")]
+    gui = remote_gui(macro, monkeypatch, tmp_path, running=True)
+    write_command(macro, "rejoin")
+    gui.poll_commands()
+    assert gui.calls == [("stop",)] and ("rejoin_from_outside" in [name for _, name in gui.root.scheduled])
+    gui.is_running = False                                                    # the loop has ended: the next look does the rejoin
+    gui.rejoin_from_outside()
+    assert gui.calls[-1] == ("run_async", "leave_and_rejoin")
+    gui = remote_gui(macro, monkeypatch, tmp_path, running=True)              # a loop that never ends
+    gui.rejoin_waits = macro.cfg.REJOIN_STOP_WAIT_MS // macro.cfg.REJOIN_STOP_POLL_MS
+    gui.root.scheduled.clear()
+    gui.rejoin_from_outside()
+    assert gui.root.scheduled == [] and ("run_async", "leave_and_rejoin") not in gui.calls
+
+
 def test_start_does_nothing_to_a_loop_that_is_running_and_the_loop_argument_starts_it_once_the_window_is_up(macro, monkeypatch, tmp_path):
     gui = remote_gui(macro, monkeypatch, tmp_path, running=True)
     write_command(macro, "start")
@@ -1458,8 +1477,21 @@ def test_start_does_nothing_to_a_loop_that_is_running_and_the_loop_argument_star
     assert [name for _, name in gui.root.scheduled] == ["poll_commands", "start_loop_from_outside"] and not os.path.exists(macro.cfg.COMMANDS_PATH)
     assert gui.calls == []
     gui.root.scheduled.clear()
+    marked = []
+    monkeypatch.setattr(macro, "mark_stopped", lambda: marked.append(True))
+    gui.start_remote_control(loop=True)
+    assert marked == []
+    gui.root.scheduled.clear()
     gui.start_remote_control(loop=False)
-    assert [name for _, name in gui.root.scheduled] == ["poll_commands"]
+    assert [name for _, name in gui.root.scheduled] == ["poll_commands"] and marked == [True]       # (no loop: the status says nothing is running)
+
+
+def test_stopping_on_purpose_is_written_to_the_status_and_a_new_run_clears_it(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "STATUS_PATH", str(tmp_path / "status.json"))
+    macro.mark_stopped()
+    assert json.load(open(macro.cfg.STATUS_PATH))["stopped"]
+    macro.reset_run_stats()
+    assert json.load(open(macro.cfg.STATUS_PATH))["stopped"] is None
 
 
 def test_a_set_command_is_only_read_for_a_switch_that_exists_with_a_true_or_false_value(macro, monkeypatch, tmp_path):
@@ -1499,6 +1531,7 @@ def test_the_need_names_a_command_may_switch_are_the_handlers_there_are(macro):
 
 def test_a_minigame_that_has_no_player_yet_is_declined_even_when_switched_on(macro, monkeypatch):
     import cv2
+    monkeypatch.delitem(macro.MINIGAME_PLAYERS, "stitches_spotlight")                         # (one that is recognised but cannot be played)
     clicks, played = [], []
     monkeypatch.setattr(macro, "grab_screen", lambda: cv2.imread(os.path.join(os.path.dirname(__file__), "popups", "stitches_spotlight.png")))
     monkeypatch.setattr(macro, "load_game_config", lambda: {"stitches_spotlight_enabled": True})

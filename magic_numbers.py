@@ -50,7 +50,7 @@ MINIGAME_POPUP_YES_POS = (1049, 612)
 # config ("<name>_enabled", off by default) - an off one is dismissed, an on one is played.
 MINIGAME_TITLE_BOX = (730, 410, 1200, 510)   # left, top, right, bottom
 MINIGAME_TITLE_MATCH_THRESHOLD = 0.85
-MINIGAME_LABELS = {"hauntlet_2": "Hauntlet 2", "ghost_gallery": "Ghost Gallery", "stitches_spotlight": "Stitches' Spotlight"}   # for the GUI and the logs (Stitches' Spotlight is recognised but has no player yet: its popup is declined)
+MINIGAME_LABELS = {"hauntlet_2": "Hauntlet 2", "ghost_gallery": "Ghost Gallery", "stitches_spotlight": "Stitches' Spotlight"}   # for the GUI and the logs
 
 # Playing one. Both end on the victory screen (a red "GAME OVER!" banner over a green NICE! button), which
 # is looked for every MINIGAME_VICTORY_CHECK_INTERVAL seconds, then the button is clicked.
@@ -66,7 +66,7 @@ MINIGAME_VICTORY_BUTTON_POS = (966, 762)
 # MINIGAME_OVERLAY_THRESHOLD) say whether the game is on: one that was seen and then isn't, for
 # MINIGAME_OVERLAY_LOST_TIMEOUT seconds, was left (game over, kicked out) - and one never seen within
 # MINIGAME_OVERLAY_START_GRACE seconds after its start wait never started.
-MINIGAME_OVERLAYS = {"hauntlet_2": (1040, 40, 1210, 135), "ghost_gallery": (840, 25, 1080, 120)}   # name: search box
+MINIGAME_OVERLAYS = {"hauntlet_2": (1040, 40, 1210, 135), "ghost_gallery": (840, 25, 1080, 120), "stitches_spotlight": (860, 25, 1065, 125)}   # name: search box
 MINIGAME_OVERLAY_THRESHOLD = 0.7
 MINIGAME_OVERLAY_LOST_TIMEOUT = 10.0
 MINIGAME_OVERLAY_START_GRACE = 60.0
@@ -113,7 +113,10 @@ HAUNTLET_2_FORWARD_KEY = "w"
 STRAY_WINDOW_MATCH_THRESHOLD = 0.8
 STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     "trading_hub": {"box": (580, 290, 1020, 400), "close_pos": (1278, 339)},
-    "star_rewards": {"box": (640, 385, 1060, 475), "close_pos": (1209, 441)},
+    "star_rewards": {"box": (640, 385, 1060, 475), "close_pos": (1209, 441)},      # the calendar view (the star icon opens it): closed by its red X
+    # The Task Board (opened by a notification such as "Trading Hub: Your listing got an offer!", on its Alerts tab): its red X closes it. Only closed, for now.
+    "task_board": {"box": (540, 300, 1000, 430), "close_pos": (1318, 369)},
+    "star_rewards_claim": {"box": (680, 410, 1080, 520), "close_pos": (959, 675)},   # the view that opens on its own once a day: no X, only the green CLAIM! button
     # "Are you sure you want to respawn your character?" - what respawn_character()'s esc, r, enter leaves
     # open when the Enter comes before the dialog does; "close_pos" is its Respawn button.
     "respawn_confirm": {"box": (600, 330, 1320, 430), "close_pos": (850, 496)},
@@ -194,20 +197,22 @@ for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
 COMMANDS_PATH = os.path.join(DEBUG_DIR, "commands.json")    # a command for the macro, written by the Discord bot (see read_command()); the macro removes it once read
-COMMANDS = ("start", "stop", "exit", "set")                  # what it may hold: start the loop, stop it, stop and close the window, or change a switch (see NEED_NAMES, OPTION_SWITCHES)
+COMMANDS = ("start", "stop", "exit", "set", "rejoin")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), or leave and rejoin the game
 NEED_NAMES = ("catch", "pet", "choose", "ride", "walk", "hungry", "thirsty", "dirty", "potty", "sleepy", "bored", "beach", "school", "cafe", "salon", "pizza", "camping", "sick")   # the Debug tab's need switches (the keys of main.py's NEED_HANDLER_CLASSES)
 OPTION_SWITCHES = {"side_quest": "side_quest_enabled", "resume_on_focus_loss": "resume_on_focus_loss", "record_next_run": "record_next_run",
                    **{f"play_{name}": f"{name}_enabled" for name in MINIGAME_LABELS}}   # the other switches a command may change: name -> the game config's key ("show_debug_lines" too, which is only in the window)
 SHOW_DEBUG_LINES_OPTION = "show_debug_lines"
 COMMAND_POLL_MS = 1000                                      # how often the macro looks for one
 COMMAND_MAX_AGE = 30                                        # seconds: an older command is ignored (left over from before the macro was started)
+REJOIN_STOP_POLL_MS = 500                                   # a rejoin asked for while the loop runs: how often to see whether it has stopped
+REJOIN_STOP_WAIT_MS = 15000                                 # and how long to wait for that before giving up
 START_LOOP_DELAY_MS = 1500                                  # after the window is up, before the --loop argument starts the loop
 BOT_START_CONFIRM = 60                                     # seconds the bot waits, after /start, for the macro's loop to show in status.json
+BOT_MAX_PULL_MB = 2000                                      # /pull copies nothing that comes to more than this (OneDrive's free space is small)
 BOT_GIT_TIMEOUT = 120                                       # seconds a git command of /update may take (a fetch over a slow connection)
 BOT_PIP_TIMEOUT = 900                                       # seconds pip may take to install the packages of an update
 BOT_WATCH_INTERVAL = 10                                     # seconds between the Discord bot's looks at what the macro wrote (failures, run charts, captures, status)
 BOT_ALERT_GAP = 60                                          # seconds: at most one failure post per this long, the rest counted ("N more failures")
-BOT_CAPTURE_SETTLE = 20                                     # seconds a capture's zips must be unchanged before they are copied (they are written on a thread)
 BOT_FILE_SETTLE = 5                                         # seconds a run chart must be unchanged before it is posted
 BOT_MAX_UPLOAD_MB = 8                                       # bigger files are not posted (Discord's limit for a bot is about 10 MB)
 RUN_LOG_PATH = os.path.join(LOGS_DIR, "run_log.txt")        # appended to, never overwritten
@@ -258,6 +263,8 @@ MAX_CAPTURES = 5                         # oldest captures are deleted beyond th
 MINIGAME_CAPTURE = True
 RUN_CAPTURES_DIR = os.path.join(DEBUG_DIR, "minigame_captures")
 RUN_CAPTURE_ZIPS = 5
+# What the Discord bot's /pull can copy into OneDrive: the folders of debug/ (not the game config, which holds the private server link).
+PULL_SOURCES = {"failures": FAILURE_DIR, "logs": LOGS_DIR, "runs": RUNS_DIR, "minigame_captures": RUN_CAPTURES_DIR, "captures": CAPTURES_DIR, "recordings": RECORDINGS_DIR}
 RUN_CAPTURES_BEST = 2
 RUN_CAPTURES_WORST = 2
 RUN_CAPTURES_FAILED = 5                   # the latest this many runs that failed (did not finish, or had a failure logged) are kept too
@@ -308,6 +315,29 @@ GHOST_BOSS_BAR_GOLD = ((15, 150, 160), (30, 255, 255))
 GHOST_BOSS_BAR_MIN = 3000
 GHOST_BOSS_BAR_IGNORE = (680, 150, 1240, 275)  # the bar itself, in the boss phase: its crest and its ghost icons are the same cyan
 GHOST_LOOK_INTERVAL = 0.06
+STITCHES_LOOK_INTERVAL = 0.3                 # Stitches' Spotlight: between looks at the screen
+STITCHES_CHARACTER = (960, 600)              # where the player's character stands on the screen
+STITCHES_SEARCH_BOX = (250, 260, 1670, 920)  # where candy corn is looked for (not the HUD, the buttons, or the far wall's stripes)
+STITCHES_CANDY_HUE = (14, 26)                # candy corn's orange-yellow (OpenCV hue), with at least the saturation and value below
+STITCHES_CANDY_MIN_SATURATION = 150
+STITCHES_CANDY_MIN_VALUE = 170
+STITCHES_CANDY_AREA = (15, 260)              # a piece's blob size in pixels; a bigger blob is a wall stripe or a light
+STITCHES_CANDY_MAX_SIDE = 40
+STITCHES_CANDY_MIN_FILL = 0.35               # of its bounding box (a stripe is thin and long)
+STITCHES_CANDY_REACHED = 70                  # a piece this close to the character is being picked up already (the magnet): the next one is chosen
+STITCHES_STEER_DEADBAND = 45                 # a piece this near straight ahead (or beside) needs no sideways (or forward) key
+STITCHES_STEP = 0.35                         # how long a movement key is held to walk towards a piece
+STITCHES_WANDER_STEP = 0.6                   # and when there is none in sight
+STITCHES_RED_BOX = (830, 420, 1090, 680)     # around the character: red here is the searchlight on the player
+STITCHES_RED_HUE_MAX = (6, 172)              # OpenCV hue at most the first or at least the second is red, with the saturation and value below
+STITCHES_RED_MIN_SATURATION = 110
+STITCHES_RED_MIN_VALUE = 110
+STITCHES_DANGER_FRACTION = 0.2               # of STITCHES_RED_BOX that is red: the searchlight is on the character
+STITCHES_COVER_BOX = (890, 300, 1030, 520)   # the dark grey planks to hide behind show here, in front of the character
+STITCHES_COVER_MAX_SATURATION = 70
+STITCHES_COVER_VALUE = (35, 120)
+STITCHES_COVER_FRACTION = 0.4                # of STITCHES_COVER_BOX that is plank: the player is behind cover and stays where it is
+STITCHES_FLEE_STEP = 0.5                     # how long a sideways key is held to get out of the red
 GHOST_START_LOOK_INTERVAL = 0.5              # while waiting for the game to begin
 GHOST_INTRO_WAIT = 6.0                       # after its overlay shows, the game's own intro camera (a look at the ceiling) runs this long; the zoom and tilt come after, or are undone
 # The boss can't be hurt while its bar shows two or three ghost icons instead of its health: the bar's cyan fill (BGR (255, 222, 0),

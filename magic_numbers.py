@@ -113,7 +113,8 @@ HAUNTLET_2_FORWARD_KEY = "w"
 STRAY_WINDOW_MATCH_THRESHOLD = 0.8
 STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     "trading_hub": {"box": (580, 290, 1020, 400), "close_pos": (1278, 339)},
-    "star_rewards": {"box": (640, 385, 1060, 475), "close_pos": (1209, 441)},
+    "star_rewards": {"box": (640, 385, 1060, 475), "close_pos": (1209, 441)},      # the calendar view (the star icon opens it): closed by its red X
+    "star_rewards_claim": {"box": (680, 410, 1080, 520), "close_pos": (959, 675)},   # the view that opens on its own once a day: no X, only the green CLAIM! button
     # "Are you sure you want to respawn your character?" - what respawn_character()'s esc, r, enter leaves
     # open when the Enter comes before the dialog does; "close_pos" is its Respawn button.
     "respawn_confirm": {"box": (600, 330, 1320, 430), "close_pos": (850, 496)},

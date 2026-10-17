@@ -510,10 +510,12 @@ these windows - the macro's paycheck clicks don't close them, and their green
 buttons look like CASH OUT.
 (`load_templates()` reads each folder's crops once and re-reads them only when a file is added, changed or removed.)
 `dismiss_stray_windows()` recognises each by a crop of its title
-in `ref/popups/` (`trading_hub.png`, `star_rewards.png`; matched within the
+in `ref/popups/` (`trading_hub.png`, `star_rewards.png`, `star_rewards_claim.png`; matched within the
 `box` in `STRAY_WINDOWS`, at least `STRAY_WINDOW_MATCH_THRESHOLD`) and clicks
 its `close_pos`; for the Trading Hub it first clicks the popup's green Okay
-(`STRAY_OKAY_*`) if that's showing. A new window is a new crop plus an entry in
+(`STRAY_OKAY_*`) if that's showing. The Star Rewards has two views, each its own entry: the one that opens by itself once a day (`star_rewards_claim`) has only a green CLAIM! button and no X, so it is closed
+by clicking CLAIM!; the calendar one that the star icon opens (`star_rewards`) is closed by its red X. Only the calendar one was handled at first, with the X clicked wherever the window
+was - which closes nothing in the daily view, the one the macro meets (real screenshots of both are `tests/popups/star_rewards_claim.png` and `star_rewards.png`; the crops are cut from them). A new window is a new crop plus an entry in
 `STRAY_WINDOWS`. `setup_game()` also closes any before it starts, since an open
 one would take its clicks.
 

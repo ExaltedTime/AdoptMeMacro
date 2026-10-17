@@ -195,6 +195,18 @@ def test_stray_windows_are_recognised_and_closed(macro, monkeypatch, name):
     assert config["close_pos"] in macro.clicks
 
 
+@pytest.mark.parametrize("shot, name, closed_at", [("star_rewards_claim", "star_rewards_claim", (959, 675)), ("star_rewards", "star_rewards", (1209, 441))])
+def test_the_two_views_of_the_star_rewards_are_each_closed_where_they_close(macro, monkeypatch, shot, name, closed_at):
+    """Real screenshots: the daily one has only a CLAIM! button (no X), the calendar one that the star icon opens has a red X. Each is told from
+    the other, and clicked where its own way out is - the X was clicked on both before, which closes only one of them."""
+    screen = screenshot(shot)
+    monkeypatch.setattr(macro, "grab_screen", lambda: screen)
+    monkeypatch.setattr(macro.time, "sleep", lambda s: None)
+    assert macro.dismiss_stray_windows() == name
+    assert macro.clicks == [closed_at]
+    assert {k for k in macro.cfg.STRAY_WINDOWS if macro.popup_visible(screen, k)} == {name}
+
+
 def test_an_empty_screen_has_no_stray_window(macro, monkeypatch):
     monkeypatch.setattr(macro, "grab_screen", blank)
     assert macro.dismiss_stray_windows() is None and not macro.clicks
@@ -399,7 +411,8 @@ POPUP_SCREENSHOTS = {                    # real screenshots of a 1920x1080 windo
     "stitches_spotlight": (True, "stitches_spotlight"),   # a minigame with no player yet: recognised, so that its popup is declined by name
     "ghost_over_backpack": (True, "ghost_gallery"),      # the open backpack behind it has green buttons too: it was not found, with all the green taken together
     "paycheck": (False, None),                           # the paycheck's green CASH OUT, a green Okay, the win screen's NICE!: no red No beside them
-    "star_rewards": (False, None),
+    "star_rewards": (False, None),                       # the calendar view (real screenshot, lossless)
+    "star_rewards_claim": (False, None),                 # the view that opens by itself once a day, with its green CLAIM! button
     "game_over": (False, None),
     "teleport_nursery": (False, None),                   # the macro's own teleport dialogs (backpack -> category -> Yes) have a green Yes and a red No too: 30 of them were
     "teleport_dealership": (False, None),                # taken for a minigame popup and "dismissed" in a run, which broke the teleports and the needs after them

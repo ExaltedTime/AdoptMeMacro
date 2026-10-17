@@ -5393,6 +5393,8 @@ class DebugCapture(logging.Handler):
         self.text.insert(tk.END, line + "\n", level)
         self.at_line_start = True
 
+OUTSIDE_ACTIONS: dict[str, Callable[[], Any]] = {"rejoin": leave_and_rejoin, "setup": setup_game}   # the commands that do what a button does (AdoptMeGUI.act_from_outside())
+
 class AdoptMeGUI:
     def __init__(self, root: tk.Tk) -> None:
         state.macro_window = self
@@ -5445,7 +5447,7 @@ class AdoptMeGUI:
 
     def poll_commands(self) -> None:
         """Do the command waiting in COMMANDS_PATH, if any (Tk's thread): `start` the loop, `stop` it (the cooperative stop, same as [STOP]), `exit`
-        (stop, release every key and the mouse, and close the window - what the X button does) or `set` a switch (set_switch()). Looks again
+        (stop, release every key and the mouse, and close the window - what the X button does) `set` a switch (set_switch()), `rejoin` or `setup` (act_from_outside()), or `refresh_debug`. Looks again
         COMMAND_POLL_MS later."""
         data = read_command()
         command = data["command"] if data else None
@@ -5462,24 +5464,34 @@ class AdoptMeGUI:
             self.stop()
         elif command == "set" and data:
             self.set_switch(data["kind"], data["name"], data["value"])
-        elif command == "rejoin":
+        elif command in OUTSIDE_ACTIONS:
             self.rejoin_waits = 0
-            self.rejoin_from_outside()
+            self.act_from_outside(command)
+        elif command == "refresh_debug":
+            self.refresh_debug_from_outside()
         self.root.after(cfg.COMMAND_POLL_MS, self.poll_commands)
 
-    def rejoin_from_outside(self) -> None:
-        """Leave and rejoin the game, as the Leave & rejoin button does (`rejoin` command). A running loop is stopped first and the rejoin starts once it has
-        ended, looking again every REJOIN_STOP_POLL_MS for up to REJOIN_STOP_WAIT_MS."""
+    def act_from_outside(self, command: str) -> None:
+        """Do what the button of the same name does (OUTSIDE_ACTIONS: `rejoin` is Leave & rejoin, `setup` is Setup). A running loop is stopped first and
+        the action starts once it has ended, looking again every REJOIN_STOP_POLL_MS for up to REJOIN_STOP_WAIT_MS."""
         if self.is_running:
             self.stop()
             if self.rejoin_waits * cfg.REJOIN_STOP_POLL_MS >= cfg.REJOIN_STOP_WAIT_MS:
-                logger.warning("Rejoin asked for, but the running loop did not stop")
+                logger.warning(f"{command} asked for, but the running loop did not stop")
                 return
             self.rejoin_waits += 1
-            self.root.after(cfg.REJOIN_STOP_POLL_MS, self.rejoin_from_outside)
+            self.root.after(cfg.REJOIN_STOP_POLL_MS, lambda: self.act_from_outside(command))
             return
-        log_run_event("rejoin asked for from outside (the Discord bot)")
-        self.run_async(leave_and_rejoin)
+        log_run_event(f"{command} asked for from outside (the Discord bot)")
+        self.run_async(OUTSIDE_ACTIONS[command])
+
+    def refresh_debug_from_outside(self) -> None:
+        """Empty the debug folder as the Refresh debug button does, without asking; not while something is running, which is writing there."""
+        if self.is_running:
+            logger.warning("Refresh debug asked for, but the macro is running - stop it first")
+            return
+        logger.debug(f"Debug folder refreshed ({refresh_debug()} entries removed)")
+        mark_stopped()                                           # (the status file went with the rest)
 
     def set_switch(self, kind: str, name: str, value: bool) -> None:
         """Change a switch as its checkbox does - persist it and tick or untick the checkbox in the window: a need's (the Debug tab), or an option (the

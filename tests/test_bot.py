@@ -247,6 +247,10 @@ def test_failures_are_posted_one_a_minute_and_the_rest_counted():
     assert "1 more failure since" in bot_lib.failure_text(failure, 1) and "3 more failures since" in bot_lib.failure_text(failure, 3)
 
 
+def test_the_loop_is_idle_only_when_the_status_says_so():
+    assert bot_lib.loop_idle({"stopped": "2026-10-17 12:00:00"}) and not bot_lib.loop_idle({"stopped": None}) and not bot_lib.loop_idle(None)
+
+
 def test_a_macro_stopped_on_purpose_is_not_reported_as_not_updating():
     old = {"updated": (NOW - timedelta(minutes=30)).strftime(bot_lib.TIME_FORMAT), "stopped": "2026-10-17 12:00:00"}
     assert bot_lib.stale_alert(False, old, NOW, 5) == (False, None)

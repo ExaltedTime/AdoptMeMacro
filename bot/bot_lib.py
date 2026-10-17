@@ -378,6 +378,11 @@ def stale_alert(was_stale: bool, status: Optional[dict[str, Any]], now: datetime
     return False, "The macro is updating again."
 
 
+def loop_idle(status: Optional[dict[str, Any]]) -> bool:
+    """True if status.json says the macro is running nothing (stopped on purpose, or open with no loop): see main.mark_stopped()."""
+    return status is not None and bool(status.get("stopped"))
+
+
 def heartbeat_due(last: Optional[float], hours: float, now: float) -> bool:
     """Whether a heartbeat post is due: `hours` is not 0 and that long has passed since `last` (None: never, so it is due at once)."""
     return hours > 0 and (last is None or now - last >= hours * 3600)

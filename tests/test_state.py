@@ -1484,6 +1484,19 @@ def test_the_trade_hub_trips_click_the_recorded_positions_in_order(macro, monkey
     assert not macro.travel_to_trade_hub() and not macro.leave_trade_hub() and clicks == [] and keys == []
 
 
+def test_a_command_that_raises_is_logged_and_the_polling_goes_on(macro, monkeypatch, tmp_path, caplog):
+    gui = remote_gui(macro, monkeypatch, tmp_path)
+    gui.set_switch = lambda kind, name, value: (_ for _ in ()).throw(PermissionError("game_config.json is locked"))
+    write_command(macro, "set", kind="need", name="hungry", value=False)
+    gui.poll_commands()
+    assert gui.root.scheduled == [(macro.cfg.COMMAND_POLL_MS, "poll_commands")]       # (scheduled before the command ran)
+    assert "failed" in caplog.text and "locked" in caplog.text
+    gui.root.scheduled.clear()
+    write_command(macro, "start")                                                     # and the next command is still heard
+    gui.poll_commands()
+    assert gui.calls == [("run_async", "run_workflow_loop")] and len(gui.root.scheduled) == 1
+
+
 def test_refresh_debug_is_done_when_nothing_runs_and_the_status_is_written_again(macro, monkeypatch, tmp_path):
     done = []
     monkeypatch.setattr(macro, "refresh_debug", lambda: done.append("refreshed") or 3)

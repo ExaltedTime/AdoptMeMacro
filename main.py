@@ -5449,14 +5449,24 @@ class AdoptMeGUI:
     def poll_commands(self) -> None:
         """Do the command waiting in COMMANDS_PATH, if any (Tk's thread): `start` the loop, `stop` it (the cooperative stop, same as [STOP]), `exit`
         (stop, release every key and the mouse, and close the window - what the X button does) `set` a switch (set_switch()), `rejoin`, `setup`, `trade_hub` or `leave_trade_hub` (act_from_outside()), or `refresh_debug`. Looks again
-        COMMAND_POLL_MS later."""
+        COMMAND_POLL_MS later - scheduled before the command is done, and a command that raises is logged and does not stop the polling."""
         data = read_command()
         command = data["command"] if data else None
-        if command is not None:
-            logger.info(f"Command from outside: {command}")
         if command == "exit":
+            logger.info("Command from outside: exit")
             self.close()
             return
+        self.root.after(cfg.COMMAND_POLL_MS, self.poll_commands)
+        if command is None:
+            return
+        logger.info(f"Command from outside: {command}")
+        try:
+            self.do_command(command, data)
+        except Exception:
+            logger.exception(f"The command from outside ({command}) failed")
+
+    def do_command(self, command: str, data: Optional[dict[str, Any]]) -> None:
+        """What poll_commands() does for one command (not `exit`)."""
         if command == "start":
             self.start_loop_from_outside()
         elif command == "stop":
@@ -5470,7 +5480,6 @@ class AdoptMeGUI:
             self.act_from_outside(command)
         elif command == "refresh_debug":
             self.refresh_debug_from_outside()
-        self.root.after(cfg.COMMAND_POLL_MS, self.poll_commands)
 
     def act_from_outside(self, command: str) -> None:
         """Do what the button of the same name does (OUTSIDE_ACTIONS: `rejoin` is Leave & rejoin, `setup` is Setup). A running loop is stopped first and

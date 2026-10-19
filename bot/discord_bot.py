@@ -1,5 +1,5 @@
-"""The Discord bot: ask the macro's PC how it is doing from anywhere. Read-only (Phase 1 of docs/planned/Discord.md): /status, /screenshot, /log,
-/report, /results. It runs on the PC the macro runs on, in the same logged-in desktop session (it reads the macro's files and grabs its screen),
+"""The Discord bot: ask the macro's PC how it is doing from anywhere, and control it: /status, /screenshot, /log, /report, /results, /captures, /pull, the
+commands that start, stop and change the macro, and /update and /rollback. It runs on the PC the macro runs on, in the same logged-in desktop session (it reads the macro's files and grabs its screen),
 and connects out to Discord, so no port needs opening. Only one user, in one channel, is obeyed (bot_config.json).
 
     python bot/discord_bot.py [path to bot_config.json]

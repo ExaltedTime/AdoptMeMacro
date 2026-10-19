@@ -10,7 +10,7 @@ how; the rest is the plan as it was written, from reading `main.py` and `docs/AR
 Run the macro on the home PC and, from anywhere (a phone, say):
 
 1. **See** how it is doing: alive or stuck, what it resolved, what failed, a live screenshot.
-2. **Be told** when something breaks (this is the "Notify somewhere when something breaks" item in `PLANNED.md`).
+2. **Be told** when something breaks.
 3. **Control** it: start the loop, stop it, restart it.
 4. **Update** it: stop the macro, `git pull` the changes made in a Claude session, start it again.
 5. **Get the minigame capture zips** off the PC without going home, via OneDrive, so they can be forwarded to Claude.
@@ -36,20 +36,20 @@ wired into the macro's internals** for status and alerts:
 | What happened | `debug/logs/run_log.txt` (one tagged line per event, `FAILURE: ...` for failures), `debug/runs/run<N>.txt` (one run), `debug/logs/output.log` |
 | What broke, with a picture | `debug/failures/<time>_<run>_<reason>/` (`screen.png`, `need_icons.png`, `info.txt`, `state.json`), made by `log_failure()` |
 | Run chart | `debug/runs/run<N>.png`, written when a run stops (`write_run_report()`) |
-| Minigame captures | `debug/minigame_captures/<minigame>_<date>_<time>/`, each with a `zips/` folder (`capture_..._part01.zip`, ...) made on a thread by `zip_capture_in_background()`. At most `RUN_CAPTURE_ZIPS` (5) zips of `CAPTURE_ZIP_MB` (25 MB) per run; `info.json` has the `outcome` |
+| Minigame captures | `debug/minigame_captures/<minigame>_<date>_<time>/`, each with a `zips/` folder (`capture_..._part01.zip`, ...) made on a thread by `zip_capture_in_background()`. At most `RUN_CAPTURE_ZIPS` zips of `CAPTURE_ZIP_MB` each per run; `info.json` has the `outcome` |
 | Stopping safely | `STOP_EVENT` (cooperative; the worker releases held keys itself - see "Stopping & focus safety") |
 | Starting | the GUI's loop button -> `run_async(run_workflow_loop)` |
 | Zip splitting | `tools/split_zip.py` |
 
 What did **not** exist and was added: a way to start/stop the loop from outside the GUI, a `--loop`
-start-up flag, and the bot itself (**Built:** phases 1 to 4; only the update and rollback are still to do).
+start-up flag, and the bot itself (**Built:** phases 1 to 5).
 
 ## Design
 
 ### Two processes: a supervisor/bot, and the macro
 
 ```
-Discord  <--outbound-->  bot.py (supervisor)  --launches/kills-->  main.py (the macro, GUI + loop)
+Discord  <--outbound-->  bot/discord_bot.py (supervisor)  --launches/kills-->  main.py (the macro, GUI + loop)
                               |   reads                               |  writes
                               +---- debug/logs/status.json, run_log.txt, failures/, minigame_captures/ <----+
                               +---- writes debug/commands.json (stop / start requests) ---> polled by main.py
@@ -112,10 +112,18 @@ effectively remote control of the PC.
 | `/screenshot` | Grabs the Roblox window (or the screen with an option) and posts it as a PNG |
 | `/log [lines]` | The last N lines of `run_log.txt` (capped, as a file attachment if long) |
 | `/report` | The newest `runs/run<N>.png` (**Built**, along with `/results`: best, worst and average candy corn of each minigame) |
-| `/start` | Launches `main.py --loop` if it is not running |
-| `/stop` | Asks the macro to stop (command file); if the loop hasn't stopped within a timeout, kills the process and releases held keys (see below). **Built:** the command is `exit`, which ends the whole process cleanly (the loop stops, the keys are released, the window closes), so the process ending is the proof |
-| `/restart` | `/stop` then `/start` |
-| `/update [branch]` | Stop, `git pull --ff-only`, reinstall requirements if they changed, start. Posts what changed (the `git log` of the pulled commits) |
+| `/start` | **Built:** launches `main.py` with its window up and no loop going, unless it is running |
+| `/loop` | **Built:** launches `main.py --loop` if it is not running, else asks the running macro to start its loop |
+| `/stop` | **Built:** asks the macro to stop its loop (the `stop` command, the [STOP] button); the window stays open |
+| `/exit` | Asks the macro to exit (command file); if the process hasn't ended within a timeout, kills it and releases held keys (see below). The command is `exit`, which ends the whole process cleanly (the loop stops, the keys are released, the window closes), so the process ending is the proof |
+| `/restart` | `/exit` then `/loop` |
+| `/update` | Stop, `git pull --ff-only`, reinstall requirements if they changed, start. Posts what changed (the `git log` of the pulled commits). **Built:** no branch argument; it pulls the configured `update_branch` (`main`) |
+| `/rejoin`, `/setup` | **Built:** the macro runs Leave & rejoin or Setup, as the buttons do (its loop is stopped first) |
+| `/refresh_debug` | **Built:** the macro empties its debug folder, as the Refresh debug button does, when its loop is not running |
+| `/trade_hub`, `/leave_trade_hub` | **Built:** the macro travels to the Trading Hub, or leaves it for a regular server (the loop is stopped first) |
+| `/need`, `/option`, `/options` | **Built:** switch a need or an option on or off in the running macro, or list what is on |
+| `/pull` | **Built:** copies something out of the debug folder into OneDrive (the zips of a capture alone; a pull over `BOT_PULL_CONFIRM_MB` asks for a yes first) |
+| `/results` | **Built:** best, worst and average candy corn of each minigame |
 | `/rollback` | Go back to the commit that was running before the last `/update` (kept in `bot_state.json`), then start |
 | `/captures` | Lists recent minigame capture zips, with sizes and whether they are in OneDrive yet (**Built**) |
 | `/capture-link <name>` | Posts the OneDrive link for one capture (see below). **Not built, and dropped:** the post just says the zips were posted to OneDrive |
@@ -143,17 +151,17 @@ The simplest approach needs no Microsoft API:
 2. The bot watches `debug/minigame_captures/*/zips/`. A zip counts as ready when the capture's `info.json` has an
    `outcome` **and** the zip sizes have stopped changing for a few seconds (`zip_capture_in_background()` writes
    them on a thread, so they can appear before they are complete).
-3. Copy them to `onedrive_dir/<capture folder name>/` (`shutil.copy2`; the files are already split to 25 MB parts,
+3. Copy them to `onedrive_dir/<capture folder name>/` (`shutil.copy2`; the files are already split into `CAPTURE_ZIP_MB` parts,
    so one capture is a handful of parts). Remember which captures were copied in `bot_state.json`.
 4. Post the capture name, outcome and part count in Discord. **Built:** no link - the post says the zips were posted to OneDrive, and you open
    the folder there (a shared-folder link, or a per-file one through the Microsoft Graph `createLink` call, was left out: it is not needed to find the files).
 5. Housekeeping: delete OneDrive copies older than N days or beyond N MB (config), since the free quota is small.
-   The macro already keeps only the newest `MAX_RUN_CAPTURES` on the PC.
+   The macro already keeps only some of the captures on the PC: of each minigame the `RUN_CAPTURES_BEST` best, the `RUN_CAPTURES_WORST` worst, the latest and the `RUN_CAPTURES_FAILED` latest failed. **Not built:** the bot deletes nothing in OneDrive.
 
 Getting them to Claude: **a OneDrive link can't be opened from a cloud session**. Download the parts (or just
 the ones wanted) and attach them to the chat, in order (see the capture notes in `ARCHITECTURE.md` -
 "Getting one to someone else"). Discord's own upload limit for a bot is around 10 MB without server boosts, so it
-is not a substitute for OneDrive for the 25 MB parts, but `/screenshot`, reports and failure images fit.
+is not a substitute for OneDrive for the zip parts, but `/screenshot`, reports and failure images fit.
 
 ## `/update` in detail
 
@@ -161,7 +169,7 @@ The safe order, because the macro is holding keys and the working tree must be c
 
 1. Refuse if a minigame capture or a need handler is mid-way? Not needed - a graceful stop already copes with
    being interrupted anywhere - but tell the user what was running.
-2. **Stop the macro** (command file; wait up to `stop_timeout` seconds for the process to exit).
+2. **Stop the macro** (command file; wait up to `stop_timeout_seconds` seconds for the process to exit).
 3. `git status --porcelain`: if there are local changes to tracked files, **abort** and say so (never discard
    them). `debug/` is git-ignored so it doesn't count.
 4. `git fetch origin <branch>`; if `git merge-base --is-ancestor HEAD origin/<branch>` fails (history diverged),
@@ -181,13 +189,12 @@ moves the PC onto a branch that hasn't been reviewed or merged.
 ## Stop details (what must not go wrong)
 
 - **Normal stop**: write the stop command; the macro's cooperative stop releases keys/buttons in its `finally`
-  blocks (see "Stopping & focus safety"). Wait for the process to exit (`stop_timeout`, for example 30 s - a
-  75 s walk is interrupted within a check or two, not at its end).
+  blocks (see "Stopping & focus safety"). Wait for the process to exit (`stop_timeout_seconds` - a long wait is interrupted within a check or two, not at its end).
 - **Fallback kill**: if it doesn't exit, terminate the process, then **release everything** from the bot
   (key-up for the movement keys and `shift`/`space`/`e`..., mouse button up), because a killed process can leave
   a key held down in the game. `release_all_inputs()` in `main.py` shows which; the bot needs its own small copy
   (`ctypes` `SendInput`/`keybd_event`) since it doesn't import `main.py`.
-- A stopped macro on purpose (`/stop`) must not be reported as a crash or auto-restarted: the bot keeps a
+- A macro closed on purpose (`/exit`) must not be reported as a crash or auto-restarted: the bot keeps a
   `desired_state` (running / stopped) in `bot_state.json`.
 
 ## Phased steps
@@ -224,10 +231,10 @@ Each phase is shippable and testable on its own; later phases build on earlier o
 ### Phase 3 - OneDrive capture zips - built as an on-request `/pull`, not automatic and without links (not tried against a real server)
 
 1. `onedrive_dir` in the config; the watcher from the "Capture zips -> OneDrive" section above; `/captures` and
-   `/capture-link`.
-2. Test with a short minigame capture (or **Record** with the `m` hotkey, which makes the same zips) and check the
+   `/capture-link` (**Built** instead: `/captures` and `/pull`).
+2. Test with a short minigame capture (or **Record** with the capture hotkey, which makes the same zips) and check the
    files appear in OneDrive and the post arrives.
-3. Housekeeping of old copies.
+3. Housekeeping of old copies (**not built**).
 
 ### Phase 4 - Control (`main.py` hooks + start/stop) - built (not tried against a real macro and server)
 
@@ -249,17 +256,15 @@ Each phase is shippable and testable on its own; later phases build on earlier o
 
 ### Phase 6 - Tests, CI and docs
 
-The CI (`.github/workflows/check.yml`) runs `pyflakes`, `tools/check_constants.py`, `mypy main.py` and
+The CI (`.github/workflows/check.yml`) runs `pyflakes`, `tools/check_constants.py`, `mypy main.py bot/bot_lib.py` and
 `pytest` on Linux, and can't run the macro or Discord. So:
 
 1. Keep the logic that can be tested without Discord or Windows in plain functions: the owner/channel check,
    config validation, parsing new lines from the log (offset handling, truncation), choosing ready capture zips
    (size stable, `outcome` present), rate limiting, the git-update decision (clean tree / fast-forward / diverged)
    given command outputs, and building the status text from a `status.json`. Add `tests/test_bot.py`.
-2. Add the new files to the `pyflakes` line in `check.yml` (and to `mypy.ini`/the mypy step if wanted;
-   `discord.py` ships types).
-3. Document it: a section in `ARCHITECTURE.md` (commands, the two hooks, config keys, security rules), and move
-   the Natro "notify somewhere when something breaks" item to done. (`README.md` and `LINKS.md` are the owner's.)
+2. Add the new files to the `pyflakes` line in `check.yml` (**Built:** `bot` and `tools` are on it; mypy checks `bot/bot_lib.py` too).
+3. Document it: a section in `ARCHITECTURE.md` (commands, the two hooks, config keys, security rules), (done). (`README.md` and `LINKS.md` are the owner's.)
 
 ## Config keys (`bot_config.json`)
 
@@ -272,9 +277,8 @@ The CI (`.github/workflows/check.yml`) runs `pyflakes`, `tools/check_constants.p
   "repo_dir": "C:\\path\\to\\AdoptMeMacro",
   "python": "C:\\path\\to\\.venv\\Scripts\\python.exe",
   "update_remote": "origin",
-  "update_branch": "master",
+  "update_branch": "main",
   "onedrive_dir": "C:\\Users\\you\\OneDrive\\AdoptMeCaptures",
-  "onedrive_keep_days": 14,
   "stop_timeout_seconds": 30,
   "stale_status_minutes": 5,
   "heartbeat_hours": 0,
@@ -283,12 +287,12 @@ The CI (`.github/workflows/check.yml`) runs `pyflakes`, `tools/check_constants.p
 }
 ```
 
-## Decisions needed before building
+## Decisions
 
 Decided: auto-restart off by default (and limited per hour when on); the screenshot is the Roblox window; no OneDrive links (the post says the zips were posted); the bot is
-started by hand and nothing starts with the PC; `/update` pulls `main` only and restarts the macro and, when its code changed, the bot.
+started by hand and nothing starts with the PC (so "where the bot runs" below is decided: by hand); `/update` pulls `main` only and restarts the macro and, when its code changed, the bot.
 
-1. **Branch for `/update`**: only the main branch (safer: changes are merged first), or also a named
+1. **Branch for `/update`** (decided: main only): only the main branch (safer: changes are merged first), or also a named
    `claude/...` branch (faster to try a fix, but runs unreviewed code)? Suggestion: main only by default, with
    the named branch behind an explicit `/update branch:<name>` and a confirmation button.
 2. **Auto-restart** when the macro dies: on or off by default? Suggestion: off, since a crash caused by Roblox

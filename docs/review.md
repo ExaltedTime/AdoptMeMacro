@@ -8,6 +8,12 @@ Line numbers are those at the time of the review and drift.
 
 The review ran the suite (562 tests), `tools/check_constants.py` and pyflakes; all passed. Nothing was run against the real game, Discord or Windows.
 
+**Done since (docs, tools and tests pass):** all of the [Docs](#docs) findings except the ones noted as left (the macro-side comment fixes in
+`magic_numbers.py` were made with them), and everything under [Tests and tools](#tests-and-tools) except the test seam for the Discord glue (an idea, not a defect). The unused `MINIGAME_VICTORY_CHECK_INTERVAL` and `minigame_won()` were removed, and `tools/check_constants.py` now also
+checks `bot/`, reports unused constants and uncalled functions, names unknown UPPER_CASE names in the docs, and flags unused `tmp_path`, `monkeypatch`, `caplog`
+and `capsys` test parameters (unused imports and local variables are pyflakes's, which now also covers `tools`). Not changed, and still open: the macro findings
+M1 to M14 and the bot findings B1 to B12 (code), and the docs' values that are measurements rather than constants.
+
 Contents: [Fix first](#fix-first) · [Macro](#macro-mainpy) · [Discord bot](#discord-bot) · [Docs](#docs) · [Tests and tools](#tests-and-tools) ·
 [Ideas and open questions](#ideas-and-open-questions)
 

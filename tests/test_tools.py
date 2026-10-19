@@ -23,6 +23,8 @@ def test_the_constants_check_names_an_unused_constant_a_typo_and_an_uncalled_fun
     (tmp_path / "bot").mkdir()
     (tmp_path / "tools").mkdir()
     (tmp_path / "tests").mkdir()
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "notes.md").write_text("`USED` is described, `GONE_NAME` is not a thing, and `lower_case` is not checked.\n")
     (tmp_path / "magic_numbers.py").write_text("USED = 1\nUNUSED = 2\nCOMBINED = USED + 1\n")
     (tmp_path / "main.py").write_text("import magic_numbers as cfg\n\ndef used():\n    return cfg.COMBINED + cfg.TYPO\n\ndef lonely():\n    return used()\n")
     monkeypatch.setattr(check_constants, "ROOT", str(tmp_path))
@@ -31,4 +33,5 @@ def test_the_constants_check_names_an_unused_constant_a_typo_and_an_uncalled_fun
     defined = check_constants.defined_names("magic_numbers.py")
     assert [m for _, _, m in check_constants.unknown_constants(defined)] == ["cfg.TYPO is not defined in magic_numbers.py"]
     assert [m for _, _, m in check_constants.unused_constants(defined)] == ["UNUSED is not used anywhere"]
+    assert [m for _, _, m in check_constants.unknown_names_in_docs()] == ["GONE_NAME is named in the docs and exists in no code file"]
     assert [m for _, _, m in check_constants.unused_functions()] == ["lonely() is not called anywhere in the code"]

@@ -4,6 +4,7 @@
   that line runs, possibly hours into a run;
 - a constant in magic_numbers.py that nothing uses (not main.py, bot/, tools/, tests/, nor another constant), or a function or method of main.py or
   bot/ that nothing but tests calls: dead code, and the comments and docs that still describe it;
+- a constant the docs name in backticks that no code file has;
 - a test that asks for tmp_path, monkeypatch, caplog or capsys and doesn't use it.
 
 (Unused imports and unused local variables are pyflakes's.)
@@ -18,8 +19,16 @@ import sys
 import tokenize
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CODE = ["main.py", *sorted(glob.glob(os.path.join("bot", "*.py")))]            # what uses the constants
-OTHER = [*sorted(glob.glob(os.path.join("tools", "*.py"))), *sorted(glob.glob(os.path.join("tests", "*.py")))]
+
+
+def files(pattern):
+    """The files matching `pattern` (relative to the repo), as paths relative to it."""
+    return sorted(os.path.relpath(path, ROOT) for path in glob.glob(os.path.join(ROOT, pattern), recursive=True))
+
+
+CODE = ["main.py", *files("bot/*.py")]                                         # what uses the constants
+OTHER = [*files("tools/*.py"), *files("tests/*.py")]
+EXTERNAL_NAMES = {"TM_CCOEFF_NORMED", "SIGKILL", "HALLOWEEN"}                       # named in the docs, from a library or the OS
 ENTRY_POINTS = {"main", "build", "setup_hook", "on_ready", "on_error", "interaction_check", "on_timeout", "run", "emit"}   # called by a framework, not by name
 
 
@@ -91,10 +100,26 @@ def unused_functions():
     return problems
 
 
+def unknown_names_in_docs():
+    """A constant (or other UPPER_CASE name) the docs write in backticks that no code file has: a renamed or removed one the docs still describe."""
+    known = set(EXTERNAL_NAMES)
+    for path in (*CODE, *OTHER, "magic_numbers.py"):
+        known.update(code_tokens(path)[0])
+    problems = []
+    for path in files("docs/**/*.md"):
+        if os.path.basename(path) == "review.md":                              # (a record of findings: it names what was found wrong, and what has since gone)
+            continue
+        for number, line in enumerate(read(path).split("\n"), 1):
+            for name in re.findall(r"`([A-Z][A-Z0-9_]{3,})`", line):
+                if name not in known:
+                    problems.append((number, path, f"{name} is named in the docs and exists in no code file"))
+    return problems
+
+
 def unused_test_parameters():
     """A test that asks for tmp_path, monkeypatch, caplog or capsys and never uses it (the other fixtures can matter by existing: a `macro` sets things up)."""
     problems = []
-    for path in sorted(glob.glob(os.path.join("tests", "test_*.py"))):
+    for path in files("tests/test_*.py"):
         for node in ast.walk(ast.parse(read(path))):
             if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
                 used = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
@@ -106,7 +131,7 @@ def unused_test_parameters():
 
 def main():
     defined = defined_names("magic_numbers.py")
-    problems = unknown_constants(defined) + unused_constants(defined) + unused_functions() + unused_test_parameters()
+    problems = unknown_constants(defined) + unused_constants(defined) + unused_functions() + unused_test_parameters() + unknown_names_in_docs()
     for line, path, message in sorted(problems):
         print(f"{path}:{line}: {message}")
     return 1 if problems else 0

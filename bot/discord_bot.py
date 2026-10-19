@@ -247,6 +247,31 @@ async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say) -
         RESTART_BOT = True
 
 
+class ConfirmView(discord.ui.View):
+    """Yes and Cancel buttons that only the owner in the one channel can press; `answer` is True, False, or None if nobody pressed one in time."""
+
+    def __init__(self, config: bot_lib.Config, timeout: float) -> None:
+        super().__init__(timeout=timeout)
+        self.config = config
+        self.answer: Optional[bool] = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return bot_lib.is_allowed(self.config, interaction.user.id, interaction.channel_id or 0)
+
+    async def finish(self, interaction: discord.Interaction, answer: bool) -> None:
+        self.answer = answer
+        await interaction.response.edit_message(view=None)
+        self.stop()
+
+    @discord.ui.button(label="Copy it", style=discord.ButtonStyle.green)
+    async def yes(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self.finish(interaction, True)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
+    async def no(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self.finish(interaction, False)
+
+
 class OwnerOnlyTree(app_commands.CommandTree):
     """A command tree that obeys the owner in the one channel and nobody else (their commands get no answer at all)."""
 
@@ -485,11 +510,19 @@ def build(config: bot_lib.Config) -> discord.Client:
         try:
             path, name = bot_lib.resolve_pull(folder.value, item)
             files = await asyncio.to_thread(bot_lib.pull_files, path, name)
+            size = await asyncio.to_thread(bot_lib.files_size_mb, files)
+            if cfg.BOT_PULL_CONFIRM_MB < size <= cfg.BOT_MAX_PULL_MB:
+                view = ConfirmView(config, cfg.BOT_PULL_CONFIRM_TIMEOUT)
+                await interaction.followup.send(f"`{name}` is {bot_lib.size_text(size)} ({len(files)} file{'s' if len(files) != 1 else ''}). Copy it to OneDrive?", view=view)
+                await view.wait()
+                if not view.answer:
+                    await interaction.followup.send("Nothing copied: " + ("cancelled." if view.answer is False else "no answer in time."))
+                    return
             megabytes = await asyncio.to_thread(bot_lib.copy_pull, files, config.onedrive_dir, folder.value, cfg.BOT_MAX_PULL_MB)
         except (ValueError, OSError) as error:
             await interaction.followup.send(f"Nothing copied: {error}")
             return
-        await interaction.followup.send(f"Copied `{name}` ({len(files)} file{'s' if len(files) != 1 else ''}, {megabytes:.0f} MB) to OneDrive, in `{folder.value}/`. The OneDrive app on the PC uploads it from there.")
+        await interaction.followup.send(f"Copied `{name}` ({len(files)} file{'s' if len(files) != 1 else ''}, {bot_lib.size_text(megabytes)}) to OneDrive, in `{folder.value}/`. The OneDrive app on the PC uploads it from there.")
 
     @pull.autocomplete("item")
     async def pull_items(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:

@@ -517,14 +517,24 @@ def pull_files(path: str, name: str) -> list[tuple[str, str]]:
     return found
 
 
+def files_size_mb(files: list[tuple[str, str]]) -> float:
+    """The megabytes of the files /pull would copy."""
+    return sum(os.path.getsize(src) for src, _ in files) / 1048576
+
+
+def size_text(megabytes: float) -> str:
+    """A size for a message: megabytes, or gigabytes from 1024 MB."""
+    return f"{megabytes / 1024:.1f} GB" if megabytes >= 1024 else f"{megabytes:.0f} MB"
+
+
 def copy_pull(files: list[tuple[str, str]], onedrive_dir: str, source: str, max_mb: float) -> float:
     """Copy `files` into onedrive_dir/<source>/ (the OneDrive app uploads them from there); the megabytes copied. ValueError, and nothing copied, if
     there are none or they come to more than `max_mb`."""
     if not files:
         raise ValueError("there are no files to copy")
-    total = sum(os.path.getsize(src) for src, _ in files) / 1048576
+    total = files_size_mb(files)
     if total > max_mb:
-        raise ValueError(f"that is {total:.0f} MB - more than the {max_mb:g} MB one /pull will copy; pull a smaller one")
+        raise ValueError(f"that is {size_text(total)} - more than the {size_text(max_mb)} one /pull will copy; pull a smaller one")
     for src, relative in files:
         target = os.path.join(onedrive_dir, source, relative)
         os.makedirs(os.path.dirname(target), exist_ok=True)

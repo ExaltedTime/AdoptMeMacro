@@ -595,6 +595,13 @@ def test_the_update_source_is_a_name_git_cannot_take_for_an_option(tmp_path):
     assert bot_lib.load_state(path).previous_commit is None                                                       # (a state file is not trusted with a git argument)
 
 
+def test_sizes_are_said_in_megabytes_or_from_a_gigabyte_in_gigabytes_and_the_total_is_of_the_files(tmp_path):
+    assert bot_lib.size_text(5) == "5 MB" and bot_lib.size_text(1023) == "1023 MB" and bot_lib.size_text(1024) == "1.0 GB" and bot_lib.size_text(10240) == "10.0 GB"
+    (tmp_path / "a").write_bytes(b"x" * 1048576)
+    (tmp_path / "b").write_bytes(b"x" * 3145728)
+    assert bot_lib.files_size_mb([(str(tmp_path / "a"), "a"), (str(tmp_path / "b"), "b")]) == 4
+
+
 def test_every_slash_command_has_a_name_and_descriptions_discord_accepts():
     """Discord refuses the whole upload (and the bot never gets its commands) for a description over 100 characters or a bad name."""
     import re

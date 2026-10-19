@@ -794,6 +794,7 @@ KEY_HELICOPTER = "r"           # held to fly the equipped helicopter (also held 
 KEY_JUMP = "space"
 MOVE_KEYS = ("w", "a", "s", "d")
 RESPAWN_KEYS = ("esc", "r", "enter")
+HELD_KEYS = (*MOVE_KEYS, KEY_HELICOPTER, KEY_ZOOM_IN, KEY_ZOOM_OUT, KEY_JUMP, *RESPAWN_KEYS, *STITCHES_TURN_KEYS, KEY_STITCHES_WALK)   # every key the macro can hold down: let go of when it ends or is killed
 
 # Lure/tree collection (run automatically by side_quest(), not tied to a detected need)
 LURE_COLLECT_WALK_DURATION = 2.0  # hold 'a' this long before pressing KEY_INTERACT at the lure

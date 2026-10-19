@@ -1600,3 +1600,45 @@ def test_the_start_wait_ends_when_the_overlay_shows_or_the_game_is_lost_not_only
     monkeypatch.setattr(macro, "minigame_wait", lambda duration, w: (looks.append(duration), setattr(w, "last_seen", time.time())))
     macro.wait_for_minigame_start(watch, "ghost_gallery")
     assert looks == [macro.cfg.MINIGAME_START_LOOK_INTERVAL]
+
+
+def test_release_all_inputs_lets_go_of_every_key_that_is_down_including_the_camera_arrows(macro, monkeypatch):
+    ups = []
+    monkeypatch.setattr(macro.pydirectinput, "keyDown", lambda key: None)
+    monkeypatch.setattr(macro.pydirectinput, "keyUp", lambda key: ups.append(key))
+    monkeypatch.setattr(macro, "pressed_inputs", lambda: set())
+    macro.key_down("right")                                            # (the Stitches' Spotlight camera turn, cut short by an exit)
+    macro.key_down("some_future_key")                                  # (a key no list has heard of)
+    macro.release_all_inputs()
+    assert "right" in ups and "some_future_key" in ups
+    assert set(macro.cfg.HELD_KEYS) <= set(ups) and ups.count("right") == 1       # (the keys of the fixed list too, each once)
+    assert macro.HELD_KEYS == set()
+    ups.clear()
+    macro.key_down("w")
+    macro.key_up("w")
+    assert macro.HELD_KEYS == set() and ups == ["w"]
+
+
+def test_a_key_is_let_go_of_whatever_happens_during_the_hold_and_the_safety_net_survives_a_failure(macro, monkeypatch):
+    ups = []
+    monkeypatch.setattr(macro.pydirectinput, "keyDown", lambda key: None)
+    monkeypatch.setattr(macro.pydirectinput, "keyUp", lambda key: ups.append(key))
+    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: (_ for _ in ()).throw(macro.StopRequested()))
+    with pytest.raises(macro.StopRequested):
+        macro.hold_key("left", 0.2)
+    assert ups == ["left"] and macro.HELD_KEYS == set()
+    monkeypatch.setattr(macro, "pressed_inputs", lambda: (_ for _ in ()).throw(OSError("no state")))
+    macro.release_all_inputs()                                          # (does not raise: what follows in the caller still happens)
+
+
+def test_a_key_that_fails_to_come_up_is_still_forgotten_and_the_others_are_let_go_of(macro, monkeypatch):
+    attempts = []
+    def up(key):
+        attempts.append(key)
+        raise RuntimeError("fail-safe")                                 # (e.g. the cursor in a screen corner)
+    monkeypatch.setattr(macro.pydirectinput, "keyDown", lambda key: None)
+    monkeypatch.setattr(macro.pydirectinput, "keyUp", up)
+    monkeypatch.setattr(macro, "pressed_inputs", lambda: set())
+    macro.key_down("a")
+    macro.release_all_inputs()
+    assert "a" in attempts and set(macro.cfg.HELD_KEYS) <= set(attempts)       # each tried, though each raised

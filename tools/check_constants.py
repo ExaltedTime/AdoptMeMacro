@@ -5,6 +5,7 @@
 - a constant in magic_numbers.py that nothing uses (not main.py, bot/, tools/, tests/, nor another constant), or a function or method of main.py or
   bot/ that nothing but tests calls: dead code, and the comments and docs that still describe it;
 - a constant the docs name in backticks that no code file has;
+- a `pydirectinput.keyDown`/`keyUp` in main.py outside the wrappers that keep track of the keys held;
 - a test that asks for tmp_path, monkeypatch, caplog or capsys and doesn't use it.
 
 (Unused imports and unused local variables are pyflakes's.)
@@ -116,6 +117,20 @@ def unknown_names_in_docs():
     return problems
 
 
+def bare_key_calls():
+    """pydirectinput.keyDown or keyUp in main.py outside key_down(), key_up() and release_all_inputs(): a key pressed that way is not known to release_all_inputs()."""
+    problems = []
+    tree = ast.parse(read("main.py"))
+    allowed = {"key_down", "key_up", "release_all_inputs"}
+    for function in ast.walk(tree):
+        if isinstance(function, ast.FunctionDef) and function.name not in allowed:
+            for node in ast.walk(function):
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in ("keyDown", "keyUp")
+                        and isinstance(node.func.value, ast.Name) and node.func.value.id == "pydirectinput"):
+                    problems.append((node.lineno, "main.py", f"pydirectinput.{node.func.attr}() in {function.name}(): use key_down() and key_up()"))
+    return problems
+
+
 def unused_test_parameters():
     """A test that asks for tmp_path, monkeypatch, caplog or capsys and never uses it (the other fixtures can matter by existing: a `macro` sets things up)."""
     problems = []
@@ -131,7 +146,7 @@ def unused_test_parameters():
 
 def main():
     defined = defined_names("magic_numbers.py")
-    problems = unknown_constants(defined) + unused_constants(defined) + unused_functions() + unused_test_parameters() + unknown_names_in_docs()
+    problems = unknown_constants(defined) + unused_constants(defined) + unused_functions() + unused_test_parameters() + unknown_names_in_docs() + bare_key_calls()
     for line, path, message in sorted(problems):
         print(f"{path}:{line}: {message}")
     return 1 if problems else 0

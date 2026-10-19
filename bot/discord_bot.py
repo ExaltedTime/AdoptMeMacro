@@ -103,13 +103,13 @@ def macro_process_running() -> Optional[bool]:
 
 def release_inputs() -> None:
     """Let go of every key the macro holds and of a mouse button that is down - for a macro that was killed (a killed process can leave one pressed in
-    the game). Best effort: main.py's release_all_inputs() is the same list (cfg.MOVE_KEYS and the others), and a button is only released if it is
+    the game). Best effort: main.py's release_all_inputs() lets go of the same keys (cfg.HELD_KEYS, and the ones it knows are down), and a button is only released if it is
     down, since a right button released with none pressed is a click."""
     try:
         import pydirectinput
     except ImportError:
         return
-    for key in (*cfg.MOVE_KEYS, cfg.KEY_HELICOPTER, cfg.KEY_ZOOM_IN, cfg.KEY_ZOOM_OUT):
+    for key in cfg.HELD_KEYS:
         try:
             pydirectinput.keyUp(key)
         except Exception:

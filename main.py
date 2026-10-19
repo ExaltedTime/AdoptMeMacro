@@ -1055,18 +1055,41 @@ def wait_stoppable(duration: float) -> None:
         STOP_EVENT.wait(min(cfg.STOP_CHECK_INTERVAL, max(0.0, end - time.time())))
     check_stop()
 
+HELD_KEYS: set[str] = set()                    # the keys key_down() has pressed and key_up() has not let go of
+HELD_KEYS_LOCK = threading.Lock()
+
+def key_down(key: str) -> None:
+    """Press `key` and keep it, until key_up(), in HELD_KEYS - so that release_all_inputs() lets go of exactly the keys that are down, whichever they are."""
+    with HELD_KEYS_LOCK:
+        HELD_KEYS.add(key)                         # (before the press: one that failed half-way is let go of too)
+    pydirectinput.keyDown(key)
+
+def key_up(key: str) -> None:
+    """Let go of a key key_down() pressed."""
+    try:
+        pydirectinput.keyUp(key)
+    finally:
+        with HELD_KEYS_LOCK:
+            HELD_KEYS.discard(key)
+
 def release_all_inputs() -> None:
-    """Best-effort safety net: release every key the macro holds and the mouse buttons that are down,
+    """Best-effort safety net: release every key the macro holds (those in HELD_KEYS, and the keys of cfg.HELD_KEYS) and the mouse buttons that are down,
     called when a background task ends. See docs/ARCHITECTURE.md#stopping--focus-safety.
     """
-    for key in (*cfg.MOVE_KEYS, cfg.KEY_HELICOPTER, cfg.KEY_ZOOM_IN, cfg.KEY_ZOOM_OUT):
+    with HELD_KEYS_LOCK:
+        keys = [*dict.fromkeys((*HELD_KEYS, *cfg.HELD_KEYS))]
+        HELD_KEYS.clear()
+    for key in keys:
         try:
             pydirectinput.keyUp(key)
         except Exception:
             pass
     # Only a button that is down: a right button released with none pressed is a click as far as the window under the mouse is
     # concerned, and over its border or title bar that opens the window's menu and takes the focus from the game.
-    held = pressed_inputs()
+    try:
+        held = pressed_inputs()
+    except Exception:                              # (it must not stop the caller from reaching what it does next, such as letting the window be used again)
+        held = set()                               # (not known: a button released with none pressed is a click, so none is)
     for button in ("left", "right"):
         if f"mouse_{button}" not in held:
             continue
@@ -1260,9 +1283,11 @@ def respawn_character() -> None:
     if not focus_roblox_click():
         return
     for key in cfg.RESPAWN_KEYS:
-        pydirectinput.keyDown(key)
-        time.sleep(cfg.RESPAWN_KEY_DURATION)
-        pydirectinput.keyUp(key)
+        key_down(key)
+        try:
+            time.sleep(cfg.RESPAWN_KEY_DURATION)
+        finally:
+            key_up(key)
         time.sleep(cfg.RESPAWN_KEY_DURATION)
     # The keys go in within a fraction of a second; if the Enter came before the
     # "Are you sure you want to respawn your character?" dialog did, it's still
@@ -1278,11 +1303,11 @@ def hold_key(key: str, duration: float) -> None:
     """Hold `key` down for `duration` seconds (interruptibly). Always
     releases the key, even if StopRequested/FocusLost fires mid-hold -
     otherwise it would stay stuck held down in the game."""
-    pydirectinput.keyDown(key)
     try:
+        key_down(key)
         wait_interruptible(duration)
     finally:
-        pydirectinput.keyUp(key)
+        key_up(key)
 
 def walk_to_buttons() -> None:
     """Walk forward from the respawn spot to where the action buttons are."""
@@ -2926,7 +2951,7 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
         hold_key(direction, duration)                                           # one key at a time: the strafe, then the walk (what couldn't be aimed is a strafe worked out in one go)
     arrived = False
     started = time.time()
-    pydirectinput.keyDown(cfg.HAUNTLET_2_FORWARD_KEY)
+    key_down(cfg.HAUNTLET_2_FORWARD_KEY)
     try:
         last_view: Optional[np.ndarray] = None
         still_since: Optional[float] = None
@@ -2964,9 +2989,9 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
                 steer = hauntlet_steer(img, target_index)
                 if steer is not None:
                     logger.debug(f"Hauntlet 2: off the door - a step {steer[0]} for {steer[1]:.2f}s")
-                    pydirectinput.keyUp(cfg.HAUNTLET_2_FORWARD_KEY)                # one key at a time
+                    key_up(cfg.HAUNTLET_2_FORWARD_KEY)                # one key at a time
                     hold_key(*steer)
-                    pydirectinput.keyDown(cfg.HAUNTLET_2_FORWARD_KEY)
+                    key_down(cfg.HAUNTLET_2_FORWARD_KEY)
                     still_since, last_view = None, None
                     continue
             view = hauntlet_view(img)
@@ -2982,7 +3007,7 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
                 continue
             wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
     finally:
-        pydirectinput.keyUp(cfg.HAUNTLET_2_FORWARD_KEY)
+        key_up(cfg.HAUNTLET_2_FORWARD_KEY)
         run.walked_at = time.time()
         run.stuck = 0 if arrived else run.stuck + 1
     if not arrived:
@@ -3342,7 +3367,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     def stop_walking() -> None:
         nonlocal moving
         if moving is not None:
-            pydirectinput.keyUp(moving)
+            key_up(moving)
             moving = None
 
     try:
@@ -3430,7 +3455,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 chasing = chase
                 if chase is not None:
                     moving = chase
-                    pydirectinput.keyDown(chase)
+                    key_down(chase)
                 move_until = now
             if chasing is None and target is None and phase == "ghosts":     # nothing in sight: walking about, a step at a time, without stopping the aiming
                 if moving is not None and now >= move_until:
@@ -3438,7 +3463,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                     next_move = now + cfg.GHOST_MOVE_PERIOD
                 elif moving is None and now >= next_move:
                     moving = random.choice(cfg.MOVE_KEYS)
-                    pydirectinput.keyDown(moving)
+                    key_down(moving)
                     move_until = time.time() + random.uniform(cfg.GHOST_MOVE_STEP_MIN, cfg.GHOST_MOVE_STEP_MAX)      # (`now` is from before a search for furniture, which can take longer than a step)
             elif chasing is None:
                 stop_walking()
@@ -3481,7 +3506,7 @@ def play_stitches_spotlight(deadline: float, watch: MinigameWatch) -> bool:
     (stitches_camera_turn()); that keeps the walk on the ring. Nothing is read or avoided: the candy corn on the way is picked up by walking over it.
     True if won before `deadline`. See docs/ARCHITECTURE.md#playing-stitches-spotlight."""
     wait_for_minigame_start(watch, "stitches_spotlight")
-    pydirectinput.keyDown(cfg.KEY_STITCHES_WALK)
+    key_down(cfg.KEY_STITCHES_WALK)
     try:
         while time.time() < deadline and not watch.problem:
             img = minigame_look(watch)
@@ -3492,7 +3517,7 @@ def play_stitches_spotlight(deadline: float, watch: MinigameWatch) -> bool:
                 hold_key(*turn)
             wait_interruptible(cfg.STITCHES_CENTER_INTERVAL)
     finally:
-        pydirectinput.keyUp(cfg.KEY_STITCHES_WALK)
+        key_up(cfg.KEY_STITCHES_WALK)
     return False
 
 MINIGAME_PLAYERS = {"hauntlet_2": play_hauntlet_2, "ghost_gallery": play_ghost_gallery, "stitches_spotlight": play_stitches_spotlight}

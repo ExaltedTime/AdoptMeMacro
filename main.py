@@ -3492,29 +3492,85 @@ def stitches_ring_angle(img: Image) -> Optional[float]:
     angle = math.degrees(math.atan2(dy, dx))
     return angle - 180 if angle > 90 else angle + 180 if angle < -90 else angle
 
-def stitches_camera_turn(img: Image) -> Optional[tuple[str, float]]:
-    """(key, seconds) that turns the camera towards the middle of the ring (STITCHES_TURN_KEYS: left, right), longer the further off the ring's line is
-    from straight across (up to STITCHES_TURN_HOLD_MAX), or None when it is within STITCHES_LINE_DEADBAND or not seen."""
-    angle = stitches_ring_angle(img)
-    if angle is None or abs(angle) <= cfg.STITCHES_LINE_DEADBAND:
-        return None
-    return cfg.STITCHES_TURN_KEYS[angle > 0], cfg.STITCHES_TURN_HOLD_MAX * min(abs(angle), 90.0) / 90.0
+class RingCamera:
+    """What turns the camera towards the middle of Stitches' Spotlight's ring, from the angle of the ring's edge line (stitches_ring_angle()). Walking
+    round the ring needs the camera turned all the time, at a steady rate, so besides the turn the angle asks for (proportional: up to STITCHES_TURN_HOLD_MAX
+    seconds of key for a line 90 degrees off) it learns that rate (`bias`: the share of the time the turn key is held, grown by STITCHES_TURN_BIAS_GAIN
+    per degree per second while the line is off by more than STITCHES_LINE_DEADBAND) and keeps turning at it while the line is out of sight, and after
+    STITCHES_LOST_AFTER seconds without it sweeps the camera round to find it. `keys` are the (left, right) arrow keys; swap_keys() when a test turn
+    shows they work the other way."""
+
+    def __init__(self) -> None:
+        self.keys = cfg.STITCHES_TURN_KEYS
+        self.bias = 0.0
+        self.lost_since: Optional[float] = None
+
+    def swap_keys(self) -> None:
+        self.keys = (self.keys[1], self.keys[0])
+        self.bias = -self.bias
+
+    def decide(self, angle: Optional[float], now: float, interval: float) -> Optional[tuple[str, float]]:
+        """(key, seconds to hold it) for this look, or None. `angle` is None when the line is not in sight."""
+        if angle is None:
+            if self.lost_since is None:
+                self.lost_since = now
+            seconds = cfg.STITCHES_TURN_HOLD_MAX if now - self.lost_since > cfg.STITCHES_LOST_AFTER else self.bias * interval
+        else:
+            self.lost_since = None
+            error = angle if abs(angle) > cfg.STITCHES_LINE_DEADBAND else 0.0
+            self.bias = max(-cfg.STITCHES_TURN_BIAS_MAX, min(cfg.STITCHES_TURN_BIAS_MAX, self.bias + cfg.STITCHES_TURN_BIAS_GAIN * error * interval))
+            seconds = cfg.STITCHES_TURN_HOLD_MAX * max(-90.0, min(90.0, error)) / 90.0 + self.bias * interval
+        seconds = max(-cfg.STITCHES_TURN_HOLD_MAX, min(cfg.STITCHES_TURN_HOLD_MAX, seconds))
+        if abs(seconds) < cfg.STITCHES_TURN_MIN_HOLD:
+            return None
+        return self.keys[seconds > 0], abs(seconds)
+
+def calibrate_ring_camera(camera: RingCamera, watch: MinigameWatch) -> None:
+    """Find out which arrow key turns the camera which way, by turning with the right one for STITCHES_CALIBRATE_HOLD seconds and seeing the ring's line
+    move: turning right must make a line that falls to the right (positive angle) level. If it moved the other way the camera's keys are swapped. Too small a
+    move, or no line in sight before or after, is logged and the keys are left as they are."""
+    before = stitches_ring_angle(minigame_look(watch))
+    if before is None:
+        logger.debug("Stitches' Spotlight: no ring line in sight to test the camera keys against")
+        return
+    hold_key(camera.keys[1], cfg.STITCHES_CALIBRATE_HOLD)
+    minigame_wait(cfg.STITCHES_CALIBRATE_HOLD, watch)
+    after = stitches_ring_angle(minigame_look(watch))
+    if after is None or abs(after - before) < cfg.STITCHES_CALIBRATE_MIN:
+        logger.debug(f"Stitches' Spotlight: the camera keys test showed nothing clear (line {before:.0f} -> {'not seen' if after is None else f'{after:.0f}'} degrees)")
+        mark_run_capture("Stitches' Spotlight: the camera keys test was unclear")
+        return
+    if after > before:
+        camera.swap_keys()
+    logger.debug(f"Stitches' Spotlight: line {before:.0f} -> {after:.0f} degrees, the camera keys are {camera.keys}")
 
 def play_stitches_spotlight(deadline: float, watch: MinigameWatch) -> bool:
-    """Stitches' Spotlight: once its overlay shows (or the start wait is over), walk round the ring by holding D (KEY_STITCHES_WALK) and, every
-    STITCHES_CENTER_INTERVAL, turn the camera until the ring's gold edge line runs straight across the screen, i.e. the camera looks at the middle
-    (stitches_camera_turn()); that keeps the walk on the ring. Nothing is read or avoided: the candy corn on the way is picked up by walking over it.
+    """Stitches' Spotlight: once its overlay shows, wait (at most STITCHES_INTRO_MAX seconds) for the ring's edge line - the game's intro camera looks at
+    the sky first - test which way the arrow keys turn the camera (calibrate_ring_camera()), then walk round the ring by holding KEY_STITCHES_WALK and, every
+    STITCHES_CENTER_INTERVAL, turn the camera (RingCamera) until the line runs straight across the screen, i.e. the camera looks at the middle. KEY_STITCHES_BOOST
+    is pressed every STITCHES_BOOST_INTERVAL. Nothing is read or avoided: the candy corn on the way is picked up by walking over it.
     True if won before `deadline`. See docs/ARCHITECTURE.md#playing-stitches-spotlight."""
     wait_for_minigame_start(watch, "stitches_spotlight")
+    intro_until = time.time() + cfg.STITCHES_INTRO_MAX
+    while time.time() < intro_until and not watch.problem and stitches_ring_angle(minigame_look(watch)) is None:
+        wait_interruptible(cfg.STITCHES_CENTER_INTERVAL)
+    camera = RingCamera()
+    calibrate_ring_camera(camera, watch)
+    next_boost = time.time()
     key_down(cfg.KEY_STITCHES_WALK)
     try:
         while time.time() < deadline and not watch.problem:
             img = minigame_look(watch)
             if detect_minigame_victory(img):
                 return True
-            turn = stitches_camera_turn(img)
+            angle = stitches_ring_angle(img)
+            turn = camera.decide(angle, time.time(), cfg.STITCHES_CENTER_INTERVAL)
+            logger.debug(f"Stitches' Spotlight: ring line {'not seen' if angle is None else f'{angle:.0f} degrees'}, turn {turn if turn else 'none'}, bias {camera.bias:+.2f}")
             if turn is not None:
                 hold_key(*turn)
+            if time.time() >= next_boost:
+                pydirectinput.press(cfg.KEY_STITCHES_BOOST)
+                next_boost = time.time() + cfg.STITCHES_BOOST_INTERVAL
             wait_interruptible(cfg.STITCHES_CENTER_INTERVAL)
     finally:
         key_up(cfg.KEY_STITCHES_WALK)

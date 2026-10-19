@@ -330,6 +330,15 @@ STITCHES_LINE_VALUE = (85, 175)
 STITCHES_LINE_MIN_PIXELS = 3500              # less of it than this is not a line to go by
 STITCHES_LINE_DEADBAND = 12.0                # degrees from straight across that need no turn
 STITCHES_TURN_KEYS = ("left", "right")       # (the camera is turned towards a line that falls to the right by the second)
+STITCHES_TURN_MIN_HOLD = 0.03               # a turn shorter than this (seconds) is not made
+STITCHES_TURN_BIAS_GAIN = 0.002             # how fast the steady turn is learned: share of the time the turn key is held, per degree off, per second
+STITCHES_TURN_BIAS_MAX = 0.6                # the most of the time the turn key is held for that
+STITCHES_LOST_AFTER = 4.0                   # seconds without the ring's line, turning at the learned rate, before the camera is swept round to find it
+STITCHES_INTRO_MAX = 15.0                   # the most seconds waited at the start for the ring's line (the intro camera looks at the sky first)
+STITCHES_CALIBRATE_HOLD = 0.15              # seconds the test turn of the camera keys is held
+STITCHES_CALIBRATE_MIN = 3.0                # degrees the ring's line must move in it to tell which way the keys turn
+KEY_STITCHES_BOOST = "e"                     # the speed boost ("Press E for a Speed Boost!"), pressed every STITCHES_BOOST_INTERVAL
+STITCHES_BOOST_INTERVAL = 2.0
 STITCHES_TURN_HOLD_MAX = 0.2                 # seconds a turn key is held for a line 90 degrees off, less for less
 GHOST_INTRO_WAIT = 6.0                       # after its overlay shows, the game's own intro camera (a look at the ceiling) runs this long; the zoom and tilt come after, or are undone
 # The boss can't be hurt while its bar shows two or three ghost icons instead of its health: the bar's cyan fill (BGR (255, 222, 0),

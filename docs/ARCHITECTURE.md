@@ -1385,18 +1385,33 @@ First version, from two human-played rounds (a two-minute round; the overlay sho
 ring walkway round a central drum (with a bunny on it that moves, so the drum is not a landmark to match); candy corn lies along the ring and on the platforms
 at its sides, searchlights sweep it and tint what they cover red, and dark grey planks hide the player from the light. The count is never read.
 
-`play_stitches_spotlight()` waits for the overlay (`MINIGAME_START_WAIT`), holds `KEY_STITCHES_WALK` (a strafe, which round a middle the camera looks at is
-a walk round the ring) until victory, and every `STITCHES_CENTER_INTERVAL` turns the camera towards the middle (`stitches_camera_turn()`). Where the middle is
-comes from the ring's own edge: a gold line (`STITCHES_LINE_*`: hue, saturation and value of its dim olive-gold, looked for in `STITCHES_LINE_BOX`), fitted
-with a line (`stitches_ring_angle()`). A ground line across the camera's view runs straight across the screen, so when the camera looks at the middle of the
-ring the line is level. A line that falls to the right means the middle is to the right, and `STITCHES_TURN_KEYS` (its two keys, for left and right) turns the camera that way
-for up to `STITCHES_TURN_HOLD_MAX`, less the nearer the line is to level; within `STITCHES_LINE_DEADBAND` degrees nothing is done. With fewer than
-`STITCHES_LINE_MIN_PIXELS` of the line in sight (in a searchlight's red it is not found, and with the camera turned away) the camera is left alone.
+`play_stitches_spotlight()` waits for the overlay (`MINIGAME_START_WAIT`), then for the ring's line to show (at most `STITCHES_INTRO_MAX`: the game's intro
+camera looks at the sky first), tests which way the camera keys turn (`calibrate_ring_camera()`), then holds `KEY_STITCHES_WALK` (a strafe, which round a middle
+the camera looks at is a walk round the ring) until victory. Every `STITCHES_CENTER_INTERVAL` it turns the camera towards the middle (`RingCamera`) and every
+`STITCHES_BOOST_INTERVAL` it presses `KEY_STITCHES_BOOST` (the speed boost, "Press E for a Speed Boost!").
+
+**Where the middle is** comes from the ring's own edge: a gold line (`STITCHES_LINE_*`: hue, saturation and value of its dim olive-gold, looked for in
+`STITCHES_LINE_BOX`), fitted with a line (`stitches_ring_angle()`). A ground line across the camera's view runs straight across the screen, so when the camera
+looks at the middle of the ring the line is level; a line that falls to the right means the middle is to the right.
+
+**Turning the camera is a small controller (`RingCamera.decide()`), because a walk round the ring needs the camera turned all the time**, and the line is not
+always in sight (in a searchlight's red it is not found, and with the camera turned away; on a round's frames it was found in about six of ten looks):
+- *proportional:* a turn of up to `STITCHES_TURN_HOLD_MAX` seconds, longer the further the line is from level; within `STITCHES_LINE_DEADBAND` degrees none;
+- *learned steady turn (`bias`):* while the line stays off, the share of the time the turn key is held grows (`STITCHES_TURN_BIAS_GAIN`, at most
+  `STITCHES_TURN_BIAS_MAX`), which is the turn rate the orbit needs;
+- *line out of sight:* the learned turn goes on, and after `STITCHES_LOST_AFTER` seconds the camera is swept round to find the line again;
+- a turn shorter than `STITCHES_TURN_MIN_HOLD` is not made.
+
+**Which key turns which way is tested, not assumed.** `calibrate_ring_camera()` turns with the right key for `STITCHES_CALIBRATE_HOLD` seconds and looks at the line
+(it must move at least `STITCHES_CALIBRATE_MIN` degrees): turning right levels a line that falls to the right. If it moved the other way `RingCamera.swap_keys()`
+swaps the keys (and the learned turn); if nothing clear shows, the keys stay as `STITCHES_TURN_KEYS` has them and the run capture is marked. Each look logs the line's
+angle, the turn and the learned `bias` at the debug level.
+
 The red and the planks are not handled, and no candy corn is looked for: the magnet picks up what the walk passes.
 
-Not yet known from play: whether the left and right arrow keys turn the camera the way `STITCHES_TURN_KEYS` says, whether D holds the
-character on the ring with those turns, how the round goes when the red is on the ring, and what the `E` key (a speed boost, by the game's message) is worth.
-The tests use frames of a round (`tests/stitches_spotlight/`).
+Not yet known from play: whether D holds the character on the ring with these turns (the player has not been seen working in the game: a run capture of it
+is the next thing to look at, with the debug lines of the log), how the round goes when the red is on the ring, and what the speed boost is worth.
+The tests use frames of a round (`tests/stitches_spotlight/`) and a made-up camera.
 
 ### Candy corn
 

@@ -25,7 +25,7 @@ Suggestions from reading through the code, none of them started. Roughly in orde
 
 ## Stitches' Spotlight
 
-- [ ] Check the first player in the game (`play_stitches_spotlight()`): that the left and right arrow keys turn the camera towards the middle as `STITCHES_TURN_KEYS` assumes, that D then keeps the character on the ring, and how the ring line is found when the room is red. Then the searchlight (hide behind planks) and the candy corn off the ring. The key `E` (a speed boost, by the game's message) is not used.
+- [ ] Check the player in the game (`play_stitches_spotlight()`): send a run capture and the debug lines of its log. It never worked in the first version; the second (a controller that learns the steady turn, tests which arrow key turns which way and presses the speed boost) is untried. Still to do after that: the searchlight (hide behind planks) and the candy corn off the ring.
 
 ## Hauntlet 2
 

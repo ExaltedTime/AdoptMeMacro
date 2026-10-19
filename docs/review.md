@@ -8,6 +8,8 @@ Line numbers are those at the time of the review and drift.
 
 The review ran the suite (562 tests), `tools/check_constants.py` and pyflakes; all passed. Nothing was run against the real game, Discord or Windows.
 
+`docs/planned/Discord.md` has been removed (the bot is built and described in `ARCHITECTURE.md`); findings below that mention it are about the file as it was.
+
 **Done since (docs, tools and tests pass):** all of the [Docs](#docs) findings except the ones noted as left (the macro-side comment fixes in
 `magic_numbers.py` were made with them), and everything under [Tests and tools](#tests-and-tools) except the test seam for the Discord glue (an idea, not a defect). The unused `MINIGAME_VICTORY_CHECK_INTERVAL` and `minigame_won()` were removed, and `tools/check_constants.py` now also
 checks `bot/`, reports unused constants and uncalled functions, names unknown UPPER_CASE names in the docs, and flags unused `tmp_path`, `monkeypatch`, `caplog`
@@ -290,6 +292,9 @@ hearts, the cyan temporary heart, the wand, counts above two).
 - Per-minigame statistics over several days (best, worst, average are in `/results`; a trend chart would show whether a change helped).
 
 **Bot ideas**
+- Left over from the removed `docs/planned/Discord.md`: deleting old copies in OneDrive by age or size (the bot deletes nothing there); a full-screen screenshot as a
+  separate command; trying the commands from a phone; trying alerts, `/pull`, start/stop and `/update` and `/rollback` against the real PC (a no-op update, one that changes
+  `requirements.txt`, one that makes `main.py` fail on start, to prove the failed-start report and `/rollback`).
 - A command that lists the commands and their state (`/help` is Discord's own list, but a short status of what is possible right now would help).
 - Acknowledgement of remote commands by the macro (B10) would let every command report what really happened.
 - A dry run of `/update` that posts what would change without applying it; `/update` already posts the plan, a confirm button (as `/pull` has) before applying would

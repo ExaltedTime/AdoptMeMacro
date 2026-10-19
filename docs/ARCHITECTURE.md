@@ -1555,7 +1555,7 @@ resolution or Roblox's UI, look at the screenshot of a failure (`failures/`) and
 ## Discord bot
 
 `bot/` is a separate program, not part of `main.py`: a Discord bot that answers questions about the macro from anywhere (a phone, say). It is the first
-five phases of the plan in `docs/planned/Discord.md`: the read-only commands, alerts, pulling things out of the debug folder into OneDrive on request, starting and stopping the macro, and updating it. It runs **on the PC the macro runs on**, in the same logged-in desktop session, because it reads the
+five phases of the plan it was built from: the read-only commands, alerts, pulling things out of the debug folder into OneDrive on request, starting and stopping the macro, and updating it. It runs **on the PC the macro runs on**, in the same logged-in desktop session, because it reads the
 macro's files and grabs its screen; it connects out to Discord, so no port needs opening, and the Discord app itself is only on whatever device is used to type
 the commands. It is started by hand, next to the macro: `python bot/discord_bot.py [path to bot_config.json]`.
 

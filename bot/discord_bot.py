@@ -203,6 +203,7 @@ async def start_macro(config: bot_lib.Config) -> str:
     return what + " No sign of its loop yet - see /status and /log."
 
 
+UPDATING = False          # True while /update or /rollback is stopping, moving and starting the macro: the watcher must not take that for a crash
 RESTART_BOT = False        # set by /update or /rollback when the bot's own code changed: main() starts the bot again once it has closed
 
 
@@ -483,32 +484,36 @@ def build(config: bot_lib.Config) -> discord.Client:
 
     async def change_code(interaction: discord.Interaction, rollback: bool) -> None:
         """/update and /rollback: make the plan from what git says (nothing is changed unless it says go), then apply_commit() - one at a time."""
+        global UPDATING
         await interaction.response.defer(thinking=True)
         if update_lock.locked():
             await interaction.followup.send("An update or rollback is already going on.")
             return
         async with update_lock:
-            state = client.bot_state  # type: ignore[attr-defined]
+            UPDATING = True
             try:
-                plan, move, head = await asyncio.to_thread(bot_lib.make_plan, git_runner(config), config.update_remote, config.update_branch, state.previous_commit, rollback)
-            except RuntimeError as error:
-                await interaction.followup.send(f"Nothing was changed. {error}")
-                return
-            await interaction.followup.send(f"```\n{plan.text}\n```")
-            if plan.kind not in ("update", "rollback"):
-                return
-            if not rollback:
-                state.previous_commit = head
-            else:
-                state.previous_commit = None
-            bot_lib.save_state(bot_lib.state_path(), state)
-            try:
-                await apply_commit(config, move, head, lambda text: interaction.followup.send(text))
-            except RuntimeError as error:
-                await interaction.followup.send(f"**Stopped:** {error}\nThe macro may be stopped - see /status.")
-                return
+                await plan_and_apply(interaction, rollback)
+            finally:
+                UPDATING = False
         if RESTART_BOT:
             await client.close()
+
+    async def plan_and_apply(interaction: discord.Interaction, rollback: bool) -> None:
+        state = client.bot_state  # type: ignore[attr-defined]
+        try:
+            plan, move, head = await asyncio.to_thread(bot_lib.make_plan, git_runner(config), config.update_remote, config.update_branch, state.previous_commit, rollback)
+        except RuntimeError as error:
+            await interaction.followup.send(f"Nothing was changed. {error}")
+            return
+        await interaction.followup.send(f"```\n{plan.text}\n```")
+        if plan.kind not in ("update", "rollback"):
+            return
+        state.previous_commit = None if rollback else head
+        bot_lib.save_state(bot_lib.state_path(), state)
+        try:
+            await apply_commit(config, move, head, lambda text: interaction.followup.send(text))
+        except RuntimeError as error:
+            await interaction.followup.send(f"**Stopped:** {error}\nThe macro may be stopped - see /status.")
 
     @command("update", "Pull the latest main, restart the macro (and the bot if its code changed)")
     async def update(interaction: discord.Interaction) -> None:
@@ -632,7 +637,7 @@ async def watch_once(channel: discord.abc.Messageable, config: bot_lib.Config, s
         if os.path.basename(chart) not in state.charts and now - os.path.getmtime(chart) >= cfg.BOT_FILE_SETTLE:
             state.charts.append(os.path.basename(chart))
             await post(channel, f"Run chart {os.path.basename(chart)}", chart)
-    if state.desired_state == "running":
+    if bot_lib.crash_check_due(state.desired_state, UPDATING):
         running = await asyncio.to_thread(macro_process_running)
         state.crash_reported, event = bot_lib.crash_check(state.desired_state, running, state.crash_reported)
         if event == "alert":

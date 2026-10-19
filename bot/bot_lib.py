@@ -624,6 +624,11 @@ def crash_check(desired: Optional[str], running: Optional[bool], reported: bool)
     return reported, None
 
 
+def crash_check_due(desired: Optional[str], updating: bool) -> bool:
+    """Whether the macro's process is looked for now: when the bot has it that it should be running, and not while /update or /rollback has stopped it on purpose."""
+    return desired == "running" and not updating
+
+
 def started_since(status: Optional[dict[str, Any]], since: datetime) -> bool:
     """Whether status.json was written at or after `since` - the macro that was just started is running its loop (it writes the status when it starts)."""
     try:

@@ -178,7 +178,7 @@ def test_the_macro_is_told_from_the_bot_in_a_process_list():
     assert not bot_lib.main_py_in(["python bot/discord_bot.py main.py-config"]) and not bot_lib.main_py_in([])
 
 
-# --- alerts (Phase 2) ---
+# --- alerts ---
 
 REAL_FAILURE = "[2026-10-16 12:37:30] [RUN 6] FAILURE: sleepy handler could not resolve it (screenshot: failures/20261016_123729_run6_sleepy_handler_could_not_resolve_it/screen.png)"
 
@@ -486,7 +486,7 @@ def test_the_switches_are_read_from_the_game_config_with_the_defaults_for_what_i
     assert "side_quest on" in text and "play_stitches_spotlight off" in text and text.splitlines()[1] == "Needs off: hungry"
 
 
-# --- update and rollback (Phase 5) ---
+# --- update and rollback ---
 
 def git_in(folder):
     """A bot_lib.GitRunner running the real git in `folder` (the tests make their own repositories)."""

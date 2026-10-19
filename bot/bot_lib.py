@@ -275,7 +275,7 @@ def main_py_in(command_lines: list[str]) -> bool:
     return any("main.py" in line and "discord_bot" not in line for line in command_lines)
 
 
-# --- alerts: what the macro writes that the bot watches (Phase 2) ---
+# --- alerts: what the macro writes that the bot watches ---
 
 @dataclass(frozen=True)
 class Failure:
@@ -542,7 +542,7 @@ def copy_pull(files: list[tuple[str, str]], onedrive_dir: str, source: str, max_
     return total
 
 
-# --- control: start, stop, restart the macro (Phase 4) ---
+# --- control: start, stop, restart the macro ---
 
 def write_command(path: str, command: str, now: float, **details: Any) -> None:
     """Leave `command` (one of magic_numbers.COMMANDS) for the macro to find at `path`: {"command": ..., "time": ..., plus `details`}, written all at
@@ -632,7 +632,7 @@ def started_since(status: Optional[dict[str, Any]], since: datetime) -> bool:
         return False
 
 
-# --- update and rollback (Phase 5) ---
+# --- update and rollback ---
 
 @dataclass(frozen=True)
 class UpdatePlan:

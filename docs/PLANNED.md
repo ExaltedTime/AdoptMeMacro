@@ -35,3 +35,13 @@ Suggestions from reading through the code, none of them started. Roughly in orde
 - [ ] The Hauntlet 2 decision logic is the item rules plus a random door so far (`choose_hauntlet_door()`, `hauntlet_items_for()`): risk-based picking - the ghost door by kind (boarded, dark, mystery), how many hearts to risk - is what is left; so is checking that an item was used (the slot's count goes down), and a use for the gold key and the wand
 - [ ] Fork rooms (10 and 20): both doorways are found in 19 of 47 frames of three captures (one whole opening plus a narrow piece of the lit one); the rest show one doorway, from the entrance, and the walk to it is untested in the game. The signs over the doorways (cream boards with an item picture) and the circles in them could find a doorway that is not dark inside.
 - [ ] Hearts and items left out by the readers: a row of only black hearts, the cyan temporary heart, the wand's picture and the counts above 2
+
+## Trade value helper
+
+Read a trade window and say whether the trade is worth it. Not started; nothing is built.
+
+- [ ] **Value source first.** Neither adoptmewfl.com nor elvebredd.com publishes a feed that was found (the former serves its value files scrambled and disallows `/api` in `robots.txt`; the latter did not answer a direct request). Ask the owners for a feed or for permission to read the calculator automatically. Until then a values table kept by hand (a file, one value per pet and flag combination) is the fallback, or the helper only shows what it read and the calculator is used by hand.
+- [ ] **Read the trade window** from real screenshots (both sides, several pets, ordinary, neon and mega): the pets' pictures matched against a reference crop per pet (or the name label read, if the window shows one), and the age, fly, ride, neon and mega marks each with a detector of its own. Needs screenshots of a trade in progress; details hidden until a pet is hovered cannot be read.
+- [ ] **Decide.** Sum each side from the values table and compare with a margin; the helper posts its verdict (and a screenshot) to Discord and does not accept or decline by itself at first, since a misread would cost real pets.
+- [ ] **Optionally drive the calculator.** Type the pets into the site in a browser like a visitor and read its verdict off the screen; this needs a second window or monitor (the macro stops when Roblox loses focus), the pet names exactly as the site expects them, and the owners' agreement.
+

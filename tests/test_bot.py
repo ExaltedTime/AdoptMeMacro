@@ -183,7 +183,7 @@ def test_the_macro_is_told_from_the_bot_in_a_process_list():
 REAL_FAILURE = "[2026-10-16 12:37:30] [RUN 6] FAILURE: sleepy handler could not resolve it (screenshot: failures/20261016_123729_run6_sleepy_handler_could_not_resolve_it/screen.png)"
 
 
-def test_a_failure_line_is_read_and_other_lines_are_not(tmp_path):
+def test_a_failure_line_is_read_and_other_lines_are_not():
     failure = bot_lib.parse_failure(REAL_FAILURE)
     assert (failure.time, failure.run, failure.reason) == ("2026-10-16 12:37:30", 6, "sleepy handler could not resolve it")
     assert failure.screenshot == "failures/20261016_123729_run6_sleepy_handler_could_not_resolve_it/screen.png"
@@ -384,7 +384,7 @@ def test_pulled_files_are_copied_into_a_folder_of_the_source_and_a_too_big_pull_
         bot_lib.copy_pull([], str(other), "logs", 100)
 
 
-def test_the_new_config_keys_are_read_and_checked(tmp_path):
+def test_the_onedrive_folder_and_heartbeat_keys_are_read_and_checked(tmp_path):
     config = bot_lib.load_config(write_config(tmp_path, onedrive_dir=" C:/OneDrive/AdoptMeMacro/captures ", heartbeat_hours=6))
     assert (config.onedrive_dir, config.heartbeat_hours) == ("C:/OneDrive/AdoptMeMacro/captures", 6.0)
     config = bot_lib.load_config(write_config(tmp_path))
@@ -394,7 +394,7 @@ def test_the_new_config_keys_are_read_and_checked(tmp_path):
             bot_lib.load_config(write_config(tmp_path, **change))
 
 
-# --- control (Phase 4) ---
+# --- control: start, stop, restart the macro ---
 
 def test_a_command_is_left_for_the_macro_all_at_once_and_only_a_known_one(tmp_path):
     path = str(tmp_path / "commands.json")
@@ -607,7 +607,9 @@ def test_every_slash_command_has_a_name_and_descriptions_discord_accepts():
     import re
     source = (pathlib.Path(__file__).parent.parent / "bot" / "discord_bot.py").read_text(encoding="utf-8")
     commands = re.findall(r'@command\("([^"]+)", "((?:[^"\\]|\\.)*)"\)', source)
-    assert len(commands) >= 20
+    names = {name for name, _ in commands}
+    assert {"status", "screenshot", "log", "report", "results", "captures", "pull", "start", "loop", "stop", "exit", "restart", "rejoin", "setup", "refresh_debug",
+            "trade_hub", "leave_trade_hub", "update", "rollback", "need", "option", "options"} <= names
     for name, description in commands:
         assert re.fullmatch(r"[a-z0-9_-]{1,32}", name) and 1 <= len(description) <= 100, name
     for described in re.findall(r'@app_commands\.describe\((.*)\)', source):

@@ -471,7 +471,7 @@ def test_config_reads_never_see_a_half_written_file(macro, monkeypatch, tmp_path
     assert not (tmp_path / ".config.tmp").exists()
 
 
-def test_a_button_action_cut_short_by_a_rejoin_is_done_not_a_crash(macro, monkeypatch):
+def test_a_button_action_cut_short_by_a_rejoin_is_done_not_a_crash(macro):
     """The Setup button runs setup_game() under the in-task checks; a disconnect rejoins (and sets up) mid-way and
     raises TaskInterrupted, which the worker must not report as a crash."""
     gui = object.__new__(macro.AdoptMeGUI)
@@ -782,7 +782,7 @@ def test_setup_keeps_its_backpack_open_without_the_in_task_check_closing_it(macr
     assert macro.unscrew(in_task=True, play_minigames=False) is None
 
 
-def test_the_in_task_check_closes_a_backpack_seen_open_twice_but_not_one_a_handler_has_open_on_purpose(macro, monkeypatch, tmp_path):
+def test_the_in_task_check_closes_a_backpack_seen_open_twice_but_not_one_a_handler_has_open_on_purpose(macro, monkeypatch):
     import numpy as np
     closed = []
     monkeypatch.setattr(macro, "is_roblox_focused", lambda: True)

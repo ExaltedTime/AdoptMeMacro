@@ -2560,7 +2560,7 @@ def detect_minigame_overlay(img: Image) -> Optional[str]:
 class MinigameWatch:
     """Keeps track of whether the minigame being played is on screen (its
     overlay - detect_minigame_overlay()) and whether the game disconnected
-    (detect_disconnect()), fed one screenshot at a time by minigame_won().
+    (detect_disconnect()), fed one screenshot at a time by minigame_look() and minigame_wait().
     `problem` says why to stop, or None."""
 
     def __init__(self, name: str) -> None:
@@ -2610,10 +2610,6 @@ def minigame_look(watch: MinigameWatch) -> Image:
     img = grab_screen()
     watch.update(img)
     return img
-
-def minigame_won(watch: MinigameWatch) -> bool:
-    """minigame_look(), then True if it shows the victory screen (detect_minigame_victory())."""
-    return detect_minigame_victory(minigame_look(watch))
 
 def zoom_out() -> None:
     """Zoom the camera out (KEY_ZOOM_OUT held MINIGAME_ZOOM_OUT_DURATION seconds) to see the whole room: close up, the TVs

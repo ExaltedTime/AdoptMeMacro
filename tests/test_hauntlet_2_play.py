@@ -593,7 +593,7 @@ def test_the_red_potion_is_used_when_the_hearts_are_low_and_not_otherwise(macro,
         assert (red in macro.clicks) is used
 
 
-def test_an_item_not_held_is_not_clicked(macro, world, monkeypatch):
+def test_an_item_not_held_is_not_clicked(macro, world):
     world.screens = [frame(macro, bar="red_potion")]
     assert macro.hauntlet_use_item("phone", watch_of(macro)) is None and macro.clicks == []
     assert macro.hauntlet_use_item("red_potion", watch_of(macro)) is not None and macro.clicks == [slot_of(macro, "red_potion", bar="red_potion")]

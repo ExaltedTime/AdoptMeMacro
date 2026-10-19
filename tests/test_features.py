@@ -81,7 +81,7 @@ def test_side_quest_resets_the_money_and_the_tree_is_harvested_again(macro, conf
     assert macro.load_game_config()["money_collected"] == macro.cfg.TREE_HARVEST_YIELD
 
 
-def test_reset_config_goes_back_to_not_yet_recorded(macro, config_file, monkeypatch):
+def test_reset_config_goes_back_to_not_yet_recorded(macro, config_file):
     config_file(money_collected=5, money_reset_boundary=stamp(2026, 10, 10, 17))
     macro.reset_game_config()
     assert macro.load_game_config()["money_reset_boundary"] is None

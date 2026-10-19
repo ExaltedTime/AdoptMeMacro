@@ -55,6 +55,22 @@ def grab_roblox_png() -> tuple[bytes, bool]:
     return mss.tools.to_png(shot.rgb, shot.size), bot_lib.looks_blank(shot.rgb)
 
 
+def grab_roblox_jpeg() -> tuple[bytes, bool]:
+    """A small JPEG of the Roblox window (the whole monitor if there is none), BOT_RVIEW_WIDTH wide, and whether it looks blank - for /rview, which sends one every second."""
+    import cv2
+    import mss
+    import numpy as np
+    with mss.MSS() as sct:
+        shot = sct.grab(roblox_region(sct.monitors[1]))
+    picture = np.frombuffer(shot.bgra, np.uint8).reshape(shot.height, shot.width, 4)[:, :, :3]
+    if shot.width > cfg.BOT_RVIEW_WIDTH:
+        picture = cv2.resize(picture, (cfg.BOT_RVIEW_WIDTH, round(shot.height * cfg.BOT_RVIEW_WIDTH / shot.width)), interpolation=cv2.INTER_AREA)
+    done, encoded = cv2.imencode(".jpg", picture, [cv2.IMWRITE_JPEG_QUALITY, cfg.BOT_RVIEW_JPEG_QUALITY])
+    if not done:
+        raise RuntimeError("the picture could not be encoded")
+    return encoded.tobytes(), bot_lib.looks_blank(shot.rgb)
+
+
 def list_processes() -> Optional[list[tuple[int, str]]]:
     """(id, command line) of every process on this PC, or None when that can't be found out (psutil is used when it is installed)."""
     try:
@@ -313,6 +329,41 @@ def build(config: bot_lib.Config) -> discord.Client:
             return
         note = "The screen looks blank - the PC may be locked or asleep." if blank else ""
         await interaction.followup.send(note, file=discord.File(io.BytesIO(png), "screenshot.png"))
+
+    rolling = {"on": False}                                        # one rolling view at a time
+
+    @command("rview", "A rolling view: the Roblox window once a second for 30 seconds, in one message that updates")
+    async def rview(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        if rolling["on"]:
+            await interaction.followup.send("A rolling view is already running.")
+            return
+        rolling["on"] = True
+        try:
+            started = time.monotonic()
+            shown = 0
+            while True:
+                elapsed = time.monotonic() - started
+                left = max(0, round(cfg.BOT_RVIEW_SECONDS - elapsed))
+                jpeg, blank = await asyncio.to_thread(grab_roblox_jpeg)
+                note = f"Rolling view - {left} s left" + (" - the screen looks blank (the PC may be locked or asleep)" if blank else "")
+                if len(jpeg) > cfg.BOT_MAX_UPLOAD_MB * 1048576:
+                    note += " - this picture was too big to send"
+                    attachments = []
+                else:
+                    attachments = [discord.File(io.BytesIO(jpeg), f"view{shown % 2}.jpg")]    # (a new name each time, so the picture shown is replaced)
+                await interaction.edit_original_response(content=note, attachments=attachments)
+                shown += 1
+                if elapsed >= cfg.BOT_RVIEW_SECONDS:
+                    break
+                await asyncio.sleep(max(0.0, started + shown * cfg.BOT_RVIEW_INTERVAL - time.monotonic()))
+            await interaction.edit_original_response(content="Rolling view over.")
+        except Exception as error:
+            log.exception("rolling view failed")
+            with contextlib.suppress(Exception):
+                await interaction.followup.send(f"The rolling view stopped: {error}")
+        finally:
+            rolling["on"] = False
 
     @command("log", "The last lines of the run log")
     @app_commands.describe(lines="How many lines (at most the configured limit)")

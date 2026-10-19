@@ -56,3 +56,32 @@ def test_the_loop_respawns_when_idle_logs_resources_stops_and_writes_the_report(
     lines_after = open(cfg.RUN_LOG_PATH).read().count("resources: cpu")
     time.sleep(0.5)
     assert open(cfg.RUN_LOG_PATH).read().count("resources: cpu") == lines_after   # the monitor thread has stopped
+
+
+def test_a_stop_that_comes_before_the_loop_has_begun_is_not_lost(macro, tmp_path, monkeypatch):
+    """run_async() clears the stop flag, then the worker thread starts the loop: a stop in between (the bot's /loop, then /stop) must still end it."""
+    cfg = macro.cfg
+    monkeypatch.setattr(cfg, "RUN_COUNTER_PATH", str(tmp_path / "run_counter.txt"))
+    monkeypatch.setattr(cfg, "GAME_CONFIG_PATH", str(tmp_path / ".config"))
+    monkeypatch.setattr(macro, "respawn_character", lambda: None)
+    monkeypatch.setattr(macro, "check_focus", lambda: None)
+    monkeypatch.setattr(macro, "unscrew", lambda *a, **k: None)
+    monkeypatch.setattr(macro, "side_quest", lambda: None)
+    monkeypatch.setattr(macro, "process_needs", lambda: False)
+    macro.STOP_EVENT.set()
+    try:
+        outcome = []
+        worker = threading.Thread(target=lambda: outcome.append(_run_loop(macro)))
+        worker.start()
+        worker.join(30)
+        assert not worker.is_alive() and isinstance(outcome[0], macro.StopRequested)
+    finally:
+        macro.STOP_EVENT.clear()
+
+
+def _run_loop(macro):
+    try:
+        macro.run_workflow_loop()
+    except BaseException as error:                                   # noqa: BLE001 - what the GUI worker would see
+        return error
+    return None

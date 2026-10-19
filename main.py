@@ -4826,8 +4826,7 @@ def run_full_cycle() -> None:
 def run_workflow_loop() -> None:
     """Respawn once, then repeat the workflow until a stop request, which propagates (bare
     finally, not except) so the GUI reports [STOPPED]. See docs/ARCHITECTURE.md#the-workflow-lifecycle.
-    """
-    STOP_EVENT.clear()
+    """                                                                   # (STOP_EVENT is not cleared here: run_async() did that before this thread began, and a stop since then must not be lost)
     state.run_number = next_run_number()
     reset_need_tracking()
     state.idle_checks = 0

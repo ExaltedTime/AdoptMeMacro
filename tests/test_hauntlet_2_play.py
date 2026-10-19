@@ -422,6 +422,17 @@ def test_a_walk_reports_the_victory_screen(macro, world, monkeypatch):
 
 # --- the room being looked at ---
 
+def test_a_white_screen_after_a_ghost_starts_the_room_afresh_so_it_is_not_taken_for_one_without_doors(macro):
+    white = cv2.imread(os.path.join(HERE, "white_after_a_ghost.png"))               # "A Ghost!! You lost 1 Heart from fear.": the screen is white, then the room's start again
+    run = macro.HauntletRun()
+    run.look(frame(macro, room=5), 0.0)
+    assert run.room == 5
+    assert run.look(white, 100.0) is None and run.since == 100.0 and run.tvs is None   # (the room was entered long ago: its clock starts over)
+    assert run.look(frame(macro, room=5), 101.0) is None                                # the room again, with no TVs yet: not "one doorway, no doors found"
+    assert run.look(frame(macro, room=5), 100.0 + macro.cfg.HAUNTLET_DOORS_TIMEOUT + 1) == [macro.HauntletDoor(0, 0, None)]   # a room that stays without TVs is still found to have none
+
+
+
 def test_the_doors_are_chosen_from_once_the_room_has_settled_and_the_camera_stopped(macro):
     cfg = macro.cfg
     run = macro.HauntletRun()

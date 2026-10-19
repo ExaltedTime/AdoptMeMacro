@@ -2679,6 +2679,7 @@ class HauntletRun:
         self.tvs: Optional[list[tuple[int, int]]] = None   # of the last look: None if the timer was hidden
         self.empty_looks = 0                          # looks in a row at a room without TVs
         self.doors_missing_reported = False           # the failure for a room with no doors found has been logged
+        self.white = False                            # the last look was a white screen
 
     @property
     def fork(self) -> bool:
@@ -2695,6 +2696,12 @@ class HauntletRun:
             logger.debug(f"Hauntlet 2: room {room}")
         if self.room is None:
             return None
+        if detect_white_screen(img):                  # a heart lost to a ghost, a death: the game whites the screen out and brings the player back to the room's start,
+            if not self.white:                        # so the room is looked at afresh from now - not taken for one with no doors because it was entered long ago
+                logger.debug("Hauntlet 2: the screen went white (a ghost, or a fall): the room starts again")
+            self.white, self.since, self.walked_at, self.tvs, self.empty_looks = True, now, None, None, 0
+            return None
+        self.white = False
         age = now - self.since
         before, self.tvs = self.tvs, (find_door_tvs(img) if hauntlet_timer_visible(img) else None)
         if self.tvs is None or age < cfg.HAUNTLET_ROOM_SETTLE or (self.walked_at is not None and now < self.walked_at + cfg.HAUNTLET_RETRY_WAIT):

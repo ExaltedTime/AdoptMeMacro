@@ -13,6 +13,7 @@ from typing import Any, Callable, Optional
 import magic_numbers as cfg
 
 DISCORD_MESSAGE_LIMIT = 2000
+MAX_LOG_LINE = 100                    # a line of the update plan's git log is cut to this
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
@@ -255,6 +256,27 @@ def tail_lines(path: str, count: int, limit: int = 0) -> Optional[str]:
 def fits_a_message(text: str) -> bool:
     """Whether `text` goes in one Discord message (in a code block, which takes 8 characters more)."""
     return len(text) + 8 <= DISCORD_MESSAGE_LIMIT
+
+
+def clip_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> str:
+    """`text` cut to fit one Discord message (a longer one is refused, and the whole command with it): whole lines from the start, then "... (N more lines)";
+    a code block stays closed."""
+    if len(text) <= limit:
+        return text
+    fenced = text.startswith("```") and text.rstrip().endswith("```")
+    body = text[text.index("\n") + 1:text.rstrip().rindex("```")].rstrip("\n") if fenced else text
+    lines = body.split("\n")
+    room = limit - (8 if fenced else 0) - 30                                 # (30: the note about what was cut)
+    kept, used = [], 0
+    for line in lines:
+        line = line if len(line) <= room else line[:room - 1] + "…"
+        if used + len(line) + 1 > room:
+            break
+        kept.append(line)
+        used += len(line) + 1
+    cut = f"... ({len(lines) - len(kept)} more lines)"
+    body = "\n".join([*kept, cut])
+    return f"```\n{body}\n```" if fenced else body
 
 
 # --- /screenshot ---
@@ -661,7 +683,8 @@ def files_text(files: list[str], limit: int = 8) -> str:
 
 def log_text(lines: list[str], limit: int = 15) -> str:
     """The `git log --oneline` lines of what is pulled, the newest first, at most `limit` of them."""
-    return "\n".join(lines[:limit]) + (f"\n... and {len(lines) - limit} more" if len(lines) > limit else "")
+    shown = [line if len(line) <= MAX_LOG_LINE else line[:MAX_LOG_LINE - 1] + "…" for line in lines[:limit]]
+    return "\n".join(shown) + (f"\n... and {len(lines) - limit} more" if len(lines) > limit else "")
 
 
 def update_plan(head: str, target: str, dirty: list[str], head_in_target: bool, target_in_head: bool, log_lines: list[str], name: str) -> UpdatePlan:

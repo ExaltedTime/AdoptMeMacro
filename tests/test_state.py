@@ -471,7 +471,7 @@ def test_config_reads_never_see_a_half_written_file(macro, monkeypatch, tmp_path
     assert not (tmp_path / ".config.tmp").exists()
 
 
-def test_a_button_action_cut_short_by_a_rejoin_is_done_not_a_crash(macro, monkeypatch):
+def test_a_button_action_cut_short_by_a_rejoin_is_done_not_a_crash(macro):
     """The Setup button runs setup_game() under the in-task checks; a disconnect rejoins (and sets up) mid-way and
     raises TaskInterrupted, which the worker must not report as a crash."""
     gui = object.__new__(macro.AdoptMeGUI)
@@ -782,7 +782,7 @@ def test_setup_keeps_its_backpack_open_without_the_in_task_check_closing_it(macr
     assert macro.unscrew(in_task=True, play_minigames=False) is None
 
 
-def test_the_in_task_check_closes_a_backpack_seen_open_twice_but_not_one_a_handler_has_open_on_purpose(macro, monkeypatch, tmp_path):
+def test_the_in_task_check_closes_a_backpack_seen_open_twice_but_not_one_a_handler_has_open_on_purpose(macro, monkeypatch):
     import numpy as np
     closed = []
     monkeypatch.setattr(macro, "is_roblox_focused", lambda: True)
@@ -1570,3 +1570,20 @@ def test_a_minigame_that_has_no_player_yet_is_declined_even_when_switched_on(mac
     monkeypatch.setattr(macro, "log_run_event", lambda message: None)
     assert macro.identify_minigame(macro.grab_screen()) == "stitches_spotlight" and "stitches_spotlight" not in macro.MINIGAME_PLAYERS
     assert macro.minigame_popup() == "dismissed" and played == [] and clicks[-1] == macro.cfg.MINIGAME_POPUP_NO_POS
+
+
+def test_the_start_wait_ends_when_the_overlay_shows_or_the_game_is_lost_not_only_when_it_runs_out(macro, monkeypatch):
+    looks = []
+    monkeypatch.setattr(macro, "minigame_wait", lambda duration, watch: looks.append(duration))
+    watch = macro.MinigameWatch("ghost_gallery")
+    watch.last_seen = time.time()                                                  # the overlay is up: no waiting at all
+    macro.wait_for_minigame_start(watch, "ghost_gallery")
+    assert looks == [] and watch.start_grace_from is not None
+    watch = macro.MinigameWatch("ghost_gallery")
+    watch.disconnected = True                                                      # a disconnect in the lobby: the rejoin should not wait for the whole start wait
+    macro.wait_for_minigame_start(watch, "ghost_gallery")
+    assert looks == []
+    watch = macro.MinigameWatch("ghost_gallery")                                   # nothing yet: it looks, at the interval, until the overlay shows
+    monkeypatch.setattr(macro, "minigame_wait", lambda duration, w: (looks.append(duration), setattr(w, "last_seen", time.time())))
+    macro.wait_for_minigame_start(watch, "ghost_gallery")
+    assert looks == [macro.cfg.MINIGAME_START_LOOK_INTERVAL]

@@ -1,5 +1,5 @@
-"""The Discord bot: ask the macro's PC how it is doing from anywhere. Read-only (Phase 1 of docs/planned/Discord.md): /status, /screenshot, /log,
-/report, /results. It runs on the PC the macro runs on, in the same logged-in desktop session (it reads the macro's files and grabs its screen),
+"""The Discord bot: ask the macro's PC how it is doing from anywhere, and control it: /status, /screenshot, /log, /report, /results, /captures, /pull, the
+commands that start, stop and change the macro, and /update and /rollback. It runs on the PC the macro runs on, in the same logged-in desktop session (it reads the macro's files and grabs its screen),
 and connects out to Discord, so no port needs opening. Only one user, in one channel, is obeyed (bot_config.json).
 
     python bot/discord_bot.py [path to bot_config.json]
@@ -53,6 +53,22 @@ def grab_roblox_png() -> tuple[bytes, bool]:
     with mss.MSS() as sct:
         shot = sct.grab(roblox_region(sct.monitors[1]))
     return mss.tools.to_png(shot.rgb, shot.size), bot_lib.looks_blank(shot.rgb)
+
+
+def grab_roblox_jpeg() -> tuple[bytes, bool]:
+    """A small JPEG of the Roblox window (the whole monitor if there is none), BOT_RVIEW_WIDTH wide, and whether it looks blank - for /rview, which sends one every second."""
+    import cv2
+    import mss
+    import numpy as np
+    with mss.MSS() as sct:
+        shot = sct.grab(roblox_region(sct.monitors[1]))
+    picture = np.frombuffer(shot.bgra, np.uint8).reshape(shot.height, shot.width, 4)[:, :, :3]
+    if shot.width > cfg.BOT_RVIEW_WIDTH:
+        picture = cv2.resize(picture, (cfg.BOT_RVIEW_WIDTH, round(shot.height * cfg.BOT_RVIEW_WIDTH / shot.width)), interpolation=cv2.INTER_AREA)
+    done, encoded = cv2.imencode(".jpg", picture, [cv2.IMWRITE_JPEG_QUALITY, cfg.BOT_RVIEW_JPEG_QUALITY])
+    if not done:
+        raise RuntimeError("the picture could not be encoded")
+    return encoded.tobytes(), bot_lib.looks_blank(shot.rgb)
 
 
 def list_processes() -> Optional[list[tuple[int, str]]]:
@@ -161,7 +177,7 @@ async def open_macro(config: bot_lib.Config) -> str:
     return "Started the macro, but its process is not there - see /log and macro_stderr.log."
 
 
-async def stop_loop(config: bot_lib.Config) -> str:
+async def stop_loop() -> str:
     """Ask the running macro to stop its loop (the [STOP] button); its window stays open."""
     if not await asyncio.to_thread(current_macro_pids):
         return "The macro is not running."
@@ -247,6 +263,31 @@ async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say) -
         RESTART_BOT = True
 
 
+class ConfirmView(discord.ui.View):
+    """Yes and Cancel buttons that only the owner in the one channel can press; `answer` is True, False, or None if nobody pressed one in time."""
+
+    def __init__(self, config: bot_lib.Config, timeout: float) -> None:
+        super().__init__(timeout=timeout)
+        self.config = config
+        self.answer: Optional[bool] = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return bot_lib.is_allowed(self.config, interaction.user.id, interaction.channel_id or 0)
+
+    async def finish(self, interaction: discord.Interaction, answer: bool) -> None:
+        self.answer = answer
+        await interaction.response.edit_message(view=None)
+        self.stop()
+
+    @discord.ui.button(label="Copy it", style=discord.ButtonStyle.green)
+    async def yes(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self.finish(interaction, True)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.red)
+    async def no(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self.finish(interaction, False)
+
+
 class OwnerOnlyTree(app_commands.CommandTree):
     """A command tree that obeys the owner in the one channel and nobody else (their commands get no answer at all)."""
 
@@ -288,6 +329,41 @@ def build(config: bot_lib.Config) -> discord.Client:
             return
         note = "The screen looks blank - the PC may be locked or asleep." if blank else ""
         await interaction.followup.send(note, file=discord.File(io.BytesIO(png), "screenshot.png"))
+
+    rolling = {"on": False}                                        # one rolling view at a time
+
+    @command("rview", "A rolling view: the Roblox window once a second for 30 seconds, in one message that updates")
+    async def rview(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        if rolling["on"]:
+            await interaction.followup.send("A rolling view is already running.")
+            return
+        rolling["on"] = True
+        try:
+            started = time.monotonic()
+            shown = 0
+            while True:
+                elapsed = time.monotonic() - started
+                left = max(0, round(cfg.BOT_RVIEW_SECONDS - elapsed))
+                jpeg, blank = await asyncio.to_thread(grab_roblox_jpeg)
+                note = f"Rolling view - {left} s left" + (" - the screen looks blank (the PC may be locked or asleep)" if blank else "")
+                if len(jpeg) > cfg.BOT_MAX_UPLOAD_MB * 1048576:
+                    note += " - this picture was too big to send"
+                    attachments = []
+                else:
+                    attachments = [discord.File(io.BytesIO(jpeg), f"view{shown % 2}.jpg")]    # (a new name each time, so the picture shown is replaced)
+                await interaction.edit_original_response(content=note, attachments=attachments)
+                shown += 1
+                if elapsed >= cfg.BOT_RVIEW_SECONDS:
+                    break
+                await asyncio.sleep(max(0.0, started + shown * cfg.BOT_RVIEW_INTERVAL - time.monotonic()))
+            await interaction.edit_original_response(content="Rolling view over.")
+        except Exception as error:
+            log.exception("rolling view failed")
+            with contextlib.suppress(Exception):
+                await interaction.followup.send(f"The rolling view stopped: {error}")
+        finally:
+            rolling["on"] = False
 
     @command("log", "The last lines of the run log")
     @app_commands.describe(lines="How many lines (at most the configured limit)")
@@ -335,7 +411,7 @@ def build(config: bot_lib.Config) -> discord.Client:
     @command("stop", "Stop the macro's loop (its window stays open)")
     async def stop(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
-        await interaction.followup.send(await stop_loop(config))
+        await interaction.followup.send(await stop_loop())
 
     @command("exit", "Close the macro: its loop is stopped, its keys are released and its window closed")
     async def exit_macro(interaction: discord.Interaction) -> None:
@@ -351,31 +427,25 @@ def build(config: bot_lib.Config) -> discord.Client:
         remember("running")
         await interaction.followup.send(f"{stopped}\n{await start_macro(config)}")
 
-    @command("rejoin", "Have the macro leave the game and rejoin it (stops its loop first)")
-    async def rejoin(interaction: discord.Interaction) -> None:
-        await interaction.response.defer(thinking=True)
-        if not await asyncio.to_thread(current_macro_pids):
-            await interaction.followup.send("The macro isn't running - /start it first (a rejoin is done by its window).")
-            return
-        bot_lib.write_command(cfg.COMMANDS_PATH, "rejoin", time.time())
-        await interaction.followup.send("Asked the macro to leave and rejoin. Its loop is stopped; /loop it again once it is back in the game.")
-
-    @command("setup", "Have the macro run Setup (stops its loop first)")
-    async def setup(interaction: discord.Interaction) -> None:
-        await interaction.response.defer(thinking=True)
-        if not await asyncio.to_thread(current_macro_pids):
-            await interaction.followup.send("The macro isn't running - /start it first (Setup is done by its window).")
-            return
-        bot_lib.write_command(cfg.COMMANDS_PATH, "setup", time.time())
-        await interaction.followup.send("Asked the macro to run Setup. Its loop is stopped; /loop it again once Setup is done.")
-
-    async def ask_macro(interaction: discord.Interaction, command_name: str, said: str) -> None:
+    async def ask_macro(interaction: discord.Interaction, command_name: str, said: str, idle_only: bool = False) -> None:
+        """Leave the running macro `command_name` (its window does it) and say `said`; with `idle_only` not while its loop runs."""
         await interaction.response.defer(thinking=True)
         if not await asyncio.to_thread(current_macro_pids):
             await interaction.followup.send("The macro isn't running - /start it first (it is done by its window).")
             return
+        if idle_only and not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path())):
+            await interaction.followup.send("The macro's loop is running - /stop it first.")
+            return
         bot_lib.write_command(cfg.COMMANDS_PATH, command_name, time.time())
         await interaction.followup.send(said)
+
+    @command("rejoin", "Have the macro leave the game and rejoin it (stops its loop first)")
+    async def rejoin(interaction: discord.Interaction) -> None:
+        await ask_macro(interaction, "rejoin", "Asked the macro to leave and rejoin. Its loop is stopped; /loop it again once it is back in the game.")
+
+    @command("setup", "Have the macro run Setup (stops its loop first)")
+    async def setup(interaction: discord.Interaction) -> None:
+        await ask_macro(interaction, "setup", "Asked the macro to run Setup. Its loop is stopped; /loop it again once Setup is done.")
 
     @command("trade_hub", "Have the macro travel to the Trading Hub (stops its loop first)")
     async def trade_hub(interaction: discord.Interaction) -> None:
@@ -387,15 +457,7 @@ def build(config: bot_lib.Config) -> discord.Client:
 
     @command("refresh_debug", "Empty the macro's debug folder (the game config stays); not while its loop runs")
     async def refresh_debug(interaction: discord.Interaction) -> None:
-        await interaction.response.defer(thinking=True)
-        if not await asyncio.to_thread(current_macro_pids):
-            await interaction.followup.send("The macro isn't running - /start it first (the debug folder is emptied by its window).")
-            return
-        if not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path())):
-            await interaction.followup.send("The macro's loop is running - /stop it first.")
-            return
-        bot_lib.write_command(cfg.COMMANDS_PATH, "refresh_debug", time.time())
-        await interaction.followup.send("Asked the macro to empty its debug folder (everything but the game config).")
+        await ask_macro(interaction, "refresh_debug", "Asked the macro to empty its debug folder (everything but the game config).", idle_only=True)
 
     async def change_switch(interaction: discord.Interaction, kind: str, name: str, value: bool) -> None:
         """Ask the running macro to change a switch (the command file) and say what the game config shows a moment later."""
@@ -485,11 +547,19 @@ def build(config: bot_lib.Config) -> discord.Client:
         try:
             path, name = bot_lib.resolve_pull(folder.value, item)
             files = await asyncio.to_thread(bot_lib.pull_files, path, name)
+            size = await asyncio.to_thread(bot_lib.files_size_mb, files)
+            if cfg.BOT_PULL_CONFIRM_MB < size <= cfg.BOT_MAX_PULL_MB:
+                view = ConfirmView(config, cfg.BOT_PULL_CONFIRM_TIMEOUT)
+                await interaction.followup.send(f"`{name}` is {bot_lib.size_text(size)} ({len(files)} file{'s' if len(files) != 1 else ''}). Copy it to OneDrive?", view=view)
+                await view.wait()
+                if not view.answer:
+                    await interaction.followup.send("Nothing copied: " + ("cancelled." if view.answer is False else "no answer in time."))
+                    return
             megabytes = await asyncio.to_thread(bot_lib.copy_pull, files, config.onedrive_dir, folder.value, cfg.BOT_MAX_PULL_MB)
         except (ValueError, OSError) as error:
             await interaction.followup.send(f"Nothing copied: {error}")
             return
-        await interaction.followup.send(f"Copied `{name}` ({len(files)} file{'s' if len(files) != 1 else ''}, {megabytes:.0f} MB) to OneDrive, in `{folder.value}/`. The OneDrive app on the PC uploads it from there.")
+        await interaction.followup.send(f"Copied `{name}` ({len(files)} file{'s' if len(files) != 1 else ''}, {bot_lib.size_text(megabytes)}) to OneDrive, in `{folder.value}/`. The OneDrive app on the PC uploads it from there.")
 
     @pull.autocomplete("item")
     async def pull_items(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:

@@ -180,15 +180,15 @@ def item(macro, name, x=0):
 def test_a_door_is_chosen_at_random_but_a_locked_one_only_with_the_grey_key_and_not_the_ghosts(macro):
     cfg = macro.cfg
     doors = [door("locked"), door(), door("locked")]
-    assert {macro.choose_hauntlet_door(doors, None, []) for _ in range(60)} == {1}
-    assert {macro.choose_hauntlet_door(doors, None, [item(macro, "gold_key")]) for _ in range(60)} == {1}       # the gold one is not it
-    assert {macro.choose_hauntlet_door(doors, None, [item(macro, cfg.HAUNTLET_ITEM_KEY)]) for _ in range(200)} == {0, 1, 2}
-    assert {macro.choose_hauntlet_door([door("locked")] * 3, None, []) for _ in range(200)} == {0, 1, 2}        # nothing else to take
+    assert {macro.choose_hauntlet_door(doors, []) for _ in range(60)} == {1}
+    assert {macro.choose_hauntlet_door(doors, [item(macro, "gold_key")]) for _ in range(60)} == {1}       # the gold one is not it
+    assert {macro.choose_hauntlet_door(doors, [item(macro, cfg.HAUNTLET_ITEM_KEY)]) for _ in range(200)} == {0, 1, 2}
+    assert {macro.choose_hauntlet_door([door("locked")] * 3, []) for _ in range(200)} == {0, 1, 2}        # nothing else to take
     plain = [door(), door(), door()]
-    assert {macro.choose_hauntlet_door(plain, None, [], avoid={1}) for _ in range(200)} == {0, 2}                  # the arrow's door is left alone
-    assert {macro.choose_hauntlet_door([door("locked"), door(), door()], None, [], avoid={1}) for _ in range(200)} == {2}
-    assert macro.choose_hauntlet_door(plain, None, [], avoid={0, 1}) == 2 and macro.choose_hauntlet_door(plain, None, [], avoid={0, 1, 2}) in (0, 1, 2)   # several to avoid, and nothing left
-    assert macro.choose_hauntlet_door([door("locked")] * 2 + [door()], None, [], avoid={2}) in (0, 1)            # only the ghost's door open: not it, if possible
+    assert {macro.choose_hauntlet_door(plain, [], avoid={1}) for _ in range(200)} == {0, 2}                  # the arrow's door is left alone
+    assert {macro.choose_hauntlet_door([door("locked"), door(), door()], [], avoid={1}) for _ in range(200)} == {2}
+    assert macro.choose_hauntlet_door(plain, [], avoid={0, 1}) == 2 and macro.choose_hauntlet_door(plain, [], avoid={0, 1, 2}) in (0, 1, 2)   # several to avoid, and nothing left
+    assert macro.choose_hauntlet_door([door("locked")] * 2 + [door()], [], avoid={2}) in (0, 1)            # only the ghost's door open: not it, if possible
 
 
 def test_each_door_and_the_hearts_call_for_their_items(macro):
@@ -593,7 +593,7 @@ def test_the_red_potion_is_used_when_the_hearts_are_low_and_not_otherwise(macro,
         assert (red in macro.clicks) is used
 
 
-def test_an_item_not_held_is_not_clicked(macro, world, monkeypatch):
+def test_an_item_not_held_is_not_clicked(macro, world):
     world.screens = [frame(macro, bar="red_potion")]
     assert macro.hauntlet_use_item("phone", watch_of(macro)) is None and macro.clicks == []
     assert macro.hauntlet_use_item("red_potion", watch_of(macro)) is not None and macro.clicks == [slot_of(macro, "red_potion", bar="red_potion")]

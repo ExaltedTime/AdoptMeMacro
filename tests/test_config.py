@@ -62,8 +62,3 @@ def test_the_handler_carries_out_the_real_entry(macro, monkeypatch, name):
     if "final_click" in entry:
         assert macro.clicks == [(10, 20), entry["final_click"]]            # the doctor's prompt, then the Yes
     assert waited == [entry.get("max_wait", cfg.NEED_GONE_MAX_WAIT)]
-
-
-def test_the_minigame_start_wait_outlasts_the_longest_queue_seen():
-    """The players act when their overlay shows and this is only the most they wait for it: in a real run it showed 50.5 s after the Yes (the Yes comes up to about a minute before a round)."""
-    assert cfg.MINIGAME_START_WAIT >= 60

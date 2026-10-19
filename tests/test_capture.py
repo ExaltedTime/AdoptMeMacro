@@ -189,6 +189,7 @@ def test_a_click_always_gets_a_frame_even_when_nothing_changed(macro, capture, s
 
 
 def test_a_long_stretch_without_a_frame_forces_one(macro, capture, screen, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "CAPTURE_FRAME_INTERVAL", 0.03)                    # (looks come far more often than the forced frames, whatever the tuning)
     monkeypatch.setattr(macro.cfg, "CAPTURE_MAX_SKIP", 0.15)
     recorder = run_capture(macro, capture, lambda r: r.frames >= 3)
     assert recorder.skipped >= 1                                       # some looks were skipped in between
@@ -474,7 +475,7 @@ def test_frames_around_a_mark_survive_the_thinning(macro, capture, monkeypatch):
     assert all(marked[0] - 0.1 <= float(f.split("_")[2][:-4]) <= marked[0] + 0.6 for f in recorder.protected)    # and they are of that moment
 
 
-def test_a_run_that_went_wrong_keeps_the_frames_of_its_last_seconds(macro, capture, monkeypatch):
+def test_a_run_that_went_wrong_keeps_the_frames_of_its_last_seconds(macro, capture):
     recorder = macro.InputCapture(capture["folder"], max_zips=2)
     recorder.started = time.time() - 100
     recorder._kept = [(f"frame_{i + 1:06d}_{t:.3f}.png", 1) for i, t in enumerate((10.0, 50.0, 80.0, 90.0, 99.0))]
@@ -505,6 +506,14 @@ def test_a_failure_and_a_popup_in_the_middle_of_a_minigame_mark_the_recording(ma
     macro.state.last_minigame_popup_check = 0.0
     macro.minigame_popup_checks()
     assert len(marks) == 1 and "paycheck" in marks[0]
+
+
+@pytest.fixture(autouse=True)
+def capture_limits(macro, monkeypatch):
+    """How many run captures are kept is tuned (magic_numbers.py); the tests of which are kept use these counts, whatever is set there."""
+    monkeypatch.setattr(macro.cfg, "RUN_CAPTURES_BEST", 2)
+    monkeypatch.setattr(macro.cfg, "RUN_CAPTURES_WORST", 2)
+    monkeypatch.setattr(macro.cfg, "RUN_CAPTURES_FAILED", 3)
 
 
 def runs_dir_with(macro, label, earned_by_name, failed=()):

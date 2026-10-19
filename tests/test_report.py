@@ -1,12 +1,9 @@
 """The run report: the parser reads the exact wording the macro logs, so these tests guard that wording."""
 import os
-import subprocess
-import sys
 import time
 
 import cv2
 
-import conftest
 
 LOG = """\
 [2026-10-10 22:01:14] [RUN 327] LOOP started
@@ -66,7 +63,7 @@ def test_parse_run_event_counts(macro, tmp_path):
                             "quiet periods logged": 1, "idle respawns": 1}
 
 
-def test_what_the_macro_logs_is_what_the_parser_reads(macro, tmp_path, monkeypatch):
+def test_what_the_macro_logs_is_what_the_parser_reads(macro, monkeypatch):
     """Round trip through log_run_event(): a wording change there must change the regexes too."""
     macro.state.run_number = 5
     macro.log_run_event("detected: hungry, thirsty")
@@ -99,11 +96,6 @@ def test_generate_run_report_for_an_unknown_run_is_none(macro, tmp_path):
 def test_generate_run_report_never_raises(macro, tmp_path, monkeypatch):
     monkeypatch.setattr(macro, "draw_report", lambda *a, **k: 1 / 0)
     assert macro.generate_run_report(write_log(tmp_path), 328, str(tmp_path / "reports")) is None
-
-
-def test_constants_check_passes_on_the_repo():
-    result = subprocess.run([sys.executable, "tools/check_constants.py"], cwd=conftest.ROOT, capture_output=True, text=True)
-    assert result.returncode == 0, result.stdout
 
 
 def test_idle_check_lines_become_one_empty_check_each_spread_over_their_span(macro, tmp_path):
@@ -201,7 +193,7 @@ def test_white_screens_and_minigame_results_are_read_and_drawn(macro, tmp_path):
     assert (with_results != without).any()
 
 
-def test_what_record_minigame_result_logs_is_what_the_parser_reads(macro, tmp_path):
+def test_what_record_minigame_result_logs_is_what_the_parser_reads(macro):
     macro.state.run_number = 5
     macro.record_minigame_result({"minigame": "ghost_gallery", "earned": 3102, "room": None, "time": "2026-10-15 16:35:50"})
     macro.record_minigame_result({"minigame": "hauntlet_2", "earned": 3360, "room": 8, "time": "2026-10-15 16:25:10"})

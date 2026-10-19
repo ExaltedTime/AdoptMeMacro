@@ -1055,18 +1055,41 @@ def wait_stoppable(duration: float) -> None:
         STOP_EVENT.wait(min(cfg.STOP_CHECK_INTERVAL, max(0.0, end - time.time())))
     check_stop()
 
+HELD_KEYS: set[str] = set()                    # the keys key_down() has pressed and key_up() has not let go of
+HELD_KEYS_LOCK = threading.Lock()
+
+def key_down(key: str) -> None:
+    """Press `key` and keep it, until key_up(), in HELD_KEYS - so that release_all_inputs() lets go of exactly the keys that are down, whichever they are."""
+    with HELD_KEYS_LOCK:
+        HELD_KEYS.add(key)                         # (before the press: one that failed half-way is let go of too)
+    pydirectinput.keyDown(key)
+
+def key_up(key: str) -> None:
+    """Let go of a key key_down() pressed."""
+    try:
+        pydirectinput.keyUp(key)
+    finally:
+        with HELD_KEYS_LOCK:
+            HELD_KEYS.discard(key)
+
 def release_all_inputs() -> None:
-    """Best-effort safety net: release every key the macro holds and the mouse buttons that are down,
+    """Best-effort safety net: release every key the macro holds (those in HELD_KEYS, and the keys of cfg.HELD_KEYS) and the mouse buttons that are down,
     called when a background task ends. See docs/ARCHITECTURE.md#stopping--focus-safety.
     """
-    for key in (*cfg.MOVE_KEYS, cfg.KEY_HELICOPTER, cfg.KEY_ZOOM_IN, cfg.KEY_ZOOM_OUT):
+    with HELD_KEYS_LOCK:
+        keys = [*dict.fromkeys((*HELD_KEYS, *cfg.HELD_KEYS))]
+        HELD_KEYS.clear()
+    for key in keys:
         try:
             pydirectinput.keyUp(key)
         except Exception:
             pass
     # Only a button that is down: a right button released with none pressed is a click as far as the window under the mouse is
     # concerned, and over its border or title bar that opens the window's menu and takes the focus from the game.
-    held = pressed_inputs()
+    try:
+        held = pressed_inputs()
+    except Exception:                              # (it must not stop the caller from reaching what it does next, such as letting the window be used again)
+        held = set()                               # (not known: a button released with none pressed is a click, so none is)
     for button in ("left", "right"):
         if f"mouse_{button}" not in held:
             continue
@@ -1260,9 +1283,11 @@ def respawn_character() -> None:
     if not focus_roblox_click():
         return
     for key in cfg.RESPAWN_KEYS:
-        pydirectinput.keyDown(key)
-        time.sleep(cfg.RESPAWN_KEY_DURATION)
-        pydirectinput.keyUp(key)
+        key_down(key)
+        try:
+            time.sleep(cfg.RESPAWN_KEY_DURATION)
+        finally:
+            key_up(key)
         time.sleep(cfg.RESPAWN_KEY_DURATION)
     # The keys go in within a fraction of a second; if the Enter came before the
     # "Are you sure you want to respawn your character?" dialog did, it's still
@@ -1278,11 +1303,11 @@ def hold_key(key: str, duration: float) -> None:
     """Hold `key` down for `duration` seconds (interruptibly). Always
     releases the key, even if StopRequested/FocusLost fires mid-hold -
     otherwise it would stay stuck held down in the game."""
-    pydirectinput.keyDown(key)
     try:
+        key_down(key)
         wait_interruptible(duration)
     finally:
-        pydirectinput.keyUp(key)
+        key_up(key)
 
 def walk_to_buttons() -> None:
     """Walk forward from the respawn spot to where the action buttons are."""
@@ -2654,6 +2679,7 @@ class HauntletRun:
         self.tvs: Optional[list[tuple[int, int]]] = None   # of the last look: None if the timer was hidden
         self.empty_looks = 0                          # looks in a row at a room without TVs
         self.doors_missing_reported = False           # the failure for a room with no doors found has been logged
+        self.white = False                            # the last look was a white screen
 
     @property
     def fork(self) -> bool:
@@ -2670,6 +2696,12 @@ class HauntletRun:
             logger.debug(f"Hauntlet 2: room {room}")
         if self.room is None:
             return None
+        if detect_white_screen(img):                  # a heart lost to a ghost, a death: the game whites the screen out and brings the player back to the room's start,
+            if not self.white:                        # so the room is looked at afresh from now - not taken for one with no doors because it was entered long ago
+                logger.debug("Hauntlet 2: the screen went white (a ghost, or a fall): the room starts again")
+            self.white, self.since, self.walked_at, self.tvs, self.empty_looks = True, now, None, None, 0
+            return None
+        self.white = False
         age = now - self.since
         before, self.tvs = self.tvs, (find_door_tvs(img) if hauntlet_timer_visible(img) else None)
         if self.tvs is None or age < cfg.HAUNTLET_ROOM_SETTLE or (self.walked_at is not None and now < self.walked_at + cfg.HAUNTLET_RETRY_WAIT):
@@ -2926,7 +2958,7 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
         hold_key(direction, duration)                                           # one key at a time: the strafe, then the walk (what couldn't be aimed is a strafe worked out in one go)
     arrived = False
     started = time.time()
-    pydirectinput.keyDown(cfg.HAUNTLET_2_FORWARD_KEY)
+    key_down(cfg.HAUNTLET_2_FORWARD_KEY)
     try:
         last_view: Optional[np.ndarray] = None
         still_since: Optional[float] = None
@@ -2964,9 +2996,9 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
                 steer = hauntlet_steer(img, target_index)
                 if steer is not None:
                     logger.debug(f"Hauntlet 2: off the door - a step {steer[0]} for {steer[1]:.2f}s")
-                    pydirectinput.keyUp(cfg.HAUNTLET_2_FORWARD_KEY)                # one key at a time
+                    key_up(cfg.HAUNTLET_2_FORWARD_KEY)                # one key at a time
                     hold_key(*steer)
-                    pydirectinput.keyDown(cfg.HAUNTLET_2_FORWARD_KEY)
+                    key_down(cfg.HAUNTLET_2_FORWARD_KEY)
                     still_since, last_view = None, None
                     continue
             view = hauntlet_view(img)
@@ -2982,7 +3014,7 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
                 continue
             wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
     finally:
-        pydirectinput.keyUp(cfg.HAUNTLET_2_FORWARD_KEY)
+        key_up(cfg.HAUNTLET_2_FORWARD_KEY)
         run.walked_at = time.time()
         run.stuck = 0 if arrived else run.stuck + 1
     if not arrived:
@@ -3342,7 +3374,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     def stop_walking() -> None:
         nonlocal moving
         if moving is not None:
-            pydirectinput.keyUp(moving)
+            key_up(moving)
             moving = None
 
     try:
@@ -3430,7 +3462,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 chasing = chase
                 if chase is not None:
                     moving = chase
-                    pydirectinput.keyDown(chase)
+                    key_down(chase)
                 move_until = now
             if chasing is None and target is None and phase == "ghosts":     # nothing in sight: walking about, a step at a time, without stopping the aiming
                 if moving is not None and now >= move_until:
@@ -3438,7 +3470,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                     next_move = now + cfg.GHOST_MOVE_PERIOD
                 elif moving is None and now >= next_move:
                     moving = random.choice(cfg.MOVE_KEYS)
-                    pydirectinput.keyDown(moving)
+                    key_down(moving)
                     move_until = time.time() + random.uniform(cfg.GHOST_MOVE_STEP_MIN, cfg.GHOST_MOVE_STEP_MAX)      # (`now` is from before a search for furniture, which can take longer than a step)
             elif chasing is None:
                 stop_walking()
@@ -3467,32 +3499,88 @@ def stitches_ring_angle(img: Image) -> Optional[float]:
     angle = math.degrees(math.atan2(dy, dx))
     return angle - 180 if angle > 90 else angle + 180 if angle < -90 else angle
 
-def stitches_camera_turn(img: Image) -> Optional[tuple[str, float]]:
-    """(key, seconds) that turns the camera towards the middle of the ring (STITCHES_TURN_KEYS: left, right), longer the further off the ring's line is
-    from straight across (up to STITCHES_TURN_HOLD_MAX), or None when it is within STITCHES_LINE_DEADBAND or not seen."""
-    angle = stitches_ring_angle(img)
-    if angle is None or abs(angle) <= cfg.STITCHES_LINE_DEADBAND:
-        return None
-    return cfg.STITCHES_TURN_KEYS[angle > 0], cfg.STITCHES_TURN_HOLD_MAX * min(abs(angle), 90.0) / 90.0
+class RingCamera:
+    """What turns the camera towards the middle of Stitches' Spotlight's ring, from the angle of the ring's edge line (stitches_ring_angle()). Walking
+    round the ring needs the camera turned all the time, at a steady rate, so besides the turn the angle asks for (proportional: up to STITCHES_TURN_HOLD_MAX
+    seconds of key for a line 90 degrees off) it learns that rate (`bias`: the share of the time the turn key is held, grown by STITCHES_TURN_BIAS_GAIN
+    per degree per second while the line is off by more than STITCHES_LINE_DEADBAND) and keeps turning at it while the line is out of sight, and after
+    STITCHES_LOST_AFTER seconds without it sweeps the camera round to find it. `keys` are the (left, right) arrow keys; swap_keys() when a test turn
+    shows they work the other way."""
+
+    def __init__(self) -> None:
+        self.keys = cfg.STITCHES_TURN_KEYS
+        self.bias = 0.0
+        self.lost_since: Optional[float] = None
+
+    def swap_keys(self) -> None:
+        self.keys = (self.keys[1], self.keys[0])
+        self.bias = -self.bias
+
+    def decide(self, angle: Optional[float], now: float, interval: float) -> Optional[tuple[str, float]]:
+        """(key, seconds to hold it) for this look, or None. `angle` is None when the line is not in sight."""
+        if angle is None:
+            if self.lost_since is None:
+                self.lost_since = now
+            seconds = cfg.STITCHES_TURN_HOLD_MAX if now - self.lost_since > cfg.STITCHES_LOST_AFTER else self.bias * interval
+        else:
+            self.lost_since = None
+            error = angle if abs(angle) > cfg.STITCHES_LINE_DEADBAND else 0.0
+            self.bias = max(-cfg.STITCHES_TURN_BIAS_MAX, min(cfg.STITCHES_TURN_BIAS_MAX, self.bias + cfg.STITCHES_TURN_BIAS_GAIN * error * interval))
+            seconds = cfg.STITCHES_TURN_HOLD_MAX * max(-90.0, min(90.0, error)) / 90.0 + self.bias * interval
+        seconds = max(-cfg.STITCHES_TURN_HOLD_MAX, min(cfg.STITCHES_TURN_HOLD_MAX, seconds))
+        if abs(seconds) < cfg.STITCHES_TURN_MIN_HOLD:
+            return None
+        return self.keys[seconds > 0], abs(seconds)
+
+def calibrate_ring_camera(camera: RingCamera, watch: MinigameWatch) -> None:
+    """Find out which arrow key turns the camera which way, by turning with the right one for STITCHES_CALIBRATE_HOLD seconds and seeing the ring's line
+    move: turning right must make a line that falls to the right (positive angle) level. If it moved the other way the camera's keys are swapped. Too small a
+    move, or no line in sight before or after, is logged and the keys are left as they are."""
+    before = stitches_ring_angle(minigame_look(watch))
+    if before is None:
+        logger.debug("Stitches' Spotlight: no ring line in sight to test the camera keys against")
+        return
+    hold_key(camera.keys[1], cfg.STITCHES_CALIBRATE_HOLD)
+    minigame_wait(cfg.STITCHES_CALIBRATE_HOLD, watch)
+    after = stitches_ring_angle(minigame_look(watch))
+    if after is None or abs(after - before) < cfg.STITCHES_CALIBRATE_MIN:
+        logger.debug(f"Stitches' Spotlight: the camera keys test showed nothing clear (line {before:.0f} -> {'not seen' if after is None else f'{after:.0f}'} degrees)")
+        mark_run_capture("Stitches' Spotlight: the camera keys test was unclear")
+        return
+    if after > before:
+        camera.swap_keys()
+    logger.debug(f"Stitches' Spotlight: line {before:.0f} -> {after:.0f} degrees, the camera keys are {camera.keys}")
 
 def play_stitches_spotlight(deadline: float, watch: MinigameWatch) -> bool:
-    """Stitches' Spotlight: once its overlay shows (or the start wait is over), walk round the ring by holding D (KEY_STITCHES_WALK) and, every
-    STITCHES_CENTER_INTERVAL, turn the camera until the ring's gold edge line runs straight across the screen, i.e. the camera looks at the middle
-    (stitches_camera_turn()); that keeps the walk on the ring. Nothing is read or avoided: the candy corn on the way is picked up by walking over it.
+    """Stitches' Spotlight: once its overlay shows, wait (at most STITCHES_INTRO_MAX seconds) for the ring's edge line - the game's intro camera looks at
+    the sky first - test which way the arrow keys turn the camera (calibrate_ring_camera()), then walk round the ring by holding KEY_STITCHES_WALK and, every
+    STITCHES_CENTER_INTERVAL, turn the camera (RingCamera) until the line runs straight across the screen, i.e. the camera looks at the middle. KEY_STITCHES_BOOST
+    is pressed every STITCHES_BOOST_INTERVAL. Nothing is read or avoided: the candy corn on the way is picked up by walking over it.
     True if won before `deadline`. See docs/ARCHITECTURE.md#playing-stitches-spotlight."""
     wait_for_minigame_start(watch, "stitches_spotlight")
-    pydirectinput.keyDown(cfg.KEY_STITCHES_WALK)
+    intro_until = time.time() + cfg.STITCHES_INTRO_MAX
+    while time.time() < intro_until and not watch.problem and stitches_ring_angle(minigame_look(watch)) is None:
+        wait_interruptible(cfg.STITCHES_CENTER_INTERVAL)
+    camera = RingCamera()
+    calibrate_ring_camera(camera, watch)
+    next_boost = time.time()
+    key_down(cfg.KEY_STITCHES_WALK)
     try:
         while time.time() < deadline and not watch.problem:
             img = minigame_look(watch)
             if detect_minigame_victory(img):
                 return True
-            turn = stitches_camera_turn(img)
+            angle = stitches_ring_angle(img)
+            turn = camera.decide(angle, time.time(), cfg.STITCHES_CENTER_INTERVAL)
+            logger.debug(f"Stitches' Spotlight: ring line {'not seen' if angle is None else f'{angle:.0f} degrees'}, turn {turn if turn else 'none'}, bias {camera.bias:+.2f}")
             if turn is not None:
                 hold_key(*turn)
+            if time.time() >= next_boost:
+                pydirectinput.press(cfg.KEY_STITCHES_BOOST)
+                next_boost = time.time() + cfg.STITCHES_BOOST_INTERVAL
             wait_interruptible(cfg.STITCHES_CENTER_INTERVAL)
     finally:
-        pydirectinput.keyUp(cfg.KEY_STITCHES_WALK)
+        key_up(cfg.KEY_STITCHES_WALK)
     return False
 
 MINIGAME_PLAYERS = {"hauntlet_2": play_hauntlet_2, "ghost_gallery": play_ghost_gallery, "stitches_spotlight": play_stitches_spotlight}
@@ -4826,8 +4914,7 @@ def run_full_cycle() -> None:
 def run_workflow_loop() -> None:
     """Respawn once, then repeat the workflow until a stop request, which propagates (bare
     finally, not except) so the GUI reports [STOPPED]. See docs/ARCHITECTURE.md#the-workflow-lifecycle.
-    """
-    STOP_EVENT.clear()
+    """                                                                   # (STOP_EVENT is not cleared here: run_async() did that before this thread began, and a stop since then must not be lost)
     state.run_number = next_run_number()
     reset_need_tracking()
     state.idle_checks = 0
@@ -5450,14 +5537,24 @@ class AdoptMeGUI:
     def poll_commands(self) -> None:
         """Do the command waiting in COMMANDS_PATH, if any (Tk's thread): `start` the loop, `stop` it (the cooperative stop, same as [STOP]), `exit`
         (stop, release every key and the mouse, and close the window - what the X button does) `set` a switch (set_switch()), `rejoin`, `setup`, `trade_hub` or `leave_trade_hub` (act_from_outside()), or `refresh_debug`. Looks again
-        COMMAND_POLL_MS later."""
+        COMMAND_POLL_MS later - scheduled before the command is done, and a command that raises is logged and does not stop the polling."""
         data = read_command()
         command = data["command"] if data else None
-        if command is not None:
-            logger.info(f"Command from outside: {command}")
         if command == "exit":
+            logger.info("Command from outside: exit")
             self.close()
             return
+        self.root.after(cfg.COMMAND_POLL_MS, self.poll_commands)
+        if command is None:
+            return
+        logger.info(f"Command from outside: {command}")
+        try:
+            self.do_command(command, data)
+        except Exception:
+            logger.exception(f"The command from outside ({command}) failed")
+
+    def do_command(self, command: str, data: Optional[dict[str, Any]]) -> None:
+        """What poll_commands() does for one command (not `exit`)."""
         if command == "start":
             self.start_loop_from_outside()
         elif command == "stop":
@@ -5471,7 +5568,6 @@ class AdoptMeGUI:
             self.act_from_outside(command)
         elif command == "refresh_debug":
             self.refresh_debug_from_outside()
-        self.root.after(cfg.COMMAND_POLL_MS, self.poll_commands)
 
     def act_from_outside(self, command: str) -> None:
         """Do what the button of the same name does (OUTSIDE_ACTIONS: `rejoin` is Leave & rejoin, `setup` is Setup). A running loop is stopped first and

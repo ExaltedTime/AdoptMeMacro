@@ -29,6 +29,12 @@ from bot import bot_lib  # noqa: E402
 log = logging.getLogger("adoptme-bot")
 
 
+async def say(interaction: discord.Interaction, text: Optional[str] = None, **kwargs) -> None:
+    """Follow up on a command with `text`, cut to fit a message first (bot_lib.clip_message()): a message over Discord's limit is refused, and the command would
+    end with nothing said."""
+    await interaction.followup.send(bot_lib.clip_message(text) if text else text, **kwargs)  # type: ignore[arg-type]
+
+
 def roblox_region(monitor: dict) -> dict:
     """The Roblox window as a region of the primary monitor `monitor` (mss's dict), or the whole monitor if there is no usable window."""
     try:
@@ -97,13 +103,13 @@ def macro_process_running() -> Optional[bool]:
 
 def release_inputs() -> None:
     """Let go of every key the macro holds and of a mouse button that is down - for a macro that was killed (a killed process can leave one pressed in
-    the game). Best effort: main.py's release_all_inputs() is the same list (cfg.MOVE_KEYS and the others), and a button is only released if it is
+    the game). Best effort: main.py's release_all_inputs() lets go of the same keys (cfg.HELD_KEYS, and the ones it knows are down), and a button is only released if it is
     down, since a right button released with none pressed is a click."""
     try:
         import pydirectinput
     except ImportError:
         return
-    for key in (*cfg.MOVE_KEYS, cfg.KEY_HELICOPTER, cfg.KEY_ZOOM_IN, cfg.KEY_ZOOM_OUT):
+    for key in cfg.HELD_KEYS:
         try:
             pydirectinput.keyUp(key)
         except Exception:
@@ -203,6 +209,7 @@ async def start_macro(config: bot_lib.Config) -> str:
     return what + " No sign of its loop yet - see /status and /log."
 
 
+UPDATING = False          # True while /update or /rollback is stopping, moving and starting the macro: the watcher must not take that for a crash
 RESTART_BOT = False        # set by /update or /rollback when the bot's own code changed: main() starts the bot again once it has closed
 
 
@@ -317,7 +324,7 @@ def build(config: bot_lib.Config) -> discord.Client:
         await interaction.response.defer(thinking=True)
         running = await asyncio.to_thread(macro_process_running)
         text = bot_lib.status_text(bot_lib.read_json(bot_lib.status_path()), datetime.now(), config.stale_status_minutes, running)
-        await interaction.followup.send(f"```\n{text}\n```")
+        await say(interaction, f"```\n{text}\n```")
 
     @command("screenshot", "The Roblox window right now")
     async def screenshot(interaction: discord.Interaction) -> None:
@@ -325,10 +332,10 @@ def build(config: bot_lib.Config) -> discord.Client:
         try:
             png, blank = await asyncio.to_thread(grab_roblox_png)
         except Exception as error:
-            await interaction.followup.send(f"Couldn't grab the screen: {error}")
+            await say(interaction, f"Couldn't grab the screen: {error}")
             return
         note = "The screen looks blank - the PC may be locked or asleep." if blank else ""
-        await interaction.followup.send(note, file=discord.File(io.BytesIO(png), "screenshot.png"))
+        await say(interaction, note, file=discord.File(io.BytesIO(png), "screenshot.png"))
 
     rolling = {"on": False}                                        # one rolling view at a time
 
@@ -336,7 +343,7 @@ def build(config: bot_lib.Config) -> discord.Client:
     async def rview(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         if rolling["on"]:
-            await interaction.followup.send("A rolling view is already running.")
+            await say(interaction, "A rolling view is already running.")
             return
         rolling["on"] = True
         try:
@@ -361,7 +368,7 @@ def build(config: bot_lib.Config) -> discord.Client:
         except Exception as error:
             log.exception("rolling view failed")
             with contextlib.suppress(Exception):
-                await interaction.followup.send(f"The rolling view stopped: {error}")
+                await say(interaction, f"The rolling view stopped: {error}")
         finally:
             rolling["on"] = False
 
@@ -371,25 +378,25 @@ def build(config: bot_lib.Config) -> discord.Client:
         await interaction.response.defer(thinking=True)
         text = bot_lib.tail_lines(bot_lib.run_log_path(), max(1, min(lines, config.log_lines_max)))
         if text is None:
-            await interaction.followup.send("There is no run log yet.")
+            await say(interaction, "There is no run log yet.")
         elif bot_lib.fits_a_message(text):
-            await interaction.followup.send(f"```\n{text}\n```")
+            await say(interaction, f"```\n{text}\n```")
         else:
-            await interaction.followup.send(file=discord.File(io.BytesIO(text.encode("utf-8")), "run_log_tail.txt"))
+            await say(interaction, file=discord.File(io.BytesIO(text.encode("utf-8")), "run_log_tail.txt"))
 
     @command("report", "The newest run chart")
     async def report(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         path = bot_lib.newest_report()
         if path is None:
-            await interaction.followup.send("There is no run chart yet - one is written when a run stops.")
+            await say(interaction, "There is no run chart yet - one is written when a run stops.")
         else:
-            await interaction.followup.send(os.path.basename(path), file=discord.File(path))
+            await say(interaction, os.path.basename(path), file=discord.File(path))
 
     @command("results", "Best, worst and average candy corn of each minigame")
     async def results(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
-        await interaction.followup.send(f"```\n{bot_lib.results_text(bot_lib.read_results(bot_lib.results_path()))}\n```")
+        await say(interaction, f"```\n{bot_lib.results_text(bot_lib.read_results(bot_lib.results_path()))}\n```")
 
     def remember(desired: str) -> None:
         state = client.bot_state  # type: ignore[attr-defined]
@@ -400,24 +407,24 @@ def build(config: bot_lib.Config) -> discord.Client:
     async def start(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         remember("running")
-        await interaction.followup.send(await open_macro(config))
+        await say(interaction, await open_macro(config))
 
     @command("loop", "Start the macro's loop (launches the macro if it is not running)")
     async def loop(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         remember("running")
-        await interaction.followup.send(await start_macro(config))
+        await say(interaction, await start_macro(config))
 
     @command("stop", "Stop the macro's loop (its window stays open)")
     async def stop(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
-        await interaction.followup.send(await stop_loop())
+        await say(interaction, await stop_loop())
 
     @command("exit", "Close the macro: its loop is stopped, its keys are released and its window closed")
     async def exit_macro(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         remember("stopped")
-        await interaction.followup.send(await stop_macro(config))
+        await say(interaction, await stop_macro(config))
 
     @command("restart", "Close the macro, then start it with its loop")
     async def restart(interaction: discord.Interaction) -> None:
@@ -425,19 +432,19 @@ def build(config: bot_lib.Config) -> discord.Client:
         remember("stopped")
         stopped = await stop_macro(config)
         remember("running")
-        await interaction.followup.send(f"{stopped}\n{await start_macro(config)}")
+        await say(interaction, f"{stopped}\n{await start_macro(config)}")
 
     async def ask_macro(interaction: discord.Interaction, command_name: str, said: str, idle_only: bool = False) -> None:
         """Leave the running macro `command_name` (its window does it) and say `said`; with `idle_only` not while its loop runs."""
         await interaction.response.defer(thinking=True)
         if not await asyncio.to_thread(current_macro_pids):
-            await interaction.followup.send("The macro isn't running - /start it first (it is done by its window).")
+            await say(interaction, "The macro isn't running - /start it first (it is done by its window).")
             return
         if idle_only and not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path())):
-            await interaction.followup.send("The macro's loop is running - /stop it first.")
+            await say(interaction, "The macro's loop is running - /stop it first.")
             return
         bot_lib.write_command(cfg.COMMANDS_PATH, command_name, time.time())
-        await interaction.followup.send(said)
+        await say(interaction, said)
 
     @command("rejoin", "Have the macro leave the game and rejoin it (stops its loop first)")
     async def rejoin(interaction: discord.Interaction) -> None:
@@ -463,18 +470,18 @@ def build(config: bot_lib.Config) -> discord.Client:
         """Ask the running macro to change a switch (the command file) and say what the game config shows a moment later."""
         await interaction.response.defer(thinking=True)
         if not await asyncio.to_thread(current_macro_pids):
-            await interaction.followup.send("The macro isn't running - a switch can only be changed while its window is open (or by hand in the window).")
+            await say(interaction, "The macro isn't running - a switch can only be changed while its window is open (or by hand in the window).")
             return
         bot_lib.write_command(cfg.COMMANDS_PATH, "set", time.time(), **bot_lib.switch_command(kind, name, value))
         if name == cfg.SHOW_DEBUG_LINES_OPTION:
-            await interaction.followup.send(f"Asked the macro to turn {name} {'on' if value else 'off'} (it is not kept in the config, so it can't be checked).")
+            await say(interaction, f"Asked the macro to turn {name} {'on' if value else 'off'} (it is not kept in the config, so it can't be checked).")
             return
         for _ in range(5):
             await asyncio.sleep(1)
             if bot_lib.switch_states(bot_lib.read_json(cfg.GAME_CONFIG_PATH)).get(f"{kind}:{name}") == value:
-                await interaction.followup.send(f"{name} is now {'on' if value else 'off'}.")
+                await say(interaction, f"{name} is now {'on' if value else 'off'}.")
                 return
-        await interaction.followup.send(f"Asked the macro to turn {name} {'on' if value else 'off'}, but the config doesn't show it yet.")
+        await say(interaction, f"Asked the macro to turn {name} {'on' if value else 'off'}, but the config doesn't show it yet.")
 
     need_choices = [app_commands.Choice(name=name, value=name) for name in cfg.NEED_NAMES]
     option_choices = [app_commands.Choice(name=name, value=name) for name in (*cfg.OPTION_SWITCHES, cfg.SHOW_DEBUG_LINES_OPTION)]
@@ -483,32 +490,40 @@ def build(config: bot_lib.Config) -> discord.Client:
 
     async def change_code(interaction: discord.Interaction, rollback: bool) -> None:
         """/update and /rollback: make the plan from what git says (nothing is changed unless it says go), then apply_commit() - one at a time."""
+        global UPDATING
         await interaction.response.defer(thinking=True)
         if update_lock.locked():
-            await interaction.followup.send("An update or rollback is already going on.")
+            await say(interaction, "An update or rollback is already going on.")
             return
         async with update_lock:
-            state = client.bot_state  # type: ignore[attr-defined]
+            UPDATING = True
             try:
-                plan, move, head = await asyncio.to_thread(bot_lib.make_plan, git_runner(config), config.update_remote, config.update_branch, state.previous_commit, rollback)
-            except RuntimeError as error:
-                await interaction.followup.send(f"Nothing was changed. {error}")
-                return
-            await interaction.followup.send(f"```\n{plan.text}\n```")
-            if plan.kind not in ("update", "rollback"):
-                return
-            if not rollback:
-                state.previous_commit = head
-            else:
-                state.previous_commit = None
-            bot_lib.save_state(bot_lib.state_path(), state)
-            try:
-                await apply_commit(config, move, head, lambda text: interaction.followup.send(text))
-            except RuntimeError as error:
-                await interaction.followup.send(f"**Stopped:** {error}\nThe macro may be stopped - see /status.")
-                return
+                await plan_and_apply(interaction, rollback)
+            except Exception:                                      # (a message that could not be sent, git gone wrong: said in the log, and the lock is let go)
+                log.exception("/update or /rollback failed")
+                with contextlib.suppress(Exception):
+                    await say(interaction, "**The update failed** - see the bot's log. The macro may be stopped (/status).")
+            finally:
+                UPDATING = False
         if RESTART_BOT:
             await client.close()
+
+    async def plan_and_apply(interaction: discord.Interaction, rollback: bool) -> None:
+        state = client.bot_state  # type: ignore[attr-defined]
+        try:
+            plan, move, head = await asyncio.to_thread(bot_lib.make_plan, git_runner(config), config.update_remote, config.update_branch, state.previous_commit, rollback)
+        except RuntimeError as error:
+            await say(interaction, f"Nothing was changed. {error}")
+            return
+        await say(interaction, f"```\n{plan.text}\n```")
+        if plan.kind not in ("update", "rollback"):
+            return
+        state.previous_commit = None if rollback else head
+        bot_lib.save_state(bot_lib.state_path(), state)
+        try:
+            await apply_commit(config, move, head, lambda text: say(interaction, text))
+        except RuntimeError as error:
+            await say(interaction, f"**Stopped:** {error}\nThe macro may be stopped - see /status.")
 
     @command("update", "Pull the latest main, restart the macro (and the bot if its code changed)")
     async def update(interaction: discord.Interaction) -> None:
@@ -532,7 +547,7 @@ def build(config: bot_lib.Config) -> discord.Client:
     async def options(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         text = bot_lib.options_text(bot_lib.switch_states(bot_lib.read_json(cfg.GAME_CONFIG_PATH)))
-        await interaction.followup.send(f"```\n{text}\n```")
+        await say(interaction, f"```\n{text}\n```")
 
     pull_folders = [app_commands.Choice(name=name, value=name) for name in cfg.PULL_SOURCES]
 
@@ -542,7 +557,7 @@ def build(config: bot_lib.Config) -> discord.Client:
     async def pull(interaction: discord.Interaction, folder: app_commands.Choice[str], item: Optional[str] = None) -> None:
         await interaction.response.defer(thinking=True)
         if not config.onedrive_dir or not os.path.isdir(config.onedrive_dir):
-            await interaction.followup.send("onedrive_dir is not set, or is not a folder on this PC - there is nowhere to copy to.")
+            await say(interaction, "onedrive_dir is not set, or is not a folder on this PC - there is nowhere to copy to.")
             return
         try:
             path, name = bot_lib.resolve_pull(folder.value, item)
@@ -550,16 +565,16 @@ def build(config: bot_lib.Config) -> discord.Client:
             size = await asyncio.to_thread(bot_lib.files_size_mb, files)
             if cfg.BOT_PULL_CONFIRM_MB < size <= cfg.BOT_MAX_PULL_MB:
                 view = ConfirmView(config, cfg.BOT_PULL_CONFIRM_TIMEOUT)
-                await interaction.followup.send(f"`{name}` is {bot_lib.size_text(size)} ({len(files)} file{'s' if len(files) != 1 else ''}). Copy it to OneDrive?", view=view)
+                await say(interaction, f"`{name}` is {bot_lib.size_text(size)} ({len(files)} file{'s' if len(files) != 1 else ''}). Copy it to OneDrive?", view=view)
                 await view.wait()
                 if not view.answer:
-                    await interaction.followup.send("Nothing copied: " + ("cancelled." if view.answer is False else "no answer in time."))
+                    await say(interaction, "Nothing copied: " + ("cancelled." if view.answer is False else "no answer in time."))
                     return
             megabytes = await asyncio.to_thread(bot_lib.copy_pull, files, config.onedrive_dir, folder.value, cfg.BOT_MAX_PULL_MB)
         except (ValueError, OSError) as error:
-            await interaction.followup.send(f"Nothing copied: {error}")
+            await say(interaction, f"Nothing copied: {error}")
             return
-        await interaction.followup.send(f"Copied `{name}` ({len(files)} file{'s' if len(files) != 1 else ''}, {bot_lib.size_text(megabytes)}) to OneDrive, in `{folder.value}/`. The OneDrive app on the PC uploads it from there.")
+        await say(interaction, f"Copied `{name}` ({len(files)} file{'s' if len(files) != 1 else ''}, {bot_lib.size_text(megabytes)}) to OneDrive, in `{folder.value}/`. The OneDrive app on the PC uploads it from there.")
 
     @pull.autocomplete("item")
     async def pull_items(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
@@ -570,7 +585,7 @@ def build(config: bot_lib.Config) -> discord.Client:
     @command("captures", "The newest minigame captures on the PC (/pull minigame_captures copies one to OneDrive)")
     async def captures(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
-        await interaction.followup.send(f"```\n{bot_lib.captures_text(bot_lib.captures_dir())}\n```")
+        await say(interaction, f"```\n{bot_lib.captures_text(bot_lib.captures_dir())}\n```")
 
     async def setup_hook() -> None:
         client.loop.create_task(watch(client, config))
@@ -589,9 +604,9 @@ def build(config: bot_lib.Config) -> discord.Client:
 async def post(channel: discord.abc.Messageable, text: str, path: Optional[str] = None) -> None:
     """Send `text` to the channel, with the file at `path` if there is one and it is small enough for Discord."""
     if path and os.path.getsize(path) <= cfg.BOT_MAX_UPLOAD_MB * 1048576:
-        await channel.send(text, file=discord.File(path))
+        await channel.send(bot_lib.clip_message(text), file=discord.File(path))
     else:
-        await channel.send(text)
+        await channel.send(bot_lib.clip_message(text))
 
 
 async def watch(client: discord.Client, config: bot_lib.Config) -> None:
@@ -627,12 +642,12 @@ async def watch_once(channel: discord.abc.Messageable, config: bot_lib.Config, s
     status = bot_lib.read_json(bot_lib.status_path())
     state.stale, text = bot_lib.stale_alert(state.stale, status, datetime.now(), config.stale_status_minutes)
     if text:
-        await channel.send(text)
+        await channel.send(bot_lib.clip_message(text))
     for chart in bot_lib.run_charts():
         if os.path.basename(chart) not in state.charts and now - os.path.getmtime(chart) >= cfg.BOT_FILE_SETTLE:
             state.charts.append(os.path.basename(chart))
             await post(channel, f"Run chart {os.path.basename(chart)}", chart)
-    if state.desired_state == "running":
+    if bot_lib.crash_check_due(state.desired_state, UPDATING):
         running = await asyncio.to_thread(macro_process_running)
         state.crash_reported, event = bot_lib.crash_check(state.desired_state, running, state.crash_reported)
         if event == "alert":
@@ -648,7 +663,7 @@ async def watch_once(channel: discord.abc.Messageable, config: bot_lib.Config, s
             await channel.send("The macro's process is running again.")
     if bot_lib.heartbeat_due(state.last_heartbeat, config.heartbeat_hours, now):
         running = await asyncio.to_thread(macro_process_running)
-        await channel.send("Heartbeat\n```\n" + bot_lib.status_text(status, datetime.now(), config.stale_status_minutes, running) + "\n```")
+        await channel.send(bot_lib.clip_message("Heartbeat\n```\n" + bot_lib.status_text(status, datetime.now(), config.stale_status_minutes, running) + "\n```"))
         state.last_heartbeat = now
 
 

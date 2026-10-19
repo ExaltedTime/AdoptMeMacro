@@ -252,6 +252,32 @@ def test_the_loop_is_idle_only_when_the_status_says_so():
     assert bot_lib.loop_idle({"stopped": "2026-10-17 12:00:00"}) and not bot_lib.loop_idle({"stopped": None}) and not bot_lib.loop_idle(None)
 
 
+def test_a_message_is_cut_to_fit_discord_whole_lines_first_and_a_code_block_stays_closed():
+    limit = bot_lib.DISCORD_MESSAGE_LIMIT
+    short = "a short message"
+    assert bot_lib.clip_message(short) == short and bot_lib.clip_message(f"```\n{short}\n```") == f"```\n{short}\n```"
+    long_block = "```\n" + "\n".join(f"line {i} " + "x" * 90 for i in range(60)) + "\n```"
+    clipped = bot_lib.clip_message(long_block)
+    assert len(clipped) <= limit and clipped.startswith("```\nline 0 ") and clipped.endswith("more lines)\n```")
+    assert all(line.startswith("line ") or line.startswith("```") or line.startswith("...") for line in clipped.split("\n"))     # (no line cut in two)
+    one_line = bot_lib.clip_message("y" * 5000)
+    assert len(one_line) <= limit and "more lines" in one_line
+    assert len(bot_lib.clip_message("z" * 3000, limit=500)) <= 500
+
+
+def test_the_update_plan_of_many_long_commit_subjects_fits_a_message():
+    subjects = [f"abc{i:04d} " + "A long commit subject that says a lot about what changed in the macro " * 2 for i in range(40)]
+    plan = bot_lib.update_plan("aaa1111", "bbb2222", [], True, False, subjects, "main")
+    assert len(bot_lib.clip_message(f"```\n{plan.text}\n```")) <= bot_lib.DISCORD_MESSAGE_LIMIT
+    assert max(len(line) for line in plan.text.split("\n")) <= 200 and "more" in plan.text
+
+
+def test_the_process_is_not_looked_for_while_an_update_has_it_stopped():
+    assert bot_lib.crash_check_due("running", updating=False)
+    assert not bot_lib.crash_check_due("running", updating=True)                 # (/update stops the macro, moves the code and starts it again)
+    assert not bot_lib.crash_check_due("stopped", updating=False) and not bot_lib.crash_check_due(None, updating=False)
+
+
 def test_a_macro_stopped_on_purpose_is_not_reported_as_not_updating():
     old = {"updated": (NOW - timedelta(minutes=30)).strftime(bot_lib.TIME_FORMAT), "stopped": "2026-10-17 12:00:00"}
     assert bot_lib.stale_alert(False, old, NOW, 5) == (False, None)

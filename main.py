@@ -2218,12 +2218,20 @@ def detect_paycheck() -> bool:
     hover_click(*cfg.PAYCHECK_DISMISS_POS_2)
     return True
 
+def color_pixels(img: Image, box: Box, color: Color, tolerance: int) -> int:
+    """How many pixels of `box` (left, top, right, bottom) of `img` are `color` within `tolerance`."""
+    left, top, right, bottom = box
+    return int(np.count_nonzero(exact_color_mask(img[top:bottom, left:right], color, tolerance)))
+
+def color_fraction(img: Image, box: Box, color: Color, tolerance: int) -> float:
+    """The share (0-1) of `box` of `img` that is `color` within `tolerance`."""
+    left, top, right, bottom = box
+    return color_pixels(img, box, color, tolerance) / ((right - left) * (bottom - top))
+
 def detect_backpack_expanded(img: Image) -> bool:
     """True if the EXPANDED backpack is open in `img`: most of
     BACKPACK_HEADER_BOX is the purple of its header bar."""
-    left, top, right, bottom = cfg.BACKPACK_HEADER_BOX
-    mask = exact_color_mask(img[top:bottom, left:right], cfg.BACKPACK_HEADER_COLOR, cfg.BACKPACK_HEADER_TOLERANCE)
-    return bool(np.count_nonzero(mask) / mask.size >= cfg.BACKPACK_HEADER_MIN_FRACTION)
+    return color_fraction(img, cfg.BACKPACK_HEADER_BOX, cfg.BACKPACK_HEADER_COLOR, cfg.BACKPACK_HEADER_TOLERANCE) >= cfg.BACKPACK_HEADER_MIN_FRACTION
 
 def detect_backpack_normal(img: Image) -> bool:
     """True if the normal backpack is open: its purple frame plus the white item grid, or its
@@ -2231,9 +2239,7 @@ def detect_backpack_normal(img: Image) -> bool:
     """
     if popup_visible(img, "backpack_normal"):
         return True
-    left, top, right, bottom = cfg.BACKPACK_NORMAL_PANEL_BOX
-    frame = exact_color_mask(img[top:bottom, left:right], cfg.BACKPACK_NORMAL_COLOR, cfg.BACKPACK_NORMAL_TOLERANCE)
-    if np.count_nonzero(frame) < cfg.BACKPACK_NORMAL_MIN_PIXELS:
+    if color_pixels(img, cfg.BACKPACK_NORMAL_PANEL_BOX, cfg.BACKPACK_NORMAL_COLOR, cfg.BACKPACK_NORMAL_TOLERANCE) < cfg.BACKPACK_NORMAL_MIN_PIXELS:
         return False
     left, top, right, bottom = cfg.BACKPACK_NORMAL_WHITE_BOX
     grid = img[top:bottom, left:right]
@@ -2311,9 +2317,7 @@ def detect_disconnect(img: Image) -> bool:
     """True if the Roblox "Disconnected" dialog is on screen in `img`: most
     of DISCONNECT_PANEL_BOX is the dialog's grey (the game behind it is
     blurred, so nothing else on screen fills a box like that)."""
-    left, top, right, bottom = cfg.DISCONNECT_PANEL_BOX
-    mask = exact_color_mask(img[top:bottom, left:right], cfg.DISCONNECT_PANEL_COLOR, cfg.DISCONNECT_PANEL_TOLERANCE)
-    return bool(np.count_nonzero(mask) / mask.size >= cfg.DISCONNECT_PANEL_MIN_FRACTION)
+    return color_fraction(img, cfg.DISCONNECT_PANEL_BOX, cfg.DISCONNECT_PANEL_COLOR, cfg.DISCONNECT_PANEL_TOLERANCE) >= cfg.DISCONNECT_PANEL_MIN_FRACTION
 
 def detect_white_screen(img: Image) -> bool:
     """True if most of `img` is completely white - the transition shown on a respawn, teleport or change of
@@ -2522,9 +2526,7 @@ def dismiss_stray_windows() -> Optional[str]:
         logger.debug(f"Stray window open: {name}, closing it...")
         log_run_event(f"stray window closed: {name}")
         if name == "trading_hub":
-            left, top, right, bottom = cfg.STRAY_OKAY_BOX
-            okay = exact_color_mask(img[top:bottom, left:right], cfg.GREEN_BUTTON_COLOR, cfg.GREEN_BUTTON_TOLERANCE)
-            if np.count_nonzero(okay) >= cfg.STRAY_OKAY_MIN_PIXELS:
+            if color_pixels(img, cfg.STRAY_OKAY_BOX, cfg.GREEN_BUTTON_COLOR, cfg.GREEN_BUTTON_TOLERANCE) >= cfg.STRAY_OKAY_MIN_PIXELS:
                 hover_click(*cfg.STRAY_OKAY_POS)
         hover_click(*config["close_pos"])
         time.sleep(cfg.STRAY_CLOSE_SETTLE)
@@ -2540,8 +2542,7 @@ def detect_minigame_victory(img: Image) -> bool:
              cfg.MINIGAME_VICTORY_BANNER_BOX, cfg.MINIGAME_VICTORY_BANNER_MIN_PIXELS),
             (cfg.GREEN_BUTTON_COLOR, cfg.GREEN_BUTTON_TOLERANCE,
              cfg.MINIGAME_VICTORY_BUTTON_BOX, cfg.MINIGAME_VICTORY_BUTTON_MIN_PIXELS)):
-        left, top, right, bottom = box
-        if np.count_nonzero(exact_color_mask(img[top:bottom, left:right], color, tolerance)) < minimum:
+        if color_pixels(img, box, color, tolerance) < minimum:
             return False
     return True
 
@@ -2565,7 +2566,6 @@ class MinigameWatch:
 
     def __init__(self, name: str) -> None:
         self.name = name
-        self.began = time.time()
         self.last_seen: Optional[float] = None
         self.start_grace_from: Optional[float] = None   # set once the start wait is over
         self.disconnected = False                       # the "Disconnected" dialog has been seen
@@ -2629,6 +2629,15 @@ def minigame_wait(duration: float, watch: MinigameWatch) -> None:
         if watch.problem:
             return
 
+def wait_for_minigame_start(watch: MinigameWatch, name: str) -> None:
+    """Wait, looking every MINIGAME_START_LOOK_INTERVAL, until the minigame's overlay shows (the game has begun: the lobby's countdown to a round that starts
+    at a fixed time), for at most MINIGAME_START_WAIT, or until `watch` (the minigame `name`'s) has a problem (a disconnect); then tell `watch` the start wait is over."""
+    logger.debug(f"{cfg.MINIGAME_LABELS[name]}: waiting for it to start (at most {cfg.MINIGAME_START_WAIT:g}s)...")
+    waited_until = time.time() + cfg.MINIGAME_START_WAIT
+    while time.time() < waited_until and watch.last_seen is None and not watch.problem:
+        minigame_wait(cfg.MINIGAME_START_LOOK_INTERVAL, watch)
+    watch.start_wait_over()
+
 class HauntletRun:
     """What play_hauntlet_2() knows about the room it is in: its number, when that changed, and the TVs of the last
     look. look() says when the doors can be chosen from. See docs/ARCHITECTURE.md#playing-hauntlet-2."""
@@ -2678,10 +2687,10 @@ class HauntletRun:
             return [HauntletDoor(0, 0, None)]                                  # one doorway, straight ahead
         return None
 
-def choose_hauntlet_door(doors: list[HauntletDoor], hearts: Optional[HauntletHearts], items: list[HauntletItem], avoid: Collection[int] = ()) -> int:
+def choose_hauntlet_door(doors: list[HauntletDoor], items: list[HauntletItem], avoid: Collection[int] = ()) -> int:
     """The index in `doors` (left to right) of the door to go through: a random one, but none of `avoid` (the one the phone's
     arrow is over, where a ghost is, and the one that just got the player stuck) and a locked one only when the grey key is
-    held - unless that leaves nothing, then whatever is left. (`hearts` is here for the decision logic to come.)"""
+    held - unless that leaves nothing, then whatever is left."""
     has_key = any(item.name == cfg.HAUNTLET_ITEM_KEY for item in items)
     allowed = [i for i in range(len(doors)) if i not in avoid]
     options = [i for i in allowed if doors[i].kind != "locked" or has_key]
@@ -2830,7 +2839,7 @@ def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun, wat
                 img = minigame_look(watch)
             items = read_hauntlet_items(img)
     avoid = {door for door in (ghost, run.last_index if run.stuck else None) if door is not None}      # the ghost's, and the one that got us stuck
-    index = choose_hauntlet_door(doors, hearts, items, avoid=avoid)
+    index = choose_hauntlet_door(doors, items, avoid=avoid)
     run.last_index = index
     for name in hauntlet_items_for(doors[index], hearts, items):
         shown = hauntlet_use_item(name, watch)
@@ -2985,11 +2994,7 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
     hauntlet_choose(), hauntlet_walk()) until the victory screen shows or the overlay says it's over. True if won
     before `deadline`. See docs/ARCHITECTURE.md#playing-hauntlet-2.
     """
-    logger.debug(f"Hauntlet 2: waiting for it to start (at most {cfg.MINIGAME_START_WAIT:g}s)...")
-    waited_until = time.time() + cfg.MINIGAME_START_WAIT
-    while time.time() < waited_until and watch.last_seen is None:       # its overlay (the room panel) shows when the game has begun - the lobby's countdown varies
-        minigame_wait(cfg.HAUNTLET_START_LOOK_INTERVAL, watch)
-    watch.start_wait_over()
+    wait_for_minigame_start(watch, "hauntlet_2")
     zoom_out()
     if cfg.HAUNTLET_START_FORWARD > 0:
         wait_interruptible(cfg.HAUNTLET_START_DELAY)                   # the doors of the entrance hall open after a moment...
@@ -3298,11 +3303,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     taken to hide, and the furniture around it is tried; no score for GHOST_STALL seconds moves the player and turns the camera.
     True if won before `deadline`. See docs/ARCHITECTURE.md#playing-ghost-gallery.
     """
-    logger.debug(f"Ghost Gallery: waiting for it to start (at most {cfg.MINIGAME_START_WAIT:g}s)...")
-    waited_until = time.time() + cfg.MINIGAME_START_WAIT
-    while time.time() < waited_until and watch.last_seen is None:       # its overlay (TIME LEFT, the score) shows when the game has begun
-        minigame_wait(cfg.GHOST_START_LOOK_INTERVAL, watch)
-    watch.start_wait_over()
+    wait_for_minigame_start(watch, "ghost_gallery")
     minigame_wait(cfg.GHOST_INTRO_WAIT, watch)
     zoom_out()
     tilt_camera_down()
@@ -3479,11 +3480,7 @@ def play_stitches_spotlight(deadline: float, watch: MinigameWatch) -> bool:
     STITCHES_CENTER_INTERVAL, turn the camera until the ring's gold edge line runs straight across the screen, i.e. the camera looks at the middle
     (stitches_camera_turn()); that keeps the walk on the ring. Nothing is read or avoided: the candy corn on the way is picked up by walking over it.
     True if won before `deadline`. See docs/ARCHITECTURE.md#playing-stitches-spotlight."""
-    logger.debug(f"Stitches' Spotlight: waiting for it to start (at most {cfg.MINIGAME_START_WAIT:g}s)...")
-    waited_until = time.time() + cfg.MINIGAME_START_WAIT
-    while time.time() < waited_until and watch.last_seen is None:
-        minigame_wait(cfg.GHOST_START_LOOK_INTERVAL, watch)
-    watch.start_wait_over()
+    wait_for_minigame_start(watch, "stitches_spotlight")
     pydirectinput.keyDown(cfg.KEY_STITCHES_WALK)
     try:
         while time.time() < deadline and not watch.problem:

@@ -177,7 +177,7 @@ async def open_macro(config: bot_lib.Config) -> str:
     return "Started the macro, but its process is not there - see /log and macro_stderr.log."
 
 
-async def stop_loop(config: bot_lib.Config) -> str:
+async def stop_loop() -> str:
     """Ask the running macro to stop its loop (the [STOP] button); its window stays open."""
     if not await asyncio.to_thread(current_macro_pids):
         return "The macro is not running."
@@ -411,7 +411,7 @@ def build(config: bot_lib.Config) -> discord.Client:
     @command("stop", "Stop the macro's loop (its window stays open)")
     async def stop(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
-        await interaction.followup.send(await stop_loop(config))
+        await interaction.followup.send(await stop_loop())
 
     @command("exit", "Close the macro: its loop is stopped, its keys are released and its window closed")
     async def exit_macro(interaction: discord.Interaction) -> None:
@@ -427,31 +427,25 @@ def build(config: bot_lib.Config) -> discord.Client:
         remember("running")
         await interaction.followup.send(f"{stopped}\n{await start_macro(config)}")
 
-    @command("rejoin", "Have the macro leave the game and rejoin it (stops its loop first)")
-    async def rejoin(interaction: discord.Interaction) -> None:
-        await interaction.response.defer(thinking=True)
-        if not await asyncio.to_thread(current_macro_pids):
-            await interaction.followup.send("The macro isn't running - /start it first (a rejoin is done by its window).")
-            return
-        bot_lib.write_command(cfg.COMMANDS_PATH, "rejoin", time.time())
-        await interaction.followup.send("Asked the macro to leave and rejoin. Its loop is stopped; /loop it again once it is back in the game.")
-
-    @command("setup", "Have the macro run Setup (stops its loop first)")
-    async def setup(interaction: discord.Interaction) -> None:
-        await interaction.response.defer(thinking=True)
-        if not await asyncio.to_thread(current_macro_pids):
-            await interaction.followup.send("The macro isn't running - /start it first (Setup is done by its window).")
-            return
-        bot_lib.write_command(cfg.COMMANDS_PATH, "setup", time.time())
-        await interaction.followup.send("Asked the macro to run Setup. Its loop is stopped; /loop it again once Setup is done.")
-
-    async def ask_macro(interaction: discord.Interaction, command_name: str, said: str) -> None:
+    async def ask_macro(interaction: discord.Interaction, command_name: str, said: str, idle_only: bool = False) -> None:
+        """Leave the running macro `command_name` (its window does it) and say `said`; with `idle_only` not while its loop runs."""
         await interaction.response.defer(thinking=True)
         if not await asyncio.to_thread(current_macro_pids):
             await interaction.followup.send("The macro isn't running - /start it first (it is done by its window).")
             return
+        if idle_only and not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path())):
+            await interaction.followup.send("The macro's loop is running - /stop it first.")
+            return
         bot_lib.write_command(cfg.COMMANDS_PATH, command_name, time.time())
         await interaction.followup.send(said)
+
+    @command("rejoin", "Have the macro leave the game and rejoin it (stops its loop first)")
+    async def rejoin(interaction: discord.Interaction) -> None:
+        await ask_macro(interaction, "rejoin", "Asked the macro to leave and rejoin. Its loop is stopped; /loop it again once it is back in the game.")
+
+    @command("setup", "Have the macro run Setup (stops its loop first)")
+    async def setup(interaction: discord.Interaction) -> None:
+        await ask_macro(interaction, "setup", "Asked the macro to run Setup. Its loop is stopped; /loop it again once Setup is done.")
 
     @command("trade_hub", "Have the macro travel to the Trading Hub (stops its loop first)")
     async def trade_hub(interaction: discord.Interaction) -> None:
@@ -463,15 +457,7 @@ def build(config: bot_lib.Config) -> discord.Client:
 
     @command("refresh_debug", "Empty the macro's debug folder (the game config stays); not while its loop runs")
     async def refresh_debug(interaction: discord.Interaction) -> None:
-        await interaction.response.defer(thinking=True)
-        if not await asyncio.to_thread(current_macro_pids):
-            await interaction.followup.send("The macro isn't running - /start it first (the debug folder is emptied by its window).")
-            return
-        if not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path())):
-            await interaction.followup.send("The macro's loop is running - /stop it first.")
-            return
-        bot_lib.write_command(cfg.COMMANDS_PATH, "refresh_debug", time.time())
-        await interaction.followup.send("Asked the macro to empty its debug folder (everything but the game config).")
+        await ask_macro(interaction, "refresh_debug", "Asked the macro to empty its debug folder (everything but the game config).", idle_only=True)
 
     async def change_switch(interaction: discord.Interaction, kind: str, name: str, value: bool) -> None:
         """Ask the running macro to change a switch (the command file) and say what the game config shows a moment later."""

@@ -97,6 +97,7 @@ MINIGAME_MAX_DURATION = 600.0       # gives up (and logs a failure) if the victo
 MINIGAME_ZOOM_OUT_DURATION = 3.0    # Hauntlet 2 and Ghost Gallery hold KEY_ZOOM_OUT this long when they begin (Hauntlet 2 again where it can't find the doors, if HAUNTLET_SEARCH_TURNS allows)
 MINIGAME_FINISH_WAIT = 5.0          # after clicking NICE!, before carrying on
 MINIGAME_VICTORY_CLICK_TRIES = 3      # NICE! clicks before giving up on the win screen closing
+MINIGAME_START_LOOK_INTERVAL = 0.5     # how often each minigame looks for its overlay while waiting for the game to begin
 MINIGAME_START_WAIT = 90.0          # each minigame waits for its overlay (the game has begun: the lobby's countdown to a round that starts at a fixed time) and act
                                     # when it shows - this is the most they wait for it, a limit that must outlast the longest queue (the overlay came 50.5 s after the Yes in one run;
                                     # the Yes comes 12-52 s before the round, and a need's end wait holds it back by up to MINIGAME_POPUP_END_WAIT)
@@ -330,7 +331,6 @@ STITCHES_LINE_MIN_PIXELS = 3500              # less of it than this is not a lin
 STITCHES_LINE_DEADBAND = 12.0                # degrees from straight across that need no turn
 STITCHES_TURN_KEYS = ("left", "right")       # (the camera is turned towards a line that falls to the right by the second)
 STITCHES_TURN_HOLD_MAX = 0.2                 # seconds a turn key is held for a line 90 degrees off, less for less
-GHOST_START_LOOK_INTERVAL = 0.5              # while waiting for the game to begin
 GHOST_INTRO_WAIT = 6.0                       # after its overlay shows, the game's own intro camera (a look at the ceiling) runs this long; the zoom and tilt come after, or are undone
 # The boss can't be hurt while its bar shows two or three ghost icons instead of its health: the bar's cyan fill (BGR (255, 222, 0),
 # 500-20000 px in GHOST_BOSS_BAR_BOX) is gone then (0 px), the boss is dim - too dim for GHOST_COLOR, so only the small ghosts that fly in
@@ -509,7 +509,6 @@ HAUNTLET_STEER_MAX = 0.8
 HAUNTLET_STEER_GAIN = 0.75
 HAUNTLET_AIM_STEPS = 8
 HAUNTLET_WALK_PAST_DURATION = 1.5            # more of W after the number changed (a human's: 1.0-2.0 s, median 1.4)
-HAUNTLET_START_LOOK_INTERVAL = 0.5            # while waiting for the game to begin (its overlay to show)
 HAUNTLET_START_DELAY = 1.5                    # after the view is set up, before the first step: the entrance hall's doors open on their own (a macro-played run that had not moved by the 45 s the room's timer gave it was thrown out)
 HAUNTLET_START_FORWARD = 1.4                  # the first step, forward (a human's: 1.3-1.5 s)
 HAUNTLET_LOOK_INTERVAL = 0.25

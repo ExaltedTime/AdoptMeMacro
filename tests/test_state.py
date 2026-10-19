@@ -1570,3 +1570,20 @@ def test_a_minigame_that_has_no_player_yet_is_declined_even_when_switched_on(mac
     monkeypatch.setattr(macro, "log_run_event", lambda message: None)
     assert macro.identify_minigame(macro.grab_screen()) == "stitches_spotlight" and "stitches_spotlight" not in macro.MINIGAME_PLAYERS
     assert macro.minigame_popup() == "dismissed" and played == [] and clicks[-1] == macro.cfg.MINIGAME_POPUP_NO_POS
+
+
+def test_the_start_wait_ends_when_the_overlay_shows_or_the_game_is_lost_not_only_when_it_runs_out(macro, monkeypatch):
+    looks = []
+    monkeypatch.setattr(macro, "minigame_wait", lambda duration, watch: looks.append(duration))
+    watch = macro.MinigameWatch("ghost_gallery")
+    watch.last_seen = time.time()                                                  # the overlay is up: no waiting at all
+    macro.wait_for_minigame_start(watch, "ghost_gallery")
+    assert looks == [] and watch.start_grace_from is not None
+    watch = macro.MinigameWatch("ghost_gallery")
+    watch.disconnected = True                                                      # a disconnect in the lobby: the rejoin should not wait for the whole start wait
+    macro.wait_for_minigame_start(watch, "ghost_gallery")
+    assert looks == []
+    watch = macro.MinigameWatch("ghost_gallery")                                   # nothing yet: it looks, at the interval, until the overlay shows
+    monkeypatch.setattr(macro, "minigame_wait", lambda duration, w: (looks.append(duration), setattr(w, "last_seen", time.time())))
+    macro.wait_for_minigame_start(watch, "ghost_gallery")
+    assert looks == [macro.cfg.MINIGAME_START_LOOK_INTERVAL]

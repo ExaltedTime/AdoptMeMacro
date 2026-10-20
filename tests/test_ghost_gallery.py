@@ -169,7 +169,7 @@ def test_it_jumps_every_so_often(macro, world):
     world.screens = [shot("ghosts_50")]
     start = world.clock.now
     macro.play_ghost_gallery(start + cfg.GHOST_JUMP_MAX * 4.5, watch_started(macro))
-    jumps = [at for kind, key, at in world.keys if kind == "press" and key == cfg.KEY_JUMP]
+    jumps = [at for kind, key, at in world.keys if kind == "press" and key == cfg.KEYS["jump"]]
     assert 3 <= len(jumps) <= 10
     gaps = np.diff([start] + jumps)
     assert gaps.min() >= cfg.GHOST_JUMP_MIN - 0.5 and gaps.max() <= cfg.GHOST_JUMP_MAX + 0.5
@@ -240,9 +240,9 @@ def test_a_game_that_never_shows_its_overlay_is_acted_in_after_the_start_wait(ma
     assert world.mouse and world.clock.now - start >= cfg.MINIGAME_START_WAIT           # it waited the whole time, then went on regardless
 
 
-def test_the_victory_screen_ends_it_and_the_button_is_let_go(macro, world, monkeypatch):
+def test_the_finish_screen_ends_it_and_the_button_is_let_go(macro, world, monkeypatch):
     world.screens = [shot("ghosts_50")]
-    monkeypatch.setattr(macro, "detect_minigame_victory", lambda img: len(world.mouse) > 6)
+    monkeypatch.setattr(macro, "detect_minigame_finished", lambda img: len(world.mouse) > 6)
     assert macro.play_ghost_gallery(world.clock.now + 100, watch_started(macro)) is True
     assert world.mouse[-1] == ("up",)
 
@@ -282,7 +282,7 @@ def test_it_starts_with_a_zoomed_out_tilted_down_view_once_the_overlay_shows(mac
 def test_zooming_out_holds_the_zoom_out_key_and_the_tilt_drags_down_with_the_right_button(macro, world):
     cfg = macro.cfg
     world.real_zoom_out()
-    assert [(kind, key) for kind, key, _ in world.keys] == [("down", cfg.KEY_ZOOM_OUT), ("up", cfg.KEY_ZOOM_OUT)]
+    assert [(kind, key) for kind, key, _ in world.keys] == [("down", cfg.KEYS["zoom_out"]), ("up", cfg.KEYS["zoom_out"])]
     assert world.keys[1][2] - world.keys[0][2] == pytest.approx(cfg.MINIGAME_ZOOM_OUT_DURATION)
     world.real_tilt()
     assert world.mouse[:2] == [("move", cfg.REFERENCE_CENTER_X, cfg.REFERENCE_CENTER_Y), ("down", "right")] and world.mouse[-1] == ("up", "right")
@@ -347,8 +347,8 @@ def test_it_walks_forward_at_the_start_and_then_towards_the_ghost(macro, world, 
     monkeypatch.setattr(cfg, "GHOST_START_FORWARD", 2.0)
     cx, cy = cfg.GHOST_CHARACTER
     far = cfg.GHOST_TOWARD_MARGIN * 3
-    assert macro.ghost_chase_key((cx, cy - far)) == "w" and macro.ghost_chase_key((cx, cy + far)) == cfg.KEY_BACK
-    assert macro.ghost_chase_key((cx - far, cy)) == cfg.KEY_LEFT and macro.ghost_chase_key((cx + far, cy - 10)) == cfg.KEY_RIGHT
+    assert macro.ghost_chase_key((cx, cy - far)) == "w" and macro.ghost_chase_key((cx, cy + far)) == cfg.KEYS["back"]
+    assert macro.ghost_chase_key((cx - far, cy)) == cfg.KEYS["left"] and macro.ghost_chase_key((cx + far, cy - 10)) == cfg.KEYS["right"]
     assert macro.ghost_chase_key((cx + 5, cy - 5)) is None and macro.ghost_chase_key((cx, cy - cfg.GHOST_TOWARD_MARGIN)) is None    # near enough for the beam
     world.screens = [blank()]
     start = world.clock.now
@@ -720,7 +720,7 @@ def test_no_score_for_a_long_time_is_a_stall_the_player_walks_away_jumps_and_tur
     assert walks and walks[0][1] - start >= cfg.GHOST_STALL
     ups = [at for kind, key, at in world.keys if kind == "up" and key == walks[0][0] and at > walks[0][1]]      # (the start's walk may have been the same key)
     assert ups[0] - walks[0][1] == pytest.approx(cfg.GHOST_STALL_WALK)
-    assert [k for k in world.keys if k[0] == "press" and k[1] == cfg.KEY_JUMP] != []
+    assert [k for k in world.keys if k[0] == "press" and k[1] == cfg.KEYS["jump"]] != []
     drags = [i for i, e in enumerate(world.mouse) if e == ("down", "right")]
     assert len(drags) == len(walks)
     turned = sum(abs(e[1]) for e in world.mouse[drags[0]:drags[0] + 1 + cfg.GHOST_CAMERA_DRAG_STEPS] if e[0] == "rel" and e[1])

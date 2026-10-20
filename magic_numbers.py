@@ -54,13 +54,13 @@ MINIGAME_LABELS = {"hauntlet_2": "Hauntlet 2", "ghost_gallery": "Ghost Gallery",
 
 # Playing one. Each ends on the game over screen (a red "GAME OVER!" banner over a green NICE! button), which
 # is looked for on every look at the screen, then the button is clicked.
-MINIGAME_VICTORY_BANNER_COLOR = (255, 45, 89)
-MINIGAME_VICTORY_BANNER_TOLERANCE = 4
-MINIGAME_VICTORY_BANNER_BOX = (740, 255, 1190, 370)
-MINIGAME_VICTORY_BANNER_MIN_PIXELS = 3000
-MINIGAME_VICTORY_BUTTON_BOX = (860, 725, 1060, 800)
-MINIGAME_VICTORY_BUTTON_MIN_PIXELS = 2000
-MINIGAME_VICTORY_BUTTON_POS = (966, 762)
+MINIGAME_FINISH_BANNER_COLOR = (255, 45, 89)
+MINIGAME_FINISH_BANNER_TOLERANCE = 4
+MINIGAME_FINISH_BANNER_BOX = (740, 255, 1190, 370)
+MINIGAME_FINISH_BANNER_MIN_PIXELS = 3000
+MINIGAME_FINISH_BUTTON_BOX = (860, 725, 1060, 800)
+MINIGAME_FINISH_BUTTON_MIN_PIXELS = 2000
+MINIGAME_FINISH_BUTTON_POS = (966, 762)
 # While one runs it has its own overlay along the top of the screen (Hauntlet 2: the ROOM counter beside the
 # timer and monitor; Ghost Gallery: the TIME LEFT / GHOST GALLERY / Score banner; Stitches' Spotlight: TIME LEFT / STITCHES' SPOTLIGHT / Candy Corn). Crops of each overlay (ref/overlays/<minigame>.png, found within its box here, at least
 # MINIGAME_OVERLAY_THRESHOLD) say whether the game is on: one that was seen and then isn't, for
@@ -95,9 +95,9 @@ MINIGAME_TELEPORT_POLL = 0.1
 SCREEN_CHANGE_SIZE = (80, 45)         # screen_changed() compares the two screens shrunk to this many pixels (grey)
 MINIGAME_TELEPORT_CHANGE = 25       # mean grey-level difference (0-255, over the whole screen, shrunk) from before the click that counts as a changed view
 MINIGAME_MAX_DURATION = 600.0       # gives up (and logs a failure) if the minigame hasn't finished by then
-MINIGAME_ZOOM_OUT_DURATION = 3.0    # Hauntlet 2 and Ghost Gallery hold KEY_ZOOM_OUT this long when they begin (Hauntlet 2 again where it can't find the doors, if HAUNTLET_SEARCH_TURNS allows)
+MINIGAME_ZOOM_OUT_DURATION = 3.0    # Hauntlet 2 and Ghost Gallery hold KEYS["zoom_out"] this long when they begin (Hauntlet 2 again where it can't find the doors, if HAUNTLET_SEARCH_TURNS allows)
 MINIGAME_FINISH_WAIT = 5.0          # after clicking NICE!, before carrying on
-MINIGAME_VICTORY_CLICK_TRIES = 3      # NICE! clicks before giving up on the finish screen closing
+MINIGAME_FINISH_CLICK_TRIES = 3      # NICE! clicks before giving up on the finish screen closing
 MINIGAME_START_LOOK_INTERVAL = 0.5     # how often each minigame looks for its overlay while waiting for the game to begin
 MINIGAME_START_WAIT = 90.0          # each minigame waits for its overlay (the game has begun: the lobby's countdown to a round that starts at a fixed time) and act
                                     # when it shows - this is the most they wait for it, a limit that must outlast the longest queue (the overlay came 50.5 s after the Yes in one run;
@@ -241,12 +241,11 @@ RECORD_FPS = 4
 RECORD_MAX_MINUTES = 480                 # recording stops by itself after this long
 MAX_RECORDINGS = 5                       # oldest videos are deleted beyond this many
 
-# The input capture (press CAPTURE_HOTKEY in any window to start it and again to stop it): lossless screenshots plus
+# The input capture (press HOTKEYS["capture"] in any window to start it and again to stop it): lossless screenshots plus
 # every key, mouse button and mouse movement, in a folder of its own, to work out how something is played by hand
 # (see InputCapture). Screenshots are large, so it stops by itself after a while or when the disk runs low, and a frame
 # that looks like the last one saved is skipped.
 CAPTURES_DIR = os.path.join(DEBUG_DIR, "captures")          # a folder per capture
-CAPTURE_HOTKEY = "m"                     # a letter or digit
 CAPTURE_FRAME_INTERVAL = 0.5             # a screenshot is looked at this often (seconds), and one more right after every mouse click
 # A frame is only saved if it differs from the last one saved: at least CAPTURE_CHANGE_FRACTION of the picture (shrunk to
 # 320x180 first) has moved by more than CAPTURE_CHANGE_LEVEL (0-255 grey) - a character walking does, a ticking timer or
@@ -329,7 +328,6 @@ GHOST_BOSS_BAR_GOLD = ((15, 150, 160), (30, 255, 255))
 GHOST_BOSS_BAR_MIN = 3000
 GHOST_BOSS_BAR_IGNORE = (680, 150, 1240, 275)  # the bar itself, in the boss phase: its crest and its ghost icons are the same cyan
 GHOST_LOOK_INTERVAL = 0.06
-KEY_STITCHES_WALK = "d"                      # Stitches' Spotlight: held all round, to walk round the ring
 STITCHES_CENTER_INTERVAL = 0.5               # between looks at the ring's edge line, to turn the camera towards the middle
 STITCHES_LINE_BOX = (500, 560, 1500, 1010)   # where the ring walkway's gold edge line is looked for (below the horizon, round the character)
 STITCHES_LINE_HUE = (26, 40)                 # the line's dim olive-gold (OpenCV hue), with the saturation and value below (candy corn is brighter and more orange)
@@ -337,7 +335,6 @@ STITCHES_LINE_MIN_SATURATION = 110
 STITCHES_LINE_VALUE = (85, 175)
 STITCHES_LINE_MIN_PIXELS = 3500              # less of it than this is not a line to go by
 STITCHES_LINE_DEADBAND = 12.0                # degrees from straight across that need no turn
-STITCHES_TURN_KEYS = ("left", "right")       # (the camera is turned towards a line that falls to the right by the second)
 STITCHES_TURN_MIN_HOLD = 0.03               # a turn shorter than this (seconds) is not made
 STITCHES_TURN_BIAS_GAIN = 0.002             # how fast the steady turn is learned: share of the time the turn key is held, per degree off, per second
 STITCHES_TURN_BIAS_MAX = 0.6                # the most of the time the turn key is held for that
@@ -345,7 +342,6 @@ STITCHES_LOST_AFTER = 4.0                   # seconds without the ring's line, t
 STITCHES_INTRO_MAX = 15.0                   # the most seconds waited at the start for the ring's line (the intro camera looks at the sky first)
 STITCHES_CALIBRATE_HOLD = 0.15              # seconds the test turn of the camera keys is held
 STITCHES_CALIBRATE_MIN = 3.0                # degrees the ring's line must move in it to tell which way the keys turn
-KEY_STITCHES_BOOST = "e"                     # the speed boost ("Press E for a Speed Boost!"), pressed every STITCHES_BOOST_INTERVAL
 STITCHES_BOOST_INTERVAL = 2.0
 STITCHES_TURN_HOLD_MAX = 0.2                 # seconds a turn key is held for a line 90 degrees off, less for less
 GHOST_INTRO_WAIT = 6.0                       # after its overlay shows, the game's own intro camera (a look at the ceiling) runs this long; the zoom and tilt come after, or are undone
@@ -633,9 +629,7 @@ POST_CLICK_DELAY = 0.4         # pause after each click
 NEED_CHECK_RETRY_DELAY = 5.0   # pause before re-checking when no need was found
 LOOP_DELAY = 2.0               # pause between iterations of the workflow loop
 STOP_CHECK_INTERVAL = 0.1      # granularity of the interruptible wait loop
-STOP_HOTKEY = "p"              # a letter or digit: pressing it, in any window, stops a running macro
                                # (so you can take over the computer) - see watch_stop_hotkey()
-BLACKOUT_HOTKEY = "h"         # a letter or digit: pressed while Roblox is focused, it blanks the screen with a black window (and again, to take it away)
 BLACKOUT_SETTLE = 0.4         # seconds the test flash is shown before the screen is looked at, to see whether the macro's screenshots see the window
 BLACKOUT_SEEN_RISE = 40       # if the screenshot's mean grey level rises this much (0-255) while the white test window is up, the screenshots see the window
 BLACKOUT_TOO_BRIGHT = 215     # a screen whose mean grey level is above this is too bright for that test to tell (white against white)
@@ -724,7 +718,7 @@ RIDE_FORWARD_DURATION = 2.0    # walk forward briefly after mounting, before the
 RIDE_VEHICLES_POS = (816, 804)
 RIDE_FIRST_VEHICLE_POS = (976, 708)
 RIDE_EQUIP_POS = (1062, 814)
-RIDE_R_HOLD_DURATION = 1.5     # hold KEY_HELICOPTER this long after equipping, before walking back and forth
+RIDE_R_HOLD_DURATION = 1.5     # hold KEYS["helicopter"] this long after equipping, before walking back and forth
 
 # Backpack-teleport sequence, shared by every teleport destination: open
 # backpack -> category tab -> two more fixed clicks that confirm/execute
@@ -753,7 +747,34 @@ SICK_FINAL_CLICK_POS = (1045, 660)       # click after the sick need's walk
 # and camping entries turn it on.
 HELICOPTER_REQUIRED = False
 HELICOPTER_FORWARD_DURATION = 1.0  # step forward this long after teleporting, before equipping
-HELICOPTER_HOLD_DURATION = 4.5     # then hold KEY_HELICOPTER this long (it was 0.5 s less, and the helicopter could be caught on a tree)
+HELICOPTER_HOLD_DURATION = 4.5     # then hold KEYS["helicopter"] this long (it was 0.5 s less, and the helicopter could be caught on a tree)
+
+# Every key the macro presses, by what it is for (code says cfg.KEYS["forward"], not "w"): the game's own bindings, then the macro's hotkeys.
+KEYS = {
+    "forward": "w", "left": "a", "back": "s", "right": "d",   # walking (every minigame walks with them; Stitches' Spotlight holds "right" all round the ring)
+    "jump": "space",
+    "backpack": "b",
+    "mount": "e",                  # mounting a vehicle...
+    "interact": "e",               # ...and collecting/harvesting (lure_collect(), tree_collect()): the same physical key, named for each use
+    "speed_boost": "e",            # Stitches' Spotlight's speed boost ("Press E for a Speed Boost!"), pressed every STITCHES_BOOST_INTERVAL
+    "zoom_in": "i",
+    "zoom_out": "o",               # zooms the camera out while held (the minigames hold it to see the whole room)
+    "helicopter": "r",             # held to fly the equipped helicopter (also held briefly by ride)
+    "camera_left": "left",         # the arrow keys turn the camera (Stitches' Spotlight turns it to keep the middle of the ring in view)
+    "camera_right": "right",
+}
+KEY_SEQUENCES = {                  # keys pressed one after the other, each held KEY_STEP_GAP-ish (RESPAWN_KEY_DURATION, REJOIN_LEAVE_KEY_GAP)
+    "respawn": ("esc", "r", "enter"),
+    "leave_game": ("esc", "l", "enter"),
+}
+HOTKEYS = {                        # the macro's own keys, each a letter or digit, read in any window (the last two only while Roblox is focused)
+    "stop": "p",                   # stops a running macro
+    "capture": "m",                # starts or stops an input capture
+    "blackout": "h",               # blanks the screen with a black window (and again, to take it away)
+}
+MOVE_KEYS = tuple(KEYS[name] for name in ("forward", "left", "back", "right"))
+HELD_KEYS = tuple(dict.fromkeys([*KEYS.values(), *(key for keys in KEY_SEQUENCES.values() for key in keys)]))   # every key the macro can hold down: let go of when it ends, at a stop, or when it is killed
+
 
 # Needs that teleport somewhere and walk (see TeleportWalkNeedHandler), then
 # wait for the need to clear. Each entry: where to teleport, the
@@ -761,14 +782,14 @@ HELICOPTER_HOLD_DURATION = 4.5     # then hold KEY_HELICOPTER this long (it was 
 # its prompt is clicked, the dialog waited for and this is its Yes - sick; see TeleportWalkNeedHandler._open_dialog()), optionally `helicopter` (above) and optionally
 # `max_wait` (how long to wait for the need to clear afterwards; default NEED_GONE_MAX_WAIT).
 TELEPORT_WALK_NEEDS_NORMAL: dict[str, dict[str, Any]] = {
-    "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 16.0), ("a", 10.0))),
-    "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 27.0),)),
-    "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 1.2), ("a", 10.0))),
-    "cafe":    dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 3.2), ("s", 5), ("a", 0.2), ("s", 3))),
-    "salon":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("a", 2.5), ("w", 15.0))),
-    "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=(("w", 3.0), ("a", 7.2), ("s", 4.0))),
-    "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 0.1), ("d", 3.0), ("s", 2.2), ("d", 15.0), ("w",20.0))),
-    "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 3.0), ("w", 0.8)),
+    "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["forward"], 16.0), (KEYS["left"], 10.0))),
+    "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["left"], 27.0),)),
+    "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["forward"], 1.2), (KEYS["left"], 10.0))),
+    "cafe":    dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=((KEYS["left"], 3.2), (KEYS["back"], 5), (KEYS["left"], 0.2), (KEYS["back"], 3))),
+    "salon":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=((KEYS["left"], 2.5), (KEYS["forward"], 15.0))),
+    "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=((KEYS["forward"], 3.0), (KEYS["left"], 7.2), (KEYS["back"], 4.0))),
+    "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["forward"], 0.1), (KEYS["right"], 3.0), (KEYS["back"], 2.2), (KEYS["right"], 15.0), (KEYS["forward"],20.0))),
+    "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["forward"], 2.5), (KEYS["right"], 3.0), (KEYS["forward"], 0.8)),
                     final_click=SICK_FINAL_CLICK_POS),
 }
 
@@ -776,11 +797,11 @@ TELEPORT_WALK_NEEDS_NORMAL: dict[str, dict[str, Any]] = {
 # moves the nursery) - and "sick" only exists here, so it isn't a need at all
 # outside Halloween.
 TELEPORT_WALK_NEEDS_HALLOWEEN: dict[str, dict[str, Any]] = {
-    "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 9),), helicopter=True),
-    "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("a", 20.0),), helicopter=True),
-    "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 3), ("a", 10))),
-    "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("s", 20),), helicopter=True),
-    "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=(("w", 2.5), ("d", 4.0), ("w", 1.2)),
+    "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["forward"], 9),), helicopter=True),
+    "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["left"], 20.0),), helicopter=True),
+    "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["forward"], 3), (KEYS["left"], 10))),
+    "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["back"], 20),), helicopter=True),
+    "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["forward"], 2.5), (KEYS["right"], 4.0), (KEYS["forward"], 1.2)),
                     final_click=SICK_FINAL_CLICK_POS),
 }
 
@@ -804,30 +825,13 @@ NEED_GONE_FLICKER_RECHECK_DELAY = 0.3  # before counting any single miss, re-sam
 NEED_WATCH_JOIN_TIMEOUT = 5.0    # most walk_alternating() waits for its background need-gone
                                  # watcher thread to exit before moving on without it
 
-# Game key bindings
-KEY_BACKPACK = "b"
-KEY_MOUNT = "e"
-KEY_INTERACT = "e"             # same physical key as KEY_MOUNT, named for its other use: collecting/
-                                # harvesting (lure_collect(), tree_collect()) rather than mounting a vehicle
-KEY_ZOOM_IN = "i"
-KEY_ZOOM_OUT = "o"              # zooms the camera out while held (the minigames hold it to see the whole room)
-KEY_HELICOPTER = "r"           # held to fly the equipped helicopter (also held briefly by ride)
-KEY_JUMP = "space"
-KEY_FORWARD = "w"                # the movement keys (every minigame walks with them)
-KEY_LEFT = "a"
-KEY_BACK = "s"
-KEY_RIGHT = "d"
-MOVE_KEYS = (KEY_FORWARD, KEY_LEFT, KEY_BACK, KEY_RIGHT)
-RESPAWN_KEYS = ("esc", "r", "enter")
-HELD_KEYS = (*MOVE_KEYS, KEY_HELICOPTER, KEY_ZOOM_IN, KEY_ZOOM_OUT, KEY_JUMP, *RESPAWN_KEYS, *STITCHES_TURN_KEYS, KEY_STITCHES_WALK)   # every key the macro can hold down: let go of when it ends or is killed
-
 # Lure/tree collection (run automatically by side_quest(), not tied to a detected need)
-LURE_COLLECT_WALK_DURATION = 2.0  # hold 'a' this long before pressing KEY_INTERACT at the lure
-LURE_COLLECT_SETTLE_DELAY = 1.0   # wait this long between the two KEY_INTERACT presses at the lure
+LURE_COLLECT_WALK_DURATION = 2.0  # hold 'a' this long before pressing KEYS["interact"] at the lure
+LURE_COLLECT_SETTLE_DELAY = 1.0   # wait this long between the two KEYS["interact"] presses at the lure
 LURE_NEW_POS_1 = (876, 711)       # the two backpack clicks that place a fresh lure - see set_new_lure()
 LURE_NEW_POS_2 = (978, 814)
 TREE_COLLECT_WALK_DURATION = 2.0  # hold 'd' this long before stepping back
-TREE_COLLECT_BACKWARD_DURATION = 1.0  # then hold 's' this long before pressing KEY_INTERACT at the money tree
+TREE_COLLECT_BACKWARD_DURATION = 1.0  # then hold 's' this long before pressing KEYS["interact"] at the money tree
 TREE_HARVEST_YIELD = 16           # money_collected added to the persisted total per tree_collect() call
 
 # side_quest(): how often to tend the money tree/lure, and the money_collected
@@ -872,7 +876,6 @@ TRADE_HUB_REGULAR_SERVER_POS = (917, 540)  # REGULAR SERVER in "You are in the T
 # then wait in stages, checking the screen, instead of waiting a fixed time and hoping.
 ROBLOX_PLACE_ID = 920587237
 ROBLOX_PROCESS_NAMES = ("RobloxPlayerBeta.exe", "RobloxCrashHandler.exe")  # killed after leaving
-REJOIN_LEAVE_KEYS = ("esc", "l", "enter")
 REJOIN_LEAVE_KEY_GAP = 0.25        # between those keys (Natro uses the same)
 REJOIN_MIN_LEAVE_HEIGHT = 500      # px; the L shortcut only works in a Roblox window at least this tall
 REJOIN_CLOSE_WAIT = 5.0            # after closing, before relaunching (relaunching too soon gives Roblox error 264)

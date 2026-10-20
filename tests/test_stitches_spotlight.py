@@ -32,7 +32,7 @@ def camera(macro, monkeypatch, deadband=5.0):
 
 
 def test_the_camera_is_turned_towards_the_side_the_line_says_and_not_when_it_is_straight(macro, monkeypatch):
-    left_key, right_key = macro.cfg.STITCHES_TURN_KEYS
+    left_key, right_key = (macro.cfg.KEYS["camera_left"], macro.cfg.KEYS["camera_right"])
     interval = 0.5
     ring = camera(macro, monkeypatch)
     assert ring.decide(2.0, 0.0, interval) is None and ring.decide(-5.0, 0.5, interval) is None           # level enough
@@ -46,7 +46,7 @@ def test_the_camera_is_turned_towards_the_side_the_line_says_and_not_when_it_is_
 
 
 def test_a_line_that_stays_off_teaches_a_steady_turn_which_goes_on_while_the_line_is_out_of_sight(macro, monkeypatch):
-    left_key, right_key = macro.cfg.STITCHES_TURN_KEYS
+    right_key = macro.cfg.KEYS["camera_right"]
     ring = camera(macro, monkeypatch)
     now, interval = 0.0, 0.5
     for _ in range(10):                                                         # the line sits 12 degrees off, look after look: the walk needs turning all the time
@@ -63,7 +63,7 @@ def test_a_line_that_stays_off_teaches_a_steady_turn_which_goes_on_while_the_lin
 
 
 def test_swapping_the_camera_keys_turns_the_other_way_and_flips_what_was_learned(macro, monkeypatch):
-    left_key, right_key = macro.cfg.STITCHES_TURN_KEYS
+    left_key, right_key = (macro.cfg.KEYS["camera_left"], macro.cfg.KEYS["camera_right"])
     ring = camera(macro, monkeypatch)
     ring.bias = 0.3
     ring.swap_keys()
@@ -87,7 +87,7 @@ def calibration(macro, monkeypatch, angles):
 
 
 def test_the_camera_keys_are_tested_by_turning_right_and_seeing_the_line_move(macro, monkeypatch):
-    keys = macro.cfg.STITCHES_TURN_KEYS
+    keys = (macro.cfg.KEYS["camera_left"], macro.cfg.KEYS["camera_right"])
     ring, pressed, marks = calibration(macro, monkeypatch, [30.0, 10.0])               # turning right made a line that fell to the right level: as assumed
     assert ring.keys == keys and pressed == [keys[1]] and marks == []
     ring, _, _ = calibration(macro, monkeypatch, [10.0, 30.0])                           # it went the other way: the keys are swapped
@@ -98,7 +98,7 @@ def test_the_camera_keys_are_tested_by_turning_right_and_seeing_the_line_move(ma
     assert len(marks) == 1 or marks == []                                                  # (an unclear test marks the capture)
 
 
-def test_the_player_walks_boosts_and_turns_until_the_victory_screen_shows(macro, monkeypatch):
+def test_the_player_walks_boosts_and_turns_until_the_finish_screen_shows(macro, monkeypatch):
     cfg = macro.cfg
     events, looks = [], iter([shot("ring_falls_right_a")] * 8)
     now = [1000.0]
@@ -111,13 +111,13 @@ def test_the_player_walks_boosts_and_turns_until_the_victory_screen_shows(macro,
     monkeypatch.setattr(macro, "minigame_look", lambda watch: next(looks))
     monkeypatch.setattr(macro, "wait_for_minigame_start", lambda watch, name: None)
     monkeypatch.setattr(macro, "calibrate_ring_camera", lambda ring, watch: None)
-    won = iter([False] * 6 + [True])
-    monkeypatch.setattr(macro, "detect_minigame_victory", lambda img: next(won))
+    finished = iter([False] * 6 + [True])
+    monkeypatch.setattr(macro, "detect_minigame_finished", lambda img: next(finished))
     monkeypatch.setattr(macro.cfg, "STITCHES_LINE_DEADBAND", 5.0)
     watch = macro.MinigameWatch("stitches_spotlight")
     assert macro.play_stitches_spotlight(10 ** 12, watch) is True
-    walk = cfg.KEY_STITCHES_WALK
+    walk = cfg.KEYS["right"]
     assert events[0] == ("down", walk) and events[-1] == ("up", walk)
-    assert ("turn", cfg.STITCHES_TURN_KEYS[1]) in events
-    boosts = [i for i, event in enumerate(events) if event == ("press", cfg.KEY_STITCHES_BOOST)]
+    assert ("turn", (cfg.KEYS["camera_left"], cfg.KEYS["camera_right"])[1]) in events
+    boosts = [i for i, event in enumerate(events) if event == ("press", cfg.KEYS["speed_boost"])]
     assert 2 <= len(boosts) <= 4                                                          # (about one every STITCHES_BOOST_INTERVAL of the fake time: 6 looks of STITCHES_CENTER_INTERVAL)

@@ -725,7 +725,7 @@ def test_the_zoom_keys_and_the_mouse_buttons_that_are_down_are_released_with_the
     monkeypatch.setattr(macro.pydirectinput, "mouseUp", lambda button="left": buttons.append(button), raising=False)
     monkeypatch.setattr(macro, "pressed_inputs", lambda: held[0])
     macro.release_all_inputs()
-    assert {macro.cfg.KEY_ZOOM_IN, macro.cfg.KEY_ZOOM_OUT, macro.cfg.KEY_HELICOPTER} <= set(released)
+    assert {macro.cfg.KEYS["zoom_in"], macro.cfg.KEYS["zoom_out"], macro.cfg.KEYS["helicopter"]} <= set(released)
     assert sorted(buttons) == ["left", "right"]                                      # (the camera is turned with the right one)
     buttons.clear()
     held[0] = {"mouse_left"}
@@ -763,7 +763,7 @@ def test_a_dismissed_minigame_popup_does_not_lose_the_abort(macro, monkeypatch):
     monkeypatch.setattr(macro, "rejoin_game", lambda kinds=None: False)
     monkeypatch.setattr(macro, "close_backpack_if_stuck", lambda in_task: False)
     monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: "cant_spawn_vehicle")     # flagged abort_task
-    monkeypatch.setattr(macro, "close_minigame_win_screen", lambda abandon=True: False)
+    monkeypatch.setattr(macro, "close_minigame_finish_screen", lambda abandon=True: False)
     monkeypatch.setattr(macro, "minigame_popup", lambda play=True: "dismissed")
     monkeypatch.setattr(macro, "detect_paycheck", lambda: False)
     monkeypatch.setattr(macro.cfg, "HALLOWEEN", True)
@@ -816,7 +816,7 @@ def test_an_equip_sequence_is_not_closed_in_the_middle_by_the_in_task_check(macr
     opened, presses, logged = [False], [], []
 
     def press(key, **kwargs):
-        if key == macro.cfg.KEY_BACKPACK:
+        if key == macro.cfg.KEYS["backpack"]:
             opened[0] = not opened[0]
             presses.append(opened[0])
     monkeypatch.setattr(macro.pydirectinput, "press", press, raising=False)
@@ -1246,11 +1246,11 @@ def test_a_failed_minigame_does_not_count_as_progress_but_a_won_one_does(macro, 
     monkeypatch.setattr(macro, "click_nice_until_gone", lambda: True)
     monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: None)
     monkeypatch.setattr(macro, "read_candy_corn_settled", lambda tries=4: None)                  # (no screen to read the total off)
-    for won in (False, True):
+    for finished in (False, True):
         macro.state.last_progress = stalled
-        monkeypatch.setitem(macro.MINIGAME_PLAYERS, "ghost_gallery", lambda deadline, watch, won=won: won)
-        assert macro.play_minigame("ghost_gallery") is won
-        assert (macro.state.last_progress == stalled) is (not won)
+        monkeypatch.setitem(macro.MINIGAME_PLAYERS, "ghost_gallery", lambda deadline, watch, finished=finished: finished)
+        assert macro.play_minigame("ghost_gallery") is finished
+        assert (macro.state.last_progress == stalled) is (not finished)
         assert time.time() - macro.state.last_detection < 5                            # needs couldn't be seen meanwhile either way
 
 
@@ -1363,7 +1363,7 @@ def test_the_end_wait_is_marked_while_a_need_is_waited_for_and_a_held_popup_is_n
     macro.wait_until_need_gone("potty")
     assert seen == ["potty"] and macro.state.end_wait_need is None
     checked = []
-    for name in ("rejoin_game", "close_backpack_if_stuck", "dismiss_stray_windows", "close_minigame_win_screen"):
+    for name in ("rejoin_game", "close_backpack_if_stuck", "dismiss_stray_windows", "close_minigame_finish_screen"):
         monkeypatch.setattr(macro, name, lambda *a, **k: False)
     monkeypatch.setattr(macro, "minigame_popup", lambda play=True: "waiting")
     monkeypatch.setattr(macro, "detect_paycheck", lambda: checked.append(1) or True)
@@ -1500,7 +1500,7 @@ def test_the_trade_hub_trips_click_the_recorded_positions_in_order(macro, monkey
     monkeypatch.setattr(macro, "log_run_event", lambda message: None)
     monkeypatch.setattr(macro, "close_backpack", lambda step: keys.append("closed"))
     monkeypatch.setattr(macro.pydirectinput, "press", lambda key: keys.append(key))
-    assert macro.travel_to_trade_hub() and keys == [cfg.KEY_BACKPACK, "closed"]
+    assert macro.travel_to_trade_hub() and keys == [cfg.KEYS["backpack"], "closed"]
     assert clicks == [cfg.TRADE_HUB_TOYS_TAB_POS, cfg.TRADE_HUB_PHONE_POS, cfg.TRADE_HUB_EQUIP_POS, cfg.TRADE_HUB_USE_POS, cfg.TRADE_HUB_TRAVEL_POS, cfg.TRADE_HUB_YES_POS]
     clicks.clear()
     assert macro.leave_trade_hub() and clicks == [cfg.TRADE_HUB_HOME_POS, cfg.TRADE_HUB_REGULAR_SERVER_POS]

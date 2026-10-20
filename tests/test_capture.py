@@ -74,7 +74,7 @@ def test_the_hotkey_is_not_recorded_and_nothing_held_means_no_key_events(macro, 
     folder = capture["folder"]
     recorder = macro.InputCapture(folder)
     recorder.start()
-    capture["held"] = {macro.cfg.CAPTURE_HOTKEY}
+    capture["held"] = {macro.cfg.HOTKEYS["capture"]}
     time.sleep(0.15)
     capture["held"] = set()
     time.sleep(0.05)
@@ -377,7 +377,7 @@ def test_no_run_is_recorded_when_it_is_switched_off_or_a_capture_is_already_runn
     assert manual is not None
     assert macro.start_run_capture("hauntlet_2") is None                      # one capture at a time
     macro.toggle_input_capture()
-    macro.finish_run_capture(None, "won")                                    # nothing to finish is no error
+    macro.finish_run_capture(None, "finished")                                    # nothing to finish is no error
 
 
 def test_a_recording_that_cannot_start_does_not_stop_the_minigame(macro, run_folder, monkeypatch, caplog):

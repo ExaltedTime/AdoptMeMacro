@@ -12,10 +12,6 @@
 
 Suggestions from reading through the code, none of them started. Roughly in order of payoff within each group.
 
-## Code
-
-- [ ] The teleport and walk handlers are already table-driven; the button handlers, `catch` and `pet` could be too (a list of steps instead of code), which also makes the timing tuning item easier
-
 ## Reliability
 
 - [ ] Ghost Gallery in the game: whether the score-feedback skip and the "!" marks keep the macro off the pet and the fog, and how the boss phase does; none of it was seen in a run after the changes.

@@ -29,20 +29,19 @@ from bot import bot_lib  # noqa: E402
 log = logging.getLogger("adoptme-bot")
 
 
-async def say(interaction: discord.Interaction, text: Optional[str] = None, **kwargs) -> None:
+async def say(interaction: discord.Interaction, text: Optional[str] = None, **kwargs) -> Any:
     """Follow up on a command with `text`, cut to fit a message first (bot_lib.clip_message()): a message over Discord's limit is refused, and the command would
     end with nothing said. An interaction can only be followed up for 15 minutes (a long /update or /pull outlasts that): after that, or when Discord says the
-    token is no good, the answer goes to the channel itself (bot_lib.followup_needs_the_channel())."""
+    token is no good, the answer goes to the channel itself (bot_lib.followup_needs_the_channel()). The message that was sent."""
     text = bot_lib.clip_message(text) if text else text
     if not interaction.is_expired():
         try:
-            await interaction.followup.send(text, **kwargs)  # type: ignore[arg-type]
-            return
+            return await interaction.followup.send(text, **kwargs)  # type: ignore[arg-type]
         except discord.HTTPException as error:
             if not bot_lib.followup_needs_the_channel(error.status, False):
                 raise
     channel = interaction.channel or await interaction.client.fetch_channel(interaction.channel_id or 0)
-    await channel.send(text, **kwargs)  # type: ignore[union-attr,arg-type]
+    return await channel.send(text, **kwargs)  # type: ignore[union-attr,arg-type]
 
 
 def roblox_region(monitor: dict) -> dict:
@@ -143,7 +142,8 @@ def launch_macro(config: bot_lib.Config, loop: bool = True) -> int:
     os.makedirs(cfg.LOGS_DIR, exist_ok=True)                           # (a Refresh debug, or a fresh checkout, leaves no folder to write the error output into)
     with open(os.path.join(cfg.LOGS_DIR, "macro_stderr.log"), "ab") as errors:
         process = subprocess.Popen([config.python or sys.executable, os.path.join(folder, "main.py"), *(["--loop"] if loop else [])], cwd=folder,
-                                   stdout=subprocess.DEVNULL, stderr=errors)
+                                   stdout=subprocess.DEVNULL, stderr=errors,
+                                   creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))     # (Ctrl+C in the bot's console is not sent to the macro too)
     return process.pid
 
 
@@ -152,7 +152,7 @@ def kill_macro(pids: list[int]) -> None:
     for pid in pids:
         try:
             if os.name == "nt":
-                subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, timeout=15)
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, timeout=15)       # (/T: its child processes too)
             else:
                 import signal
                 os.kill(pid, signal.SIGKILL)
@@ -247,23 +247,37 @@ async def start_macro(config: bot_lib.Config) -> str:
     the loop. Then wait up to BOT_START_CONFIRM seconds for status.json to be written, and say what was seen."""
     since = datetime.now()
     if await running_pids():
+        if not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path())):
+            return "The macro's loop is running already."                       # (its status is fresh whatever a `start` did: it could not be told from a loop that began now)
         problem = await send_command("start")
         if problem:
             return problem
-        what = "The macro was already running - asked it to start its loop (nothing happens if it is going already)."
+        what = "The macro was already running - asked it to start its loop."
     else:
         await asyncio.to_thread(launch_macro, config)
         what = "Started the macro."
     deadline = time.time() + cfg.BOT_START_CONFIRM
     while time.time() < deadline:
         await asyncio.sleep(2)
-        if bot_lib.started_since(bot_lib.read_json(bot_lib.status_path()), since):
+        if bot_lib.loop_started(bot_lib.read_json(bot_lib.status_path()), since):
             return what + " Its loop is running."
     return what + " No sign of its loop yet - see /status and /log."
 
 
+LAUNCHING = 0             # the commands that are starting the macro now (/start, /loop): its process is not there yet, which is not a crash
 UPDATING = False          # True while /update or /rollback is stopping, moving and starting the macro: the watcher must not take that for a crash
 RESTART_BOT = False        # set by /update or /rollback when the bot's own code changed: main() starts the bot again once it has closed
+
+
+@contextlib.contextmanager
+def launching():
+    """While the macro is being started, the watcher does not take the process that is not there yet for a crash."""
+    global LAUNCHING
+    LAUNCHING += 1
+    try:
+        yield
+    finally:
+        LAUNCHING -= 1
 
 
 def repo_folder(config: bot_lib.Config) -> str:
@@ -292,16 +306,18 @@ def output_tail(path: str, count: int = 12) -> str:
     return bot_lib.tail_lines(path, count) or "(nothing)"
 
 
-async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say, loop_was_running: bool = True) -> None:
+async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say, loop_was_running: bool = True, moved=None) -> None:
     """The steps both /update and /rollback share, once the plan is made: stop the macro, move the repository (`move`: the git arguments), install
     the packages if requirements.txt changed, start the macro again if it was running (with its loop only if `loop_was_running`: a window that was open with
     no loop comes back the same), and ask for the bot's own restart if its code changed and still imports. `say` posts a message. A step that fails stops it
-    there, with what to do."""
+    there, with what to do. `moved` is called once the repository has moved (not before: a move that fails keeps the rollback target there was)."""
     global RESTART_BOT
     was_running = bool(await running_pids())
     if was_running:
         await say(await stop_macro(config))
     await git(config, *move)
+    if moved is not None:
+        moved()
     new = (await git(config, "rev-parse", "HEAD")).strip()
     changed = (await git(config, "diff", "--name-only", old, new)).splitlines()
     await say(f"Now at {bot_lib.short(new)}. Changed: {bot_lib.files_text(changed) or 'nothing'}.")
@@ -336,7 +352,15 @@ class ConfirmView(discord.ui.View):
         super().__init__(timeout=timeout)
         self.config = config
         self.answer: Optional[bool] = None
+        self.message: Any = None                                      # the message the buttons are on, to take them off when nobody pressed one in time
         self.yes.label = yes                                         # (the button the decorator made)
+
+    async def on_timeout(self) -> None:
+        if self.message is not None:
+            try:
+                await self.message.edit(view=None)
+            except discord.HTTPException:
+                pass
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return bot_lib.is_allowed(self.config, interaction.user.id, interaction.channel_id or 0)
@@ -485,13 +509,17 @@ def build(config: bot_lib.Config) -> discord.Client:
     async def start(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         remember("open")
-        await say(interaction, await open_macro(config))
+        with launching():
+            text = await open_macro(config)
+        await say(interaction, text)
 
     @command("loop", "Start the macro's loop (launches the macro if it is not running)")
     async def loop(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
         remember("running")
-        await say(interaction, await start_macro(config))
+        with launching():
+            text = await start_macro(config)
+        await say(interaction, text)
 
     @command("stop", "Stop the macro's loop (its window stays open)")
     async def stop(interaction: discord.Interaction) -> None:
@@ -532,7 +560,7 @@ def build(config: bot_lib.Config) -> discord.Client:
 
     @command("leave_trade_hub", "Have the macro leave the Trading Hub for a regular server")
     async def leave_trade_hub(interaction: discord.Interaction) -> None:
-        await ask_macro(interaction, "leave_trade_hub", "Asked the macro to leave the Trading Hub for a regular server.")
+        await ask_macro(interaction, "leave_trade_hub", "Asked the macro to leave the Trading Hub for a regular server. Its loop is stopped; /loop it again once it is back.")
 
     @command("refresh_debug", "Empty the macro's debug folder (the game config stays); not while its loop runs")
     async def refresh_debug(interaction: discord.Interaction) -> None:
@@ -597,7 +625,7 @@ def build(config: bot_lib.Config) -> discord.Client:
         loop_running = bool(pids) and not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path()))
         if not rollback:                          # an update says what it brings (the commits, the lines changed in the Python files) and waits for a yes; a rollback is the way back, and does not
             view = ConfirmView(config, cfg.BOT_UPDATE_CONFIRM_TIMEOUT, yes="Update")
-            await say(interaction, f"```\n{plan.text}\n```", view=view)
+            view.message = await say(interaction, f"```\n{plan.text}\n```", view=view)
             await view.wait()
             if not view.answer:
                 await say(interaction, "Nothing was changed: " + ("cancelled." if view.answer is False else "no answer in time."))
@@ -606,11 +634,14 @@ def build(config: bot_lib.Config) -> discord.Client:
             await say(interaction, f"```\n{plan.text}\n```")
         if pids:
             state.desired_state = "running" if loop_running else "open"      # (what the macro is, so that what comes back - and a restart of it - is the same)
-        state.previous_commit = None if rollback else head
+
+        def moved() -> None:
+            state.previous_commit = None if rollback else head
+            bot_lib.save_state(bot_lib.state_path(), state)
         bot_lib.save_state(bot_lib.state_path(), state)
         UPDATING = True
         try:
-            await apply_commit(config, move, head, lambda text: say(interaction, text), loop_running)
+            await apply_commit(config, move, head, lambda text: say(interaction, text), loop_running, moved)
         except RuntimeError as error:
             await say(interaction, f"**Stopped:** {error}\nThe macro may be stopped - see /status.")
         finally:
@@ -656,7 +687,7 @@ def build(config: bot_lib.Config) -> discord.Client:
             size = await asyncio.to_thread(bot_lib.files_size_mb, files)
             if cfg.BOT_PULL_CONFIRM_MB < size <= cfg.BOT_MAX_PULL_MB:
                 view = ConfirmView(config, cfg.BOT_PULL_CONFIRM_TIMEOUT)
-                await say(interaction, f"`{name}` is {bot_lib.size_text(size)} ({len(files)} file{'s' if len(files) != 1 else ''}). Copy it to OneDrive?", view=view)
+                view.message = await say(interaction, f"`{name}` is {bot_lib.size_text(size)} ({len(files)} file{'s' if len(files) != 1 else ''}). Copy it to OneDrive?", view=view)
                 await view.wait()
                 if not view.answer:
                     await say(interaction, "Nothing copied: " + ("cancelled." if view.answer is False else "no answer in time."))
@@ -805,6 +836,9 @@ async def watch_once(channel: discord.abc.Messageable, config: bot_lib.Config, s
         post_now, held = limiter.check(now)
         if post_now:
             await attempt("a failure", post(channel, bot_lib.failure_text(failure, held), bot_lib.failure_screenshot_path(failure)))
+    unsaid = limiter.flush(now)                    # failures held back for the rate limit, with no later one to carry the count
+    if unsaid:
+        await attempt("the held failures", channel.send(f"{unsaid} more failure{'s' if unsaid != 1 else ''} since the last post - see /log."))
     status = bot_lib.read_json(bot_lib.status_path())
     stale, text = bot_lib.stale_alert(state.stale, status, datetime.now(), config.stale_status_minutes)
     if not text or await attempt("the stale-status alert", channel.send(bot_lib.clip_message(text))):
@@ -816,15 +850,20 @@ async def watch_once(channel: discord.abc.Messageable, config: bot_lib.Config, s
         if os.path.basename(chart) not in state.charts and now - os.path.getmtime(chart) >= cfg.BOT_FILE_SETTLE:
             if await attempt("a run chart", post(channel, f"Run chart {os.path.basename(chart)}", chart)):
                 state.charts.append(os.path.basename(chart))
-    if bot_lib.crash_check_due(state.desired_state, UPDATING):
+    if bot_lib.crash_check_due(state.desired_state, UPDATING or LAUNCHING > 0):
         running = await asyncio.to_thread(macro_process_running)
         state.crash_reported, event = bot_lib.crash_check(state.desired_state, running, state.crash_reported)
         if event == "alert":
-            allowed, state.restarts = bot_lib.restart_allowed(state.restarts, now, config.auto_restart_max_per_hour) if config.auto_restart else (False, state.restarts)
+            allowed, history = bot_lib.restart_allowed(state.restarts, now, config.auto_restart_max_per_hour) if config.auto_restart else (False, state.restarts)
             if allowed:
                 await attempt("the restart notice", channel.send("**The macro's process is gone** while it should be running - restarting it."))
-                await asyncio.to_thread(launch_macro, config, state.desired_state == "running")      # (with its loop only if the loop was wanted)
-                state.crash_reported = False
+                try:
+                    await asyncio.to_thread(launch_macro, config, state.desired_state == "running")      # (with its loop only if the loop was wanted)
+                except OSError as error:                  # (the restart is counted only once it has been made: a launch that fails does not use one up)
+                    await attempt("the failed restart", channel.send(bot_lib.clip_message(f"**The macro could not be started again:** {error}")))
+                else:
+                    state.restarts = history
+                    state.crash_reported = False
             else:
                 limit = " (the limit of automatic restarts this hour is used)" if config.auto_restart else ""
                 await attempt("the crash alert", channel.send(f"**The macro's process is gone** while it should be running{limit}. /start or /loop starts it again."))

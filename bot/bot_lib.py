@@ -348,7 +348,10 @@ def failure_screenshot_path(failure: Failure) -> Optional[str]:
     if not failure.screenshot:
         return None
     path = os.path.normpath(os.path.join(cfg.DEBUG_DIR, failure.screenshot))
-    inside = os.path.commonpath([path, os.path.normpath(cfg.DEBUG_DIR)]) == os.path.normpath(cfg.DEBUG_DIR)
+    try:
+        inside = os.path.commonpath([path, os.path.normpath(cfg.DEBUG_DIR)]) == os.path.normpath(cfg.DEBUG_DIR)
+    except ValueError:                                  # (a path on another drive: Windows has no common path with it)
+        return None
     return path if inside and os.path.isfile(path) else None
 
 
@@ -379,7 +382,8 @@ def file_end(path: str) -> int:
 
 class RateLimiter:
     """At most one post per `gap` seconds. `check(now)` says whether to post now and how many were held back since the last post, so the post can
-    say "and N more"; the held ones are not kept."""
+    say "and N more"; the held ones are only counted. `flush(now)` is for when no further failure comes: the count of those held back, once the gap has
+    passed, so that they are not left unsaid."""
 
     def __init__(self, gap: float) -> None:
         self.gap = gap
@@ -392,6 +396,13 @@ class RateLimiter:
             return True, held
         self.held += 1
         return False, 0
+
+    def flush(self, now: float) -> int:
+        """The failures held back, if there are any and a post is allowed now (then the count starts again); else 0."""
+        if self.held and self.last is not None and now - self.last >= self.gap:
+            held, self.held, self.last = self.held, 0, now
+            return held
+        return 0
 
 
 def failure_text(failure: Failure, held: int = 0) -> str:
@@ -524,8 +535,16 @@ def pull_entries(source: str, limit: int = 24) -> list[str]:
     folder = cfg.PULL_SOURCES.get(source)
     if folder is None or not os.path.isdir(folder):
         return []
-    names = [name for name in os.listdir(folder) if not name.startswith(".") and not name.endswith(".tmp")]
-    return sorted(names, key=lambda name: os.path.getmtime(os.path.join(folder, name)), reverse=True)[:limit]
+    def modified(name: str) -> float:
+        try:
+            return os.path.getmtime(os.path.join(folder, name))
+        except OSError:                                  # (gone since the listing: the macro empties these folders)
+            return 0.0
+    try:
+        names = [name for name in os.listdir(folder) if not name.startswith(".") and not name.endswith(".tmp")]
+    except OSError:
+        return []
+    return sorted(names, key=modified, reverse=True)[:limit]
 
 
 def resolve_pull(source: str, item: Optional[str]) -> tuple[str, str]:
@@ -582,11 +601,28 @@ def copy_pull(files: list[tuple[str, str]], onedrive_dir: str, source: str, max_
     total = files_size_mb(files)
     if total > max_mb:
         raise ValueError(f"that is {size_text(total)} - more than the {size_text(max_mb)} one /pull will copy; pull a smaller one")
-    for src, relative in files:
-        target = os.path.join(onedrive_dir, source, relative)
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        shutil.copy2(src, target)
+    made: list[str] = []                                  # what this copy made, to take away again if it fails half-way
+    try:
+        for src, relative in files:
+            target = long_path(os.path.join(onedrive_dir, source, relative))
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            existed = os.path.exists(target)
+            shutil.copy2(long_path(src), target)
+            if not existed:
+                made.append(target)
+    except OSError:
+        for path in made:
+            with contextlib.suppress(OSError):
+                os.remove(path)
+        raise
     return total
+
+
+def long_path(path: str) -> str:
+    """On Windows the path in the form that is not limited to MAX_PATH characters (`\\\\?\\` and the full path); anywhere else the path as it is."""
+    if os.name != "nt" or path.startswith("\\\\?\\"):
+        return path
+    return "\\\\?\\" + os.path.abspath(path)
 
 
 # --- control: start, stop, restart the macro ---
@@ -714,6 +750,12 @@ def crash_check_due(desired: Optional[str], updating: bool) -> bool:
     return desired in ("running", "open") and not updating
 
 
+def loop_started(status: Optional[dict[str, Any]], since: datetime) -> bool:
+    """Whether the loop is going and began at or after `since`: status.json written then, and not saying that nothing runs (a window with its loop stopped writes
+    it too). A loop that was going all along also writes it, so this is asked only of a loop that was seen to be idle (loop_idle())."""
+    return started_since(status, since) and not loop_idle(status)
+
+
 def started_since(status: Optional[dict[str, Any]], since: datetime) -> bool:
     """Whether status.json was written at or after `since` - the macro that was just started is running its loop (it writes the status when it starts)."""
     try:
@@ -832,7 +874,7 @@ def make_plan(run: GitRunner, remote: str, branch: str, previous: Optional[str],
         return plan, ["reset", "--hard", previous or ""], head
     name = f"{remote}/{branch}"
     git_ok(run, "fetch", remote, branch)
-    target = git_ok(run, "rev-parse", f"refs/remotes/{name}").strip()
+    target = git_ok(run, "rev-parse", "FETCH_HEAD^{commit}").strip()           # (what was just fetched, whatever the remote's fetch refspec makes of the branch's name)
     head_in_target = run(["merge-base", "--is-ancestor", head, target])[0] == 0
     target_in_head = run(["merge-base", "--is-ancestor", target, head])[0] == 0
     log = git_ok(run, "log", "--oneline", f"{head}..{target}").splitlines() if head_in_target else []

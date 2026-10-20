@@ -22,7 +22,7 @@ import logging.handlers
 import itertools
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field, fields
-from typing import Collection, Any, Callable, Iterable, Iterator, Optional, Sequence, Union
+from typing import Collection, Any, Callable, ContextManager, Iterable, Iterator, Optional, Sequence, Union
 from abc import ABC, abstractmethod
 from functools import lru_cache, partial
 import tkinter as tk
@@ -1887,103 +1887,115 @@ class WalkNeedHandler(NeedHandler):
         walk_alternating((cfg.KEYS["left"], cfg.KEYS["right"]), cfg.NEED_GONE_MAX_WAIT, need_name="walk")
         return True
 
-class CatchNeedHandler(NeedHandler):
-    """The 'catch' need requires opening backpack, equipping a toy, throwing it
-    (clicking) CATCH_THROW_COUNT times, then unequipping it."""
+# The needs that are a fixed sequence (catch, pet, ride) are tables of steps, run by SequenceNeedHandler: (action, *arguments), the arguments naming the
+# magic_numbers constants (read when the step runs, so a retuned value is used) or the KEYS label. The actions are STEP_ACTIONS; a step that returns False
+# ends the need as not done.
+STEP_ACTIONS: dict[str, Callable[..., Optional[bool]]] = {
+    "say": lambda text: logger.debug(text.format_map(vars(cfg))),                                   # a debug line, {CONSTANT} filled in
+    "press": lambda key: pydirectinput.press(cfg.KEYS[key]),
+    "wait": lambda duration: wait_interruptible(getattr(cfg, duration)),
+    "sleep": lambda duration: time.sleep(getattr(cfg, duration)),                                  # (not interruptible: a pause inside a mouse movement)
+    "tab": lambda pos: select_backpack_tab(getattr(cfg, pos)),
+    "click": lambda pos: hover_click(*getattr(cfg, pos)),
+    "close_backpack": lambda step: close_backpack(step),
+    "hold": lambda key, duration: hold_key(cfg.KEYS[key], getattr(cfg, duration)),
+    "walk": lambda keys, duration, need: walk_alternating((cfg.KEYS[keys[0]], cfg.KEYS[keys[1]]), getattr(cfg, duration), need_name=need),
+    "focus_pet": lambda duration: focus_pet(getattr(cfg, duration)),
+    "click_centre": lambda duration: hover_click(cfg.REFERENCE_CENTER_X, cfg.REFERENCE_CENTER_Y, duration=getattr(cfg, duration)),
+    "equip_vehicle": lambda: equip_favorite_vehicle(),
+    "swipe_down": lambda: pet_swipe_down(),
+    "with_backpack": lambda steps: run_steps_with_backpack(steps),                                # the steps with the backpack open on purpose (the in-task check leaves it alone)
+    "repeat": lambda count, label, steps: repeat_steps(getattr(cfg, count), label, steps),
+}
+
+def run_steps(steps: Sequence[tuple[Any, ...]]) -> bool:
+    """Do the steps in order (see STEP_ACTIONS); False as soon as one says it was not done."""
+    for action, *arguments in steps:
+        if STEP_ACTIONS[action](*arguments) is False:
+            return False
+    return True
+
+def run_steps_with_backpack(steps: Sequence[tuple[Any, ...]]) -> bool:
+    with backpack_on_purpose():
+        return run_steps(steps)
+
+def repeat_steps(count: int, label: str, steps: Sequence[tuple[Any, ...]]) -> bool:
+    for i in range(count):
+        logger.debug(f"{label} {i + 1}/{count}...")
+        if not run_steps(steps):
+            return False
+    return True
+
+def pet_swipe_down() -> None:
+    """Hold the mouse button down at PET_SWIPE_START_OFFSET from the middle of the screen and move it, step by step (much more reliable for games than one
+    jump), to PET_SWIPE_END_OFFSET over PET_SWIPE_DURATION; the button is let go of however it ends."""
+    start_y = cfg.REFERENCE_CENTER_Y + cfg.PET_SWIPE_START_OFFSET
+    end_y = cfg.REFERENCE_CENTER_Y + cfg.PET_SWIPE_END_OFFSET
+    pydirectinput.moveTo(*to_screen(cfg.REFERENCE_CENTER_X, start_y))
+    time.sleep(cfg.PET_SETTLE_DELAY)
+    mouse_down()
+    try:
+        start_time = time.time()
+        while True:
+            check_running()
+            elapsed = time.time() - start_time
+            if elapsed >= cfg.PET_SWIPE_DURATION:
+                break
+            y = int(start_y + (end_y - start_y) * elapsed / cfg.PET_SWIPE_DURATION)
+            pydirectinput.moveTo(*to_screen(cfg.REFERENCE_CENTER_X, y))
+            time.sleep(cfg.PET_SWIPE_STEP_DURATION)
+    finally:
+        pydirectinput.mouseUp()                                                                    # always, even if interrupted
+
+class SequenceNeedHandler(NeedHandler):
+    """A need that is a table of steps (`steps`, run by run_steps()) once Roblox is focused; `around()` is what the steps are done inside of."""
+    label = ""
+    steps: tuple[tuple[Any, ...], ...] = ()
+
+    def around(self) -> ContextManager[Any]:
+        return contextlib.nullcontext()
 
     def handle(self) -> bool:
-        logger.info("Catch need")
+        logger.info(f"{self.label} need")
         if not focus_roblox():
             return False
-
-        with backpack_on_purpose():
-            # Open backpack with 'b' key
-            logger.debug("Opening backpack...")
-            pydirectinput.press(cfg.KEYS["backpack"])
-            wait_interruptible(cfg.UI_SETTLE)
-
-            # Navigate to toys
-            logger.debug("Opening toys...")
-            select_backpack_tab(cfg.CATCH_TOYS_POS)
-            wait_interruptible(cfg.UI_SETTLE)
-
-            # Click squeaky toy
-            logger.debug("Selecting squeaky toy...")
-            hover_click(*cfg.CATCH_SQUEAKY_TOY_POS)
-            wait_interruptible(cfg.UI_SETTLE)
-
-            # Equip the toy
-            logger.debug("Equipping toy...")
-            hover_click(*cfg.CATCH_EQUIP_POS)
-            wait_interruptible(cfg.UI_SETTLE)
-
-            # Close backpack with 'b' key
-            logger.debug("Closing backpack...")
-            close_backpack("equipping the toy")
-
-        # Wait before throwing
-        logger.debug(f"Waiting {cfg.CATCH_WAIT_AFTER_EQUIP}s before throwing...")
-        wait_interruptible(cfg.CATCH_WAIT_AFTER_EQUIP)
-
-        # Zoom in, to avoid focusing the pet on toy throw
-        hold_key(cfg.KEYS["zoom_in"], cfg.CATCH_ZOOM_DURATION)
-        
-        # Click empty space to throw, with a delay between throws
-        for i in range(cfg.CATCH_THROW_COUNT):
-            logger.debug(f"Throw {i + 1}/{cfg.CATCH_THROW_COUNT}...")
-            hover_click(*cfg.EMPTY_POS)
-            wait_interruptible(cfg.CATCH_EMOTE_DELAY)
-
-        # Unequip the toy
-        logger.debug("Unequipping toy...")
-        hover_click(*cfg.CATCH_UNEQUIP_POS)
-
-        logger.info("Catch complete")
+        with self.around():
+            if not run_steps(self.steps):
+                return False
+        logger.info(f"{self.label} complete")
         return True
 
-class PetNeedHandler(NeedHandler):
+class CatchNeedHandler(SequenceNeedHandler):
+    """The 'catch' need requires opening backpack, equipping a toy, throwing it
+    (clicking) CATCH_THROW_COUNT times, then unequipping it."""
+    label = "Catch"
+    steps = (
+        ("with_backpack", (
+            ("say", "Opening backpack..."), ("press", "backpack"), ("wait", "UI_SETTLE"),
+            ("say", "Opening toys..."), ("tab", "CATCH_TOYS_POS"), ("wait", "UI_SETTLE"),
+            ("say", "Selecting squeaky toy..."), ("click", "CATCH_SQUEAKY_TOY_POS"), ("wait", "UI_SETTLE"),
+            ("say", "Equipping toy..."), ("click", "CATCH_EQUIP_POS"), ("wait", "UI_SETTLE"),
+            ("say", "Closing backpack..."), ("close_backpack", "equipping the toy"))),
+        ("say", "Waiting {CATCH_WAIT_AFTER_EQUIP}s before throwing..."), ("wait", "CATCH_WAIT_AFTER_EQUIP"),
+        ("hold", "zoom_in", "CATCH_ZOOM_DURATION"),                                                # zoomed in, to avoid focusing the pet on a toy throw
+        ("repeat", "CATCH_THROW_COUNT", "Throw", (("click", "EMPTY_POS"), ("wait", "CATCH_EMOTE_DELAY"))),   # click empty space to throw, with a delay between throws
+        ("say", "Unequipping toy..."), ("click", "CATCH_UNEQUIP_POS"),
+    )
+
+class PetNeedHandler(SequenceNeedHandler):
     """The 'pet' need: click to focus the pet, then hold the mouse button
     down and swipe it once down from just above the center of the screen to
     just below it, over PET_SWIPE_DURATION."""
+    label = "Pet"
+    steps = (
+        ("say", "Focusing pet..."), ("focus_pet", "PET_FOCUS_CLICK_DURATION"), ("wait", "UI_SETTLE"),
+        ("say", "Petting: one swipe down over {PET_SWIPE_DURATION}s..."),
+        ("click_centre", "PET_FOCUS_CLICK_DURATION"), ("sleep", "PET_SETTLE_DELAY"),
+        ("swipe_down",),
+    )
 
-    def handle(self) -> bool:
-        logger.info("Pet need")
-        if not focus_roblox():
-            return False
-
-        logger.debug("Focusing pet...")
-        with wanting_pet_focus():
-            return self._pet()
-
-    def _pet(self) -> bool:
-        if not focus_pet(cfg.PET_FOCUS_CLICK_DURATION):
-            return False
-        wait_interruptible(cfg.UI_SETTLE)
-        logger.debug(f"Petting: one swipe down over {cfg.PET_SWIPE_DURATION}s...")
-        # Click the center to focus
-        hover_click(cfg.REFERENCE_CENTER_X, cfg.REFERENCE_CENTER_Y, duration=cfg.PET_FOCUS_CLICK_DURATION)
-        time.sleep(cfg.PET_SETTLE_DELAY)
-        start_y = cfg.REFERENCE_CENTER_Y + cfg.PET_SWIPE_START_OFFSET
-        end_y = cfg.REFERENCE_CENTER_Y + cfg.PET_SWIPE_END_OFFSET
-        pydirectinput.moveTo(*to_screen(cfg.REFERENCE_CENTER_X, start_y))
-        time.sleep(cfg.PET_SETTLE_DELAY)
-        # Hold down and move with incremental steps (much more reliable for games)
-        mouse_down()
-        try:
-            start_time = time.time()
-            while True:
-                check_running()
-                elapsed = time.time() - start_time
-                if elapsed >= cfg.PET_SWIPE_DURATION:
-                    break
-                y = int(start_y + (end_y - start_y) * elapsed / cfg.PET_SWIPE_DURATION)
-                pydirectinput.moveTo(*to_screen(cfg.REFERENCE_CENTER_X, y))
-                time.sleep(cfg.PET_SWIPE_STEP_DURATION)
-        finally:
-            # Always release, even if interrupted
-            pydirectinput.mouseUp()
-        logger.info("Pet complete")
-        return True
+    def around(self) -> ContextManager[Any]:
+        return wanting_pet_focus()
 
 class ChooseNeedHandler(NeedHandler):
     """The 'choose' need: focus the pet, move slowly to the button of one exact colour,
@@ -2020,39 +2032,19 @@ class ChooseNeedHandler(NeedHandler):
         logger.info("Choose complete")
         return True
 
-class RideNeedHandler(NeedHandler):
+class RideNeedHandler(SequenceNeedHandler):
     """The 'ride' need: step back, mount a vehicle from the backpack, then
     walk back and forth for a while astride it - or less, the moment its
     icon is confirmed gone (see walk_alternating())."""
-
-    def handle(self) -> bool:
-        logger.info("Ride need")
-        if not focus_roblox():
-            return False
-
-        # Step back before mounting
-        logger.debug(f"Stepping back for {cfg.RIDE_BACKWARD_DURATION}s...")
-        hold_key(cfg.KEYS["back"], cfg.RIDE_BACKWARD_DURATION)
-
-        logger.debug("Pressing e...")
-        pydirectinput.press(cfg.KEYS["mount"])
-        wait_interruptible(cfg.RIDE_WAIT_AFTER_E)
-
-        # Walk forward briefly after mounting, before opening the backpack
-        logger.debug(f"Walking forward for {cfg.RIDE_FORWARD_DURATION}s...")
-        hold_key(cfg.KEYS["forward"], cfg.RIDE_FORWARD_DURATION)
-
-        equip_favorite_vehicle()
-
-        # Hold r briefly before starting to move
-        logger.debug(f"Holding {cfg.KEYS['helicopter']} for {cfg.RIDE_R_HOLD_DURATION}s...")
-        hold_key(cfg.KEYS["helicopter"], cfg.RIDE_R_HOLD_DURATION)
-
-        # Walk back and forth (forward/backward, not left/right) while riding
-        walk_alternating((cfg.KEYS["forward"], cfg.KEYS["back"]), cfg.NEED_GONE_MAX_WAIT, need_name="ride")
-
-        logger.info("Ride complete")
-        return True
+    label = "Ride"
+    steps = (
+        ("say", "Stepping back for {RIDE_BACKWARD_DURATION}s..."), ("hold", "back", "RIDE_BACKWARD_DURATION"),         # step back before mounting
+        ("say", "Pressing e..."), ("press", "mount"), ("wait", "RIDE_WAIT_AFTER_E"),
+        ("say", "Walking forward for {RIDE_FORWARD_DURATION}s..."), ("hold", "forward", "RIDE_FORWARD_DURATION"),       # a little way on after mounting, before the backpack
+        ("equip_vehicle",),
+        ("say", "Holding the helicopter key for {RIDE_R_HOLD_DURATION}s..."), ("hold", "helicopter", "RIDE_R_HOLD_DURATION"),   # briefly before starting to move
+        ("walk", ("forward", "back"), "NEED_GONE_MAX_WAIT", "ride"),                                                    # back and forth (not left and right) while riding
+    )
 
 def teleport_to(category_pos: Point) -> None:
     """Open the backpack, teleport via the category tab, walk back to clear the landing

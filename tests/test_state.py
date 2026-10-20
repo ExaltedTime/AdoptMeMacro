@@ -791,16 +791,18 @@ def test_the_in_task_check_closes_a_backpack_seen_open_twice_but_not_one_a_handl
     monkeypatch.setattr(macro, "detect_backpack_open", lambda img: True)
     monkeypatch.setattr(macro, "close_backpack_if_open", lambda step="": closed.append(step))
     stuck = macro.close_backpack_if_stuck
-    assert stuck(True) is True and closed == []                                            # one sighting is not enough...
-    assert stuck(True) is False and len(closed) == 1                                       # the second one closes it
+    confirmations = macro.cfg.BACKPACK_CLOSE_CONFIRMATIONS
+    before = [True] * (confirmations - 1)                                                  # the sightings that are not enough yet
+    assert [stuck(True) for _ in before] == before and closed == []
+    assert stuck(True) is False and len(closed) == 1                                       # the last one closes it
     closed.clear()
     with macro.backpack_on_purpose():
-        assert [stuck(True) for _ in range(4)] == [True] * 4 and closed == []              # a handler has it open: never
-    assert stuck(True) is True and closed == []                                            # (and what it saw before doesn't count: a first sighting again)
-    macro.state.backpack_strikes = 1
+        assert [stuck(True) for _ in range(confirmations + 3)] == [True] * (confirmations + 3) and closed == []     # a handler has it open: never
+    assert [stuck(True) for _ in before] == before and closed == []                        # (and what it saw before doesn't count: first sightings again)
+    macro.state.backpack_strikes = confirmations - 1
     with macro.backpack_on_purpose():
         pass
-    assert stuck(True) is True and closed == []                                            # a sighting from before the block does not count after it either
+    assert [stuck(True) for _ in before] == before and closed == []                        # sightings from before the block do not count after it either
 
 
 def test_an_equip_sequence_is_not_closed_in_the_middle_by_the_in_task_check(macro, monkeypatch):

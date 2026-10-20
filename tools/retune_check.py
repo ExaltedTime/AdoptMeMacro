@@ -32,7 +32,7 @@ SCALE = '''
 import re as _re
 def _scale(_k):
     for _n, _v in list(globals().items()):
-        if (isinstance(_v, (int, float)) and not isinstance(_v, bool) and _n not in ("STOP_CHECK_INTERVAL", "REJOIN_INTERVAL")
+        if (isinstance(_v, (int, float)) and not isinstance(_v, bool) and _n not in ("STOP_CHECK_INTERVAL", "REJOIN_INTERVAL", "GHOST_ALERT_DOT_GAP")
                 and _re.search(r"(WAIT|DURATION|INTERVAL|DELAY|TIMEOUT|GAP|SETTLE|GRACE)$", _n)):
             globals()[_n] = _v * _k
     for _table in (TELEPORT_WALK_NEEDS_NORMAL, TELEPORT_WALK_NEEDS_HALLOWEEN):
@@ -88,18 +88,20 @@ TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLO
 
 
 
+KEYS_REBUILD = ('MOVE_KEYS = tuple(KEYS[name] for name in ("forward", "left", "back", "right"))\n'      # (what magic_numbers.py derives from the key tables, derived again)
+                'HELD_KEYS = tuple(dict.fromkeys([*KEYS.values(), *(key for keys in KEY_SEQUENCES.values() for key in keys)]))\n')
 REBUILD = "TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN else TELEPORT_WALK_NEEDS_NORMAL\n"
 
 VARIANTS.update({
     # a need deleted from the table / a new one added
-    "needs_removed": 'for _n in ("cafe", "pizza", "camping", "bored"):\n    TELEPORT_WALK_NEEDS_NORMAL.pop(_n, None)\n    TELEPORT_WALK_NEEDS_HALLOWEEN.pop(_n, None)\n' + REBUILD,
-    "need_added": 'TELEPORT_WALK_NEEDS_NORMAL["museum"] = dict(teleport_pos=TELEPORT_PETS_TAB_POS, steps=(("w", 3.0), ("d", 2.0)))\n' + REBUILD,
+    "needs_removed": 'for _n in ("cafe", "pizza", "camping", "bored"):\n    TELEPORT_WALK_NEEDS_NORMAL.pop(_n, None)\n    TELEPORT_WALK_NEEDS_HALLOWEEN.pop(_n, None)\nNEED_NAMES = tuple(_n for _n in NEED_NAMES if _n not in ("cafe", "pizza", "camping", "bored"))\n' + REBUILD,
+    "need_added": 'TELEPORT_WALK_NEEDS_NORMAL["museum"] = dict(teleport_pos=TELEPORT_PETS_TAB_POS, steps=(("w", 3.0), ("d", 2.0)))\nNEED_NAMES = (*NEED_NAMES, "museum")\n' + REBUILD,
     "button_names_reordered": 'BUTTON_NAMES[:] = ["sleepy", "potty", "dirty", "thirsty", "hungry"]\n',
     "helicopter_everywhere": "HELICOPTER_REQUIRED = True\n",
     # thresholds and tolerances nudged either way (detection tuning)
     "thresholds_up": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_THRESHOLD") and isinstance(_v, float):\n        globals()[_n] = min(0.99, _v * 1.03)\nfor _e in POPUP_TEMPLATES.values():\n    _e["threshold"] = min(0.99, _e["threshold"] * 1.03)\n',
     "thresholds_down": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_THRESHOLD") and isinstance(_v, float):\n        globals()[_n] = _v * 0.94\nfor _e in POPUP_TEMPLATES.values():\n    _e["threshold"] = _e["threshold"] * 0.94\n',
-    "tolerances_wider": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_TOLERANCE") and isinstance(_v, int):\n        globals()[_n] = _v * 2 + 1\n',
+    "tolerances_wider": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_TOLERANCE") and "SLOT" not in _n and isinstance(_v, int):\n        globals()[_n] = _v * 2 + 1\n',
     # every search box moved a few pixels
     "boxes_shifted": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_BOX") and isinstance(_v, tuple) and len(_v) == 4:\n        globals()[_n] = (_v[0] + 4, _v[1] + 3, _v[2] + 4, _v[3] + 3)\nfor _e in POPUP_TEMPLATES.values():\n    _v = _e["box"]\n    _e["box"] = (_v[0] + 4, _v[1] + 3, _v[2] + 4, _v[3] + 3)\n',
     "timings_x0.05": SCALE % "0.05",
@@ -108,7 +110,7 @@ VARIANTS.update({
     "counts_low": {"patch": "NEED_STUCK_CHECKS = 1\nBACKPACK_CLOSE_CONFIRMATIONS = 1\nREJOIN_MAX_ATTEMPTS = 1\nFOCUS_RESUME_MAX_IN_A_ROW = 1\nMINIGAME_FINISH_CLICK_TRIES = 1\nMAX_FAILURE_FOLDERS = 1\nMAX_REPORTS = 1\nMAX_RECORDINGS = 1\nCONSOLE_MAX_LINES = 10\nICON_SHIFT_TOLERANCE = 0\nDISABLED_NEEDS_REJOIN_THRESHOLD = 1\nRUN_CAPTURES_BEST = 1\nRUN_CAPTURES_WORST = 1\nRUN_CAPTURES_FAILED = 1\nSTITCHES_LINE_DEADBAND = 0.0\n", "deselect": [SCREENSHOT_TEST]},
     "counts_high": "NEED_STUCK_CHECKS = 10\nBACKPACK_CLOSE_CONFIRMATIONS = 4\nREJOIN_MAX_ATTEMPTS = 8\nFOCUS_RESUME_MAX_IN_A_ROW = 20\nMINIGAME_FINISH_CLICK_TRIES = 6\nMAX_FAILURE_FOLDERS = 1000\nMAX_REPORTS = 1000\nMAX_RECORDINGS = 50\nCONSOLE_MAX_LINES = 100000\nICON_SHIFT_TOLERANCE = 4\nDISABLED_NEEDS_REJOIN_THRESHOLD = 9\nRUN_CAPTURES_BEST = 8\nRUN_CAPTURES_WORST = 8\nRUN_CAPTURES_FAILED = 9\nSTITCHES_LINE_DEADBAND = 30.0\n",
     # other key bindings in the game
-    "keys_remapped": 'KEYS.update(backpack="v", mount="f", interact="f", zoom_in="o", helicopter="t", jump="x")\nHOTKEYS["stop"] = "q"\n',
+    "keys_remapped": 'KEYS.update(backpack="v", mount="f", interact="f", zoom_in="o", helicopter="t", jump="x")\nHOTKEYS["stop"] = "q"\n' + KEYS_REBUILD,
 
     # behaviour flags flipped
     "flags_flipped": {"patch": "MATCH_ONLY_LEFT_HALF = False\nFOCUS_WINDOW_ON_ACTION = False\nSAVE_NEW_NEEDS = True\n", "deselect": [SCREENSHOT_TEST]},

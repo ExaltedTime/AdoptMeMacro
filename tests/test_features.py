@@ -346,7 +346,7 @@ def test_a_button_scan_that_misses_one_is_repeated_and_maps_nothing_if_it_misses
 def test_a_button_scan_that_finds_all_five_the_second_time_maps_them(macro, monkeypatch):
     waits = scans(monkeypatch, macro, FOUR, FIVE)
     assert macro.refresh_button_mapping() is True
-    assert waits == [macro.cfg.BUTTON_SCAN_RETRY_WAIT] and macro.state.button_positions["sleepy"] == FIVE[4]
+    assert waits == [macro.cfg.BUTTON_SCAN_RETRY_WAIT] and macro.state.button_positions[macro.cfg.BUTTON_NAMES[4]] == FIVE[4]
 
 
 def test_buttons_hidden_by_a_beam_or_the_character_leave_the_others_named_by_where_they_are(macro, monkeypatch):
@@ -356,18 +356,20 @@ def test_buttons_hidden_by_a_beam_or_the_character_leave_the_others_named_by_whe
     here = os.path.join(os.path.dirname(__file__), "buttons")
     monkeypatch.setattr(macro, "focus_roblox_click", lambda: True)
     monkeypatch.setattr(macro, "wait_interruptible", lambda *a, **k: None)
-    for name, missing in (("beam_hides_thirsty", {"thirsty"}), ("beam_hides_thirsty_character_hides_potty", {"thirsty", "potty"})):
+    names = macro.cfg.BUTTON_NAMES                                                         # (the order of the buttons across the screen)
+    for name, missing in (("beam_hides_thirsty", {names[1]}), ("beam_hides_thirsty_character_hides_potty", {names[1], names[3]})):
         screen = cv2.imread(os.path.join(here, f"{name}.png"))
         monkeypatch.setattr(macro, "grab_screen", lambda screen=screen: screen)
         assert macro.refresh_button_mapping() is True, name
-        assert set(macro.cfg.BUTTON_NAMES) - set(macro.state.button_positions) == missing, name
-        assert macro.state.button_positions["dirty"][0] == pytest.approx(858, abs=5), name
-        assert macro.click_need_button("thirsty") is False                                    # (no button seen: nothing is clicked)
+        assert set(names) - set(macro.state.button_positions) == missing, name
+        assert macro.state.button_positions[names[2]][0] == pytest.approx(858, abs=5), name
+        assert macro.click_need_button(names[1]) is False                                    # (no button seen: nothing is clicked)
 
 
 def test_buttons_that_are_not_where_the_buttons_are_are_not_named(macro):
     slots = macro.cfg.BUTTON_SLOTS_X
-    assert macro.name_buttons_by_position([(slots[0] + 5, 600), (slots[3] - 8, 640)]) == {"hungry": (slots[0] + 5, 600), "potty": (slots[3] - 8, 640)}
+    names = macro.cfg.BUTTON_NAMES
+    assert macro.name_buttons_by_position([(slots[0] + 5, 600), (slots[3] - 8, 640)]) == {names[0]: (slots[0] + 5, 600), names[3]: (slots[3] - 8, 640)}
     assert macro.name_buttons_by_position([(slots[0], 600), (slots[3] + 100, 600)]) == {}        # one is near none
     assert macro.name_buttons_by_position([(slots[0], 600), (slots[0] + 10, 600)]) == {}         # two are near the same one
 

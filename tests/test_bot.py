@@ -580,14 +580,15 @@ def test_a_set_command_carries_its_switch_and_only_for_one_that_exists(tmp_path)
 
 
 def test_the_switches_are_read_from_the_game_config_with_the_defaults_for_what_is_missing():
+    on_by_default = bot_lib.cfg.ENABLED_NEEDS
     states = bot_lib.switch_states(None)
-    assert states["option:side_quest"] is True and states["option:play_hauntlet_2"] is False and states["need:hungry"] is True
+    assert states["option:side_quest"] is True and states["option:play_hauntlet_2"] is False and states["need:hungry"] is ("hungry" in on_by_default)
     assert set(states) == {f"need:{n}" for n in bot_lib.cfg.NEED_NAMES} | {f"option:{n}" for n in bot_lib.cfg.OPTION_SWITCHES}
-    states = bot_lib.switch_states({"needs_enabled": {"hungry": False, "bored": True}, "side_quest_enabled": False, "ghost_gallery_enabled": True})
-    assert states["need:hungry"] is False and states["need:bored"] is True and states["need:sick"] is True   
+    states = bot_lib.switch_states({"needs_enabled": {"hungry": False, "beach": True}, "side_quest_enabled": False, "ghost_gallery_enabled": True})
+    assert states["need:hungry"] is False and states["need:beach"] is True and states["need:sick"] is ("sick" in on_by_default)
     assert states["option:side_quest"] is False and states["option:play_ghost_gallery"] is True
-    assert bot_lib.switch_states({"needs_enabled": "x"})["need:hungry"] is True                                   # (a bad config is the defaults)
-    text = bot_lib.options_text(bot_lib.switch_states({"needs_enabled": {"hungry": False}}))
+    assert bot_lib.switch_states({"needs_enabled": "x"})["need:hungry"] is ("hungry" in on_by_default)                                  # (a bad config is the defaults)
+    text = bot_lib.options_text(bot_lib.switch_states({"needs_enabled": {name: name != "hungry" for name in bot_lib.cfg.NEED_NAMES}}))
     assert "side_quest on" in text and "play_stitches_spotlight off" in text and text.splitlines()[1] == "Needs off: hungry"
 
 

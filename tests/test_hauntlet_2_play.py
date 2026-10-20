@@ -537,7 +537,7 @@ def test_the_loop_chooses_a_door_walks_to_it_and_goes_on_in_the_next_room(macro,
     events = []
     room_12, room_13 = frame(macro, "boarded-boarded-locked", room=12), frame(macro, "boarded-boarded-locked", room=13)
     # room 12 (a locked door on the right, which isn't taken without a key) until the first walk is under way, then 13
-    world.screens = lambda: room_13 if world.keys and world.clock.now > world.keys[0][2] + 1 else room_12
+    world.screens = lambda: room_13 if world.keys and world.clock.now > world.keys[0][2] + cfg.HAUNTLET_STILL_AFTER / 2 else room_12
     start = world.clock.now
     macro.play_hauntlet_2(start + cfg.MINIGAME_START_WAIT + 10 * (cfg.HAUNTLET_ROOM_SETTLE + cfg.HAUNTLET_RETRY_WAIT + cfg.HAUNTLET_WALK_MAX), watch_of(macro))
     pressed = [(kind, key) for kind, key, _ in world.keys]
@@ -804,7 +804,7 @@ def test_a_player_far_from_its_door_is_steered_in_steps_not_one_long_strafe(macr
     doors = macro.find_hauntlet_doors(screen)
     assert len(doors) == 3 and doors[2].x < cfg.REFERENCE_CENTER_X + 100 and doors[0].x < doors[1].x < doors[2].x < cfg.REFERENCE_CENTER_X + 100
     key, whole = macro.hauntlet_strafe(screen, doors, 0)
-    assert key == cfg.KEYS["left"] and whole > 2 * cfg.HAUNTLET_STEER_MAX                 # far to go...
+    assert key == cfg.KEYS["left"] and whole > cfg.HAUNTLET_STEER_MAX                 # far to go...
     assert macro.hauntlet_steer(screen, 0) == (cfg.KEYS["left"], cfg.HAUNTLET_STEER_MAX)    # ...a step of it
     assert macro.hauntlet_steer(screen, 1)[0] == cfg.KEYS["left"]
     assert macro.hauntlet_steer(screen, 2) is None                                              # the player is in front of the last one

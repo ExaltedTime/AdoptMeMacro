@@ -2599,21 +2599,15 @@ def detect_minigame_victory(img: Image) -> bool:
             return False
     return True
 
-def detect_minigame_overlay(img: Image) -> Optional[str]:
-    """Which minigame's overlay (MINIGAME_OVERLAYS, crops in
-    MINIGAME_OVERLAY_DIR) is on screen in `img`, or None."""
-    crops = load_templates(cfg.MINIGAME_OVERLAY_DIR)
-    best_name, best_score = None, cfg.MINIGAME_OVERLAY_THRESHOLD
-    for name, box in cfg.MINIGAME_OVERLAYS.items():
-        crop = crops.get(name)
-        score = template_score(img, crop, box) if crop is not None else 0.0
-        if score >= best_score:
-            best_name, best_score = name, score
-    return best_name
+def minigame_overlay_visible(img: Image, name: str) -> bool:
+    """True if minigame `name`'s overlay (its crop in MINIGAME_OVERLAY_DIR, within its box in MINIGAME_OVERLAYS) is on screen in `img`, at least
+    MINIGAME_OVERLAY_THRESHOLD: one template match, not one per minigame, since this is asked at every look."""
+    crop = load_templates(cfg.MINIGAME_OVERLAY_DIR).get(name)
+    return crop is not None and name in cfg.MINIGAME_OVERLAYS and template_score(img, crop, cfg.MINIGAME_OVERLAYS[name]) >= cfg.MINIGAME_OVERLAY_THRESHOLD
 
 class MinigameWatch:
     """Keeps track of whether the minigame being played is on screen (its
-    overlay - detect_minigame_overlay()) and whether the game disconnected
+    overlay - minigame_overlay_visible()) and whether the game disconnected
     (detect_disconnect()), fed one screenshot at a time by minigame_look() and minigame_wait().
     `problem` says why to stop, or None."""
 
@@ -2626,7 +2620,7 @@ class MinigameWatch:
     def update(self, img: Image) -> None:
         if detect_disconnect(img):
             self.disconnected = True
-        elif detect_minigame_overlay(img) == self.name:
+        elif minigame_overlay_visible(img, self.name):
             self.last_seen = time.time()
 
     def start_wait_over(self) -> None:

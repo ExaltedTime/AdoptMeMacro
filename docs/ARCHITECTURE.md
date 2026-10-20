@@ -592,7 +592,7 @@ detectors (`detect_paycheck()`, `detect_sick_dialog()`, `detect_pet_focus()`, th
 `detect_backpack_normal()`, the BACK button in `close_backpack_if_open()`) are that lookup plus
 whatever they do with the answer, and `dismiss_stray_windows()` walks `STRAY_WINDOWS` through it. A
 new crop is a file in `ref/popups/` plus an entry in one of the two tables. A name with no crop file is
-never found. The minigame title (`identify_minigame()`) and overlay (`detect_minigame_overlay()`) crops
+never found. The minigame title (`identify_minigame()`) and overlay (`minigame_overlay_visible()`) crops
 live in their own folders and pick the best of several, so they keep their own constants.
 
 **Backpack tabs.** The backpack remembers its last category tab, and clicking a tab that is already selected (orange background) expands the backpack. `select_backpack_tab()` therefore only clicks the vehicles / toys tab when `is_backpack_tab_selected()` doesn't see the orange tile.
@@ -680,7 +680,7 @@ input). A minigame that ran to the GAME OVER! screen counts as progress for the 
 screen while it runs (Hauntlet 2: the ROOM counter; Ghost Gallery: the TIME
 LEFT / GHOST GALLERY / Score banner; Stitches' Spotlight: TIME LEFT / the title / the Candy Corn count), recognised by a crop in
 `ref/overlays/<minigame>.png` within its box in `MINIGAME_OVERLAYS`
-(`detect_minigame_overlay()`, at least `MINIGAME_OVERLAY_THRESHOLD`). A
+(`minigame_overlay_visible()`, at least `MINIGAME_OVERLAY_THRESHOLD`). A
 `MinigameWatch` made by `play_minigame()` is fed every screenshot the player
 takes (`minigame_look()`, `minigame_wait()`): once the overlay has been seen,
 losing it for `MINIGAME_OVERLAY_LOST_TIMEOUT` means the minigame was left

@@ -265,6 +265,13 @@ def test_a_message_is_cut_to_fit_discord_whole_lines_first_and_a_code_block_stay
     assert len(bot_lib.clip_message("z" * 3000, limit=500)) <= 500
 
 
+def test_a_command_that_raised_is_told_to_the_channel_briefly_with_the_kind_of_error():
+    text = bot_lib.error_text(PermissionError("[Errno 13] the file is open elsewhere"))
+    assert text.startswith("The command failed: PermissionError: ") and "open elsewhere" in text and "bot's log" in text
+    assert bot_lib.error_text(KeyError()).startswith("The command failed: KeyError") and "\n" not in bot_lib.error_text(ValueError("a\nb"))
+    assert len(bot_lib.error_text(RuntimeError("x" * 5000))) <= 300
+
+
 def test_the_update_plan_of_many_long_commit_subjects_fits_a_message():
     subjects = [f"abc{i:04d} " + "A long commit subject that says a lot about what changed in the macro " * 2 for i in range(40)]
     plan = bot_lib.update_plan("aaa1111", "bbb2222", [], True, False, subjects, "main")
@@ -634,7 +641,7 @@ def test_every_slash_command_has_a_name_and_descriptions_discord_accepts():
     source = (pathlib.Path(__file__).parent.parent / "bot" / "discord_bot.py").read_text(encoding="utf-8")
     commands = re.findall(r'@command\("([^"]+)", "((?:[^"\\]|\\.)*)"\)', source)
     names = {name for name, _ in commands}
-    assert {"status", "screenshot", "rview", "log", "report", "results", "captures", "pull", "start", "loop", "stop", "exit", "restart", "rejoin", "setup", "refresh_debug",
+    assert {"status", "screenshot", "rview", "log", "report", "results", "captures", "pull", "start", "loop", "stop", "exit", "rejoin", "setup", "refresh_debug",
             "trade_hub", "leave_trade_hub", "update", "rollback", "need", "option", "options"} <= names
     for name, description in commands:
         assert re.fullmatch(r"[a-z0-9_-]{1,32}", name) and 1 <= len(description) <= 100, name

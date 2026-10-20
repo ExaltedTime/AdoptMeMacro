@@ -1757,3 +1757,21 @@ def test_closing_asks_for_the_stop_before_it_closes_the_capture_and_waits_for_th
     gui.close()
     macro.STOP_EVENT.clear()
     assert order == ["capture stopped (stop already asked: True)", "status", "worker joined (True)", "released", "blackout away", "destroyed"]
+
+
+def test_two_threads_writing_the_status_at_once_leave_one_whole_file(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "STATUS_PATH", str(tmp_path / "status.json"))
+    errors = []
+    def writer():
+        for _ in range(150):
+            macro.write_status()
+            try:
+                json.load(open(macro.cfg.STATUS_PATH))
+            except Exception as error:                                  # a half-written or missing file would show here
+                errors.append(error)
+    threads = [threading.Thread(target=writer) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []

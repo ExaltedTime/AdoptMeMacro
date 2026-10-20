@@ -128,6 +128,7 @@ def launch_macro(config: bot_lib.Config, loop: bool = True) -> int:
     """Start `main.py` (the repository's, with the configured Python; `--loop` if `loop`) as a process of its own, in this desktop session; what it prints on its
     error output is appended to debug/logs/macro_stderr.log. Returns its process id."""
     folder = config.repo_dir or ROOT
+    os.makedirs(cfg.LOGS_DIR, exist_ok=True)                           # (a Refresh debug, or a fresh checkout, leaves no folder to write the error output into)
     with open(os.path.join(cfg.LOGS_DIR, "macro_stderr.log"), "ab") as errors:
         process = subprocess.Popen([config.python or sys.executable, os.path.join(folder, "main.py"), *(["--loop"] if loop else [])], cwd=folder,
                                    stdout=subprocess.DEVNULL, stderr=errors)
@@ -306,8 +307,18 @@ class OwnerOnlyTree(app_commands.CommandTree):
         return bot_lib.is_allowed(self.config, interaction.user.id, interaction.channel_id or 0)
 
     async def on_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
-        if not isinstance(error, app_commands.CheckFailure):
-            log.error("command failed: %s", error, exc_info=error)
+        """A command that raised: logged, and said in the channel - every command defers ("thinking..."), which would otherwise go on for ever."""
+        if isinstance(error, app_commands.CheckFailure):
+            return
+        log.error("command failed: %s", error, exc_info=error)
+        text = bot_lib.error_text(getattr(error, "original", None) or error)
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(text)
+            else:
+                await interaction.response.send_message(text)
+        except Exception:
+            log.exception("the error could not be said in the channel either")
 
 
 def build(config: bot_lib.Config) -> discord.Client:
@@ -335,7 +346,15 @@ def build(config: bot_lib.Config) -> discord.Client:
             await say(interaction, f"Couldn't grab the screen: {error}")
             return
         note = "The screen looks blank - the PC may be locked or asleep." if blank else ""
-        await say(interaction, note, file=discord.File(io.BytesIO(png), "screenshot.png"))
+        name = "screenshot.png"
+        if len(png) > cfg.BOT_MAX_UPLOAD_MB * 1048576:                 # (a large monitor: too big for Discord as a PNG, a JPEG of it is not)
+            try:
+                png, _ = await asyncio.to_thread(grab_roblox_jpeg)
+            except Exception as error:
+                await say(interaction, f"The screenshot was too big to send, and a smaller one could not be made: {error}")
+                return
+            name, note = "screenshot.jpg", (note + " " if note else "") + "(sent as a smaller JPEG: the PNG was too big)"
+        await say(interaction, note, file=discord.File(io.BytesIO(png), name))
 
     rolling = {"on": False}                                        # one rolling view at a time
 
@@ -425,14 +444,6 @@ def build(config: bot_lib.Config) -> discord.Client:
         await interaction.response.defer(thinking=True)
         remember("stopped")
         await say(interaction, await stop_macro(config))
-
-    @command("restart", "Close the macro, then start it with its loop")
-    async def restart(interaction: discord.Interaction) -> None:
-        await interaction.response.defer(thinking=True)
-        remember("stopped")
-        stopped = await stop_macro(config)
-        remember("running")
-        await say(interaction, f"{stopped}\n{await start_macro(config)}")
 
     async def ask_macro(interaction: discord.Interaction, command_name: str, said: str, idle_only: bool = False) -> None:
         """Leave the running macro `command_name` (its window does it) and say `said`; with `idle_only` not while its loop runs."""

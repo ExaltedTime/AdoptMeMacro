@@ -630,16 +630,20 @@ def save_failure_report(reason: str) -> Optional[str]:
         logger.warning(f"Couldn't save a failure report: {e}")
         return None
 
+STATUS_LOCK = threading.Lock()
+
 def write_status() -> None:
     """Write run_stats, the currently disabled needs and the time to
-    STATUS_PATH (replacing it atomically). Never raises."""
+    STATUS_PATH (replacing it atomically). Never raises. The worker thread writes it as the run goes on and Tk's thread when the window opens with no loop
+    and when it closes (mark_stopped(), while the worker is still unwinding): one writer at a time, or the two would share the temporary file."""
     try:
-        status = {**asdict(run_stats), "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
-                  "disabled_needs": sorted(state.disabled_needs)}
-        tmp = cfg.STATUS_PATH + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(status, f, indent=2)
-        os.replace(tmp, cfg.STATUS_PATH)
+        with STATUS_LOCK:
+            status = {**asdict(run_stats), "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
+                      "disabled_needs": sorted(state.disabled_needs)}
+            tmp = cfg.STATUS_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(status, f, indent=2)
+            os.replace(tmp, cfg.STATUS_PATH)
     except (OSError, TypeError):
         pass
 

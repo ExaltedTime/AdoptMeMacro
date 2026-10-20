@@ -258,6 +258,12 @@ def fits_a_message(text: str) -> bool:
     return len(text) + 8 <= DISCORD_MESSAGE_LIMIT
 
 
+def error_text(error: BaseException) -> str:
+    """What the channel is told when a command raised: the kind of error and its message, cut short (the details are in the bot's log)."""
+    message = str(error).strip().replace("\n", " ")
+    return clip_message(f"The command failed: {type(error).__name__}" + (f": {message}" if message else "") + " (see the bot's log)", 300)
+
+
 def clip_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> str:
     """`text` cut to fit one Discord message (a longer one is refused, and the whole command with it): whole lines from the start, then "... (N more lines)";
     a code block stays closed."""

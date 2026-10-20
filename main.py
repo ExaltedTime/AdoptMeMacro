@@ -5484,6 +5484,85 @@ class DebugCapture(logging.Handler):
 
 OUTSIDE_ACTIONS: dict[str, Callable[[], Any]] = {"rejoin": leave_and_rejoin, "setup": setup_game, "trade_hub": travel_to_trade_hub, "leave_trade_hub": leave_trade_hub}   # the commands that do what a button does (AdoptMeGUI.act_from_outside())
 
+def blackout_seen_by_capture(before: Image, after: Image) -> Optional[bool]:
+    """Whether the macro's screenshots see the window of the blackout test: `before` is a screenshot without it, `after` one with it up, white. Seen if
+    the screen got BLACKOUT_SEEN_RISE grey levels brighter; None - cannot tell - if the screen was brighter than BLACKOUT_TOO_BRIGHT to begin with."""
+    mean_before, mean_after = float(before.mean()), float(after.mean())
+    if mean_before > cfg.BLACKOUT_TOO_BRIGHT:
+        return None
+    return mean_after - mean_before > cfg.BLACKOUT_SEEN_RISE
+
+class Blackout:
+    """The screen blanked by a black window that is click-through, never takes the focus, and is left out of screenshots (SetWindowDisplayAffinity with
+    WDA_EXCLUDEFROMCAPTURE, Windows 10 version 2004 and later): the person sees black, while the macro's screenshots, recordings and the Discord bot's
+    pictures still see the game, and its clicks and keys go to it. Turned on only after a test with the window white that the screenshots really do not see
+    it (blackout_seen_by_capture()); if they do, or it cannot be told, it is taken away again. Tk's thread only. See docs/ARCHITECTURE.md#blanking-the-screen."""
+
+    def __init__(self, root: tk.Tk) -> None:
+        self.root = root
+        self.window: Optional[tk.Toplevel] = None
+
+    @property
+    def shown(self) -> bool:
+        return self.window is not None
+
+    def toggle(self) -> bool:
+        """Turn it on or off; True if the screen is blank afterwards."""
+        if self.shown:
+            self.hide()
+            return False
+        return self.show()
+
+    def supported(self) -> bool:
+        return os.name == "nt"
+
+    def show(self) -> bool:
+        if not self.supported():
+            logger.warning("Blanking the screen only works on Windows")
+            return False
+        before = grab_screen()
+        window = self.make_window()
+        if window is None:
+            return False
+        self.window = window
+        self.root.update()
+        time.sleep(cfg.BLACKOUT_SETTLE)
+        seen = blackout_seen_by_capture(before, grab_screen())
+        if seen is not False:
+            self.hide()
+            logger.warning("The screen was not blanked: " + ("the macro's screenshots would see the black window too" if seen else "the screen is too bright to test whether they would (try again from a darker view)"))
+            return False
+        window.configure(bg="black")
+        logger.info(f"Screen blanked ({cfg.BLACKOUT_HOTKEY.upper()} again to show it)")
+        return True
+
+    def hide(self) -> None:
+        if self.window is not None:
+            try:
+                self.window.destroy()
+            except tk.TclError:
+                pass
+            self.window = None
+
+    def make_window(self) -> Optional[tk.Toplevel]:
+        """A white full-screen topmost window with the styles above, or None (and a warning) if Windows refuses to leave it out of screenshots."""
+        window = tk.Toplevel(self.root)
+        window.overrideredirect(True)
+        window.attributes("-topmost", True)
+        window.configure(bg="white", cursor="none")
+        window.geometry(f"{self.root.winfo_screenwidth()}x{self.root.winfo_screenheight()}+0+0")
+        window.update_idletasks()
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]  # Windows only
+        hwnd = user32.GetParent(window.winfo_id()) or window.winfo_id()
+        style = user32.GetWindowLongW(hwnd, -20)                                       # GWL_EXSTYLE
+        user32.SetWindowLongW(hwnd, -20, style | 0x00080000 | 0x00000020 | 0x08000000 | 0x00000080)    # layered, transparent (click-through), no-activate, tool window
+        user32.SetLayeredWindowAttributes(hwnd, 0, 255, 2)                             # LWA_ALPHA
+        if not user32.SetWindowDisplayAffinity(hwnd, 0x00000011):                      # WDA_EXCLUDEFROMCAPTURE
+            window.destroy()
+            logger.warning("The screen was not blanked: this Windows cannot leave a window out of screenshots (it needs Windows 10 version 2004 or later)")
+            return None
+        return window
+
 class AdoptMeGUI:
     def __init__(self, root: tk.Tk) -> None:
         state.macro_window = self
@@ -5513,6 +5592,7 @@ class AdoptMeGUI:
 
         self.is_running = False
         self.rejoin_waits = 0                    # looks so far for the loop to stop, before a rejoin asked for from outside
+        self.blackout = Blackout(self.root)
         self.watch_stop_hotkey()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
@@ -5613,6 +5693,7 @@ class AdoptMeGUI:
         if state.capture is not None:
             state.capture.stop()
             state.capture = None
+        self.blackout.hide()
         STOP_EVENT.set()
         mark_stopped()
         time.sleep(cfg.STOP_CHECK_INTERVAL * 3)   # the worker notices the stop within a check or two and releases what it holds
@@ -5623,7 +5704,8 @@ class AdoptMeGUI:
         """Start a thread that watches the hotkeys: STOP_HOTKEY stops the macro (in any window), CAPTURE_HOTKEY starts or
         stops an input capture (only while Roblox is focused). See docs/ARCHITECTURE.md#gui-internals."""
         hotkeys = [(cfg.STOP_HOTKEY, self.stop_by_hotkey, True, False),
-                   (cfg.CAPTURE_HOTKEY, self.capture_by_hotkey, False, True)]   # (key, action, only while a run is going, only while Roblox is focused)
+                   (cfg.CAPTURE_HOTKEY, self.capture_by_hotkey, False, True),
+                   (cfg.BLACKOUT_HOTKEY, self.blackout_by_hotkey, False, True)]   # (key, action, only while a run is going, only while Roblox is focused)
 
         def watch():
             was_down = [False] * len(hotkeys)
@@ -5645,6 +5727,14 @@ class AdoptMeGUI:
             toggle_input_capture()
         except OSError as error:
             logger.warning(f"Input capture: {error}")
+
+    def blackout_by_hotkey(self) -> None:
+        """BLACKOUT_HOTKEY was pressed: blank the screen or show it again (Tk's thread)."""
+        try:
+            self.blackout.toggle()
+        except Exception:
+            logger.exception("Blanking the screen failed")
+            self.blackout.hide()
 
     def stop_by_hotkey(self) -> None:
         """STOP_HOTKEY was pressed: stop, same as the [STOP] button, and say so."""
@@ -5950,6 +6040,8 @@ class AdoptMeGUI:
                        selectcolor=self.bg, activebackground=self.bg, activeforeground=self.fg,
                        anchor=tk.W, cursor="hand2").pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
         tk.Label(parent, text=f"Press {cfg.CAPTURE_HOTKEY.upper()} anywhere to start / stop capturing screenshots and input",
+                 font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
+        tk.Label(parent, text=f"Press {cfg.BLACKOUT_HOTKEY.upper()} in Roblox to blank / show the screen (the macro still sees it)",
                  font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
         tk.Button(parent, text="Refresh debug", command=self.refresh_debug_folder,
                   font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.accent, fg=self.fg, cursor="hand2"

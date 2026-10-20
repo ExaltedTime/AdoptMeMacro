@@ -5,6 +5,7 @@ import threading
 import types
 import time
 
+import numpy as np
 import pytest
 
 
@@ -1642,3 +1643,55 @@ def test_a_key_that_fails_to_come_up_is_still_forgotten_and_the_others_are_let_g
     macro.key_down("a")
     macro.release_all_inputs()
     assert "a" in attempts and set(macro.cfg.HELD_KEYS) <= set(attempts)       # each tried, though each raised
+
+
+# --- blanking the screen (the H key) ---
+
+def test_the_blackout_test_tells_whether_the_screenshots_see_its_white_window(macro):
+    dark = np.full((100, 100, 3), 60, np.uint8)
+    white = np.full((100, 100, 3), 255, np.uint8)
+    assert macro.blackout_seen_by_capture(dark, white) is True                       # the white window shows in the screenshot: it is not left out of it
+    assert macro.blackout_seen_by_capture(dark, dark.copy()) is False                # the screenshot still shows the game: it is left out
+    noisy = np.clip(dark.astype(int) + 5, 0, 255).astype(np.uint8)                    # (the game moving a little)
+    assert macro.blackout_seen_by_capture(dark, noisy) is False
+    assert macro.blackout_seen_by_capture(white, white.copy()) is None                # a white screen cannot be told from the white window
+
+
+class FakeWindow:
+    def __init__(self):
+        self.destroyed, self.colors = False, []
+    def configure(self, **kw):
+        self.colors.append(kw.get("bg"))
+    def destroy(self):
+        self.destroyed = True
+
+
+def blackout_with(macro, monkeypatch, screens, window="ok", supported=True):
+    fake = FakeWindow()
+    root = types.SimpleNamespace(update=lambda: None)
+    shown = macro.Blackout(root)
+    monkeypatch.setattr(shown, "supported", lambda: supported)
+    monkeypatch.setattr(shown, "make_window", lambda: fake if window == "ok" else None)
+    seen = iter(screens)
+    monkeypatch.setattr(macro, "grab_screen", lambda: next(seen))
+    monkeypatch.setattr(macro.time, "sleep", lambda s: None)
+    return shown, fake
+
+
+def test_the_screen_is_blanked_only_when_the_screenshots_do_not_see_the_window_and_the_key_toggles_it(macro, monkeypatch):
+    dark = np.full((100, 100, 3), 60, np.uint8)
+    shown, fake = blackout_with(macro, monkeypatch, [dark, dark.copy()])
+    assert shown.toggle() is True and shown.shown and fake.colors == ["black"]       # (the white test window made black once it is known to be left out)
+    assert shown.toggle() is False and not shown.shown and fake.destroyed
+
+
+def test_the_screen_is_not_blanked_when_the_screenshots_would_see_the_window_or_it_cannot_be_told(macro, monkeypatch, caplog):
+    dark, white = np.full((100, 100, 3), 60, np.uint8), np.full((100, 100, 3), 255, np.uint8)
+    shown, fake = blackout_with(macro, monkeypatch, [dark, white])
+    assert shown.toggle() is False and not shown.shown and fake.destroyed and "would see the black window" in caplog.text
+    shown, fake = blackout_with(macro, monkeypatch, [white, white])
+    assert shown.toggle() is False and fake.destroyed and "too bright" in caplog.text
+    shown, fake = blackout_with(macro, monkeypatch, [dark, dark], window=None)         # Windows refuses to leave a window out of screenshots
+    assert shown.toggle() is False and not shown.shown
+    shown, fake = blackout_with(macro, monkeypatch, [], supported=False)               # not Windows
+    assert shown.toggle() is False and not fake.destroyed

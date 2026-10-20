@@ -1182,6 +1182,21 @@ press of the hotkey then tidies it up and starts a new one. Screenshots and inpu
 threads of the capture's own; the hotkey is watched by the GUI's hotkey thread (with the stop hotkey) and
 acted on in Tk's thread, so typing the capture key into the private server link box starts a capture too.
 
+### Blanking the screen
+
+Pressing `BLACKOUT_HOTKEY` while Roblox is focused (the GUI's hotkey thread, acted on in Tk's thread like the capture key) blanks the screen with a black window
+(`Blackout`), and pressing it again takes the window away. The window is full-screen and topmost, **click-through** (`WS_EX_TRANSPARENT`, so the macro's clicks
+reach the game), **never takes the focus** (`WS_EX_NOACTIVATE`, so the macro's focus checks are unaffected) and **left out of screenshots**
+(`SetWindowDisplayAffinity` with `WDA_EXCLUDEFROMCAPTURE`, Windows 10 version 2004 and later). So the macro's own screenshots, the recordings and captures
+(which all use `grab_screen()`) and the Discord bot's `/screenshot` and `/rview` see the game, not the black window; a recorder of another program (OBS, a call)
+would see the black.
+
+It is only turned on after a test (`Blackout.show()`): the window is first shown white for `BLACKOUT_SETTLE` seconds and the screen is grabbed; if the grab is
+`BLACKOUT_SEEN_RISE` grey levels brighter the screenshots see the window and it is taken away again with a warning, and a screen already brighter than
+`BLACKOUT_TOO_BRIGHT` cannot be tested (`blackout_seen_by_capture()` is None) and is refused the same way (try again from a darker view). A Windows that refuses
+the capture exclusion gets the same warning. Only then is the window made black. The test shows as a brief white flash. It does not dim the backlight, and the
+window goes with the process (`close()` takes it away first). Typing the hotkey in Roblox is the only way to toggle it; the cursor is hidden over it.
+
 ### Reading Hauntlet 2
 
 `read_hauntlet_room()` (the HAUNTLET 2 READER section of `main.py`) returns the number on the ROOM panel
@@ -1458,7 +1473,7 @@ exact values and rationale):
 |---|---|
 | Behavior flags | `ENABLED_NEEDS`, `STOP_HOTKEY`, `BACKPACK_*`, `HALLOWEEN`, `MINIGAME_*`, `HAUNTLET_2_*`, `GHOST_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
 | Window / coordinates | `REFERENCE_WIDTH`, `REFERENCE_HEIGHT`, `REFERENCE_CENTER_X/Y`, `ROBLOX_RECT_TTL` |
-| Key bindings | `KEY_BACKPACK`, `KEY_MOUNT`, `KEY_INTERACT`, `KEY_ZOOM_IN`, `KEY_ZOOM_OUT`, `KEY_HELICOPTER`, `KEY_JUMP`, `KEY_STITCHES_WALK`, `MOVE_KEYS`, `RESPAWN_KEYS`, `STITCHES_TURN_KEYS`, `HELD_KEYS`, `STOP_HOTKEY`, `CAPTURE_HOTKEY` |
+| Key bindings | `KEY_BACKPACK`, `KEY_MOUNT`, `KEY_INTERACT`, `KEY_ZOOM_IN`, `KEY_ZOOM_OUT`, `KEY_HELICOPTER`, `KEY_JUMP`, `KEY_STITCHES_WALK`, `MOVE_KEYS`, `RESPAWN_KEYS`, `STITCHES_TURN_KEYS`, `HELD_KEYS`, `STOP_HOTKEY`, `CAPTURE_HOTKEY`, `BLACKOUT_HOTKEY` |
 | Timing | `WATCH_POLL_INTERVAL`, `NEED_WATCH_JOIN_TIMEOUT`, `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `STOP_CLICK_GRACE`, `NEED_GONE_*` |
 | Stuck needs | `NEED_STUCK_CHECKS` |
 | Pet focusing | `FOCUS_PET_REGION_TOP_PERCENT`, `FOCUS_PET_FRAME_GAP`, `FOCUS_PET_DIFF_THRESHOLD`, `FOCUS_PET_MERGE_KERNEL`, `FOCUS_PET_MIN_AREA` |
@@ -1477,6 +1492,7 @@ exact values and rationale):
 | Candy corn | `CANDY_CORN_*`, `MINIGAME_RESULT_BOX`, `MAX_RESULT_SHOTS` |
 | Input capture | `CAPTURE_HOTKEY`, `CAPTURES_DIR`, `MINIGAME_CAPTURE`, `RUN_CAPTURES_DIR`, `RUN_CAPTURE_ZIPS`, `RUN_CAPTURES_BEST`, `RUN_CAPTURES_WORST`, `RUN_CAPTURES_FAILED`, `RUN_CAPTURE_BURST`, `RUN_CAPTURE_TAIL`, `RUN_CAPTURE_PROTECTED`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
 | Backpack tabs | `TAB_HALF_SIZE`, `TAB_SELECTED_*` (a category tab that is orange is already selected) |
+| Blanking the screen | `BLACKOUT_*` |
 | Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog, doctor-prompt and backpack crops) |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
 | GUI | colors/fonts (`GUI_BG`, `GUI_FONT`, ...) and layout spacing (`GUI_OUTER_PADDING`, `GUI_ROW_SPACING`, ...) for the `tkinter` panel |

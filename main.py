@@ -1346,7 +1346,7 @@ def walk_to_buttons() -> None:
     if not focus_roblox():
         return
     logger.debug("Walking to buttons...")
-    hold_key("w", cfg.WALK_TO_BUTTONS_DURATION)
+    hold_key(cfg.KEY_FORWARD, cfg.WALK_TO_BUTTONS_DURATION)
     wait_interruptible(cfg.UI_SETTLE)
     logger.debug("Arrived at buttons")
 
@@ -1985,7 +1985,7 @@ class RideNeedHandler(NeedHandler):
 
         # Walk forward briefly after mounting, before opening the backpack
         logger.debug(f"Walking forward for {cfg.RIDE_FORWARD_DURATION}s...")
-        hold_key("w", cfg.RIDE_FORWARD_DURATION)
+        hold_key(cfg.KEY_FORWARD, cfg.RIDE_FORWARD_DURATION)
 
         equip_favorite_vehicle()
 
@@ -1994,7 +1994,7 @@ class RideNeedHandler(NeedHandler):
         hold_key(cfg.KEY_HELICOPTER, cfg.RIDE_R_HOLD_DURATION)
 
         # Walk back and forth (forward/backward, not left/right) while riding
-        walk_alternating(("w", "s"), cfg.NEED_GONE_MAX_WAIT, need_name="ride")
+        walk_alternating((cfg.KEY_FORWARD, cfg.KEY_BACK), cfg.NEED_GONE_MAX_WAIT, need_name="ride")
 
         logger.info("Ride complete")
         return True
@@ -2046,7 +2046,7 @@ class TeleportWalkNeedHandler(NeedHandler):
         helicopter = self.config.get("helicopter", cfg.HELICOPTER_REQUIRED)
         if helicopter:
             logger.debug(f"Stepping forward for {cfg.HELICOPTER_FORWARD_DURATION}s...")
-            hold_key("w", cfg.HELICOPTER_FORWARD_DURATION)
+            hold_key(cfg.KEY_FORWARD, cfg.HELICOPTER_FORWARD_DURATION)
             equip_favorite_vehicle()
             logger.debug(f"Holding {cfg.KEY_HELICOPTER} for {cfg.HELICOPTER_HOLD_DURATION}s...")
             hold_key(cfg.KEY_HELICOPTER, cfg.HELICOPTER_HOLD_DURATION)
@@ -2851,14 +2851,14 @@ def hauntlet_strafe(img: Image, doors: list[HauntletDoor], index: int) -> tuple[
     if spacing <= 0:
         if len(doors) == 1 or (len(doors) == 3 and index == 1):
             return None, 0.0
-        return (cfg.HAUNTLET_LEFT_KEY if index == 0 else cfg.HAUNTLET_RIGHT_KEY), cfg.HAUNTLET_STRAFE_DURATION
+        return (cfg.KEY_LEFT if index == 0 else cfg.KEY_RIGHT), cfg.HAUNTLET_STRAFE_DURATION
     hearts = read_hauntlet_hearts(img)
     circles = find_door_circles(img)
     target = circles[index][0] if len(circles) == len(doors) == 3 else doors[index].x       # the circle in front of the door, where it can be seen: it is what is to be stepped in
     distance = (target - (hearts.center_x if hearts else cfg.REFERENCE_CENTER_X)) / spacing
     if abs(distance) < cfg.HAUNTLET_STRAFE_MIN:
         return None, 0.0
-    return (cfg.HAUNTLET_RIGHT_KEY if distance > 0 else cfg.HAUNTLET_LEFT_KEY), min(abs(distance), cfg.HAUNTLET_STRAFE_MAX) * cfg.HAUNTLET_STRAFE_DURATION
+    return (cfg.KEY_RIGHT if distance > 0 else cfg.KEY_LEFT), min(abs(distance), cfg.HAUNTLET_STRAFE_MAX) * cfg.HAUNTLET_STRAFE_DURATION
 
 def hauntlet_use_item(name: str, watch: MinigameWatch) -> Optional[Image]:
     """Click the slot of the item called `name` and give the game HAUNTLET_ITEM_WAIT seconds to use it. The slots move together
@@ -2913,11 +2913,11 @@ def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun, wat
     return index, img
 
 def hauntlet_view(img: Image) -> np.ndarray:
-    """`img` shrunk to a grey 96x54, without the room panel at the top and the item bar at the bottom: what the walk looks at to
+    """`img` shrunk to a grey HAUNTLET_VIEW_SIZE, without the room panel at the top and the item bar at the bottom (HAUNTLET_VIEW_ROWS): what the walk looks at to
     tell whether anything is moving (the camera follows the player, so a player who moves makes the whole view move)."""
-    small = cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), (96, 54), interpolation=cv2.INTER_AREA).astype(np.int16)
-    small[:8] = 0
-    small[45:] = 0
+    small = cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), cfg.HAUNTLET_VIEW_SIZE, interpolation=cv2.INTER_AREA).astype(np.int16)
+    small[:cfg.HAUNTLET_VIEW_ROWS[0]] = 0
+    small[cfg.HAUNTLET_VIEW_ROWS[1]:] = 0
     return small
 
 def hauntlet_unstick(img: Image, target_index: Optional[int], tries: int, last_key: Optional[str]) -> str:
@@ -2930,14 +2930,14 @@ def hauntlet_unstick(img: Image, target_index: Optional[int], tries: int, last_k
     where = [x for x, _ in tvs] if len(tvs) == 3 else list(find_fork_doorways(img) or ())
     key: Optional[str] = None
     if last_key is not None:
-        key = cfg.HAUNTLET_RIGHT_KEY if last_key == cfg.HAUNTLET_LEFT_KEY else cfg.HAUNTLET_LEFT_KEY
+        key = cfg.KEY_RIGHT if last_key == cfg.KEY_LEFT else cfg.KEY_LEFT
     elif target_index is not None and target_index < len(where):
         hearts = read_hauntlet_hearts(img)
         dx = where[target_index] - (hearts.center_x if hearts else cfg.REFERENCE_CENTER_X)
         if abs(dx) >= cfg.HAUNTLET_UNSTICK_MARGIN:
-            key = cfg.HAUNTLET_RIGHT_KEY if dx > 0 else cfg.HAUNTLET_LEFT_KEY
+            key = cfg.KEY_RIGHT if dx > 0 else cfg.KEY_LEFT
     if key is None:
-        key = random.choice((cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_RIGHT_KEY))
+        key = random.choice((cfg.KEY_LEFT, cfg.KEY_RIGHT))
     logger.debug(f"Hauntlet 2: not moving - a step {key}")
     mark_run_capture("Hauntlet 2: not moving")
     pydirectinput.press(cfg.KEY_JUMP)
@@ -2968,7 +2968,7 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
     anywhere counts in `run.stuck`; the next one steps back first (HAUNTLET_BACKUP_DURATION). True if the minigame finished."""
     run.walked_at = time.time()
     if run.stuck > 0:
-        hold_key(cfg.HAUNTLET_BACK_KEY, cfg.HAUNTLET_BACKUP_DURATION)
+        hold_key(cfg.KEY_BACK, cfg.HAUNTLET_BACKUP_DURATION)
     aimed = False
     if target_index is not None and not run.fork:                               # aimed in small steps, looking at the doors again before each (HAUNTLET_AIM_STEPS)
         for _ in range(cfg.HAUNTLET_AIM_STEPS):
@@ -2984,7 +2984,7 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
         hold_key(direction, duration)                                           # one key at a time: the strafe, then the walk (what couldn't be aimed is a strafe worked out in one go)
     arrived = False
     started = time.time()
-    key_down(cfg.HAUNTLET_2_FORWARD_KEY)
+    key_down(cfg.KEY_FORWARD)
     try:
         last_view: Optional[np.ndarray] = None
         still_since: Optional[float] = None
@@ -3022,9 +3022,9 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
                 steer = hauntlet_steer(img, target_index)
                 if steer is not None:
                     logger.debug(f"Hauntlet 2: off the door - a step {steer[0]} for {steer[1]:.2f}s")
-                    key_up(cfg.HAUNTLET_2_FORWARD_KEY)                # one key at a time
+                    key_up(cfg.KEY_FORWARD)                # one key at a time
                     hold_key(*steer)
-                    key_down(cfg.HAUNTLET_2_FORWARD_KEY)
+                    key_down(cfg.KEY_FORWARD)
                     still_since, last_view = None, None
                     continue
             view = hauntlet_view(img)
@@ -3040,7 +3040,7 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
                 continue
             wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
     finally:
-        key_up(cfg.HAUNTLET_2_FORWARD_KEY)
+        key_up(cfg.KEY_FORWARD)
         run.walked_at = time.time()
         run.stuck = 0 if arrived else run.stuck + 1
     if not arrived:
@@ -3056,7 +3056,7 @@ def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
     zoom_out()
     if cfg.HAUNTLET_START_FORWARD > 0:
         wait_interruptible(cfg.HAUNTLET_START_DELAY)                   # the doors of the entrance hall open after a moment...
-        hold_key(cfg.HAUNTLET_2_FORWARD_KEY, cfg.HAUNTLET_START_FORWARD)    # ...and the way out is a step or two ahead
+        hold_key(cfg.KEY_FORWARD, cfg.HAUNTLET_START_FORWARD)    # ...and the way out is a step or two ahead
     run = HauntletRun()
     try:
         while time.time() < deadline and not watch.problem:
@@ -3140,14 +3140,15 @@ def find_ghost_alerts(img: Image) -> list[tuple[int, int, int]]:
     level = cfg.GHOST_ALERT_WHITE
     white = cv2.inRange(img[top:bottom], (level, level, level), (255, 255, 255))
     count, _, stats, _ = cv2.connectedComponentsWithStats(white, connectivity=8)
-    pieces = [tuple(int(v) for v in stats[i]) for i in range(1, count) if stats[i, cv2.CC_STAT_AREA] >= 8]
+    pieces = [tuple(int(v) for v in stats[i]) for i in range(1, count) if stats[i, cv2.CC_STAT_AREA] >= cfg.GHOST_ALERT_MIN_PIECE]
     found = []
     for x, y, w, h, area in pieces:
-        if h < cfg.GHOST_ALERT_ASPECT * w or h < cfg.GHOST_ALERT_MIN_HEIGHT or area < 0.55 * w * h:
+        if h < cfg.GHOST_ALERT_ASPECT * w or h < cfg.GHOST_ALERT_MIN_HEIGHT or area < cfg.GHOST_ALERT_BAR_FILL * w * h:
             continue                                                                   # not a bar
         for x2, y2, w2, h2, area2 in pieces:
-            if (y + h < y2 <= y + 1.5 * h and abs((x2 + w2 / 2) - (x + w / 2)) <= 0.8 * w + 4 and 0.35 * w <= w2 <= 1.6 * w
-                    and h2 <= 1.6 * w2 + 2 and area2 >= 0.5 * w2 * h2):                    # a dot under it
+            if (y + h < y2 <= y + cfg.GHOST_ALERT_DOT_GAP * h and abs((x2 + w2 / 2) - (x + w / 2)) <= cfg.GHOST_ALERT_DOT_SHIFT * w + cfg.GHOST_ALERT_DOT_SLACK
+                    and cfg.GHOST_ALERT_DOT_WIDTH[0] * w <= w2 <= cfg.GHOST_ALERT_DOT_WIDTH[1] * w
+                    and h2 <= cfg.GHOST_ALERT_DOT_ASPECT * w2 + 2 and area2 >= cfg.GHOST_ALERT_DOT_FILL * w2 * h2):                    # a dot under it
                 found.append((x + w // 2, top + y + h // 2, h))
                 break
     return sorted(found)
@@ -3218,8 +3219,8 @@ def ghost_chase_key(target: Point) -> Optional[str]:
     if max(abs(dx), abs(dy)) <= cfg.GHOST_TOWARD_MARGIN:
         return None
     if abs(dx) > abs(dy):
-        return cfg.HAUNTLET_RIGHT_KEY if dx > 0 else cfg.HAUNTLET_LEFT_KEY
-    return cfg.HAUNTLET_BACK_KEY if dy > 0 else "w"
+        return cfg.KEY_RIGHT if dx > 0 else cfg.KEY_LEFT
+    return cfg.KEY_BACK if dy > 0 else cfg.KEY_FORWARD
 
 def rotate_camera(drag: tuple[int, int] = cfg.GHOST_CAMERA_DRAG, tilt: int = cfg.GHOST_CAMERA_TILT, direction: Optional[int] = None) -> None:
     """Turn the camera: hold the right mouse button and drag the mouse sideways (`direction` -1 or 1, else a random way; `drag` = least and most px, and
@@ -3365,7 +3366,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     minigame_wait(cfg.GHOST_INTRO_WAIT, watch)
     zoom_out()
     tilt_camera_down()
-    hold_key("w", cfg.GHOST_START_FORWARD)           # into the middle of the hall, from where the game puts the player
+    hold_key(cfg.KEY_FORWARD, cfg.GHOST_START_FORWARD)           # into the middle of the hall, from where the game puts the player
     target: Optional[Point] = None
     held = False
     moving: Optional[str] = None                     # the key being held to walk, and until when
@@ -3626,7 +3627,7 @@ def click_nice_until_gone() -> bool:
 
 def screen_changed(before: Image, after: Image) -> bool:
     """Whether the view is a different one: the mean grey-level difference of the two (shrunk) screens is over MINIGAME_TELEPORT_CHANGE."""
-    small = [cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), (80, 45), interpolation=cv2.INTER_AREA).astype(np.int16) for img in (before, after)]
+    small = [cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), cfg.SCREEN_CHANGE_SIZE, interpolation=cv2.INTER_AREA).astype(np.int16) for img in (before, after)]
     return bool(np.abs(small[0] - small[1]).mean() > cfg.MINIGAME_TELEPORT_CHANGE)
 
 def minigame_teleported(before: Image) -> bool:

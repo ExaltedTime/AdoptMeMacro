@@ -92,6 +92,7 @@ MAX_RESULT_SHOTS = 200                      # the newest this many result screen
 MINIGAME_YES_TRIES = 3              # the popup's Yes is clicked this often at most, if it did not teleport the character...
 MINIGAME_TELEPORT_WAIT = 6.0        # ...which is looked for this long after each click: a white screen, or the whole view changing
 MINIGAME_TELEPORT_POLL = 0.1
+SCREEN_CHANGE_SIZE = (80, 45)         # screen_changed() compares the two screens shrunk to this many pixels (grey)
 MINIGAME_TELEPORT_CHANGE = 25       # mean grey-level difference (0-255, over the whole screen, shrunk) from before the click that counts as a changed view
 MINIGAME_MAX_DURATION = 600.0       # gives up (and logs a failure) if the minigame hasn't finished by then
 MINIGAME_ZOOM_OUT_DURATION = 3.0    # Hauntlet 2 and Ghost Gallery hold KEY_ZOOM_OUT this long when they begin (Hauntlet 2 again where it can't find the doors, if HAUNTLET_SEARCH_TURNS allows)
@@ -101,7 +102,6 @@ MINIGAME_START_LOOK_INTERVAL = 0.5     # how often each minigame looks for its o
 MINIGAME_START_WAIT = 90.0          # each minigame waits for its overlay (the game has begun: the lobby's countdown to a round that starts at a fixed time) and act
                                     # when it shows - this is the most they wait for it, a limit that must outlast the longest queue (the overlay came 50.5 s after the Yes in one run;
                                     # the Yes comes 12-52 s before the round, and a need's end wait holds it back by up to MINIGAME_POPUP_END_WAIT)
-HAUNTLET_2_FORWARD_KEY = "w"
 
 # ============================================================================
 # STRAY WINDOWS
@@ -298,6 +298,14 @@ GHOST_ALERT_MIN_HEIGHT = 14
 GHOST_ALERT_ASPECT = 1.5
 GHOST_ALERT_BAND = (150, 860)
 GHOST_ALERT_BELOW = 4.0
+GHOST_ALERT_MIN_PIECE = 8                    # px of a white piece that can be the bar or the dot
+GHOST_ALERT_BAR_FILL = 0.55                  # of its bounding box a bar fills (a letter or a glow does not)
+GHOST_ALERT_DOT_GAP = 1.5                    # the dot's top is within this many bar heights of the bar's top...
+GHOST_ALERT_DOT_SHIFT = 0.8                  # ...its middle within this many bar widths of the bar's middle (and GHOST_ALERT_DOT_SLACK px more)...
+GHOST_ALERT_DOT_SLACK = 4
+GHOST_ALERT_DOT_WIDTH = (0.35, 1.6)          # ...its width within these bar widths...
+GHOST_ALERT_DOT_ASPECT = 1.6                 # ...at most this many times as high as wide (plus 2 px)...
+GHOST_ALERT_DOT_FILL = 0.5                   # ...and filling this much of its bounding box
 GHOST_BOSS_TRIAL = 6.0                       # the beam on the biggest blob of the boss phase for this long without a score: it is fog, not the boss
 # What the score says is no ghost is left alone - followed as it moves, not by where on the screen it was - for GHOST_SKIP_TIME seconds, then looked at again: the beam on
 # a blob scored nothing for GHOST_SPOT_TRIAL seconds, then on the furniture around it GHOST_HIDE_TRIES times (a pet is the same cyan as a ghost, and flies about wherever the camera is),
@@ -500,8 +508,6 @@ HAUNTLET_PLANK_FRACTION = 0.103
 # A room whose number is a multiple of HAUNTLET_FORK_EVERY (10 and 20 were seen) is a fork: no TVs, two doorways. A
 # room without a row of TVs is a single doorway ahead - at once for room 1, the entrance hall (its doorway leads into a room
 # with three doors that is still room 1), else HAUNTLET_DOORS_TIMEOUT seconds after its number changed - and is walked straight on.
-HAUNTLET_LEFT_KEY = "a"
-HAUNTLET_RIGHT_KEY = "d"
 HAUNTLET_STRAFE_DURATION = 1.1
 HAUNTLET_STRAFE_MIN = 0.15
 HAUNTLET_STRAFE_MAX = 2.5
@@ -524,9 +530,10 @@ HAUNTLET_LOOK_INTERVAL = 0.25
 HAUNTLET_ROOM_SETTLE = 2.0
 HAUNTLET_TV_STABLE = 4
 HAUNTLET_RETRY_WAIT = 1.0                    # after a walk that didn't change the room, this long before the doors are chosen from again
+HAUNTLET_VIEW_SIZE = (96, 54)                 # what the walk looks at to tell whether the view moves: the screen shrunk to this many pixels (grey)...
+HAUNTLET_VIEW_ROWS = (8, 45)                 # ...of which only these rows count (not the room panel at the top and the item bar at the bottom)
 HAUNTLET_SEARCH_TURNS = 0                    # times the camera is turned, in a room whose doors can't be found, before walking straight ahead (0: never - turning it changes where the keys take the player: in a captured fork the doorway was a step away until the camera was turned, and the player then stood against the wall for 20 s)
 HAUNTLET_CAMERA_DRAG = (200, 500)            # px of mouse drag (right button held) for such a turn
-HAUNTLET_BACK_KEY = "s"
 HAUNTLET_BACKUP_DURATION = 0.5               # a walk after one that got nowhere begins with a step back this long
 HAUNTLET_STILL_LEVEL = 2.0                   # a walk whose view changes less than this (mean grey level of the shrunk view, 0-255) between two looks isn't moving: standing still read 0.1-1.1, walking 11-44 over 1.4 s
 HAUNTLET_STILL_AFTER = 0.8                   # seconds of that, forward held, before the player is taken to be caught on something...
@@ -806,7 +813,11 @@ KEY_ZOOM_IN = "i"
 KEY_ZOOM_OUT = "o"              # zooms the camera out while held (the minigames hold it to see the whole room)
 KEY_HELICOPTER = "r"           # held to fly the equipped helicopter (also held briefly by ride)
 KEY_JUMP = "space"
-MOVE_KEYS = ("w", "a", "s", "d")
+KEY_FORWARD = "w"                # the movement keys (every minigame walks with them)
+KEY_LEFT = "a"
+KEY_BACK = "s"
+KEY_RIGHT = "d"
+MOVE_KEYS = (KEY_FORWARD, KEY_LEFT, KEY_BACK, KEY_RIGHT)
 RESPAWN_KEYS = ("esc", "r", "enter")
 HELD_KEYS = (*MOVE_KEYS, KEY_HELICOPTER, KEY_ZOOM_IN, KEY_ZOOM_OUT, KEY_JUMP, *RESPAWN_KEYS, *STITCHES_TURN_KEYS, KEY_STITCHES_WALK)   # every key the macro can hold down: let go of when it ends or is killed
 

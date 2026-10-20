@@ -347,8 +347,8 @@ def test_it_walks_forward_at_the_start_and_then_towards_the_ghost(macro, world, 
     monkeypatch.setattr(cfg, "GHOST_START_FORWARD", 2.0)
     cx, cy = cfg.GHOST_CHARACTER
     far = cfg.GHOST_TOWARD_MARGIN * 3
-    assert macro.ghost_chase_key((cx, cy - far)) == "w" and macro.ghost_chase_key((cx, cy + far)) == cfg.HAUNTLET_BACK_KEY
-    assert macro.ghost_chase_key((cx - far, cy)) == cfg.HAUNTLET_LEFT_KEY and macro.ghost_chase_key((cx + far, cy - 10)) == cfg.HAUNTLET_RIGHT_KEY
+    assert macro.ghost_chase_key((cx, cy - far)) == "w" and macro.ghost_chase_key((cx, cy + far)) == cfg.KEY_BACK
+    assert macro.ghost_chase_key((cx - far, cy)) == cfg.KEY_LEFT and macro.ghost_chase_key((cx + far, cy - 10)) == cfg.KEY_RIGHT
     assert macro.ghost_chase_key((cx + 5, cy - 5)) is None and macro.ghost_chase_key((cx, cy - cfg.GHOST_TOWARD_MARGIN)) is None    # near enough for the beam
     world.screens = [blank()]
     start = world.clock.now

@@ -5713,7 +5713,7 @@ class AdoptMeGUI:
 
     def set_switch(self, kind: str, name: str, value: bool) -> None:
         """Change a switch as its checkbox does - persist it and tick or untick the checkbox in the window: a need's (the Debug tab), or an option (the
-        Options tab, the Debug tab's Other subtab, and `show_debug_lines`, which is only a checkbox)."""
+        Settings tab, the Debug tab's Options subtab, and `show_debug_lines`, which is only a checkbox)."""
         if kind == "need":
             self.set_need_enabled(name, value)
             self.need_vars[name].set(value)
@@ -5802,7 +5802,7 @@ class AdoptMeGUI:
         options_tab = tk.Frame(notebook, bg=self.bg)
         debug_tab = tk.Frame(notebook, bg=self.bg)
         notebook.add(btn_frame, text="Main")
-        notebook.add(options_tab, text="Options")
+        notebook.add(options_tab, text="Settings")
         notebook.add(debug_tab, text="Debug")
 
         self.action_buttons = []  # every button that starts a background task
@@ -5842,14 +5842,15 @@ class AdoptMeGUI:
         tk.Label(btn_frame, text="Functions", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"),
                  bg=self.bg, fg=self.accent).pack(anchor=tk.W)
 
-        for label, action in (("Respawn", respawn_character), ("Setup", setup_game), ("Leave & rejoin", leave_and_rejoin)):
+        for label, action in (("Respawn", respawn_character), ("Setup", setup_game), ("Leave & rejoin", leave_and_rejoin),
+                              ("Go to the Trading Hub", travel_to_trade_hub), ("Leave the Trading Hub", leave_trade_hub)):
             btn = tk.Button(btn_frame, text=label, command=lambda a=action: self.run_async(a),  # type: ignore[misc]
                             font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_RESPAWN_COLOR, fg=self.fg,
                             height=cfg.GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
             btn.pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
             self.action_buttons.append(btn)
 
-        # Options tab
+        # Settings tab
         # Persisted switches (see load_game_config()). Deliberately not in
         # action_buttons: they must stay usable while a workflow is running,
         # which is safe since update_game_config() is locked.
@@ -6034,16 +6035,16 @@ class AdoptMeGUI:
         logger.info("Config reset to defaults")
 
     def build_debug_tab(self, parent: Any) -> None:
-        """The Debug tab: a Needs subtab (build_needs_tab()) and an Other one
-        (build_other_tab())."""
+        """The Debug tab: an Options subtab (build_other_tab()) and a Needs one
+        (build_needs_tab())."""
         subtabs = ttk.Notebook(parent)
         subtabs.pack(fill=tk.BOTH, expand=True)
         needs_tab = tk.Frame(subtabs, bg=self.bg)
         other_tab = tk.Frame(subtabs, bg=self.bg)
+        subtabs.add(other_tab, text="Options")
         subtabs.add(needs_tab, text="Needs")
-        subtabs.add(other_tab, text="Other")
-        self.build_needs_tab(needs_tab)
         self.build_other_tab(other_tab)
+        self.build_needs_tab(needs_tab)
 
     def build_needs_tab(self, parent: Any) -> None:
         """Fill the Needs subtab: a button that runs every teleport handler in turn, then a two-column grid with a switch
@@ -6078,7 +6079,7 @@ class AdoptMeGUI:
         logger.info(f"{name} need {'on' if value else 'off'}")
 
     def build_other_tab(self, parent: Any) -> None:
-        """Fill the Other subtab: record the next run, show the debug lines in the output or not, refresh the debug
+        """Fill the Options subtab: record the next run, show the debug lines in the output or not, refresh the debug
         folder, reset the config."""
         self.add_config_checkbox(parent, "Record the next run (low quality video)", "record_next_run", load_game_config())
         self.show_debug_var = tk.BooleanVar(value=True)

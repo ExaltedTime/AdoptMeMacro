@@ -419,7 +419,7 @@ teleport-walk needs `cafe`, `salon`, `sick`, `pizza`, `school`, `beach`,
 `camping`, `bored` (called out with their own inline comment in the set
 literal, since they leave the map and run considerably longer than
 everything else).
-The GUI's **Debug** tab has a **Needs** subtab with, for each handler, a switch (whether the macro acts on the
+The GUI's **Debug** tab has a **Needs** subtab (its second) with, for each handler, a switch (whether the macro acts on the
 need; usable while a run goes on, like the other config switches) and a small **Test** button that
 runs the handler directly whether or not it is switched on, and a button that runs every
 *teleport* handler once, one after another (`TELEPORT_HANDLERS`, `run_all_need_handlers()`: each with the
@@ -645,7 +645,7 @@ new crop - plus an entry in `MINIGAME_LABELS` and a player in
 
 Each minigame has a switch in the game config (`hauntlet_2_enabled`,
 `ghost_gallery_enabled`, `stitches_spotlight_enabled`, all **off** by default; "Play ..." checkboxes on the
-Options tab). A minigame that is recognised but has no player in `MINIGAME_PLAYERS` gets "(no player yet)" on its checkbox, and its popup is declined like a switched-off one even if the switch is on. `minigame_popup()`:
+Settings tab). A minigame that is recognised but has no player in `MINIGAME_PLAYERS` gets "(no player yet)" on its checkbox, and its popup is declined like a switched-off one even if the switch is on. `minigame_popup()`:
 - **switched off, not recognised, or with no player yet** - clicks `MINIGAME_POPUP_DONT_SHOW_POS`
   ("Do not show again this session") and `MINIGAME_POPUP_NO_POS`;
 - **switched on, but a need is in its end wait** (`wait_until_need_gone()`, or `walk_alternating()` watching for its need; `end_wait()` marks it in `state.end_wait_need`) -
@@ -954,7 +954,7 @@ the unwind. `release_all_inputs()` runs once more in `run_async`'s
 `finally` block as a last line of defense. Every key the macro holds is pressed with `key_down()` and let go of with `key_up()`, which keep the keys that are down in `HELD_KEYS` (`tools/check_constants.py` fails on a bare `pydirectinput.keyDown`), so `release_all_inputs()` lets go of exactly those, and of the fixed list `cfg.HELD_KEYS` as well (the movement, helicopter, zoom, jump, respawn and camera-turn keys), also when the exit comes in the middle of a hold; a key that raises when let go of (the fail-safe) does not stop the others. The releases skip PyDirectInput's fail-safe check (`unchecked()`: the wrapped call that `functools.wraps` keeps), because with the cursor in a corner - the fail-safe's sign - every checked call raises and what the macro holds would stay held after the very stop that corner asked for; the fail-safe itself stays on for everything else, and the cursor is not moved. A stop releases everything **at once** (`stop()` calls `release_all_inputs()` itself, from the thread that asked, without waiting for the worker to notice), and `key_down()` and `mouse_down()` refuse (`StopRequested`) to press anything once the stop flag is set, so the worker cannot press one more key in the gap. It releases a mouse button only if `pressed_inputs()` says it is down: a button-up with the button not pressed is a click to the window under the mouse, and a right one over Roblox's border or title bar opens the window menu and takes the focus (seen at every minigame popup, whose `play_minigame()` releases everything first, the mouse being wherever the interrupted handler left it).
 
 **Resuming after focus loss.** The GUI's **Resume after focus loss** checkbox
-(on the Options tab; the `resume_on_focus_loss` config switch, off by default - stopping is the
+(on the Settings tab; the `resume_on_focus_loss` config switch, off by default - stopping is the
 right thing when you're using the computer yourself) makes the loop carry on
 instead of ending. When `FocusLost` reaches `run_workflow_loop()` with the
 switch on, it releases every held input, saves a failure screenshot (which
@@ -1017,13 +1017,13 @@ actually on disk (so an old config missing a newer key still works), and
 - **`side_quest_enabled`** - on/off switch (default on) for
   `side_quest()`. It's a checkbox in the GUI, and can be flipped while a
   workflow runs.
-- **`hauntlet_2_enabled`**, **`ghost_gallery_enabled`**, **`stitches_spotlight_enabled`** - the **Play ...** checkboxes on the Options tab (all off by default); see Minigame popups under Need handlers.
+- **`hauntlet_2_enabled`**, **`ghost_gallery_enabled`**, **`stitches_spotlight_enabled`** - the **Play ...** checkboxes on the Settings tab (all off by default); see Minigame popups under Need handlers.
 - **`resume_on_focus_loss`** - the **Resume after focus loss** checkbox (default
   off); see [Stopping & focus safety](#stopping--focus-safety).
 - **`needs_enabled`** - `{need: on or off}`, the switches next to the Test buttons on the Debug tab's Needs subtab. A need that isn't in it
   follows `ENABLED_NEEDS`, so by default they are all on; **Reset Config** puts them back.
 - **`record_next_run`** - the **Record the next run (low quality video)**
-  checkbox on the Debug tab's Other subtab (default off); see [Recording a run](#recording-a-run). Cleared, and
+  checkbox on the Debug tab's Options subtab (default off); see [Recording a run](#recording-a-run). Cleared, and
   the checkbox unticked, when the run that it was for starts.
 - **`private_server_link`** - the private server link `leave_and_rejoin()`
   joins, typed into the GUI's entry box (saved when you press Enter or click
@@ -1087,12 +1087,12 @@ knowing if you're modifying it:
   size change to either.
 - Every button in that row is created with `bd=0, highlightthickness=0` to
   flatten Tk's default border/focus-ring rendering.
-- The **Main** tab has the loop/stop row and the Respawn, Setup and Leave &
-  rejoin buttons; the **Options** tab holds the persisted switches (Run side
+- The **Main** tab has the loop/stop row and the Respawn, Setup, Leave &
+  rejoin and Trading Hub (go, leave) buttons; the **Settings** tab holds the persisted switches (Run side
   quest, Resume after focus loss, Play <minigame>) and the private server link;
-  the **Debug** tab has two subtabs: **Needs** (a button that tests every need
-  in turn, and one per need handler) and **Other** (Record the next run,
-  Refresh debug, Reset Config).
+  the **Debug** tab has two subtabs: **Options** (Record the next run, Show debug
+  lines, Refresh debug, Reset Config) and **Needs** (a button that tests every need
+  in turn, and one per need handler).
 - **`run_on_ui_thread(func, timeout)`** is how the worker thread touches Tk
   (which is only safe from its own thread): it queues `func`, waits until it
   has run or `timeout` seconds pass (`None` = as long as it takes, for a
@@ -1108,7 +1108,7 @@ knowing if you're modifying it:
 - **`DebugCapture`** is a `logging.Handler` on `logger` for the lifetime of the GUI: every record logged anywhere in the macro shows up in
   the on-screen console (`self.debug_text`) - `emit()` only queues (from any thread) and the Tk thread puts the queue on the widget every
   `CONSOLE_DRAIN_INTERVAL_MS`, since Tk isn't thread-safe - each line starting with the time (`[HH:MM:SS]`), in the colour of its level
-  (`GUI_CONSOLE_LEVEL_COLORS`: the debug lines are dimmer). The **Show debug lines in the output** checkbox on the Debug tab's Other subtab raises the handler's level to INFO to
+  (`GUI_CONSOLE_LEVEL_COLORS`: the debug lines are dimmer). The **Show debug lines in the output** checkbox on the Debug tab's Options subtab raises the handler's level to INFO to
   leave them out (`output.log` keeps them either way). The widget keeps only its last `CONSOLE_MAX_LINES` lines (`trim()`) - it would otherwise
   hold everything logged, about 25 MB of memory per 100,000 lines - while `output.log` keeps all of it. A record with `extra={"status": True}` is a
   status line: it replaces the previous status line instead of adding one, and goes into `output.log` only the first time (this is the
@@ -1443,7 +1443,7 @@ The GAME OVER! card itself is also saved as a picture beside it (`save_minigame_
 
 ### Recording a run
 
-Tick **Record the next run (low quality video)** on the Debug tab's Other subtab (the
+Tick **Record the next run (low quality video)** on the Debug tab's Options subtab (the
 `record_next_run` config switch) and the next time the loop starts it records
 the Roblox window to `debug/recordings/run<N>_<time>.mp4` - then clears the
 switch, so it's one run only. `start_recording_if_requested()` starts a
@@ -1511,7 +1511,7 @@ were away can be read back afterwards. The folder has `failures/` (`FAILURE_DIR`
 `run_counter.txt`, `status.json`), **`runs/`** (`RUNS_DIR`: what belongs to one run - its own log, `run<N>.txt`, and its chart, `run<N>.png`, side by side, and the GAME OVER! cards of the minigames in `runs/results/`) `recordings/` for the
 videos, `captures/` and `minigame_captures/` for the input captures (see [Input capture](#input-capture)), the command file the Discord bot leaves (`commands.json`) and the macro's error output when the bot started it (`logs/macro_stderr.log`), and the game config (`.config`) in `debug/` itself. An older layout is
 moved into place at startup (`migrate_debug_layout()`, which also moves the old `logs/runs/` and `reports/` files into `runs/`, `images/failures/` up to `failures/`, and deletes the `debug_*.png` views and the `images/` folder). The Debug tab's
-Other subtab's **Refresh debug** button (`refresh_debug()`, after a confirmation, not while a
+Options subtab's **Refresh debug** button (`refresh_debug()`, after a confirmation, not while a
 run is going) empties all of it except `.config`; run numbers start from 1
 again, since the counter goes with the logs.
 

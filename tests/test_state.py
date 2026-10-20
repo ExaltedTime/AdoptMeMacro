@@ -1745,7 +1745,7 @@ class FakeWindow:
 
 def blackout_with(macro, monkeypatch, screens, window="ok", supported=True):
     fake = FakeWindow()
-    root = types.SimpleNamespace(update=lambda: None)
+    root = types.SimpleNamespace(update=lambda: None, after=lambda ms, func: "job", after_cancel=lambda job: None)
     shown = macro.Blackout(root)
     monkeypatch.setattr(shown, "supported", lambda: supported)
     monkeypatch.setattr(shown, "make_window", lambda: fake if window == "ok" else None)
@@ -1811,8 +1811,7 @@ class FakeBlackout:
 def blackout_gui(macro, monkeypatch, tmp_path, hotkey_on=True, shown=False):
     monkeypatch.setattr(macro.cfg, "GAME_CONFIG_PATH", str(tmp_path / ".config"))
     gui = object.__new__(macro.AdoptMeGUI)
-    gui.scheduled = []
-    gui.root = types.SimpleNamespace(after=lambda ms, func: gui.scheduled.append((ms, func.__name__)))
+    gui.root = types.SimpleNamespace()
     gui.blackout = FakeBlackout(shown)
     gui.config_flag_vars = {"blackout_hotkey_enabled": types.SimpleNamespace(get=lambda: hotkey_on)}
     return gui
@@ -1830,15 +1829,25 @@ def test_the_blackout_key_blanks_the_screen_only_while_its_checkbox_is_on(macro,
     assert macro.load_game_config()["blackout_hotkey_enabled"] is True                       # on unless it was turned off
 
 
-def test_the_black_window_goes_back_over_the_control_window_when_that_comes_back_up(macro, monkeypatch, tmp_path):
-    gui = blackout_gui(macro, monkeypatch, tmp_path, shown=True)
-    gui.on_window_mapped(types.SimpleNamespace(widget=gui.root))
-    assert gui.scheduled == [(macro.cfg.BLACKOUT_RAISE_DELAY_MS, "raise_over")]            # (later, once Windows has put the window back in the stack)
-    gui.on_window_mapped(types.SimpleNamespace(widget=object()))                              # a widget inside it was mapped: not the window coming back
-    assert len(gui.scheduled) == 1
-    clear = blackout_gui(macro, monkeypatch, tmp_path)
-    clear.on_window_mapped(types.SimpleNamespace(widget=clear.root))
-    assert clear.scheduled == []                                                               # no black window: nothing to do
+def test_the_black_window_is_put_back_above_everything_again_and_again_while_the_screen_is_blank(macro, monkeypatch):
+    dark = np.full((100, 100, 3), 60, np.uint8)
+    jobs, cancelled, raised = [], [], []
+    root = types.SimpleNamespace(update=lambda: None, after=lambda ms, func: jobs.append((ms, func)) or f"job{len(jobs)}", after_cancel=cancelled.append)
+    shown = macro.Blackout(root)
+    monkeypatch.setattr(shown, "supported", lambda: True)
+    monkeypatch.setattr(shown, "make_window", lambda: FakeWindow())
+    monkeypatch.setattr(shown, "raise_over", lambda: raised.append(1))
+    seen = iter([dark, dark.copy()])
+    monkeypatch.setattr(macro, "grab_screen", lambda: next(seen))
+    monkeypatch.setattr(macro.time, "sleep", lambda s: None)
+    assert shown.toggle() is True
+    assert len(raised) == 1 and [ms for ms, _ in jobs] == [macro.cfg.BLACKOUT_RAISE_INTERVAL_MS]       # raised as it goes up, and scheduled again
+    jobs[0][1]()                                                                                      # the timer fires
+    assert len(raised) == 2 and len(jobs) == 2
+    shown.toggle()                                                                                    # away: the timer is cancelled
+    assert cancelled == ["job2"] and not shown.shown
+    jobs[1][1]()                                                                                      # (a timer that fires anyway does nothing)
+    assert len(raised) == 2 and len(jobs) == 2
 
 
 def test_turning_the_blackout_key_off_takes_a_blank_screen_away(macro, monkeypatch, tmp_path):

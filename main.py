@@ -5571,6 +5571,7 @@ class Blackout:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.window: Optional[tk.Toplevel] = None
+        self.job: Optional[str] = None                 # the pending keep_on_top()
 
     @property
     def shown(self) -> bool:
@@ -5604,18 +5605,36 @@ class Blackout:
             return False
         window.configure(bg="black")
         logger.info(f"Screen blanked ({cfg.HOTKEYS['blackout'].upper()} again to show it)")
+        self.keep_on_top()
         return True
 
+    def keep_on_top(self) -> None:
+        """While the screen is blank, put the black window back above everything every BLACKOUT_RAISE_INTERVAL_MS: the control window, coming back up from the
+        taskbar, lands above it, and when exactly is for Windows to say, so no single raise is soon or late enough."""
+        self.job = None
+        if self.window is None:
+            return
+        self.raise_over()
+        self.job = self.root.after(cfg.BLACKOUT_RAISE_INTERVAL_MS, self.keep_on_top)
+
     def raise_over(self) -> None:
-        """Put the black window back on top of everything, the control window included (that one coming back up from the taskbar lands above it)."""
-        if self.window is not None:
-            try:
-                self.window.attributes("-topmost", True)
-                self.window.lift()
-            except tk.TclError:
-                pass
+        """Put the black window at the top of the always-on-top windows, without activating it."""
+        if self.window is None or not self.supported():
+            return
+        try:
+            user32 = ctypes.windll.user32  # type: ignore[attr-defined]  # Windows only
+            hwnd = user32.GetParent(self.window.winfo_id()) or self.window.winfo_id()
+            user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)    # HWND_TOPMOST; SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
+        except (tk.TclError, AttributeError, OSError):
+            pass
 
     def hide(self) -> None:
+        if self.job is not None:
+            try:
+                self.root.after_cancel(self.job)
+            except tk.TclError:
+                pass
+            self.job = None
         if self.window is not None:
             try:
                 self.window.destroy()
@@ -5675,7 +5694,6 @@ class AdoptMeGUI:
         self.pending_waits = 0                   # looks so far for a loop that was told to stop to end
         self.running_loop = False                # what run_async() runs is the loop
         self.blackout = Blackout(self.root)
-        self.root.bind("<Map>", self.on_window_mapped)
         self.watch_stop_hotkey()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
@@ -5845,12 +5863,6 @@ class AdoptMeGUI:
         except Exception:
             logger.exception("Blanking the screen failed")
             self.blackout.hide()
-
-    def on_window_mapped(self, event: Any) -> None:
-        """The window came back up (from the taskbar, say): the black window goes back over it, once Windows has put it back in the stack - the control window
-        is blanked with the rest of the screen."""
-        if event.widget is self.root and self.blackout.shown:
-            self.root.after(cfg.BLACKOUT_RAISE_DELAY_MS, self.blackout.raise_over)
 
     def stop_by_hotkey(self) -> None:
         """HOTKEYS["stop"] was pressed: stop, same as the [STOP] button, and say so."""

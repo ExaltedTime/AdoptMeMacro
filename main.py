@@ -164,8 +164,9 @@ def roblox_rect() -> Box:
     """
     global _ROBLOX_RECT
     now = time.time()
-    if _ROBLOX_RECT and now - _ROBLOX_RECT[0] < cfg.ROBLOX_RECT_TTL:
-        return _ROBLOX_RECT[1]
+    cached = _ROBLOX_RECT                          # (a local: focus_roblox() can set the global to None on another thread between the test and the use)
+    if cached and now - cached[0] < cfg.ROBLOX_RECT_TTL:
+        return cached[1]
     screen_w, screen_h = pyautogui.size()
     rect = (0, 0, screen_w, screen_h)
     try:
@@ -971,11 +972,20 @@ def _watch_need_gone(need_name: str, cleared_event: threading.Event, stop_event:
     gone, exits quietly on stop and never lets StopRequested/FocusLost escape.
     See docs/ARCHITECTURE.md#checking-a-need-in-parallel-with-movement.
     """
+    reported = False
     try:
         while not stop_event.is_set():
             if stop_event.wait(cfg.NEED_GONE_POLL_INTERVAL):
                 return
-            cleared = _need_cleared(need_name)
+            try:
+                cleared = _need_cleared(need_name)
+            except (StopRequested, FocusLost):
+                raise
+            except Exception:                 # (one look that failed - a screenshot, a detector - is not the end of the watching: the next one is tried)
+                if not reported:
+                    reported = True
+                    logger.exception(f"Watching for {need_name} to clear: a look failed (the watching goes on)")
+                continue
             if answers is not None:
                 answers.append(cleared)       # the last answer tells walk_alternating() whether the need was still showing
             if cleared:
@@ -5705,8 +5715,8 @@ class AdoptMeGUI:
 
     def refresh_debug_from_outside(self) -> None:
         """Empty the debug folder as the Refresh debug button does, without asking; not while something is running, which is writing there."""
-        if self.is_running:
-            logger.warning("Refresh debug asked for, but the macro is running - stop it first")
+        if self.is_running or state.capture is not None or state.run_capture is not None:
+            logger.warning("Refresh debug asked for, but the macro is running or recording - stop it first")
             return
         logger.debug(f"Debug folder refreshed ({refresh_debug()} entries removed)")
         mark_stopped()                                           # (the status file went with the rest)
@@ -5754,15 +5764,20 @@ class AdoptMeGUI:
 
         def watch():
             was_down = [False] * len(hotkeys)
+            reported = [False] * len(hotkeys)
             while True:
-                try:
-                    for i, (key, action, only_while_running, only_in_roblox) in enumerate(hotkeys):
+                for i, (key, action, only_while_running, only_in_roblox) in enumerate(hotkeys):
+                    try:
                         down = hotkey_down(key)
                         if hotkey_fires(down, was_down[i], only_while_running, self.is_running, only_in_roblox):
                             self.root.after(0, action)
                         was_down[i] = down
-                except (RuntimeError, tk.TclError):
-                    return  # the window is gone
+                    except (RuntimeError, tk.TclError):
+                        return  # the window is gone
+                    except Exception:     # (a look at the focused window that failed: this key is tried again at the next poll, and STOP stays alive for as long as the window does)
+                        if not reported[i]:
+                            reported[i] = True
+                            logger.exception(f"Watching the '{key}' hotkey failed (the watching goes on)")
                 time.sleep(cfg.STOP_HOTKEY_POLL_INTERVAL)
         threading.Thread(target=watch, daemon=True).start()
 
@@ -5982,14 +5997,18 @@ class AdoptMeGUI:
             finally:
                 release_all_inputs()  # last line of defense against stuck keys/mouse
                 STOP_EVENT.clear()
-                self.is_running = False
-                # Tkinter widgets may only be touched from the main thread;
-                # root.after() hands this callback to it instead of calling
-                # .config() directly from this background thread.
-                self.root.after(0, lambda status=final_status: self._set_running_ui(False, status))  # type: ignore[misc]
+                # Tkinter widgets may only be touched from the main thread; root.after() hands this callback to it instead of calling
+                # .config() directly from this background thread. The flag goes down there too, in the same step as the buttons: set from here
+                # first, an action asked for from outside could start in between and have its buttons put back to "Ready" under it.
+                self.root.after(0, lambda status=final_status: self._finish_running(status))  # type: ignore[misc]
 
         self.worker = threading.Thread(target=worker, daemon=True)
         self.worker.start()
+
+    def _finish_running(self, status_text: str) -> None:
+        """What a finished run_async() worker leaves to Tk's thread: nothing runs any more, and the buttons and the status say so."""
+        self.is_running = False
+        self._set_running_ui(False, status_text)
 
     def _set_running_ui(self, running: bool, status_text: Optional[str] = None) -> None:
         """Single place that toggles button state + status text. Called both
@@ -6102,8 +6121,8 @@ class AdoptMeGUI:
     def refresh_debug_folder(self) -> None:
         """Ask, then empty the debug folder (refresh_debug()). Not while a run
         is going - it's writing there."""
-        if self.is_running:
-            logger.debug("Stop the run before refreshing the debug folder")
+        if self.is_running or state.capture is not None or state.run_capture is not None:
+            logger.debug("Stop the run and the capture before refreshing the debug folder")
             return
         if messagebox.askyesno("Refresh debug", "Delete everything in the debug folder (logs, images, recordings)?\n"
                                                 "The game config is kept."):

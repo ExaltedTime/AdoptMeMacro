@@ -45,6 +45,7 @@ try:
 except ImportError:
     for _name in ("tkinter", "tkinter.messagebox", "tkinter.scrolledtext", "tkinter.simpledialog", "tkinter.ttk"):
         _stub(_name)
+    sys.modules["tkinter"].TclError = type("TclError", (Exception,), {})          # (an exception class, since the code catches it)
 
 import main  # noqa: E402  (after the stubs)
 

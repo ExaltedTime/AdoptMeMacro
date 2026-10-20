@@ -1793,3 +1793,68 @@ def test_a_stop_lets_go_of_everything_at_once_and_nothing_is_pressed_after_it(ma
         macro.mouse_down("right")
     assert events == []                                                               # the worker's next press is refused
     macro.STOP_EVENT.clear()
+
+
+def test_the_hotkey_watcher_survives_a_failed_look_and_ends_only_when_the_window_is_gone(macro, monkeypatch, caplog):
+    monkeypatch.setattr(macro.cfg, "STOP_HOTKEY_POLL_INTERVAL", 0.001)
+    calls = []
+    def hotkey_down(key):
+        calls.append(key)
+        if len(calls) <= 6:
+            raise ValueError("the focused window could not be read")           # (pygetwindow on an odd window)
+        if len(calls) > 40:
+            raise RuntimeError("the window is gone")
+        return False
+    monkeypatch.setattr(macro, "hotkey_down", hotkey_down)
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.root, gui.is_running = types.SimpleNamespace(after=lambda ms, f: None), False
+    before = threading.active_count()
+    gui.watch_stop_hotkey()
+    deadline = time.time() + 10
+    while len(calls) <= 40 and time.time() < deadline:
+        time.sleep(0.01)
+    assert len(calls) > 40                                                       # it went on after the failures, and every key was watched
+    assert "failed (the watching goes on)" in caplog.text and caplog.text.count("failed (the watching goes on)") <= len(macro.cfg.HOTKEYS)       # (said once per key, not at every poll)
+    time.sleep(0.1)
+    assert threading.active_count() <= before                                    # and the thread ended when the window was gone
+
+
+def test_the_need_watcher_goes_on_after_a_look_that_failed_and_still_reports_the_need_gone(macro, monkeypatch, caplog):
+    monkeypatch.setattr(macro.cfg, "NEED_GONE_POLL_INTERVAL", 0.001)
+    answers_given = iter([RuntimeError("a screenshot failed"), RuntimeError("again"), False, True])
+    def need_cleared(name):
+        answer = next(answers_given)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    monkeypatch.setattr(macro, "_need_cleared", need_cleared)
+    cleared, stop, answers = threading.Event(), threading.Event(), []
+    macro._watch_need_gone("hungry", cleared, stop, answers)
+    assert cleared.is_set() and answers == [False, True]
+    assert caplog.text.count("a look failed") == 1                               # (said once)
+
+
+def test_the_flag_that_nothing_runs_goes_down_on_tks_thread_together_with_the_buttons(macro):
+    queued, buttons = [], []
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.is_running, gui.root = False, types.SimpleNamespace(after=lambda ms, f: queued.append(f))
+    gui.pending, gui.pending_chain, gui.pending_waits, gui.running_loop = [], False, 0, False
+    gui._set_running_ui = lambda running, status=None: buttons.append((running, status))
+    gui.run_async(lambda: None)
+    gui.worker.join(10)
+    assert gui.is_running is True and buttons == [(True, None)]                    # (the worker is done, but Tk's thread has not been told yet: nothing can start in between)
+    queued[-1]()
+    assert gui.is_running is False and buttons[-1] == (False, "[DONE]")
+
+
+def test_refresh_debug_from_outside_is_refused_while_a_capture_is_recording(macro, monkeypatch, tmp_path):
+    done = []
+    monkeypatch.setattr(macro, "refresh_debug", lambda: done.append("refreshed") or 0)
+    monkeypatch.setattr(macro, "mark_stopped", lambda: None)
+    gui = remote_gui(macro, monkeypatch, tmp_path)
+    monkeypatch.setattr(macro.state, "capture", object())
+    gui.refresh_debug_from_outside()
+    assert done == []
+    monkeypatch.setattr(macro.state, "capture", None)
+    gui.refresh_debug_from_outside()
+    assert done == ["refreshed"]

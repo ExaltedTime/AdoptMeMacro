@@ -1200,7 +1200,7 @@ It is only turned on after a test (`Blackout.show()`): the window is first shown
 the capture exclusion gets the same warning. Only then is the window made black. The test shows as a brief white flash. It does not dim the backlight, and the
 window goes with the process (`close()` takes it away first). Typing the hotkey in Roblox is the only way to toggle it, while the Options subtab's checkbox has it on (`blackout_hotkey_enabled`); the cursor is hidden over it.
 The control window is blanked with the rest of the screen: while the screen is blank the black window is put back at the top of the always-on-top windows every
-`BLACKOUT_RAISE_INTERVAL_MS` (`Blackout.keep_on_top()`, `SetWindowPos` with `HWND_TOPMOST` and no activation), because the control window coming back up from the
+`BLACKOUT_RAISE_INTERVAL_MS` (`Blackout.keep_on_top()`, `SetWindowPos` with `HWND_TOPMOST` and no activation, the handles passed as pointer-sized values), and at once when the control window is brought back after a minigame (`bring_to_front()`), because the control window coming back up from the
 taskbar lands above it and Windows decides when, so a single raise is either too soon or too late.
 
 ### Reading Hauntlet 2

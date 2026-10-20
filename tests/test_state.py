@@ -1850,6 +1850,31 @@ def test_the_black_window_is_put_back_above_everything_again_and_again_while_the
     assert len(raised) == 2 and len(jobs) == 2
 
 
+def test_the_black_window_is_put_on_top_with_a_handle_as_wide_as_a_pointer(macro, monkeypatch):
+    import ctypes
+    calls = []
+    user32 = types.SimpleNamespace(GetParent=lambda hwnd: 0, SetWindowPos=lambda *args: calls.append(args) or 1)
+    monkeypatch.setattr(ctypes, "windll", types.SimpleNamespace(user32=user32), raising=False)
+    shown = macro.Blackout(types.SimpleNamespace())
+    monkeypatch.setattr(shown, "supported", lambda: True)
+    shown.raise_over()
+    assert calls == []                                                                           # (no window: nothing)
+    shown.window = types.SimpleNamespace(winfo_id=lambda: 4242)
+    shown.raise_over()
+    (hwnd, after, x, y, width, height, flags), = calls
+    assert hwnd.value == 4242 and after.value == ctypes.c_void_p(-1).value and (x, y, width, height) == (0, 0, 0, 0)     # HWND_TOPMOST as a pointer-sized -1, not a 32-bit one
+    assert flags == 0x0001 | 0x0002 | 0x0010                                                      # no size, no move, no activation
+
+
+def test_bringing_the_window_back_after_a_minigame_puts_the_black_window_over_it_again(macro):
+    order = []
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.root = types.SimpleNamespace(attributes=lambda *a: order.append("topmost"), lift=lambda: order.append("lift"))
+    gui.blackout = types.SimpleNamespace(raise_over=lambda: order.append("black window raised"))
+    gui.bring_to_front()
+    assert order == ["topmost", "lift", "black window raised"]
+
+
 def test_turning_the_blackout_key_off_takes_a_blank_screen_away(macro, monkeypatch, tmp_path):
     gui = blackout_gui(macro, monkeypatch, tmp_path, shown=True)
     gui.set_config_flag("blackout_hotkey_enabled", True)

@@ -1393,30 +1393,64 @@ def test_the_run_logs_and_charts_of_an_older_layout_are_moved_into_the_runs_fold
 
 # --- commands from outside (the Discord bot): read_command(), poll_commands() ---
 
+def write_raw_command(macro, text):
+    """A command file with `text` in it, named after the time so that the oldest is read first (the bot's names do that too)."""
+    os.makedirs(macro.cfg.COMMANDS_DIR, exist_ok=True)
+    name = f"{time.time():015.3f}-{len(os.listdir(macro.cfg.COMMANDS_DIR)):03d}"
+    with open(os.path.join(macro.cfg.COMMANDS_DIR, name + ".json"), "w", encoding="utf-8") as f:
+        f.write(text)
+    return name
+
+
 def write_command(macro, command, age=0, **extra):
-    with open(macro.cfg.COMMANDS_PATH, "w", encoding="utf-8") as f:
-        json.dump({"command": command, "time": time.time() - age, **extra}, f)
+    return write_raw_command(macro, json.dumps({"command": command, "time": time.time() - age, **extra}))
+
+
+def commands_waiting(macro):
+    return [name for name in os.listdir(macro.cfg.COMMANDS_DIR) if name.endswith(".json")] if os.path.isdir(macro.cfg.COMMANDS_DIR) else []
+
+
+def answer(macro, name):
+    with open(os.path.join(macro.cfg.COMMANDS_DIR, name + ".ack"), encoding="utf-8") as f:
+        return f.read()
 
 
 def test_a_fresh_command_is_read_once_and_the_file_is_removed(macro, monkeypatch, tmp_path):
-    monkeypatch.setattr(macro.cfg, "COMMANDS_PATH", str(tmp_path / "commands.json"))
+    monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
     assert macro.read_command() is None                                       # (no file)
     for command in ("start", "stop", "exit", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub"):
-        write_command(macro, command)
-        assert macro.read_command()["command"] == command and not os.path.exists(macro.cfg.COMMANDS_PATH)
+        name = write_command(macro, command)
+        assert macro.read_command()["command"] == command and commands_waiting(macro) == []
+        assert answer(macro, name) == "taken"
 
 
 def test_a_command_that_is_old_unknown_or_unreadable_is_dropped_with_a_warning_but_its_file_still_goes(macro, monkeypatch, tmp_path, caplog):
-    monkeypatch.setattr(macro.cfg, "COMMANDS_PATH", str(tmp_path / "commands.json"))
+    monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
     for write in (lambda: write_command(macro, "exit", age=macro.cfg.COMMAND_MAX_AGE + 5),      # left over from before the macro started
                   lambda: write_command(macro, "format-c"),                                       # not in the fixed list
                   lambda: write_command(macro, "stop", time="soon"),
-                  lambda: open(macro.cfg.COMMANDS_PATH, "w").write("{not json"),
-                  lambda: open(macro.cfg.COMMANDS_PATH, "w").write("[\"exit\"]")):
-        write()
+                  lambda: write_raw_command(macro, "{not json"),
+                  lambda: write_raw_command(macro, "[\"exit\"]")):
+        name = write()
         caplog.clear()
-        assert macro.read_command() is None and not os.path.exists(macro.cfg.COMMANDS_PATH)
+        assert macro.read_command() is None and commands_waiting(macro) == []
+        assert answer(macro, name).startswith("dropped: ")                      # (the bot is told, not left waiting)
         assert "Command from outside dropped" in caplog.text                  # (said, not silently ignored: a host with the wrong time gets every command dropped)
+
+
+def test_commands_sent_close_together_are_read_one_at_a_time_oldest_first(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
+    for command in ("rejoin", "start", "stop"):
+        write_command(macro, command)
+    assert [macro.read_command()["command"] for _ in range(3)] == ["rejoin", "start", "stop"]
+    assert macro.read_command() is None
+
+
+def test_commands_left_from_before_the_macro_started_are_all_dropped_and_answered(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
+    names = [write_command(macro, command) for command in ("exit", "start", "rejoin")]
+    macro.discard_commands()
+    assert commands_waiting(macro) == [] and all(answer(macro, name).startswith("dropped: ") for name in names)
 
 
 class FakeRoot:
@@ -1427,7 +1461,7 @@ class FakeRoot:
 
 
 def remote_gui(macro, monkeypatch, tmp_path, running=False):
-    monkeypatch.setattr(macro.cfg, "COMMANDS_PATH", str(tmp_path / "commands.json"))
+    monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
     gui = object.__new__(macro.AdoptMeGUI)
     gui.root, gui.is_running, gui.calls = FakeRoot(), running, []
     gui.pending, gui.pending_chain, gui.pending_waits, gui.running_loop = [], False, 0, running
@@ -1542,7 +1576,7 @@ def test_start_does_nothing_to_a_loop_that_is_running_and_the_loop_argument_star
     gui = remote_gui(macro, monkeypatch, tmp_path)
     write_command(macro, "exit")                                              # (a command left from before is dropped, not done)
     gui.start_remote_control(loop=True)
-    assert [name for _, name in gui.root.scheduled] == ["poll_commands", "start_loop_from_outside"] and not os.path.exists(macro.cfg.COMMANDS_PATH)
+    assert [name for _, name in gui.root.scheduled] == ["poll_commands", "start_loop_from_outside"] and commands_waiting(macro) == []
     assert gui.calls == []
     gui.root.scheduled.clear()
     marked = []
@@ -1563,7 +1597,7 @@ def test_stopping_on_purpose_is_written_to_the_status_and_a_new_run_clears_it(ma
 
 
 def test_a_set_command_is_only_read_for_a_switch_that_exists_with_a_true_or_false_value(macro, monkeypatch, tmp_path):
-    monkeypatch.setattr(macro.cfg, "COMMANDS_PATH", str(tmp_path / "commands.json"))
+    monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
     good = [dict(kind="need", name="hungry", value=False), dict(kind="option", name="play_stitches_spotlight", value=True), dict(kind="option", name="show_debug_lines", value=False)]
     for details in good:
         write_command(macro, "set", **details)

@@ -1,11 +1,13 @@
 """The logic of the Discord bot (discord_bot.py) that needs neither Discord nor Windows: reading the config, deciding who may give
 orders, and turning the files the macro writes (status.json, run_log.txt, results.jsonl, the run charts) into what is posted.
 Plain functions, so tests/test_bot.py can run them anywhere. See docs/ARCHITECTURE.md#discord-bot."""
+import contextlib
 import glob
 import json
 import os
 import re
 import shutil
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Optional
@@ -589,15 +591,53 @@ def copy_pull(files: list[tuple[str, str]], onedrive_dir: str, source: str, max_
 
 # --- control: start, stop, restart the macro ---
 
-def write_command(path: str, command: str, now: float, **details: Any) -> None:
-    """Leave `command` (one of magic_numbers.COMMANDS) for the macro to find at `path`: {"command": ..., "time": ..., plus `details`}, written all at
-    once. The macro removes the file once it has read it, and ignores a command that is old (COMMAND_MAX_AGE) or a `set` for a switch it doesn't have."""
+def write_command(folder: str, command: str, now: float, **details: Any) -> str:
+    """Leave `command` (one of magic_numbers.COMMANDS) for the macro to find in `folder`, as a file of its own named <time>-<id> (so two commands sent close
+    together are both kept and done in order): {"command": ..., "time": ..., plus `details`}, written all at once. Returns the name to ask about it
+    (take_ack(), withdraw_command()). The macro removes the file once it has read it, answers in <name>.ack, and ignores a command that is old
+    (COMMAND_MAX_AGE) or a `set` for a switch it doesn't have."""
     if command not in cfg.COMMANDS:
         raise ValueError(f"not a command the macro knows: {command!r}")
-    temp = path + ".tmp"
+    os.makedirs(folder, exist_ok=True)
+    for old in glob.glob(os.path.join(folder, "*.ack")):                  # (answers nobody came for)
+        if now - os.path.getmtime(old) > cfg.BOT_ACK_KEEP:
+            with contextlib.suppress(OSError):
+                os.remove(old)
+    name = f"{now:015.3f}-{uuid.uuid4().hex[:6]}"
+    temp = os.path.join(folder, name + ".tmp")
     with open(temp, "w", encoding="utf-8") as f:
         json.dump({"command": command, "time": now, **details}, f)
-    os.replace(temp, path)
+    os.replace(temp, os.path.join(folder, name + ".json"))
+    return name
+
+
+def take_ack(folder: str, name: str) -> Optional[str]:
+    """What the macro answered about the command `name` ("taken" or "dropped: why"), removing the answer; None if it has not answered."""
+    path = os.path.join(folder, name + ".ack")
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read().strip()
+    except OSError:
+        return None
+    with contextlib.suppress(OSError):
+        os.remove(path)
+    return text or None
+
+
+def withdraw_command(folder: str, name: str) -> bool:
+    """Take the command `name` back if the macro has not read it; False if it is gone (the macro took it)."""
+    try:
+        os.remove(os.path.join(folder, name + ".json"))
+        return True
+    except OSError:
+        return False
+
+
+def clear_commands(folder: str) -> None:
+    """Remove the commands nobody read (after the macro was killed, say) and their answers."""
+    for path in glob.glob(os.path.join(folder, "*.json")) + glob.glob(os.path.join(folder, "*.ack")):
+        with contextlib.suppress(OSError):
+            os.remove(path)
 
 
 def switch_command(kind: str, name: str, value: bool) -> dict[str, Any]:

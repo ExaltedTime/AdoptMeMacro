@@ -468,14 +468,44 @@ def test_the_onedrive_folder_and_heartbeat_keys_are_read_and_checked(tmp_path):
 # --- control: start, stop, restart the macro ---
 
 def test_a_command_is_left_for_the_macro_all_at_once_and_only_a_known_one(tmp_path):
-    path = str(tmp_path / "commands.json")
-    bot_lib.write_command(path, "exit", 1234.5)
-    assert json.load(open(path)) == {"command": "exit", "time": 1234.5} and not os.path.exists(path + ".tmp")
-    for command in ("start", "stop"):
-        bot_lib.write_command(path, command, 1.0)
+    folder = str(tmp_path / "commands")
+    name = bot_lib.write_command(folder, "exit", 1234.5)
+    assert json.load(open(os.path.join(folder, name + ".json"))) == {"command": "exit", "time": 1234.5} and not any(f.endswith(".tmp") for f in os.listdir(folder))
     with pytest.raises(ValueError):
-        bot_lib.write_command(path, "git pull", 1.0)
-    assert json.load(open(path))["command"] == "stop"                         # (the refused one wrote nothing)
+        bot_lib.write_command(folder, "git pull", 1.0)
+    assert os.listdir(folder) == [name + ".json"]                              # (the refused one wrote nothing)
+
+
+def test_commands_sent_close_together_are_all_kept_and_sort_in_the_order_sent(tmp_path):
+    folder = str(tmp_path / "commands")
+    names = [bot_lib.write_command(folder, command, now) for command, now in (("rejoin", 99.5), ("start", 100.0), ("stop", 1000.25))]
+    assert sorted(names) == names and len(set(names)) == 3
+    assert sorted(f for f in os.listdir(folder)) == [name + ".json" for name in names]
+    assert bot_lib.write_command(folder, "stop", 1000.25) != names[-1]         # (the same instant is still a file of its own)
+
+
+def test_the_macros_answer_is_read_once_and_a_command_it_has_not_read_can_be_withdrawn(tmp_path):
+    folder = str(tmp_path / "commands")
+    name = bot_lib.write_command(folder, "stop", 5.0)
+    assert bot_lib.take_ack(folder, name) is None
+    assert bot_lib.withdraw_command(folder, name) and not bot_lib.withdraw_command(folder, name)      # (once gone it was taken or withdrawn)
+    (tmp_path / "commands" / (name + ".ack")).write_text("dropped: too old\n")
+    assert bot_lib.take_ack(folder, name) == "dropped: too old" and bot_lib.take_ack(folder, name) is None
+    other = bot_lib.write_command(folder, "stop", 6.0)
+    bot_lib.clear_commands(folder)
+    assert os.listdir(folder) == [] and not bot_lib.withdraw_command(folder, other)
+
+
+def test_answers_nobody_read_are_cleared_by_the_next_command(tmp_path):
+    folder = tmp_path / "commands"
+    folder.mkdir()
+    old = folder / "old.ack"
+    old.write_text("taken")
+    os.utime(old, (1, 1))
+    fresh = folder / "fresh.ack"
+    fresh.write_text("taken")
+    bot_lib.write_command(str(folder), "stop", fresh.stat().st_mtime + 1)
+    assert not old.exists() and fresh.exists()
 
 
 def test_the_macro_is_found_among_the_processes_but_not_the_bot_or_other_scripts():
@@ -539,9 +569,9 @@ def test_the_control_config_keys_and_state_are_read_and_checked(tmp_path):
 # --- changing the macro's switches (/need, /option, /options) ---
 
 def test_a_set_command_carries_its_switch_and_only_for_one_that_exists(tmp_path):
-    path = str(tmp_path / "commands.json")
-    bot_lib.write_command(path, "set", 5.0, **bot_lib.switch_command("need", "sick", False))
-    assert json.load(open(path)) == {"command": "set", "time": 5.0, "kind": "need", "name": "sick", "value": False}
+    folder = str(tmp_path / "commands")
+    name = bot_lib.write_command(folder, "set", 5.0, **bot_lib.switch_command("need", "sick", False))
+    assert json.load(open(os.path.join(folder, name + ".json"))) == {"command": "set", "time": 5.0, "kind": "need", "name": "sick", "value": False}
     assert bot_lib.switch_command("option", "play_stitches_spotlight", True)["name"] == "play_stitches_spotlight"
     assert bot_lib.switch_command("option", "show_debug_lines", True)["value"] is True
     for kind, name in (("need", "play_ghost_gallery"), ("option", "sick"), ("secret", "sick"), ("option", "private_server_link")):

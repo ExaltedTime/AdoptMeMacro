@@ -11,6 +11,8 @@ pytest.importorskip("discord")
 
 from bot import bot_lib, discord_bot  # noqa: E402
 
+REAL_POST = discord_bot.post                      # (the `watch` fixture replaces it with a recorder)
+
 
 class FakeChannel:
     def __init__(self):
@@ -150,3 +152,68 @@ def test_a_watcher_that_ends_by_an_exception_is_logged(caplog):
         await asyncio.sleep(0)
     asyncio.run(run())
     assert any("the watcher ended" in record.message for record in caplog.records)
+
+
+@pytest.fixture
+def commands(tmp_path, monkeypatch):
+    monkeypatch.setattr(discord_bot.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
+    monkeypatch.setattr(discord_bot.cfg, "BOT_COMMAND_ACK_WAIT", 0.3)
+    monkeypatch.setattr(discord_bot.cfg, "BOT_COMMAND_ACK_POLL", 0.02)
+    return tmp_path / "commands"
+
+
+def _answer_with(folder, text):
+    """Plays the macro: answers the command that appears in `folder` the way read_command() does."""
+    async def play():
+        for _ in range(100):
+            await asyncio.sleep(0.01)
+            files = list(folder.glob("*.json")) if folder.exists() else []
+            if files:
+                (folder / (files[0].stem + ".ack")).write_text(text)
+                files[0].unlink()
+                return
+    return play
+
+
+def test_a_command_the_macro_takes_is_quiet_and_one_it_drops_says_why(commands):
+    async def both():
+        results = []
+        for text in ("taken", "dropped: stop is 40 s old"):
+            task = asyncio.ensure_future(_answer_with(commands, text)())
+            results.append(await discord_bot.send_command("stop"))
+            await task
+        return results
+    taken, dropped = asyncio.run(both())
+    assert taken == "" and "stop is 40 s old" in dropped and "nothing was done" in dropped
+
+
+def test_a_command_the_macro_never_reads_is_withdrawn_so_it_does_not_run_later(commands):
+    text = asyncio.run(discord_bot.send_command("rejoin"))
+    assert "withdrawn" in text and list(commands.glob("*.json")) == []
+
+
+def test_a_picture_that_is_gone_is_left_out_and_the_text_still_goes(tmp_path):
+    channel = FakeChannel()
+    asyncio.run(REAL_POST(channel, "A failure", str(tmp_path / "deleted_by_refresh.png")))
+    assert len(channel.sent) == 1 and channel.sent[0].startswith("A failure") and "picture could not be sent" in channel.sent[0]
+
+
+def test_a_post_that_fails_is_tried_again_at_the_next_look_and_does_not_stop_the_rest(watch, monkeypatch):
+    monkeypatch.setattr(discord_bot.cfg, "BOT_FILE_SETTLE", 0)
+    (watch.folder / "runs" / "run1.png").write_bytes(b"png")
+    broken = {"on": True}
+
+    async def post(channel, text, path=None):
+        if broken["on"]:
+            raise RuntimeError("Discord is having a bad day")
+        watch.posted.append((text, path))
+    monkeypatch.setattr(discord_bot, "post", post)
+    (watch.folder / "status.json").write_text(json.dumps({"updated": "2000-01-01 00:00:00", "running": True}))
+    watch.state.last_heartbeat = None
+    watch.config = bot_lib.load_config(_config(watch.folder, heartbeat_hours=1))
+    watch.once()
+    assert watch.state.charts == []                                           # (not recorded as posted)
+    assert any(text.startswith("Heartbeat") for text in watch.channel.sent) and watch.state.last_heartbeat is not None     # (the rest of the look went on)
+    broken["on"] = False
+    watch.once()
+    assert watch.state.charts == ["run1.png"] and [text for text, _ in watch.posted] == ["Run chart run1.png"]

@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
-from typing import Optional
+from typing import Any, Awaitable, Optional
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -179,14 +179,30 @@ async def running_pids() -> list[int]:
                        "`pip install psutil` in the macro's environment fixes it.")
 
 
+async def send_command(command: str, **details: Any) -> str:
+    """Leave the macro `command` and wait up to BOT_COMMAND_ACK_WAIT seconds for it to answer that it took it. "" when it did; else what to tell the owner:
+    the macro dropped it (and why), or did not look in time (its window may be stuck) and the command was withdrawn, so that it does not run later."""
+    name = bot_lib.write_command(cfg.COMMANDS_DIR, command, time.time(), **details)
+    deadline = time.time() + cfg.BOT_COMMAND_ACK_WAIT
+    while True:
+        answer = bot_lib.take_ack(cfg.COMMANDS_DIR, name)
+        if answer is None and time.time() >= deadline:
+            if bot_lib.withdraw_command(cfg.COMMANDS_DIR, name):
+                return f"The macro did not take the command within {cfg.BOT_COMMAND_ACK_WAIT:g} s (its window may be stuck) - it was withdrawn and nothing was done."
+            answer = bot_lib.take_ack(cfg.COMMANDS_DIR, name) or "taken"            # (taken just now)
+        if answer is not None:
+            return "" if answer == "taken" else f"The macro dropped the command ({answer.removeprefix('dropped: ')}) - nothing was done."
+        await asyncio.sleep(cfg.BOT_COMMAND_ACK_POLL)
+
+
 async def stop_macro(config: bot_lib.Config) -> str:
     """Ask the macro to exit (its cooperative stop: the loop ends, every key and the mouse are released, the window closes) and wait up to
     stop_timeout_seconds for its process to end; if it hasn't, kill it and release the inputs from here. Returns what happened, as a sentence.
     A listing of the processes that fails in the middle is waited through; if it still fails at the end nothing is claimed and nothing is killed."""
     if not await running_pids():
         return "The macro was not running."
-    bot_lib.write_command(cfg.COMMANDS_PATH, "exit", time.time())
-    deadline = time.time() + config.stop_timeout_seconds
+    problem = await send_command("exit")
+    deadline = time.time() + (0 if problem else config.stop_timeout_seconds)           # (a macro that does not answer is not waited for: it is killed)
     while time.time() < deadline:
         await asyncio.sleep(1)
         if await asyncio.to_thread(current_macro_pids) == []:
@@ -197,8 +213,9 @@ async def stop_macro(config: bot_lib.Config) -> str:
     if not pids:
         return "The macro stopped (it released its keys and closed)."
     await asyncio.to_thread(kill_macro, pids)
-    with contextlib.suppress(OSError):
-        os.remove(cfg.COMMANDS_PATH)
+    bot_lib.clear_commands(cfg.COMMANDS_DIR)
+    if problem:
+        return f"{problem} The macro was killed and its keys and mouse buttons released."
     return f"The macro did not stop within {config.stop_timeout_seconds:g} s - it was killed and its keys and mouse buttons released."
 
 
@@ -219,7 +236,9 @@ async def stop_loop() -> tuple[bool, str]:
     """Ask the running macro to stop its loop (the [STOP] button); its window stays open. (Whether the macro was there, what to say.)"""
     if not await running_pids():
         return False, "The macro is not running."
-    bot_lib.write_command(cfg.COMMANDS_PATH, "stop", time.time())
+    problem = await send_command("stop")
+    if problem:
+        return False, problem
     return True, "Asked the macro to stop (its keys are released; its window stays open - /exit closes it)."
 
 
@@ -228,7 +247,9 @@ async def start_macro(config: bot_lib.Config) -> str:
     the loop. Then wait up to BOT_START_CONFIRM seconds for status.json to be written, and say what was seen."""
     since = datetime.now()
     if await running_pids():
-        bot_lib.write_command(cfg.COMMANDS_PATH, "start", time.time())
+        problem = await send_command("start")
+        if problem:
+            return problem
         what = "The macro was already running - asked it to start its loop (nothing happens if it is going already)."
     else:
         await asyncio.to_thread(launch_macro, config)
@@ -495,8 +516,7 @@ def build(config: bot_lib.Config) -> discord.Client:
         if idle_only and not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path())):
             await say(interaction, "The macro's loop is running - /stop it first.")
             return
-        bot_lib.write_command(cfg.COMMANDS_PATH, command_name, time.time())
-        await say(interaction, said)
+        await say(interaction, await send_command(command_name) or said)
 
     @command("rejoin", "Have the macro leave the game and rejoin it (stops its loop first)")
     async def rejoin(interaction: discord.Interaction) -> None:
@@ -524,7 +544,10 @@ def build(config: bot_lib.Config) -> discord.Client:
         if not await running_pids():
             await say(interaction, "The macro isn't running - a switch can only be changed while its window is open (or by hand in the window).")
             return
-        bot_lib.write_command(cfg.COMMANDS_PATH, "set", time.time(), **bot_lib.switch_command(kind, name, value))
+        problem = await send_command("set", **bot_lib.switch_command(kind, name, value))
+        if problem:
+            await say(interaction, problem)
+            return
         if name == cfg.SHOW_DEBUG_LINES_OPTION:
             await say(interaction, f"Asked the macro to turn {name} {'on' if value else 'off'} (it is not kept in the config, so it can't be checked).")
             return
@@ -683,11 +706,26 @@ def build(config: bot_lib.Config) -> discord.Client:
 
 
 async def post(channel: discord.abc.Messageable, text: str, path: Optional[str] = None) -> None:
-    """Send `text` to the channel, with the file at `path` if there is one and it is small enough for Discord."""
-    if path and os.path.getsize(path) <= cfg.BOT_MAX_UPLOAD_MB * 1048576:
-        await channel.send(bot_lib.clip_message(text), file=discord.File(path))
-    else:
-        await channel.send(bot_lib.clip_message(text))
+    """Send `text` to the channel, with the file at `path` if there is one and it is small enough for Discord. A file that cannot be read (a Refresh debug
+    deleted it) or that Discord refuses is left out, and the text says so: the alert is worth more than its picture."""
+    try:
+        if path and os.path.getsize(path) <= cfg.BOT_MAX_UPLOAD_MB * 1048576:
+            await channel.send(bot_lib.clip_message(text), file=discord.File(path))
+            return
+    except (OSError, discord.HTTPException):
+        log.exception("posting %s with its file failed - sending the text alone", path)
+        text += "\n(its picture could not be sent)"
+    await channel.send(bot_lib.clip_message(text))
+
+
+async def attempt(what: str, sending: Awaitable[Any]) -> bool:
+    """Await a post; False (logged) if it fails, so that one post that cannot be made does not stop the rest of a look at the macro's files."""
+    try:
+        await sending
+        return True
+    except Exception:
+        log.exception("posting %s failed", what)
+        return False
 
 
 def task_ended(task: asyncio.Task) -> None:
@@ -758,46 +796,44 @@ async def watch_once(channel: discord.abc.Messageable, config: bot_lib.Config, s
         lines, state.log_offset = bot_lib.read_new_lines(bot_lib.run_log_path(), state.log_offset)
     except OSError as error:                       # (locked by OneDrive or a virus scanner, say: the place in the log is kept, and the owner is told once)
         lines = []
-        if not state.log_unreadable:
+        if not state.log_unreadable and await attempt("the unreadable log", channel.send(bot_lib.clip_message(f"**The run log could not be read** ({error}) - failures are not seen until it can be (the place in it is kept)."))):
             state.log_unreadable = True
-            await channel.send(bot_lib.clip_message(f"**The run log could not be read** ({error}) - failures are not seen until it can be (the place in it is kept)."))
     else:
-        if state.log_unreadable:
+        if state.log_unreadable and await attempt("the readable log", channel.send("The run log can be read again.")):
             state.log_unreadable = False
-            await channel.send("The run log can be read again.")
     for failure in filter(None, (bot_lib.parse_failure(line) for line in lines)):
         post_now, held = limiter.check(now)
         if post_now:
-            await post(channel, bot_lib.failure_text(failure, held), bot_lib.failure_screenshot_path(failure))
+            await attempt("a failure", post(channel, bot_lib.failure_text(failure, held), bot_lib.failure_screenshot_path(failure)))
     status = bot_lib.read_json(bot_lib.status_path())
-    state.stale, text = bot_lib.stale_alert(state.stale, status, datetime.now(), config.stale_status_minutes)
-    if text:
-        await channel.send(bot_lib.clip_message(text))
+    stale, text = bot_lib.stale_alert(state.stale, status, datetime.now(), config.stale_status_minutes)
+    if not text or await attempt("the stale-status alert", channel.send(bot_lib.clip_message(text))):
+        state.stale = stale                        # (kept as it was if the alert could not be sent, so that the next look says it again)
     charts = bot_lib.run_charts()
     there = {os.path.basename(chart) for chart in charts}
     state.charts = [name for name in state.charts if name in there]    # (a chart that is gone - Refresh debug - is forgotten, so that a new run with the same number is posted)
     for chart in charts:
         if os.path.basename(chart) not in state.charts and now - os.path.getmtime(chart) >= cfg.BOT_FILE_SETTLE:
-            state.charts.append(os.path.basename(chart))
-            await post(channel, f"Run chart {os.path.basename(chart)}", chart)
+            if await attempt("a run chart", post(channel, f"Run chart {os.path.basename(chart)}", chart)):
+                state.charts.append(os.path.basename(chart))
     if bot_lib.crash_check_due(state.desired_state, UPDATING):
         running = await asyncio.to_thread(macro_process_running)
         state.crash_reported, event = bot_lib.crash_check(state.desired_state, running, state.crash_reported)
         if event == "alert":
             allowed, state.restarts = bot_lib.restart_allowed(state.restarts, now, config.auto_restart_max_per_hour) if config.auto_restart else (False, state.restarts)
             if allowed:
-                await channel.send("**The macro's process is gone** while it should be running - restarting it.")
+                await attempt("the restart notice", channel.send("**The macro's process is gone** while it should be running - restarting it."))
                 await asyncio.to_thread(launch_macro, config, state.desired_state == "running")      # (with its loop only if the loop was wanted)
                 state.crash_reported = False
             else:
                 limit = " (the limit of automatic restarts this hour is used)" if config.auto_restart else ""
-                await channel.send(f"**The macro's process is gone** while it should be running{limit}. /start or /loop starts it again.")
+                await attempt("the crash alert", channel.send(f"**The macro's process is gone** while it should be running{limit}. /start or /loop starts it again."))
         elif event == "recovered":
-            await channel.send("The macro's process is running again.")
+            await attempt("the recovery notice", channel.send("The macro's process is running again."))
     if bot_lib.heartbeat_due(state.last_heartbeat, config.heartbeat_hours, now):
         running = await asyncio.to_thread(macro_process_running)
-        await channel.send(bot_lib.clip_message("Heartbeat\n```\n" + bot_lib.status_text(status, datetime.now(), config.stale_status_minutes, running) + "\n```"))
-        state.last_heartbeat = now
+        if await attempt("the heartbeat", channel.send(bot_lib.clip_message("Heartbeat\n```\n" + bot_lib.status_text(status, datetime.now(), config.stale_status_minutes, running) + "\n```"))):
+            state.last_heartbeat = now
 
 
 def main() -> None:

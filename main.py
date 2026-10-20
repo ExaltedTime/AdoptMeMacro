@@ -412,42 +412,78 @@ def refresh_debug() -> int:
         os.makedirs(directory, exist_ok=True)
     return removed
 
-def read_command() -> Optional[dict[str, Any]]:
-    """The command waiting in COMMANDS_PATH (written by the Discord bot: {"command": ..., "time": ...}), or None. The file is always removed once
-    read; a command that isn't one of COMMANDS, or is older than COMMAND_MAX_AGE seconds (left over from before the macro started, say), is none - and a
-    warning says why, so that a bot host whose clock is off does not have every command ignored without a trace. A `set` command must also name a switch that
-    exists (`kind` "need" and a NEED_NAMES name, or "option" and an OPTION_SWITCHES name or SHOW_DEBUG_LINES_OPTION) and give it a true or false `value`.
-    Never raises. See docs/ARCHITECTURE.md#remote-control."""
+def acknowledge_command(stem: str, text: str) -> None:
+    """Tell the bot what became of the command in <stem>.json: "taken", or "dropped: <why>" (the bot waits for this before it says it asked)."""
     try:
-        with open(cfg.COMMANDS_PATH, encoding="utf-8") as f:
+        with open(os.path.join(cfg.COMMANDS_DIR, stem + ".ack"), "w", encoding="utf-8") as f:
+            f.write(text)
+    except OSError:
+        logger.warning(f"Could not write the acknowledgement of the command {stem}")
+
+
+def discard_commands() -> None:
+    """Remove every command waiting (left from before the macro started), answering each as dropped."""
+    try:
+        names = sorted(name for name in os.listdir(cfg.COMMANDS_DIR) if name.endswith(".json"))
+    except OSError:
+        return
+    for name in names:
+        with contextlib.suppress(OSError):
+            os.remove(os.path.join(cfg.COMMANDS_DIR, name))
+            acknowledge_command(name[:-len(".json")], "dropped: it was left from before the macro started")
+
+
+def read_command() -> Optional[dict[str, Any]]:
+    """The oldest command waiting in COMMANDS_DIR (a file written by the Discord bot: {"command": ..., "time": ...}), or None. The file is always removed
+    once read, and the bot is told in an acknowledgement file whether the command was taken; a command that isn't one of COMMANDS, or is older than
+    COMMAND_MAX_AGE seconds (left over from before the macro started, say), is none - and a warning says why, so that a bot host whose clock is off does
+    not have every command ignored without a trace. A `set` command must also name a switch that exists (`kind` "need" and a NEED_NAMES name, or "option"
+    and an OPTION_SWITCHES name or SHOW_DEBUG_LINES_OPTION) and give it a true or false `value`. One command is read per call, the oldest first, so two sent
+    close together are both done, in order. Never raises. See docs/ARCHITECTURE.md#remote-control."""
+    try:
+        names = sorted(name for name in os.listdir(cfg.COMMANDS_DIR) if name.endswith(".json"))
+    except OSError:
+        return None
+    if not names:
+        return None
+    path = os.path.join(cfg.COMMANDS_DIR, names[0])
+    stem = names[0][:-len(".json")]
+
+    def dropped(why: str) -> None:
+        logger.warning(f"Command from outside dropped: {why}")
+        acknowledge_command(stem, "dropped: " + why)
+
+    try:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except FileNotFoundError:
         return None
     except (OSError, ValueError) as error:
         data = None
-        logger.warning(f"Command from outside dropped: the command file could not be read ({error})")
+        dropped(f"the command file could not be read ({error})")
     try:
-        os.remove(cfg.COMMANDS_PATH)
+        os.remove(path)
     except OSError:
         pass
     if data is None:
         return None
     if not isinstance(data, dict) or data.get("command") not in cfg.COMMANDS:
-        logger.warning(f"Command from outside dropped: not a command the macro knows ({str(data)[:80]})")
+        dropped(f"not a command the macro knows ({str(data)[:80]})")
         return None
     sent = data.get("time")
     if not isinstance(sent, (int, float)):
-        logger.warning(f"Command from outside dropped: {data['command']} has no time")
+        dropped(f"{data['command']} has no time")
         return None
     age = time.time() - sent
     if abs(age) > cfg.COMMAND_MAX_AGE:
-        logger.warning(f"Command from outside dropped: {data['command']} is {age:.0f} s old (more than COMMAND_MAX_AGE; if the PCs' clocks differ, set them right)")
+        dropped(f"{data['command']} is {age:.0f} s old (more than COMMAND_MAX_AGE; if the PCs' clocks differ, set them right)")
         return None
     if data["command"] == "set":
-        names = {"need": cfg.NEED_NAMES, "option": (*cfg.OPTION_SWITCHES, cfg.SHOW_DEBUG_LINES_OPTION)}.get(str(data.get("kind")), ())
-        if data.get("name") not in names or not isinstance(data.get("value"), bool):
-            logger.warning(f"Command from outside dropped: set {data.get('kind')} {data.get('name')} is not a switch the macro has")
+        switches = {"need": cfg.NEED_NAMES, "option": (*cfg.OPTION_SWITCHES, cfg.SHOW_DEBUG_LINES_OPTION)}.get(str(data.get("kind")), ())
+        if data.get("name") not in switches or not isinstance(data.get("value"), bool):
+            dropped(f"set {data.get('kind')} {data.get('name')} is not a switch the macro has")
             return None
+    acknowledge_command(stem, "taken")
     return data
 
 def next_run_number() -> int:
@@ -5633,9 +5669,9 @@ class AdoptMeGUI:
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
     def start_remote_control(self, loop: bool) -> None:
-        """Begin looking for commands in COMMANDS_PATH every COMMAND_POLL_MS (see poll_commands()), and with `loop` (the --loop argument) start the
+        """Begin looking for commands in COMMANDS_DIR every COMMAND_POLL_MS (see poll_commands()), and with `loop` (the --loop argument) start the
         loop once the window is up, as if the loop button was pressed; without it the status file says that nothing is running. Commands left from before are dropped first."""
-        read_command()
+        discard_commands()
         self.root.after(cfg.COMMAND_POLL_MS, self.poll_commands)
         if loop:
             self.root.after(cfg.START_LOOP_DELAY_MS, self.start_loop_from_outside)
@@ -5651,7 +5687,7 @@ class AdoptMeGUI:
         self.run_async(run_workflow_loop)
 
     def poll_commands(self) -> None:
-        """Do the command waiting in COMMANDS_PATH, if any (Tk's thread): `start` the loop, `stop` it (the cooperative stop, same as [STOP]), `exit`
+        """Do the oldest command waiting in COMMANDS_DIR, if any (Tk's thread): `start` the loop, `stop` it (the cooperative stop, same as [STOP]), `exit`
         (stop, release every key and the mouse, and close the window - what the X button does) `set` a switch (set_switch()), `rejoin`, `setup`, `trade_hub` or `leave_trade_hub` (act_from_outside()), or `refresh_debug`. Looks again
         COMMAND_POLL_MS later - scheduled before the command is done, and a command that raises is logged and does not stop the polling."""
         data = read_command()

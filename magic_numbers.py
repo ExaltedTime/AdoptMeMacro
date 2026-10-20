@@ -196,7 +196,7 @@ RUNS_DIR = os.path.join(DEBUG_DIR, "runs")                    # run<N>.txt (this
 for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
-COMMANDS_PATH = os.path.join(DEBUG_DIR, "commands.json")    # a command for the macro, written by the Discord bot (see read_command()); the macro removes it once read
+COMMANDS_DIR = os.path.join(DEBUG_DIR, "commands")          # the commands for the macro, one <time>-<id>.json file each, written by the Discord bot (see read_command()); the macro removes each once read and leaves a <time>-<id>.ack saying it was taken or why not
 COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, or travel to / leave the Trading Hub
 NEED_NAMES = ("catch", "pet", "choose", "ride", "walk", "hungry", "thirsty", "dirty", "potty", "sleepy", "bored", "beach", "school", "cafe", "salon", "pizza", "camping", "sick")   # the Debug tab's need switches (the keys of main.py's NEED_HANDLER_CLASSES)
 OPTION_SWITCHES = {"side_quest": "side_quest_enabled", "resume_on_focus_loss": "resume_on_focus_loss", "record_next_run": "record_next_run",
@@ -207,6 +207,9 @@ COMMAND_MAX_AGE = 30                                        # seconds: an older 
 REJOIN_STOP_POLL_MS = 500                                   # a rejoin asked for while the loop runs: how often to see whether it has stopped
 REJOIN_STOP_WAIT_MS = 15000                                 # and how long to wait for that before giving up
 START_LOOP_DELAY_MS = 1500                                  # after the window is up, before the --loop argument starts the loop
+BOT_COMMAND_ACK_WAIT = 5.0                                  # seconds the bot waits for the macro to take a command (it looks every COMMAND_POLL_MS) before it withdraws it and says so
+BOT_COMMAND_ACK_POLL = 0.25                                 # seconds between the bot's looks for the macro's answer
+BOT_ACK_KEEP = 300                                          # seconds an answer of the macro that nobody read stays in the commands folder
 BOT_START_CONFIRM = 60                                     # seconds the bot waits, after /start, for the macro's loop to show in status.json
 BOT_MAX_PULL_MB = 10240                                     # /pull copies nothing that comes to more than this (10 GB)
 BOT_PULL_CONFIRM_MB = 1024                                  # a /pull of more than this says its size and waits for a yes (1 GB)

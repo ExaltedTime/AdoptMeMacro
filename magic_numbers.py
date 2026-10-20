@@ -638,6 +638,7 @@ NEED_CHECK_RETRY_DELAY = 5.0   # pause before re-checking when no need was found
 LOOP_DELAY = 2.0               # pause between iterations of the workflow loop
 STOP_CHECK_INTERVAL = 0.1      # granularity of the interruptible wait loop
                                # (so you can take over the computer) - see watch_stop_hotkey()
+BLACKOUT_RAISE_DELAY_MS = 100  # milliseconds after the window comes back up (is mapped) before it is raised over the black window: Windows puts it back in the stack first
 BLACKOUT_SETTLE = 0.4         # seconds the test flash is shown before the screen is looked at, to see whether the macro's screenshots see the window
 BLACKOUT_SEEN_RISE = 40       # if the screenshot's mean grey level rises this much (0-255) while the white test window is up, the screenshots see the window
 BLACKOUT_TOO_BRIGHT = 215     # a screen whose mean grey level is above this is too bright for that test to tell (white against white)

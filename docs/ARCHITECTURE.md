@@ -1025,6 +1025,9 @@ actually on disk (so an old config missing a newer key still works), and
 - **`record_next_run`** - the **Record the next run (low quality video)**
   checkbox on the Debug tab's Options subtab (default off); see [Recording a run](#recording-a-run). Cleared, and
   the checkbox unticked, when the run that it was for starts.
+- **`blackout_hotkey_enabled`** - the **H blanks the screen in Roblox (off: type it)** checkbox on the Debug tab's Options subtab (default on; the label names
+  `HOTKEYS["blackout"]`). Off, the key does nothing here and can be typed in the game, and a blank screen is taken away when it is turned off; see
+  [Blanking the screen](#blanking-the-screen).
 - **`private_server_link`** - the private server link `leave_and_rejoin()`
   joins, typed into the GUI's entry box (saved when you press Enter or click
   away). It lives here rather than in `magic_numbers.py` because it's a key
@@ -1195,7 +1198,10 @@ It is only turned on after a test (`Blackout.show()`): the window is first shown
 `BLACKOUT_SEEN_RISE` grey levels brighter the screenshots see the window and it is taken away again with a warning, and a screen already brighter than
 `BLACKOUT_TOO_BRIGHT` cannot be tested (`blackout_seen_by_capture()` is None) and is refused the same way (try again from a darker view). A Windows that refuses
 the capture exclusion gets the same warning. Only then is the window made black. The test shows as a brief white flash. It does not dim the backlight, and the
-window goes with the process (`close()` takes it away first). Typing the hotkey in Roblox is the only way to toggle it; the cursor is hidden over it.
+window goes with the process (`close()` takes it away first). Typing the hotkey in Roblox is the only way to toggle it, while the Options subtab's checkbox has it on (`blackout_hotkey_enabled`); the cursor is hidden over it.
+The control window is raised over the black one when the screen is blanked and again when the window comes back up from being minimized
+(`on_window_mapped()`, `BLACKOUT_RAISE_DELAY_MS` later, once Windows has put it back in the stack; `keep_above_blackout()`), unless it was sent to the back
+for a minigame.
 
 ### Reading Hauntlet 2
 

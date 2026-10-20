@@ -731,6 +731,7 @@ def _read_game_config() -> dict[str, Any]:
         "side_quest_enabled": True, # whether side_quest() is allowed to run at all
         "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
         "record_next_run": False,   # record the next run as a low quality video; cleared when that run starts
+        "blackout_hotkey_enabled": True,   # whether HOTKEYS["blackout"] blanks the screen (off: that key can be typed in Roblox)
         "needs_enabled": {},        # {need: whether it is acted on}, the Debug tab's switches; a need not in it follows ENABLED_NEEDS (see need_is_enabled())
         **{f"{name}_enabled": False for name in cfg.MINIGAME_LABELS},  # which Halloween minigames get played (see minigame_popup())
         "private_server_link": "",  # used by leave_and_rejoin(); kept here, not in the source, since it's a join key
@@ -5665,6 +5666,7 @@ class AdoptMeGUI:
         self.pending_waits = 0                   # looks so far for a loop that was told to stop to end
         self.running_loop = False                # what run_async() runs is the loop
         self.blackout = Blackout(self.root)
+        self.root.bind("<Map>", self.on_window_mapped)
         self.watch_stop_hotkey()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
@@ -5825,12 +5827,27 @@ class AdoptMeGUI:
             logger.warning(f"Input capture: {error}")
 
     def blackout_by_hotkey(self) -> None:
-        """HOTKEYS["blackout"] was pressed: blank the screen or show it again (Tk's thread)."""
+        """HOTKEYS["blackout"] was pressed: blank the screen or show it again (Tk's thread), unless the Options subtab's checkbox has the key off (it is
+        then typed in the game). The window stays above the black one."""
+        if not self.config_flag_vars["blackout_hotkey_enabled"].get():
+            return
         try:
             self.blackout.toggle()
         except Exception:
             logger.exception("Blanking the screen failed")
             self.blackout.hide()
+        self.keep_above_blackout()
+
+    def keep_above_blackout(self) -> None:
+        """Raise the window over the black one (both are always on top, and the later one is the higher) - not when the window was sent to the back on purpose
+        (a minigame is being played)."""
+        if self.blackout.shown and self.root.attributes('-topmost'):
+            self.root.lift()
+
+    def on_window_mapped(self, event: Any) -> None:
+        """The window came back up (from the taskbar, say): it is above the black window again, once Windows has put it back."""
+        if event.widget is self.root and self.blackout.shown:
+            self.root.after(cfg.BLACKOUT_RAISE_DELAY_MS, self.keep_above_blackout)
 
     def stop_by_hotkey(self) -> None:
         """HOTKEYS["stop"] was pressed: stop, same as the [STOP] button, and say so."""
@@ -6071,6 +6088,8 @@ class AdoptMeGUI:
         """Persist one of the config's on/off switches (a checkbox was clicked)."""
         update_game_config(lambda c: c.update({key: value}))
         logger.info(f"{key} = {value}")
+        if key == "blackout_hotkey_enabled" and not value:
+            self.blackout.hide()                                  # (a screen that is blank must not stay so with no key to show it)
 
     def save_server_link(self) -> None:
         """Persist the private server link typed into the entry box."""
@@ -6137,6 +6156,7 @@ class AdoptMeGUI:
         """Fill the Options subtab: record the next run, show the debug lines in the output or not, refresh the debug
         folder, reset the config."""
         self.add_config_checkbox(parent, "Record the next run (low quality video)", "record_next_run", load_game_config())
+        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['blackout'].upper()} blanks the screen in Roblox (off: type it)", "blackout_hotkey_enabled", load_game_config())
         self.show_debug_var = tk.BooleanVar(value=True)
         tk.Checkbutton(parent, text="Show debug lines in the output", variable=self.show_debug_var, command=self.set_debug_lines_shown,
                        font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.bg, fg=self.fg,

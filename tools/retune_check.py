@@ -179,11 +179,12 @@ def run_variant(name: str) -> bool:
             cwd = os.path.join(folder, "elsewhere")
             os.makedirs(cwd)
             target = [os.path.join(copy, "tests")]
+        workers = [] if options.get("env", {}).get("RETUNE_ORDER") or options.get("alone") else ["-n", "4"]     # (the order variants need one process: the order is the point)
         deselect = [arg for test in options.get("deselect", []) for arg in ("--deselect", test)]
         runs = [[t] for t in sorted(glob.glob(os.path.join(copy, "tests", "test_*.py")))] if options.get("alone") else [target]
         ok, summaries, failed = True, [], set()
         for paths in runs:
-            result = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "retune_plugin", *deselect, *paths],
+            result = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "retune_plugin", *workers, *deselect, *paths],
                                     cwd=cwd, env=env, capture_output=True, text=True)
             ok = ok and result.returncode == 0
             failed |= set(re.findall(r"^(?:FAILED|ERROR) (\S+)", result.stdout, re.M))

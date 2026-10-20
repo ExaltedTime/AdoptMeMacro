@@ -237,6 +237,22 @@ def test_a_log_that_was_deleted_or_started_again_is_read_from_its_start(tmp_path
     assert bot_lib.file_end(str(log)) == 0
 
 
+def test_a_log_that_cannot_be_read_keeps_the_offset_and_a_missing_one_does_not(tmp_path, monkeypatch):
+    log = tmp_path / "run_log.txt"
+    log.write_text("one\n")
+    real_open = open
+
+    def locked(path, *args, **kwargs):
+        if str(path) == str(log):
+            raise PermissionError("locked by a scanner")
+        return real_open(path, *args, **kwargs)
+    monkeypatch.setattr("builtins.open", locked)
+    with pytest.raises(OSError):
+        bot_lib.read_new_lines(str(log), 4)
+    monkeypatch.undo()
+    assert bot_lib.read_new_lines(str(log), 0) == (["one"], 4)
+
+
 def test_failures_are_posted_one_a_minute_and_the_rest_counted():
     limiter = bot_lib.RateLimiter(60)
     assert limiter.check(1000) == (True, 0)
@@ -265,6 +281,34 @@ def test_a_message_is_cut_to_fit_discord_whole_lines_first_and_a_code_block_stay
     assert len(bot_lib.clip_message("z" * 3000, limit=500)) <= 500
 
 
+def test_the_macro_is_found_by_the_exact_file_name_main_py_and_not_by_anything_with_it_in_its_name():
+    macro_lines = [r"D:\AdoptMeMacro\.venv\Scripts\python.exe D:\AdoptMeMacro\main.py --loop", "python main.py", '"C:\\Python\\python.exe" "D:\\a b\\main.py"', "/usr/bin/python3 /home/me/AdoptMeMacro/main.py"]
+    other_lines = ["python -m pytest tests/test_main.py", "notepad.exe C:\\notes\\main.py.txt", "python xmain.py", "python main.pyc", "python D:\\AdoptMeMacro\\bot\\discord_bot.py main.py", "code D:\\x\\domain.py"]
+    for line in macro_lines:
+        assert bot_lib.main_py_in([line]), line
+    for line in other_lines:
+        assert not bot_lib.main_py_in([line]), line
+    assert bot_lib.macro_pids([(1, "python main.py"), (2, "python test_main.py"), (3, "python main.py --loop")]) == [1, 3]
+
+
+def test_an_answer_goes_to_the_channel_itself_when_the_interaction_is_too_old_or_its_token_is_refused():
+    assert bot_lib.followup_needs_the_channel(None, expired=True)
+    assert bot_lib.followup_needs_the_channel(401, expired=False) and bot_lib.followup_needs_the_channel(404, expired=False)
+    assert not bot_lib.followup_needs_the_channel(400, expired=False) and not bot_lib.followup_needs_the_channel(500, expired=False)    # (a real failure is a failure)
+
+
+def test_a_said_error_is_told_as_it_is_and_other_errors_with_their_kind():
+    assert bot_lib.error_text(bot_lib.Said("I can't list the processes.")) == "I can't list the processes."
+    assert bot_lib.error_text(RuntimeError("boom")).startswith("The command failed: RuntimeError: boom")
+
+
+def test_a_command_that_raised_is_told_to_the_channel_briefly_with_the_kind_of_error():
+    text = bot_lib.error_text(PermissionError("[Errno 13] the file is open elsewhere"))
+    assert text.startswith("The command failed: PermissionError: ") and "open elsewhere" in text and "bot's log" in text
+    assert bot_lib.error_text(KeyError()).startswith("The command failed: KeyError") and "\n" not in bot_lib.error_text(ValueError("a\nb"))
+    assert len(bot_lib.error_text(RuntimeError("x" * 5000))) <= 300
+
+
 def test_the_update_plan_of_many_long_commit_subjects_fits_a_message():
     subjects = [f"abc{i:04d} " + "A long commit subject that says a lot about what changed in the macro " * 2 for i in range(40)]
     plan = bot_lib.update_plan("aaa1111", "bbb2222", [], True, False, subjects, "main")
@@ -276,6 +320,7 @@ def test_the_process_is_not_looked_for_while_an_update_has_it_stopped():
     assert bot_lib.crash_check_due("running", updating=False)
     assert not bot_lib.crash_check_due("running", updating=True)                 # (/update stops the macro, moves the code and starts it again)
     assert not bot_lib.crash_check_due("stopped", updating=False) and not bot_lib.crash_check_due(None, updating=False)
+    assert bot_lib.crash_check_due("open", updating=False) and not bot_lib.crash_check_due("open", updating=True)
 
 
 def test_a_macro_stopped_on_purpose_is_not_reported_as_not_updating():
@@ -423,14 +468,44 @@ def test_the_onedrive_folder_and_heartbeat_keys_are_read_and_checked(tmp_path):
 # --- control: start, stop, restart the macro ---
 
 def test_a_command_is_left_for_the_macro_all_at_once_and_only_a_known_one(tmp_path):
-    path = str(tmp_path / "commands.json")
-    bot_lib.write_command(path, "exit", 1234.5)
-    assert json.load(open(path)) == {"command": "exit", "time": 1234.5} and not os.path.exists(path + ".tmp")
-    for command in ("start", "stop"):
-        bot_lib.write_command(path, command, 1.0)
+    folder = str(tmp_path / "commands")
+    name = bot_lib.write_command(folder, "exit", 1234.5)
+    assert json.load(open(os.path.join(folder, name + ".json"))) == {"command": "exit", "time": 1234.5} and not any(f.endswith(".tmp") for f in os.listdir(folder))
     with pytest.raises(ValueError):
-        bot_lib.write_command(path, "git pull", 1.0)
-    assert json.load(open(path))["command"] == "stop"                         # (the refused one wrote nothing)
+        bot_lib.write_command(folder, "git pull", 1.0)
+    assert os.listdir(folder) == [name + ".json"]                              # (the refused one wrote nothing)
+
+
+def test_commands_sent_close_together_are_all_kept_and_sort_in_the_order_sent(tmp_path):
+    folder = str(tmp_path / "commands")
+    names = [bot_lib.write_command(folder, command, now) for command, now in (("rejoin", 99.5), ("start", 100.0), ("stop", 1000.25))]
+    assert sorted(names) == names and len(set(names)) == 3
+    assert sorted(f for f in os.listdir(folder)) == [name + ".json" for name in names]
+    assert bot_lib.write_command(folder, "stop", 1000.25) != names[-1]         # (the same instant is still a file of its own)
+
+
+def test_the_macros_answer_is_read_once_and_a_command_it_has_not_read_can_be_withdrawn(tmp_path):
+    folder = str(tmp_path / "commands")
+    name = bot_lib.write_command(folder, "stop", 5.0)
+    assert bot_lib.take_ack(folder, name) is None
+    assert bot_lib.withdraw_command(folder, name) and not bot_lib.withdraw_command(folder, name)      # (once gone it was taken or withdrawn)
+    (tmp_path / "commands" / (name + ".ack")).write_text("dropped: too old\n")
+    assert bot_lib.take_ack(folder, name) == "dropped: too old" and bot_lib.take_ack(folder, name) is None
+    other = bot_lib.write_command(folder, "stop", 6.0)
+    bot_lib.clear_commands(folder)
+    assert os.listdir(folder) == [] and not bot_lib.withdraw_command(folder, other)
+
+
+def test_answers_nobody_read_are_cleared_by_the_next_command(tmp_path):
+    folder = tmp_path / "commands"
+    folder.mkdir()
+    old = folder / "old.ack"
+    old.write_text("taken")
+    os.utime(old, (1, 1))
+    fresh = folder / "fresh.ack"
+    fresh.write_text("taken")
+    bot_lib.write_command(str(folder), "stop", fresh.stat().st_mtime + 1)
+    assert not old.exists() and fresh.exists()
 
 
 def test_the_macro_is_found_among_the_processes_but_not_the_bot_or_other_scripts():
@@ -453,6 +528,8 @@ def test_the_bot_restarts_the_macro_by_itself_only_so_often():
     ("running", False, False, (True, "alert")),          # it should be there and is gone
     ("running", False, True, (True, None)),              # ...said once
     ("running", True, True, (False, "recovered")),
+    ("open", False, False, (True, "alert")),             # the window without the loop is meant to be there too
+    ("open", True, True, (False, "recovered")),
     ("running", True, False, (False, None)),
     ("running", None, False, (False, None)),             # (the process check can't tell)
     ("running", None, True, (True, None)),
@@ -483,6 +560,8 @@ def test_the_control_config_keys_and_state_are_read_and_checked(tmp_path):
     state = bot_lib.BotState(desired_state="running", crash_reported=True, restarts=[1.5, 2.0])
     bot_lib.save_state(path, state)
     assert bot_lib.load_state(path) == state
+    bot_lib.save_state(path, bot_lib.BotState(desired_state="open"))
+    assert bot_lib.load_state(path).desired_state == "open"
     (tmp_path / "bot_state.json").write_text(json.dumps({"desired_state": "paused", "restarts": [1, "x", True], "crash_reported": "no"}))
     assert bot_lib.load_state(path) == bot_lib.BotState(restarts=[1])
 
@@ -490,9 +569,9 @@ def test_the_control_config_keys_and_state_are_read_and_checked(tmp_path):
 # --- changing the macro's switches (/need, /option, /options) ---
 
 def test_a_set_command_carries_its_switch_and_only_for_one_that_exists(tmp_path):
-    path = str(tmp_path / "commands.json")
-    bot_lib.write_command(path, "set", 5.0, **bot_lib.switch_command("need", "sick", False))
-    assert json.load(open(path)) == {"command": "set", "time": 5.0, "kind": "need", "name": "sick", "value": False}
+    folder = str(tmp_path / "commands")
+    name = bot_lib.write_command(folder, "set", 5.0, **bot_lib.switch_command("need", "sick", False))
+    assert json.load(open(os.path.join(folder, name + ".json"))) == {"command": "set", "time": 5.0, "kind": "need", "name": "sick", "value": False}
     assert bot_lib.switch_command("option", "play_stitches_spotlight", True)["name"] == "play_stitches_spotlight"
     assert bot_lib.switch_command("option", "show_debug_lines", True)["value"] is True
     for kind, name in (("need", "play_ghost_gallery"), ("option", "sick"), ("secret", "sick"), ("option", "private_server_link")):
@@ -501,14 +580,15 @@ def test_a_set_command_carries_its_switch_and_only_for_one_that_exists(tmp_path)
 
 
 def test_the_switches_are_read_from_the_game_config_with_the_defaults_for_what_is_missing():
+    on_by_default = bot_lib.cfg.ENABLED_NEEDS
     states = bot_lib.switch_states(None)
-    assert states["option:side_quest"] is True and states["option:play_hauntlet_2"] is False and states["need:hungry"] is True
+    assert states["option:side_quest"] is True and states["option:play_hauntlet_2"] is False and states["need:hungry"] is ("hungry" in on_by_default)
     assert set(states) == {f"need:{n}" for n in bot_lib.cfg.NEED_NAMES} | {f"option:{n}" for n in bot_lib.cfg.OPTION_SWITCHES}
-    states = bot_lib.switch_states({"needs_enabled": {"hungry": False, "bored": True}, "side_quest_enabled": False, "ghost_gallery_enabled": True})
-    assert states["need:hungry"] is False and states["need:bored"] is True and states["need:sick"] is True   
+    states = bot_lib.switch_states({"needs_enabled": {"hungry": False, "beach": True}, "side_quest_enabled": False, "ghost_gallery_enabled": True})
+    assert states["need:hungry"] is False and states["need:beach"] is True and states["need:sick"] is ("sick" in on_by_default)
     assert states["option:side_quest"] is False and states["option:play_ghost_gallery"] is True
-    assert bot_lib.switch_states({"needs_enabled": "x"})["need:hungry"] is True                                   # (a bad config is the defaults)
-    text = bot_lib.options_text(bot_lib.switch_states({"needs_enabled": {"hungry": False}}))
+    assert bot_lib.switch_states({"needs_enabled": "x"})["need:hungry"] is ("hungry" in on_by_default)                                  # (a bad config is the defaults)
+    text = bot_lib.options_text(bot_lib.switch_states({"needs_enabled": {name: name != "hungry" for name in bot_lib.cfg.NEED_NAMES}}))
     assert "side_quest on" in text and "play_stitches_spotlight off" in text and text.splitlines()[1] == "Needs off: hungry"
 
 
@@ -556,6 +636,20 @@ def test_the_update_plan_goes_ahead_only_over_a_clean_copy_and_only_forward():
     assert bot_lib.files_text([f"f{i}" for i in range(10)]) == "f0, f1, f2, f3, f4, f5, f6, f7 and 2 more"
 
 
+def test_python_changes_count_only_python_files_and_binary_files_as_none():
+    numstat = "10\t2\tmain.py\n3\t0\tbot/bot_lib.py\n5\t5\tdocs/notes.md\n-\t-\ttests/fixture.png\n-\t-\tlogo.py"
+    assert bot_lib.python_changes(numstat) == (3, 13, 2)
+    assert bot_lib.python_changes("") == (0, 0, 0)
+    assert bot_lib.python_changes_text((3, 13, 2)) == "15 lines changed in 3 Python files (+13 / -2)."
+    assert bot_lib.python_changes_text((1, 1, 0)) == "1 line changed in 1 Python file (+1 / -0)."
+    assert bot_lib.python_changes_text((0, 0, 0)) == "No Python file changed."
+
+
+def test_the_update_plan_carries_the_changes_text_last():
+    plan = bot_lib.update_plan("a" * 40, "b" * 40, [], True, False, ["bbbbbbb fix"], "origin/main", "4 lines changed in 1 Python file (+3 / -1).")
+    assert plan.text.splitlines()[1:] == ["bbbbbbb fix", "4 lines changed in 1 Python file (+3 / -1)."]
+
+
 def test_the_rollback_plan_goes_back_only_to_a_known_commit_over_a_clean_copy():
     head, previous = "b" * 40, "a" * 40
     assert bot_lib.rollback_plan(head, previous, [], True).kind == "rollback"
@@ -580,6 +674,7 @@ def test_with_real_git_an_update_is_planned_and_done_only_forward_over_a_clean_c
     commit(repos.up, repos.upstream, "requirements.txt", "numpy", "fourth: packages")
     plan, move, head = bot_lib.make_plan(repos.pc, "origin", "main", None, False)
     assert plan.kind == "update" and "fourth: packages" in plan.text and "third: the macro" in plan.text and move[:2] == ["merge", "--ff-only"]
+    assert "2 lines changed in 1 Python file (+1 / -1)." in plan.text                                    # (main.py one -> two; requirements.txt is not Python)
     (repos.pc_dir / "main.py").write_text("edited on the PC")
     assert bot_lib.make_plan(repos.pc, "origin", "main", None, False)[0].kind == "dirty"                          # a tracked file changed here: not touched
     assert repos.pc(["checkout", "main.py"])[0] == 0
@@ -634,7 +729,7 @@ def test_every_slash_command_has_a_name_and_descriptions_discord_accepts():
     source = (pathlib.Path(__file__).parent.parent / "bot" / "discord_bot.py").read_text(encoding="utf-8")
     commands = re.findall(r'@command\("([^"]+)", "((?:[^"\\]|\\.)*)"\)', source)
     names = {name for name, _ in commands}
-    assert {"status", "screenshot", "rview", "log", "report", "results", "captures", "pull", "start", "loop", "stop", "exit", "restart", "rejoin", "setup", "refresh_debug",
+    assert {"status", "screenshot", "rview", "log", "report", "results", "captures", "pull", "start", "loop", "stop", "exit", "rejoin", "setup", "refresh_debug",
             "trade_hub", "leave_trade_hub", "update", "rollback", "need", "option", "options"} <= names
     for name, description in commands:
         assert re.fullmatch(r"[a-z0-9_-]{1,32}", name) and 1 <= len(description) <= 100, name

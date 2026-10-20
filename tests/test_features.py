@@ -193,17 +193,17 @@ def fixture(name):
     return cv2.imread(os.path.join(os.path.dirname(__file__), "fixtures", name))
 
 
-# --- the minigame win screen, closed whenever it is up ------------------------------------------------
+# --- the minigame finish screen, closed whenever it is up ------------------------------------------------
 
 @pytest.fixture
 def winner(macro, monkeypatch):
-    """A screen showing the minigame win screen (banner and NICE! button), with the things unscrew() does around it stubbed."""
+    """A screen showing the minigame finish screen (banner and NICE! button), with the things unscrew() does around it stubbed."""
     screen = bright_screen()
     cfg = macro.cfg
-    for box, color in ((cfg.MINIGAME_VICTORY_BANNER_BOX, cfg.MINIGAME_VICTORY_BANNER_COLOR), (cfg.MINIGAME_VICTORY_BUTTON_BOX, cfg.GREEN_BUTTON_COLOR)):
+    for box, color in ((cfg.MINIGAME_FINISH_BANNER_BOX, cfg.MINIGAME_FINISH_BANNER_COLOR), (cfg.MINIGAME_FINISH_BUTTON_BOX, cfg.GREEN_BUTTON_COLOR)):
         left, top, right, bottom = box
         screen[top:bottom, left:right] = color[::-1]
-    state = {"screen": screen, "sticky": 0}      # "sticky": clicks the win screen survives
+    state = {"screen": screen, "sticky": 0}      # "sticky": clicks the finish screen survives
     respawns = []
 
     def click(x, y, duration=0):
@@ -226,62 +226,62 @@ def winner(macro, monkeypatch):
     return state
 
 
-def test_a_win_screen_is_closed_and_the_character_respawned(macro, winner):
-    assert macro.close_minigame_win_screen() is True
-    assert macro.cfg.MINIGAME_VICTORY_BUTTON_POS in macro.clicks and winner["respawns"] == [1]
-    assert "minigame win screen closed" in open(macro.cfg.RUN_LOG_PATH).read()
+def test_a_finish_screen_is_closed_and_the_character_respawned(macro, winner):
+    assert macro.close_minigame_finish_screen() is True
+    assert macro.cfg.MINIGAME_FINISH_BUTTON_POS in macro.clicks and winner["respawns"] == [1]
+    assert "minigame finish screen closed" in open(macro.cfg.RUN_LOG_PATH).read()
     assert macro.state.last_progress is not None
 
 
 def test_a_click_that_missed_is_repeated(macro, winner, monkeypatch):
-    monkeypatch.setattr(macro.cfg, "MINIGAME_VICTORY_CLICK_TRIES", 3)
+    monkeypatch.setattr(macro.cfg, "MINIGAME_FINISH_CLICK_TRIES", 3)
     winner["sticky"] = 1
-    assert macro.close_minigame_win_screen() is True
-    assert macro.clicks.count(macro.cfg.MINIGAME_VICTORY_BUTTON_POS) == 2 and winner["respawns"] == [1]
+    assert macro.close_minigame_finish_screen() is True
+    assert macro.clicks.count(macro.cfg.MINIGAME_FINISH_BUTTON_POS) == 2 and winner["respawns"] == [1]
 
 
-def test_a_win_screen_that_will_not_close_is_retried_then_reported(macro, winner):
+def test_a_finish_screen_that_will_not_close_is_retried_then_reported(macro, winner):
     winner["sticky"] = 99
-    macro.close_minigame_win_screen()
-    assert macro.clicks.count(macro.cfg.MINIGAME_VICTORY_BUTTON_POS) == macro.cfg.MINIGAME_VICTORY_CLICK_TRIES
+    macro.close_minigame_finish_screen()
+    assert macro.clicks.count(macro.cfg.MINIGAME_FINISH_BUTTON_POS) == macro.cfg.MINIGAME_FINISH_CLICK_TRIES
     assert "would not close" in open(macro.cfg.RUN_LOG_PATH).read()
 
 
-def test_the_real_win_screen_is_recognised(macro):
+def test_the_real_finish_screen_is_recognised(macro):
     screen = bright_screen()
-    for box, name in ((macro.cfg.MINIGAME_VICTORY_BANNER_BOX, "win_banner.png"), (macro.cfg.MINIGAME_VICTORY_BUTTON_BOX, "win_button.png")):
+    for box, name in ((macro.cfg.MINIGAME_FINISH_BANNER_BOX, "finish_banner.png"), (macro.cfg.MINIGAME_FINISH_BUTTON_BOX, "finish_button.png")):
         crop = fixture(name)                                                     # (relative to this file, not the working directory)
         left, top, right, bottom = box
         screen[top:top + crop.shape[0], left:left + crop.shape[1]] = crop
-    assert macro.detect_minigame_victory(screen) is True
+    assert macro.detect_minigame_finished(screen) is True
 
 
-def test_no_win_screen_means_nothing_happens(macro, winner):
+def test_no_finish_screen_means_nothing_happens(macro, winner):
     winner["screen"] = bright_screen()
-    assert macro.close_minigame_win_screen() is False
+    assert macro.close_minigame_finish_screen() is False
     assert not macro.clicks and winner["respawns"] == []
 
 
-def test_the_green_button_alone_is_not_a_win_screen(macro, winner):
+def test_the_green_button_alone_is_not_a_finish_screen(macro, winner):
     screen = bright_screen()
-    left, top, right, bottom = macro.cfg.MINIGAME_VICTORY_BUTTON_BOX
+    left, top, right, bottom = macro.cfg.MINIGAME_FINISH_BUTTON_BOX
     screen[top:bottom, left:right] = macro.cfg.GREEN_BUTTON_COLOR[::-1]
     winner["screen"] = screen                                    # a popup's Yes, an Okay: the banner rules them out
-    assert macro.close_minigame_win_screen() is False
+    assert macro.close_minigame_finish_screen() is False
 
 
-def test_every_cycle_checks_for_the_win_screen_and_abandons_the_task(macro, winner):
+def test_every_cycle_checks_for_the_finish_screen_and_abandons_the_task(macro, winner):
     assert macro.unscrew() == "played"
-    assert macro.cfg.MINIGAME_VICTORY_BUTTON_POS in macro.clicks and winner["respawns"] == [1]
+    assert macro.cfg.MINIGAME_FINISH_BUTTON_POS in macro.clicks and winner["respawns"] == [1]
 
 
 def test_setup_only_clicks_nice_and_carries_on(macro, winner, monkeypatch):
     monkeypatch.setattr(macro, "minigame_popup", lambda play=True: None)
     assert macro.unscrew(in_task=True, play_minigames=False) is None
-    assert macro.cfg.MINIGAME_VICTORY_BUTTON_POS in macro.clicks and winner["respawns"] == []
+    assert macro.cfg.MINIGAME_FINISH_BUTTON_POS in macro.clicks and winner["respawns"] == []
 
 
-def test_the_win_screen_is_only_looked_for_while_halloween_is_on(macro, winner, monkeypatch):
+def test_the_finish_screen_is_only_looked_for_while_halloween_is_on(macro, winner, monkeypatch):
     monkeypatch.setattr(macro.cfg, "HALLOWEEN", False)
     assert macro.unscrew() is None and not macro.clicks
 
@@ -346,7 +346,7 @@ def test_a_button_scan_that_misses_one_is_repeated_and_maps_nothing_if_it_misses
 def test_a_button_scan_that_finds_all_five_the_second_time_maps_them(macro, monkeypatch):
     waits = scans(monkeypatch, macro, FOUR, FIVE)
     assert macro.refresh_button_mapping() is True
-    assert waits == [macro.cfg.BUTTON_SCAN_RETRY_WAIT] and macro.state.button_positions["sleepy"] == FIVE[4]
+    assert waits == [macro.cfg.BUTTON_SCAN_RETRY_WAIT] and macro.state.button_positions[macro.cfg.BUTTON_NAMES[4]] == FIVE[4]
 
 
 def test_buttons_hidden_by_a_beam_or_the_character_leave_the_others_named_by_where_they_are(macro, monkeypatch):
@@ -356,18 +356,20 @@ def test_buttons_hidden_by_a_beam_or_the_character_leave_the_others_named_by_whe
     here = os.path.join(os.path.dirname(__file__), "buttons")
     monkeypatch.setattr(macro, "focus_roblox_click", lambda: True)
     monkeypatch.setattr(macro, "wait_interruptible", lambda *a, **k: None)
-    for name, missing in (("beam_hides_thirsty", {"thirsty"}), ("beam_hides_thirsty_character_hides_potty", {"thirsty", "potty"})):
+    names = macro.cfg.BUTTON_NAMES                                                         # (the order of the buttons across the screen)
+    for name, missing in (("beam_hides_thirsty", {names[1]}), ("beam_hides_thirsty_character_hides_potty", {names[1], names[3]})):
         screen = cv2.imread(os.path.join(here, f"{name}.png"))
         monkeypatch.setattr(macro, "grab_screen", lambda screen=screen: screen)
         assert macro.refresh_button_mapping() is True, name
-        assert set(macro.cfg.BUTTON_NAMES) - set(macro.state.button_positions) == missing, name
-        assert macro.state.button_positions["dirty"][0] == pytest.approx(858, abs=5), name
-        assert macro.click_need_button("thirsty") is False                                    # (no button seen: nothing is clicked)
+        assert set(names) - set(macro.state.button_positions) == missing, name
+        assert macro.state.button_positions[names[2]][0] == pytest.approx(858, abs=5), name
+        assert macro.click_need_button(names[1]) is False                                    # (no button seen: nothing is clicked)
 
 
 def test_buttons_that_are_not_where_the_buttons_are_are_not_named(macro):
     slots = macro.cfg.BUTTON_SLOTS_X
-    assert macro.name_buttons_by_position([(slots[0] + 5, 600), (slots[3] - 8, 640)]) == {"hungry": (slots[0] + 5, 600), "potty": (slots[3] - 8, 640)}
+    names = macro.cfg.BUTTON_NAMES
+    assert macro.name_buttons_by_position([(slots[0] + 5, 600), (slots[3] - 8, 640)]) == {names[0]: (slots[0] + 5, 600), names[3]: (slots[3] - 8, 640)}
     assert macro.name_buttons_by_position([(slots[0], 600), (slots[3] + 100, 600)]) == {}        # one is near none
     assert macro.name_buttons_by_position([(slots[0], 600), (slots[0] + 10, 600)]) == {}         # two are near the same one
 

@@ -45,6 +45,7 @@ try:
 except ImportError:
     for _name in ("tkinter", "tkinter.messagebox", "tkinter.scrolledtext", "tkinter.simpledialog", "tkinter.ttk"):
         _stub(_name)
+    sys.modules["tkinter"].TclError = type("TclError", (Exception,), {})          # (an exception class, since the code catches it)
 
 import main  # noqa: E402  (after the stubs)
 
@@ -139,7 +140,7 @@ def world(macro, monkeypatch):
     monkeypatch.setattr(macro, "wait_interruptible", wait)
     monkeypatch.setattr(macro, "minigame_look", look)
     monkeypatch.setattr(macro, "minigame_wait", lambda duration, watch: clock.__setattr__("now", clock.now + duration))
-    monkeypatch.setattr(macro, "detect_minigame_victory", lambda img: False)
+    monkeypatch.setattr(macro, "detect_minigame_finished", lambda img: False)
     monkeypatch.setattr(macro, "zoom_out", lambda: world.zooms.append(clock.now))      # (world.real_zoom_out is the real one)
     monkeypatch.setattr(macro, "tilt_camera_down", lambda: world.tilts.append(clock.now))
     monkeypatch.setattr(macro.pydirectinput, "keyDown", lambda key: world.keys.append(("down", key, clock.now)), raising=False)

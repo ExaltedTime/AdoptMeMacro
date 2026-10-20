@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
-from typing import Optional
+from typing import Any, Awaitable, Optional
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -31,8 +31,18 @@ log = logging.getLogger("adoptme-bot")
 
 async def say(interaction: discord.Interaction, text: Optional[str] = None, **kwargs) -> None:
     """Follow up on a command with `text`, cut to fit a message first (bot_lib.clip_message()): a message over Discord's limit is refused, and the command would
-    end with nothing said."""
-    await interaction.followup.send(bot_lib.clip_message(text) if text else text, **kwargs)  # type: ignore[arg-type]
+    end with nothing said. An interaction can only be followed up for 15 minutes (a long /update or /pull outlasts that): after that, or when Discord says the
+    token is no good, the answer goes to the channel itself (bot_lib.followup_needs_the_channel())."""
+    text = bot_lib.clip_message(text) if text else text
+    if not interaction.is_expired():
+        try:
+            await interaction.followup.send(text, **kwargs)  # type: ignore[arg-type]
+            return
+        except discord.HTTPException as error:
+            if not bot_lib.followup_needs_the_channel(error.status, False):
+                raise
+    channel = interaction.channel or await interaction.client.fetch_channel(interaction.channel_id or 0)
+    await channel.send(text, **kwargs)  # type: ignore[union-attr,arg-type]
 
 
 def roblox_region(monitor: dict) -> dict:
@@ -109,9 +119,11 @@ def release_inputs() -> None:
         import pydirectinput
     except ImportError:
         return
+    key_up = getattr(pydirectinput.keyUp, "__wrapped__", pydirectinput.keyUp)       # (without the fail-safe check: see main.unchecked())
+    mouse_up = getattr(pydirectinput.mouseUp, "__wrapped__", pydirectinput.mouseUp)
     for key in cfg.HELD_KEYS:
         try:
-            pydirectinput.keyUp(key)
+            key_up(key)
         except Exception:
             pass
     if os.name == "nt":
@@ -119,7 +131,7 @@ def release_inputs() -> None:
         for button, code in (("left", 0x01), ("right", 0x02)):
             try:
                 if ctypes.windll.user32.GetAsyncKeyState(code) & 0x8000:  # type: ignore[attr-defined]
-                    pydirectinput.mouseUp(button=button)
+                    mouse_up(button=button)
             except Exception:
                 pass
 
@@ -128,6 +140,7 @@ def launch_macro(config: bot_lib.Config, loop: bool = True) -> int:
     """Start `main.py` (the repository's, with the configured Python; `--loop` if `loop`) as a process of its own, in this desktop session; what it prints on its
     error output is appended to debug/logs/macro_stderr.log. Returns its process id."""
     folder = config.repo_dir or ROOT
+    os.makedirs(cfg.LOGS_DIR, exist_ok=True)                           # (a Refresh debug, or a fresh checkout, leaves no folder to write the error output into)
     with open(os.path.join(cfg.LOGS_DIR, "macro_stderr.log"), "ab") as errors:
         process = subprocess.Popen([config.python or sys.executable, os.path.join(folder, "main.py"), *(["--loop"] if loop else [])], cwd=folder,
                                    stdout=subprocess.DEVNULL, stderr=errors)
@@ -148,55 +161,95 @@ def kill_macro(pids: list[int]) -> None:
     release_inputs()
 
 
-def current_macro_pids() -> list[int]:
-    return bot_lib.macro_pids(list_processes() or [])
+def current_macro_pids() -> Optional[list[int]]:
+    """The ids of the macro's processes, or None when the processes of this PC cannot be listed - which is not the same as "not running"."""
+    processes = list_processes()
+    return None if processes is None else bot_lib.macro_pids(processes)
+
+
+async def running_pids() -> list[int]:
+    """The ids of the macro's processes. A listing that fails is tried again (BOT_PROCESS_LIST_TRIES times, a second apart); one that keeps failing is an error
+    said in the channel (bot_lib.Said), not "the macro is not running": nothing is stopped, started or killed on a guess."""
+    for attempt in range(cfg.BOT_PROCESS_LIST_TRIES):
+        pids = await asyncio.to_thread(current_macro_pids)
+        if pids is not None:
+            return pids
+        await asyncio.sleep(1)
+    raise bot_lib.Said("I can't list this PC's processes (psutil is not installed and PowerShell did not answer in time), so I can't tell whether the macro is running - nothing was done. "
+                       "`pip install psutil` in the macro's environment fixes it.")
+
+
+async def send_command(command: str, **details: Any) -> str:
+    """Leave the macro `command` and wait up to BOT_COMMAND_ACK_WAIT seconds for it to answer that it took it. "" when it did; else what to tell the owner:
+    the macro dropped it (and why), or did not look in time (its window may be stuck) and the command was withdrawn, so that it does not run later."""
+    name = bot_lib.write_command(cfg.COMMANDS_DIR, command, time.time(), **details)
+    deadline = time.time() + cfg.BOT_COMMAND_ACK_WAIT
+    while True:
+        answer = bot_lib.take_ack(cfg.COMMANDS_DIR, name)
+        if answer is None and time.time() >= deadline:
+            if bot_lib.withdraw_command(cfg.COMMANDS_DIR, name):
+                return f"The macro did not take the command within {cfg.BOT_COMMAND_ACK_WAIT:g} s (its window may be stuck) - it was withdrawn and nothing was done."
+            answer = bot_lib.take_ack(cfg.COMMANDS_DIR, name) or "taken"            # (taken just now)
+        if answer is not None:
+            return "" if answer == "taken" else f"The macro dropped the command ({answer.removeprefix('dropped: ')}) - nothing was done."
+        await asyncio.sleep(cfg.BOT_COMMAND_ACK_POLL)
 
 
 async def stop_macro(config: bot_lib.Config) -> str:
     """Ask the macro to exit (its cooperative stop: the loop ends, every key and the mouse are released, the window closes) and wait up to
-    stop_timeout_seconds for its process to end; if it hasn't, kill it and release the inputs from here. Returns what happened, as a sentence."""
-    if not await asyncio.to_thread(current_macro_pids):
+    stop_timeout_seconds for its process to end; if it hasn't, kill it and release the inputs from here. Returns what happened, as a sentence.
+    A listing of the processes that fails in the middle is waited through; if it still fails at the end nothing is claimed and nothing is killed."""
+    if not await running_pids():
         return "The macro was not running."
-    bot_lib.write_command(cfg.COMMANDS_PATH, "exit", time.time())
-    deadline = time.time() + config.stop_timeout_seconds
+    problem = await send_command("exit")
+    deadline = time.time() + (0 if problem else config.stop_timeout_seconds)           # (a macro that does not answer is not waited for: it is killed)
     while time.time() < deadline:
         await asyncio.sleep(1)
-        if not await asyncio.to_thread(current_macro_pids):
+        if await asyncio.to_thread(current_macro_pids) == []:
             return "The macro stopped (it released its keys and closed)."
     pids = await asyncio.to_thread(current_macro_pids)
+    if pids is None:
+        return "I asked the macro to exit, but can't list this PC's processes, so I can't tell whether it ended (or kill it if it did not) - look at the PC."
+    if not pids:
+        return "The macro stopped (it released its keys and closed)."
     await asyncio.to_thread(kill_macro, pids)
-    with contextlib.suppress(OSError):
-        os.remove(cfg.COMMANDS_PATH)
+    bot_lib.clear_commands(cfg.COMMANDS_DIR)
+    if problem:
+        return f"{problem} The macro was killed and its keys and mouse buttons released."
     return f"The macro did not stop within {config.stop_timeout_seconds:g} s - it was killed and its keys and mouse buttons released."
 
 
 async def open_macro(config: bot_lib.Config) -> str:
     """Start the macro with its window up and no loop going (`main.py`), unless it is running already."""
-    if await asyncio.to_thread(current_macro_pids):
+    if await running_pids():
         return "The macro is already running."
     await asyncio.to_thread(launch_macro, config, False)
     deadline = time.time() + cfg.BOT_START_CONFIRM
     while time.time() < deadline:
         await asyncio.sleep(2)
-        if await asyncio.to_thread(current_macro_pids):
+        if await asyncio.to_thread(current_macro_pids):                  # (a failed listing here is just "not yet")
             return "Started the macro (its window is up, no loop going - /loop starts the loop)."
     return "Started the macro, but its process is not there - see /log and macro_stderr.log."
 
 
-async def stop_loop() -> str:
-    """Ask the running macro to stop its loop (the [STOP] button); its window stays open."""
-    if not await asyncio.to_thread(current_macro_pids):
-        return "The macro is not running."
-    bot_lib.write_command(cfg.COMMANDS_PATH, "stop", time.time())
-    return "Asked the macro to stop (its keys are released; its window stays open - /exit closes it)."
+async def stop_loop() -> tuple[bool, str]:
+    """Ask the running macro to stop its loop (the [STOP] button); its window stays open. (Whether the macro was there, what to say.)"""
+    if not await running_pids():
+        return False, "The macro is not running."
+    problem = await send_command("stop")
+    if problem:
+        return False, problem
+    return True, "Asked the macro to stop (its keys are released; its window stays open - /exit closes it)."
 
 
 async def start_macro(config: bot_lib.Config) -> str:
     """Start the macro's loop: launch `main.py --loop` if it is not running; if it is (its window may be open with the loop stopped), ask it to start
     the loop. Then wait up to BOT_START_CONFIRM seconds for status.json to be written, and say what was seen."""
     since = datetime.now()
-    if await asyncio.to_thread(current_macro_pids):
-        bot_lib.write_command(cfg.COMMANDS_PATH, "start", time.time())
+    if await running_pids():
+        problem = await send_command("start")
+        if problem:
+            return problem
         what = "The macro was already running - asked it to start its loop (nothing happens if it is going already)."
     else:
         await asyncio.to_thread(launch_macro, config)
@@ -239,12 +292,13 @@ def output_tail(path: str, count: int = 12) -> str:
     return bot_lib.tail_lines(path, count) or "(nothing)"
 
 
-async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say) -> None:
+async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say, loop_was_running: bool = True) -> None:
     """The steps both /update and /rollback share, once the plan is made: stop the macro, move the repository (`move`: the git arguments), install
-    the packages if requirements.txt changed, start the macro again if it was running, and ask for the bot's own restart if its code changed.
-    `say` posts a message. A step that fails stops it there, with what to do."""
+    the packages if requirements.txt changed, start the macro again if it was running (with its loop only if `loop_was_running`: a window that was open with
+    no loop comes back the same), and ask for the bot's own restart if its code changed and still imports. `say` posts a message. A step that fails stops it
+    there, with what to do."""
     global RESTART_BOT
-    was_running = bool(await asyncio.to_thread(current_macro_pids))
+    was_running = bool(await running_pids())
     if was_running:
         await say(await stop_macro(config))
     await git(config, *move)
@@ -258,14 +312,19 @@ async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say) -
             await say(f"pip failed (exit {code}) - the macro was not started. Use /rollback.\n```\n{output[-1200:]}\n```")
             return
     if was_running:
-        result = await start_macro(config)
+        result = await start_macro(config) if loop_was_running else await open_macro(config)
         await say(result)
-        if "Its loop is running." not in result:
+        if ("Its loop is running." not in result) if loop_was_running else (not result.startswith("Started the macro (")):
             errors = output_tail(os.path.join(cfg.LOGS_DIR, "macro_stderr.log"))
             await say(f"The macro does not look started. The end of its error output:\n```\n{errors}\n```\nUse /rollback to go back to {bot_lib.short(old)}.")
     else:
         await say("The macro was not running, so it was not started (/loop).")
     if bot_lib.needs_bot_restart(changed):
+        code, output = await asyncio.to_thread(run_command, [config.python or sys.executable, "-c", "import bot.discord_bot"], repo_folder(config), cfg.BOT_IMPORT_TIMEOUT)
+        if code != 0:
+            await say(f"The bot's own code changed, but it does not import (exit {code}) - the bot is **not** restarted and goes on with the old code in memory, which would not "
+                      f"start again. Use /rollback to go back to {bot_lib.short(old)}.\n```\n{output[-1200:]}\n```")
+            return
         await say("The bot's own code changed - the bot restarts now.")
         RESTART_BOT = True
 
@@ -273,10 +332,11 @@ async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say) -
 class ConfirmView(discord.ui.View):
     """Yes and Cancel buttons that only the owner in the one channel can press; `answer` is True, False, or None if nobody pressed one in time."""
 
-    def __init__(self, config: bot_lib.Config, timeout: float) -> None:
+    def __init__(self, config: bot_lib.Config, timeout: float, yes: str = "Copy it") -> None:
         super().__init__(timeout=timeout)
         self.config = config
         self.answer: Optional[bool] = None
+        self.yes.label = yes                                         # (the button the decorator made)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return bot_lib.is_allowed(self.config, interaction.user.id, interaction.channel_id or 0)
@@ -306,8 +366,18 @@ class OwnerOnlyTree(app_commands.CommandTree):
         return bot_lib.is_allowed(self.config, interaction.user.id, interaction.channel_id or 0)
 
     async def on_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
-        if not isinstance(error, app_commands.CheckFailure):
-            log.error("command failed: %s", error, exc_info=error)
+        """A command that raised: logged, and said in the channel - every command defers ("thinking..."), which would otherwise go on for ever."""
+        if isinstance(error, app_commands.CheckFailure):
+            return
+        log.error("command failed: %s", error, exc_info=error)
+        text = bot_lib.error_text(getattr(error, "original", None) or error)
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(text)
+            else:
+                await interaction.response.send_message(text)
+        except Exception:
+            log.exception("the error could not be said in the channel either")
 
 
 def build(config: bot_lib.Config) -> discord.Client:
@@ -335,7 +405,15 @@ def build(config: bot_lib.Config) -> discord.Client:
             await say(interaction, f"Couldn't grab the screen: {error}")
             return
         note = "The screen looks blank - the PC may be locked or asleep." if blank else ""
-        await say(interaction, note, file=discord.File(io.BytesIO(png), "screenshot.png"))
+        name = "screenshot.png"
+        if len(png) > cfg.BOT_MAX_UPLOAD_MB * 1048576:                 # (a large monitor: too big for Discord as a PNG, a JPEG of it is not)
+            try:
+                png, _ = await asyncio.to_thread(grab_roblox_jpeg)
+            except Exception as error:
+                await say(interaction, f"The screenshot was too big to send, and a smaller one could not be made: {error}")
+                return
+            name, note = "screenshot.jpg", (note + " " if note else "") + "(sent as a smaller JPEG: the PNG was too big)"
+        await say(interaction, note, file=discord.File(io.BytesIO(png), name))
 
     rolling = {"on": False}                                        # one rolling view at a time
 
@@ -406,7 +484,7 @@ def build(config: bot_lib.Config) -> discord.Client:
     @command("start", "Start the macro with its window up and no loop going")
     async def start(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
-        remember("running")
+        remember("open")
         await say(interaction, await open_macro(config))
 
     @command("loop", "Start the macro's loop (launches the macro if it is not running)")
@@ -418,7 +496,10 @@ def build(config: bot_lib.Config) -> discord.Client:
     @command("stop", "Stop the macro's loop (its window stays open)")
     async def stop(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
-        await say(interaction, await stop_loop())
+        was_there, text = await stop_loop()
+        if was_there:
+            remember("open")                                         # (the window stays, with no loop: a restart of it would not start one)
+        await say(interaction, text)
 
     @command("exit", "Close the macro: its loop is stopped, its keys are released and its window closed")
     async def exit_macro(interaction: discord.Interaction) -> None:
@@ -426,25 +507,16 @@ def build(config: bot_lib.Config) -> discord.Client:
         remember("stopped")
         await say(interaction, await stop_macro(config))
 
-    @command("restart", "Close the macro, then start it with its loop")
-    async def restart(interaction: discord.Interaction) -> None:
-        await interaction.response.defer(thinking=True)
-        remember("stopped")
-        stopped = await stop_macro(config)
-        remember("running")
-        await say(interaction, f"{stopped}\n{await start_macro(config)}")
-
     async def ask_macro(interaction: discord.Interaction, command_name: str, said: str, idle_only: bool = False) -> None:
         """Leave the running macro `command_name` (its window does it) and say `said`; with `idle_only` not while its loop runs."""
         await interaction.response.defer(thinking=True)
-        if not await asyncio.to_thread(current_macro_pids):
+        if not await running_pids():
             await say(interaction, "The macro isn't running - /start it first (it is done by its window).")
             return
         if idle_only and not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path())):
             await say(interaction, "The macro's loop is running - /stop it first.")
             return
-        bot_lib.write_command(cfg.COMMANDS_PATH, command_name, time.time())
-        await say(interaction, said)
+        await say(interaction, await send_command(command_name) or said)
 
     @command("rejoin", "Have the macro leave the game and rejoin it (stops its loop first)")
     async def rejoin(interaction: discord.Interaction) -> None:
@@ -469,10 +541,13 @@ def build(config: bot_lib.Config) -> discord.Client:
     async def change_switch(interaction: discord.Interaction, kind: str, name: str, value: bool) -> None:
         """Ask the running macro to change a switch (the command file) and say what the game config shows a moment later."""
         await interaction.response.defer(thinking=True)
-        if not await asyncio.to_thread(current_macro_pids):
+        if not await running_pids():
             await say(interaction, "The macro isn't running - a switch can only be changed while its window is open (or by hand in the window).")
             return
-        bot_lib.write_command(cfg.COMMANDS_PATH, "set", time.time(), **bot_lib.switch_command(kind, name, value))
+        problem = await send_command("set", **bot_lib.switch_command(kind, name, value))
+        if problem:
+            await say(interaction, problem)
+            return
         if name == cfg.SHOW_DEBUG_LINES_OPTION:
             await say(interaction, f"Asked the macro to turn {name} {'on' if value else 'off'} (it is not kept in the config, so it can't be checked).")
             return
@@ -496,7 +571,6 @@ def build(config: bot_lib.Config) -> discord.Client:
             await say(interaction, "An update or rollback is already going on.")
             return
         async with update_lock:
-            UPDATING = True
             try:
                 await plan_and_apply(interaction, rollback)
             except Exception:                                      # (a message that could not be sent, git gone wrong: said in the log, and the lock is let go)
@@ -509,21 +583,38 @@ def build(config: bot_lib.Config) -> discord.Client:
             await client.close()
 
     async def plan_and_apply(interaction: discord.Interaction, rollback: bool) -> None:
+        global UPDATING
         state = client.bot_state  # type: ignore[attr-defined]
         try:
             plan, move, head = await asyncio.to_thread(bot_lib.make_plan, git_runner(config), config.update_remote, config.update_branch, state.previous_commit, rollback)
         except RuntimeError as error:
             await say(interaction, f"Nothing was changed. {error}")
             return
-        await say(interaction, f"```\n{plan.text}\n```")
         if plan.kind not in ("update", "rollback"):
+            await say(interaction, f"```\n{plan.text}\n```")
             return
+        pids = await running_pids()               # (before anything is changed: if the processes cannot be listed, whether the macro runs is not known, and nothing is done)
+        loop_running = bool(pids) and not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path()))
+        if not rollback:                          # an update says what it brings (the commits, the lines changed in the Python files) and waits for a yes; a rollback is the way back, and does not
+            view = ConfirmView(config, cfg.BOT_UPDATE_CONFIRM_TIMEOUT, yes="Update")
+            await say(interaction, f"```\n{plan.text}\n```", view=view)
+            await view.wait()
+            if not view.answer:
+                await say(interaction, "Nothing was changed: " + ("cancelled." if view.answer is False else "no answer in time."))
+                return
+        else:
+            await say(interaction, f"```\n{plan.text}\n```")
+        if pids:
+            state.desired_state = "running" if loop_running else "open"      # (what the macro is, so that what comes back - and a restart of it - is the same)
         state.previous_commit = None if rollback else head
         bot_lib.save_state(bot_lib.state_path(), state)
+        UPDATING = True
         try:
-            await apply_commit(config, move, head, lambda text: say(interaction, text))
+            await apply_commit(config, move, head, lambda text: say(interaction, text), loop_running)
         except RuntimeError as error:
             await say(interaction, f"**Stopped:** {error}\nThe macro may be stopped - see /status.")
+        finally:
+            UPDATING = False
 
     @command("update", "Pull the latest main, restart the macro (and the bot if its code changed)")
     async def update(interaction: discord.Interaction) -> None:
@@ -587,26 +678,91 @@ def build(config: bot_lib.Config) -> discord.Client:
         await interaction.response.defer(thinking=True)
         await say(interaction, f"```\n{bot_lib.captures_text(bot_lib.captures_dir())}\n```")
 
+    background: list[asyncio.Task] = []                                # (kept: a task nobody holds can be collected while it runs)
+
     async def setup_hook() -> None:
-        client.loop.create_task(watch(client, config))
+        task = client.loop.create_task(watch(client, config))
+        background.append(task)
+        task.add_done_callback(task_ended)
 
     client.setup_hook = setup_hook  # type: ignore[method-assign]
+    synced = False
 
     @client.event
     async def on_ready() -> None:
-        await tree.sync(guild=guild)
+        nonlocal synced
         log.info("ready as %s", client.user)
+        if synced:                                                     # (on_ready comes again after every reconnect; the commands are registered once)
+            return
+        synced = True
+        try:
+            await tree.sync(guild=guild)
+        except (app_commands.CommandSyncFailure, discord.HTTPException) as error:
+            log.exception("syncing the slash commands failed")
+            await tell_channel(client, config, f"**The slash commands could not be registered:** {error}\nThe ones Discord already has still work; a new or changed command will not show until this is fixed (see the bot's console).")
 
     client.tree = tree  # type: ignore[attr-defined]       # (kept, so the commands can be listed)
     return client
 
 
 async def post(channel: discord.abc.Messageable, text: str, path: Optional[str] = None) -> None:
-    """Send `text` to the channel, with the file at `path` if there is one and it is small enough for Discord."""
-    if path and os.path.getsize(path) <= cfg.BOT_MAX_UPLOAD_MB * 1048576:
-        await channel.send(bot_lib.clip_message(text), file=discord.File(path))
-    else:
-        await channel.send(bot_lib.clip_message(text))
+    """Send `text` to the channel, with the file at `path` if there is one and it is small enough for Discord. A file that cannot be read (a Refresh debug
+    deleted it) or that Discord refuses is left out, and the text says so: the alert is worth more than its picture."""
+    try:
+        if path and os.path.getsize(path) <= cfg.BOT_MAX_UPLOAD_MB * 1048576:
+            await channel.send(bot_lib.clip_message(text), file=discord.File(path))
+            return
+    except (OSError, discord.HTTPException):
+        log.exception("posting %s with its file failed - sending the text alone", path)
+        text += "\n(its picture could not be sent)"
+    await channel.send(bot_lib.clip_message(text))
+
+
+async def attempt(what: str, sending: Awaitable[Any]) -> bool:
+    """Await a post; False (logged) if it fails, so that one post that cannot be made does not stop the rest of a look at the macro's files."""
+    try:
+        await sending
+        return True
+    except Exception:
+        log.exception("posting %s failed", what)
+        return False
+
+
+def task_ended(task: asyncio.Task) -> None:
+    """Done-callback of the watcher: a watcher that ended by an exception is logged (it would otherwise only show when the task is collected)."""
+    if not task.cancelled() and task.exception() is not None:
+        log.error("the watcher ended", exc_info=task.exception())
+
+
+async def find_channel(client: discord.Client, channel_id: int) -> Optional[discord.abc.Messageable]:
+    """The bot's channel: from the cache, else fetched, trying `BOT_CHANNEL_TRIES` times with a doubling wait for a network or Discord hiccup. A channel that is
+    not there or not allowed (NotFound, Forbidden) is not retried - the id or the permissions are wrong. None when it could not be had; said in the log."""
+    channel = client.get_channel(channel_id)
+    if channel is not None:
+        return channel  # type: ignore[return-value]
+    for attempt in range(cfg.BOT_CHANNEL_TRIES):
+        try:
+            return await client.fetch_channel(channel_id)  # type: ignore[return-value]
+        except (discord.NotFound, discord.Forbidden) as error:
+            log.error("channel %s cannot be used (%s) - check channel_id in bot_config.json and the bot's permissions there", channel_id, error)
+            return None
+        except (discord.HTTPException, OSError) as error:
+            log.warning("fetching channel %s failed (%s), try %d of %d", channel_id, error, attempt + 1, cfg.BOT_CHANNEL_TRIES)
+            if attempt + 1 < cfg.BOT_CHANNEL_TRIES:
+                await asyncio.sleep(cfg.BOT_CHANNEL_RETRY_WAIT * 2 ** attempt)
+    log.error("channel %s could not be fetched in %d tries - the watching (alerts, charts, heartbeat) is off; commands still work", channel_id, cfg.BOT_CHANNEL_TRIES)
+    return None
+
+
+async def tell_channel(client: discord.Client, config: bot_lib.Config, text: str) -> None:
+    """Post `text` in the bot's channel if it can be had; a failure is logged, not raised (this is for reporting a problem)."""
+    channel = await find_channel(client, config.channel_id)
+    if channel is None:
+        return
+    try:
+        await channel.send(bot_lib.clip_message(text))  # type: ignore[attr-defined]
+    except (discord.HTTPException, OSError):
+        log.exception("could not post to the channel")
 
 
 async def watch(client: discord.Client, config: bot_lib.Config) -> None:
@@ -614,7 +770,9 @@ async def watch(client: discord.Client, config: bot_lib.Config) -> None:
     stale (and its recovery), run charts, a heartbeat, a macro that is gone. A failure inside a look is logged and the watching
     goes on. What it has dealt with is kept in bot_state.json, so a restart neither posts it again nor misses what came while it was down."""
     await client.wait_until_ready()
-    channel = client.get_channel(config.channel_id) or await client.fetch_channel(config.channel_id)
+    channel = await find_channel(client, config.channel_id)
+    if channel is None:
+        return
     path = bot_lib.state_path()
     state = client.bot_state  # type: ignore[attr-defined]
     limiter = bot_lib.RateLimiter(cfg.BOT_ALERT_GAP)
@@ -634,37 +792,48 @@ async def watch(client: discord.Client, config: bot_lib.Config) -> None:
 async def watch_once(channel: discord.abc.Messageable, config: bot_lib.Config, state: bot_lib.BotState, limiter: bot_lib.RateLimiter) -> None:
     now = time.time()
     assert state.log_offset is not None
-    lines, state.log_offset = bot_lib.read_new_lines(bot_lib.run_log_path(), state.log_offset)
+    try:
+        lines, state.log_offset = bot_lib.read_new_lines(bot_lib.run_log_path(), state.log_offset)
+    except OSError as error:                       # (locked by OneDrive or a virus scanner, say: the place in the log is kept, and the owner is told once)
+        lines = []
+        if not state.log_unreadable and await attempt("the unreadable log", channel.send(bot_lib.clip_message(f"**The run log could not be read** ({error}) - failures are not seen until it can be (the place in it is kept)."))):
+            state.log_unreadable = True
+    else:
+        if state.log_unreadable and await attempt("the readable log", channel.send("The run log can be read again.")):
+            state.log_unreadable = False
     for failure in filter(None, (bot_lib.parse_failure(line) for line in lines)):
         post_now, held = limiter.check(now)
         if post_now:
-            await post(channel, bot_lib.failure_text(failure, held), bot_lib.failure_screenshot_path(failure))
+            await attempt("a failure", post(channel, bot_lib.failure_text(failure, held), bot_lib.failure_screenshot_path(failure)))
     status = bot_lib.read_json(bot_lib.status_path())
-    state.stale, text = bot_lib.stale_alert(state.stale, status, datetime.now(), config.stale_status_minutes)
-    if text:
-        await channel.send(bot_lib.clip_message(text))
-    for chart in bot_lib.run_charts():
+    stale, text = bot_lib.stale_alert(state.stale, status, datetime.now(), config.stale_status_minutes)
+    if not text or await attempt("the stale-status alert", channel.send(bot_lib.clip_message(text))):
+        state.stale = stale                        # (kept as it was if the alert could not be sent, so that the next look says it again)
+    charts = bot_lib.run_charts()
+    there = {os.path.basename(chart) for chart in charts}
+    state.charts = [name for name in state.charts if name in there]    # (a chart that is gone - Refresh debug - is forgotten, so that a new run with the same number is posted)
+    for chart in charts:
         if os.path.basename(chart) not in state.charts and now - os.path.getmtime(chart) >= cfg.BOT_FILE_SETTLE:
-            state.charts.append(os.path.basename(chart))
-            await post(channel, f"Run chart {os.path.basename(chart)}", chart)
+            if await attempt("a run chart", post(channel, f"Run chart {os.path.basename(chart)}", chart)):
+                state.charts.append(os.path.basename(chart))
     if bot_lib.crash_check_due(state.desired_state, UPDATING):
         running = await asyncio.to_thread(macro_process_running)
         state.crash_reported, event = bot_lib.crash_check(state.desired_state, running, state.crash_reported)
         if event == "alert":
             allowed, state.restarts = bot_lib.restart_allowed(state.restarts, now, config.auto_restart_max_per_hour) if config.auto_restart else (False, state.restarts)
             if allowed:
-                await channel.send("**The macro's process is gone** while it should be running - restarting it.")
-                await asyncio.to_thread(launch_macro, config)
+                await attempt("the restart notice", channel.send("**The macro's process is gone** while it should be running - restarting it."))
+                await asyncio.to_thread(launch_macro, config, state.desired_state == "running")      # (with its loop only if the loop was wanted)
                 state.crash_reported = False
             else:
                 limit = " (the limit of automatic restarts this hour is used)" if config.auto_restart else ""
-                await channel.send(f"**The macro's process is gone** while it should be running{limit}. /start or /loop starts it again.")
+                await attempt("the crash alert", channel.send(f"**The macro's process is gone** while it should be running{limit}. /start or /loop starts it again."))
         elif event == "recovered":
-            await channel.send("The macro's process is running again.")
+            await attempt("the recovery notice", channel.send("The macro's process is running again."))
     if bot_lib.heartbeat_due(state.last_heartbeat, config.heartbeat_hours, now):
         running = await asyncio.to_thread(macro_process_running)
-        await channel.send(bot_lib.clip_message("Heartbeat\n```\n" + bot_lib.status_text(status, datetime.now(), config.stale_status_minutes, running) + "\n```"))
-        state.last_heartbeat = now
+        if await attempt("the heartbeat", channel.send(bot_lib.clip_message("Heartbeat\n```\n" + bot_lib.status_text(status, datetime.now(), config.stale_status_minutes, running) + "\n```"))):
+            state.last_heartbeat = now
 
 
 def main() -> None:

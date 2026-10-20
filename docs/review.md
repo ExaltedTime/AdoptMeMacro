@@ -13,8 +13,7 @@ The review ran the suite (562 tests), `tools/check_constants.py` and pyflakes; a
 **Done since (docs, tools and tests pass):** all of the [Docs](#docs) findings except the ones noted as left (the macro-side comment fixes in
 `magic_numbers.py` were made with them), and everything under [Tests and tools](#tests-and-tools) except the test seam for the Discord glue (an idea, not a defect). The unused `MINIGAME_VICTORY_CHECK_INTERVAL` and `minigame_won()` were removed, and `tools/check_constants.py` now also
 checks `bot/`, reports unused constants and uncalled functions, names unknown UPPER_CASE names in the docs, and flags unused `tmp_path`, `monkeypatch`, `caplog`
-and `capsys` test parameters (unused imports and local variables are pyflakes's, which now also covers `tools`). Also done (dead and duplicate code): M8 (`wait_for_minigame_start()` replaces the three start waits and ends on a disconnect), the unused `hearts` parameter of `choose_hauntlet_door()`, the unused `began` attribute and `config` parameter, the repeated command handlers of the Discord bot (`ask_macro()`), and the repeated colour-count code (`color_pixels()`, `color_fraction()`). Fixed from "Fix first": M1 (`poll_commands()` keeps polling), M3 (held keys are tracked in `HELD_KEYS`, so all are released; the fail-safe worry M4 is not addressed beyond each release being tried separately), M7 (the lost stop), B1 (every message is clipped to fit) and B2 (no crash alert during `/update`). Not changed, and still open: the macro findings
-M1 to M14 and the bot findings B1 to B12 (code), and the docs' values that are measurements rather than constants.
+and `capsys` test parameters (unused imports and local variables are pyflakes's, which now also covers `tools`). Also done (dead and duplicate code): M8 (`wait_for_minigame_start()` replaces the three start waits and ends on a disconnect), the unused `hearts` parameter of `choose_hauntlet_door()`, the unused `began` attribute and `config` parameter, the repeated command handlers of the Discord bot (`ask_macro()`), and the repeated colour-count code (`color_pixels()`, `color_fraction()`). Fixed from "Fix first": M1 (`poll_commands()` keeps polling), M3 (held keys are tracked in `HELD_KEYS`, so all are released; the fail-safe worry M4 is not addressed beyond each release being tried separately), M7 (the lost stop), B1 (every message is clipped to fit) and B2 (no crash alert during `/update`). Then fixed: M2 (a queue of outside actions), M4 (the safety net's releases skip the fail-safe check, without moving the cursor or switching the fail-safe off), M6 (`close()` asks for the stop first and joins the worker), M13 (a dropped command is logged). Also fixed: M9 (one overlay match per look), M11 (a lock on the status file; it is written by the worker as the run goes on and by Tk's thread when the window opens or closes), B4 (a command that raises is told to the channel; a too-big screenshot is sent as a JPEG; the log folder is made if missing); `/restart` was removed (it was `/exit` then `/loop`). Also done: the inline literals (the Hauntlet view and screen-change sizes, the Ghost "!" thresholds) are constants, the movement keys are one set (`KEY_FORWARD`, `KEY_LEFT`, `KEY_BACK`, `KEY_RIGHT`) instead of Hauntlet ones borrowed by Ghost Gallery, and the comments that said victory or won now say the minigame finished. Also: every key the macro presses is named in one place by what it is for (`KEYS`, `KEY_SEQUENCES`, `HOTKEYS` in `magic_numbers.py`; the walk tables use them too, and `tools/check_constants.py` fails on an unknown label or a key written as a letter), and the finish screen of a minigame is called that everywhere (the constants `MINIGAME_FINISH_*`, `detect_minigame_finished()`, the fixtures and the log lines), not victory or win. Then: B3 (an answer goes to the channel when the interaction has expired) and B5 (`main.py` matched as a whole file name; a failed process listing is retried and then said, never taken for "not running"). Then: M5 (the hotkey thread survives a failed look), M10 (the need watcher survives a failed look; the window rect cache is read once into a local), M14 (the flag that nothing runs goes down on Tk's thread with the buttons; Refresh debug is refused while a capture records). M12 is dropped, as are the `allowed_mentions` item and the idea of splitting `ARCHITECTURE.md` and `main.py`. Then, in the bot: B9 (`desired_state` is `open` after `/start` and `/stop`, so a restart or an update brings the macro back with its loop only if it had one), B6 (a chart that is gone is forgotten, so a run number used again after Refresh debug is posted), B7 (a run log that cannot be read is said once, and again when it can be; the place in it is kept), B11 (the bot restarts after an update only if `import bot.discord_bot` works, else it says so and offers `/rollback`), and `/update` asks first, with the commits and the lines changed in the Python files. The startup errors: the channel is fetched again after a hiccup (`find_channel()`), the watcher task is kept and logged if it ends, and `tree.sync()` runs once with its failure logged and posted. B8 (`attempt()`: a failed post does not end the look; charts, the stale alert and the heartbeat count as done only once sent; a gone picture is left out), B10 (one file per command in `COMMANDS_DIR`, read oldest first, and the macro answers each with `taken` or `dropped: why`, which the bot waits for and withdraws the command if none comes; a queued action that is given up later is still only in the log), and the `check_constants` scan of `bot/`, which was already there. Not changed, and still open: B12 and the lower bot items, and the docs' values that are measurements rather than constants. M1 to M14 are all fixed or dropped (M4 only in part), as are B1 to B11 except B12; the entries below are kept as the record of what was found.
 
 Contents: [Fix first](#fix-first) · [Macro](#macro-mainpy) · [Discord bot](#discord-bot) · [Docs](#docs) · [Tests and tools](#tests-and-tools) ·
 [Ideas and open questions](#ideas-and-open-questions)
@@ -94,9 +93,6 @@ clear in `run_workflow_loop()`.
   `focus_roblox()` can set it to None in between on the worker thread, giving a `TypeError` in the watcher, recorder or capture threads. Copy to a local first.
 - **M11. `write_status()` uses a fixed `status.json.tmp` and no lock.** `close()` and `mark_stopped()` run on the Tk thread while the worker unwinds and also calls
   `write_status()`; two writers can interleave on the temp file and corrupt `status.json`, and a failed `os.replace` is swallowed. Add a lock or a unique temp name.
-- **M12. `travel_to_trade_hub()` is not idempotent.** It presses the backpack key blindly; if the backpack is already open that closes it and the fixed clicks land
-  in the world. It runs no `dismiss_stray_windows()` first, and neither trip checks that the hub loaded. Use `close_backpack_if_open()` first and confirm by a look at the
-  screen afterwards. If the Trading Hub Phone is already equipped the sequence also does something unintended (the recorded run started from an unequipped phone).
 - **M13. `read_command()` drops stale, unknown and malformed commands without a log line.** A bot host whose clock is off by more than `COMMAND_MAX_AGE` gets every
   command ignored with nothing in the log. Add a `logger.warning`. A command written between the read and the `os.remove` is also lost (tiny window).
 - **M14. Smaller races.** The worker's `finally` sets `is_running = False` before queueing the UI reset on Tk; an `act_from_outside()` retry in between gets its UI reset
@@ -104,25 +100,13 @@ clear in `run_workflow_loop()`.
 
 ### Dead code, duplication, size
 
-- `MINIGAME_VICTORY_CHECK_INTERVAL` is unused (victory is checked on every look); its comment in `magic_numbers.py` and the docs still say it sets an interval.
-  `tools/check_constants.py` only finds undefined names, not unused constants; adding that check would have caught it.
-- `minigame_won()` is never called (only the docs mention it). The `hearts` parameter of `choose_hauntlet_door()` is unused ("for the decision logic to come").
-- `HAUNTLET_SEARCH_TURNS` is deliberately zero, which makes the camera-search branch, `HauntletRun.turns` and `HAUNTLET_CAMERA_DRAG` inert as shipped. Fine as a kill
-  switch; say so in its comment.
-- `play_ghost_gallery()` is about 160 lines with six closure-captured state variables; a `GhostPlayer` class (as `HauntletRun` and `GhostFeedback` were done) would
-  make it testable in parts. `hauntlet_walk()` is about 90 lines.
-- Inline literals remain where constants belong: the 96x54 and 8/45 in `hauntlet_view()`, the 80x45 in `screen_changed()`, the thresholds in `find_ghost_alerts()`,
-  Ghost Gallery's hard-coded `"w"` and its borrowed `HAUNTLET_LEFT/RIGHT/BACK_KEY`. `TARGET_BUCKETS`, `BUCKET_STEPS` and `COLOR_*` live in `main.py`, against the
-  statement in the docs that every tunable is in `magic_numbers.py`.
-- Naming: `detect_minigame_victory()` and `minigame_popup_checks()` say "victory" but the screen is the GAME OVER screen for any outcome; the players' docstrings
-  say "True if won".
+Checked against the code: the unused `MINIGAME_VICTORY_CHECK_INTERVAL`, `minigame_won()` and the `hearts` parameter are gone, the inline literals are constants, the movement keys are one set, `detect_minigame_victory()` is `detect_minigame_finished()`, and `HAUNTLET_SEARCH_TURNS`'s comment says it is a kill switch. Still there:
+- `play_ghost_gallery()` is about 160 lines with several closure-captured state variables; a `GhostPlayer` class (as `HauntletRun` and `GhostFeedback` were done) would make it testable in parts. `hauntlet_walk()` is about 90 lines.
+- `TARGET_BUCKETS`, `BUCKET_STEPS` and `COLOR_*` (the run report's chart) live in `main.py`; `ARCHITECTURE.md` names that as the one exception to "every tunable is in `magic_numbers.py`".
 
 ### Stale comments
 
-- `MinigameWatch` says it is fed by `minigame_won()`; it is fed by `minigame_look()` and `minigame_wait()`.
-- `magic_numbers.py`: "both end on the victory screen" and "both minigames wait/hold" (three minigames); the overlay comment omits Stitches' Spotlight; the
-  Hauntlet 2 comment "then W alone until the room number changes" predates steering and unsticking; the "Record the next run" comment points to the Options tab, it is
-  on Debug > Other.
+None found in `main.py` or `magic_numbers.py` that the earlier review listed (the `MinigameWatch` feeding, "both" for three minigames, the overlay list, the Hauntlet 2 walk comment); the "Record the next run" comment now says the Options subtab.
 
 ## Discord bot
 
@@ -187,8 +171,6 @@ and `/restart` can launch a second macro. Treat None as unknown: retry, or abort
 
 ### Lower
 
-- `watch()` calls `fetch_channel()` outside any `try`; a `Forbidden`, `NotFound` or network error ends the task silently and alerts stop. The task reference is not
-  kept. `on_ready()` runs `tree.sync()` on every reconnect with no error handling (the 100-character description failure was exactly this: no command registered).
 - `restart_allowed()` counts a restart before `launch_macro()`, so a failed launch uses one up. `/loop` and `/start` call `remember("running")` before launching, so
   the watcher can post a brief false crash alert.
 - `failure_screenshot_path()`: `os.path.commonpath` raises `ValueError` for a path on another drive on Windows (not reachable from normal macro output).
@@ -199,7 +181,6 @@ and `/restart` can launch a second macro. Treat None as unknown: retry, or abort
   buttons stay visible after the timeout; the autocomplete lists and calls `getmtime` on the event loop and can raise if a file vanishes.
 - `/update`: `previous_commit` is overwritten with HEAD before the move succeeds, so a failed update loses an earlier rollback target; `git fetch <remote> <branch>`
   then `rev-parse refs/remotes/...` depends on the remote's fetch refspec **(uncertain)**; `FETCH_HEAD` is safer.
-- Failure text is posted with default allowed mentions; set `allowed_mentions` to none on the client.
 - The `/leave_trade_hub` reply does not say the loop is stopped (the macro stops it). `RateLimiter` drops held failures and only reports them when another comes.
 
 ## Docs
@@ -233,17 +214,8 @@ These also make the docs wrong the moment a value is retuned.
 
 ### Incomplete or inconsistent
 
-- "Two minigames" or "both" where there are three (`MINIGAME_LABELS`); the overlay list omits Stitches' Spotlight.
-- The persisted-config list omits `hauntlet_2_enabled`, `ghost_gallery_enabled` and `stitches_spotlight_enabled`.
-- The Discord constants row omits `BOT_GIT_TIMEOUT` (documented nowhere), `BOT_PIP_TIMEOUT`, `NEED_NAMES`, `OPTION_SWITCHES`, `SHOW_DEBUG_LINES_OPTION`, `TRADE_HUB_*`.
-  There is no group for the `KEY_*` constants; `KEY_MOUNT`, `KEY_ZOOM_IN`, `WATCH_POLL_INTERVAL`, `TAB_SELECTED_*` and `NEED_WATCH_JOIN_TIMEOUT` are named nowhere.
-- Side actions omits `travel_to_trade_hub()`, `leave_trade_hub()` and `click_steps()` (they appear only under Discord). The debug layout omits `captures/`,
-  `minigame_captures/`, `commands.json` and `logs/macro_stderr.log`.
-- Run capture naming: `<minigame>_<date>_<time>` is incomplete (the suffix from `run_capture_suffix()`); a sentence about which runs are kept lost a comma.
-- The `ButtonNeedHandler` row repeats "without waiting for the icon" and contradicts itself. "`run_workflow_loop()` is the only thing that runs" is no longer true.
-- Fork doorway counts differ between `ARCHITECTURE.md` and `PLANNED.md`; `retune_check.py` is "a few minutes" in one place and about 15 in `CLAUDE.md`;
-  `PLANNED.md` says the sick dialog is up "after `e`" while the handler clicks the doctor's prompt; "the table of `STITCHES_TURN_KEYS`" (it is a tuple); the door
-  fixture naming rule has exceptions (`fork_hall__no_doors`, `phone_arrow`, `room1_close`, `thin_one`).
+Checked against `ARCHITECTURE.md`: the lists the review found short (the persisted config, the Discord constants row, the side actions, the debug layout, the capture naming, the fixture naming exceptions) are complete now, and the "both" and "two minigames" wording says every minigame. Left:
+- `PLANNED.md` says the sick dialog is up "after `e`" while the handler clicks the doctor's prompt (outside the Claude section, so not edited), and its fork doorway counts were not compared with `ARCHITECTURE.md` again.
 
 ## Tests and tools
 
@@ -253,8 +225,6 @@ These also make the docs wrong the moment a value is retuned.
   relational). The docs say this file pins no value.
 - **`tools/retune_check.py` has no variant** for `RUN_CAPTURES_*` or `STITCHES_LINE_DEADBAND`, which is why the above was missed. Add them. (Do not run it unasked: it
   takes about 15 minutes.)
-- **`tools/check_constants.py` scans only `main.py`**, so a misspelt `cfg.NAME` in `bot/*.py` goes unnoticed (the bot uses many `cfg.BOT_*`). Extend it to `bot/` and add
-  an unused-constant report.
 - **Possible flake:** `tests/test_capture.py::test_a_long_stretch_without_a_frame_forces_one` failed once under `-n 4` and passed on rerun (real threads and
   wall-clock waits). The macro review saw the same test fail once in a run of the suite. Inject a clock or widen the margin.
 - **Unused fixture:** `tests/ghost_gallery/pet_close_78.png`.
@@ -304,6 +274,3 @@ hearts, the cyan temporary heart, the wand, counts above two).
 
 **Process**
 - The docs repeat tuned values in many places; a check that scans `ARCHITECTURE.md` for numbers next to constant names would keep that rule honest.
-- `ARCHITECTURE.md` is long (about 1700 lines); splitting it (macro, minigames, bot, tests) would make it easier to keep accurate, with the same anchors kept as short
-  redirects.
-- `main.py` is about 5900 lines; the minigame players and the Discord command handling are the natural first modules to split out, with the tests following the split.

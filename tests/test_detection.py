@@ -209,11 +209,11 @@ def test_each_stray_window_is_told_from_the_others_in_a_real_screenshot_and_clos
     assert {k for k in macro.cfg.STRAY_WINDOWS if macro.popup_visible(screen, k)} == {name}
 
 
-def test_the_win_screens_of_both_minigames_are_recognised_in_real_screenshots_and_nothing_else_is(macro):
-    for name in ("win_screen_ghost_gallery", "win_screen_hauntlet_2", "game_over"):            # (the second has the next game's countdown over the banner's top)
-        assert macro.detect_minigame_victory(screenshot(name)) is True, name
+def test_the_finish_screens_of_both_minigames_are_recognised_in_real_screenshots_and_nothing_else_is(macro):
+    for name in ("finish_screen_ghost_gallery", "finish_screen_hauntlet_2", "game_over"):            # (the second has the next game's countdown over the banner's top)
+        assert macro.detect_minigame_finished(screenshot(name)) is True, name
     for name in ("trading_hub", "task_board_alerts", "star_rewards", "star_rewards_claim", "hauntlet_house", "ghost_house", "paycheck", "backpack_open"):
-        assert macro.detect_minigame_victory(screenshot(name)) is False, name
+        assert macro.detect_minigame_finished(screenshot(name)) is False, name
 
 
 def test_an_empty_screen_has_no_stray_window(macro, monkeypatch):
@@ -419,7 +419,7 @@ POPUP_SCREENSHOTS = {                    # real screenshots of a 1920x1080 windo
     "ghost_house": (True, "ghost_gallery"),
     "stitches_spotlight": (True, "stitches_spotlight"),   
     "ghost_over_backpack": (True, "ghost_gallery"),      # the open backpack behind it has green buttons too: it was not found, with all the green taken together
-    "paycheck": (False, None),                           # the paycheck's green CASH OUT, a green Okay, the win screen's NICE!: no red No beside them
+    "paycheck": (False, None),                           # the paycheck's green CASH OUT, a green Okay, the finish screen's NICE!: no red No beside them
     "star_rewards": (False, None),                       # the calendar view (real screenshot, lossless)
     "star_rewards_claim": (False, None),                 # the view that opens by itself once a day, with its green CLAIM! button
     "game_over": (False, None),

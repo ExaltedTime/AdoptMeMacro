@@ -164,8 +164,9 @@ def roblox_rect() -> Box:
     """
     global _ROBLOX_RECT
     now = time.time()
-    if _ROBLOX_RECT and now - _ROBLOX_RECT[0] < cfg.ROBLOX_RECT_TTL:
-        return _ROBLOX_RECT[1]
+    cached = _ROBLOX_RECT                          # (a local: focus_roblox() can set the global to None on another thread between the test and the use)
+    if cached and now - cached[0] < cfg.ROBLOX_RECT_TTL:
+        return cached[1]
     screen_w, screen_h = pyautogui.size()
     rect = (0, 0, screen_w, screen_h)
     try:
@@ -411,29 +412,78 @@ def refresh_debug() -> int:
         os.makedirs(directory, exist_ok=True)
     return removed
 
+def acknowledge_command(stem: str, text: str) -> None:
+    """Tell the bot what became of the command in <stem>.json: "taken", or "dropped: <why>" (the bot waits for this before it says it asked)."""
+    try:
+        with open(os.path.join(cfg.COMMANDS_DIR, stem + ".ack"), "w", encoding="utf-8") as f:
+            f.write(text)
+    except OSError:
+        logger.warning(f"Could not write the acknowledgement of the command {stem}")
+
+
+def discard_commands() -> None:
+    """Remove every command waiting (left from before the macro started), answering each as dropped."""
+    try:
+        names = sorted(name for name in os.listdir(cfg.COMMANDS_DIR) if name.endswith(".json"))
+    except OSError:
+        return
+    for name in names:
+        with contextlib.suppress(OSError):
+            os.remove(os.path.join(cfg.COMMANDS_DIR, name))
+            acknowledge_command(name[:-len(".json")], "dropped: it was left from before the macro started")
+
+
 def read_command() -> Optional[dict[str, Any]]:
-    """The command waiting in COMMANDS_PATH (written by the Discord bot: {"command": ..., "time": ...}), or None. The file is always removed once
-    read; a command that isn't one of COMMANDS, or is older than COMMAND_MAX_AGE seconds (left over from before the macro started, say), is none.
-    A `set` command must also name a switch that exists (`kind` "need" and a NEED_NAMES name, or "option" and an OPTION_SWITCHES name or
-    SHOW_DEBUG_LINES_OPTION) and give it a true or false `value`. Never raises. See docs/ARCHITECTURE.md#remote-control."""
+    """The oldest command waiting in COMMANDS_DIR (a file written by the Discord bot: {"command": ..., "time": ...}), or None. The file is always removed
+    once read, and the bot is told in an acknowledgement file whether the command was taken; a command that isn't one of COMMANDS, or is older than
+    COMMAND_MAX_AGE seconds (left over from before the macro started, say), is none - and a warning says why, so that a bot host whose clock is off does
+    not have every command ignored without a trace. A `set` command must also name a switch that exists (`kind` "need" and a NEED_NAMES name, or "option"
+    and an OPTION_SWITCHES name or SHOW_DEBUG_LINES_OPTION) and give it a true or false `value`. One command is read per call, the oldest first, so two sent
+    close together are both done, in order. Never raises. See docs/ARCHITECTURE.md#remote-control."""
     try:
-        with open(cfg.COMMANDS_PATH, encoding="utf-8") as f:
+        names = sorted(name for name in os.listdir(cfg.COMMANDS_DIR) if name.endswith(".json"))
+    except OSError:
+        return None
+    if not names:
+        return None
+    path = os.path.join(cfg.COMMANDS_DIR, names[0])
+    stem = names[0][:-len(".json")]
+
+    def dropped(why: str) -> None:
+        logger.warning(f"Command from outside dropped: {why}")
+        acknowledge_command(stem, "dropped: " + why)
+
+    try:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
-    except (OSError, ValueError):
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as error:
         data = None
+        dropped(f"the command file could not be read ({error})")
     try:
-        os.remove(cfg.COMMANDS_PATH)
+        os.remove(path)
     except OSError:
         pass
+    if data is None:
+        return None
     if not isinstance(data, dict) or data.get("command") not in cfg.COMMANDS:
+        dropped(f"not a command the macro knows ({str(data)[:80]})")
         return None
     sent = data.get("time")
-    if not isinstance(sent, (int, float)) or abs(time.time() - sent) > cfg.COMMAND_MAX_AGE:
+    if not isinstance(sent, (int, float)):
+        dropped(f"{data['command']} has no time")
+        return None
+    age = time.time() - sent
+    if abs(age) > cfg.COMMAND_MAX_AGE:
+        dropped(f"{data['command']} is {age:.0f} s old (more than COMMAND_MAX_AGE; if the PCs' clocks differ, set them right)")
         return None
     if data["command"] == "set":
-        names = {"need": cfg.NEED_NAMES, "option": (*cfg.OPTION_SWITCHES, cfg.SHOW_DEBUG_LINES_OPTION)}.get(str(data.get("kind")), ())
-        if data.get("name") not in names or not isinstance(data.get("value"), bool):
+        switches = {"need": cfg.NEED_NAMES, "option": (*cfg.OPTION_SWITCHES, cfg.SHOW_DEBUG_LINES_OPTION)}.get(str(data.get("kind")), ())
+        if data.get("name") not in switches or not isinstance(data.get("value"), bool):
+            dropped(f"set {data.get('kind')} {data.get('name')} is not a switch the macro has")
             return None
+    acknowledge_command(stem, "taken")
     return data
 
 def next_run_number() -> int:
@@ -617,16 +667,20 @@ def save_failure_report(reason: str) -> Optional[str]:
         logger.warning(f"Couldn't save a failure report: {e}")
         return None
 
+STATUS_LOCK = threading.Lock()
+
 def write_status() -> None:
     """Write run_stats, the currently disabled needs and the time to
-    STATUS_PATH (replacing it atomically). Never raises."""
+    STATUS_PATH (replacing it atomically). Never raises. The worker thread writes it as the run goes on and Tk's thread when the window opens with no loop
+    and when it closes (mark_stopped(), while the worker is still unwinding): one writer at a time, or the two would share the temporary file."""
     try:
-        status = {**asdict(run_stats), "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
-                  "disabled_needs": sorted(state.disabled_needs)}
-        tmp = cfg.STATUS_PATH + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(status, f, indent=2)
-        os.replace(tmp, cfg.STATUS_PATH)
+        with STATUS_LOCK:
+            status = {**asdict(run_stats), "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
+                      "disabled_needs": sorted(state.disabled_needs)}
+            tmp = cfg.STATUS_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(status, f, indent=2)
+            os.replace(tmp, cfg.STATUS_PATH)
     except (OSError, TypeError):
         pass
 
@@ -677,6 +731,7 @@ def _read_game_config() -> dict[str, Any]:
         "side_quest_enabled": True, # whether side_quest() is allowed to run at all
         "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
         "record_next_run": False,   # record the next run as a low quality video; cleared when that run starts
+        "blackout_hotkey_enabled": True,   # whether HOTKEYS["blackout"] blanks the screen (off: that key can be typed in Roblox)
         "needs_enabled": {},        # {need: whether it is acted on}, the Debug tab's switches; a need not in it follows ENABLED_NEEDS (see need_is_enabled())
         **{f"{name}_enabled": False for name in cfg.MINIGAME_LABELS},  # which Halloween minigames get played (see minigame_popup())
         "private_server_link": "",  # used by leave_and_rejoin(); kept here, not in the source, since it's a join key
@@ -954,11 +1009,20 @@ def _watch_need_gone(need_name: str, cleared_event: threading.Event, stop_event:
     gone, exits quietly on stop and never lets StopRequested/FocusLost escape.
     See docs/ARCHITECTURE.md#checking-a-need-in-parallel-with-movement.
     """
+    reported = False
     try:
         while not stop_event.is_set():
             if stop_event.wait(cfg.NEED_GONE_POLL_INTERVAL):
                 return
-            cleared = _need_cleared(need_name)
+            try:
+                cleared = _need_cleared(need_name)
+            except (StopRequested, FocusLost):
+                raise
+            except Exception:                 # (one look that failed - a screenshot, a detector - is not the end of the watching: the next one is tried)
+                if not reported:
+                    reported = True
+                    logger.exception(f"Watching for {need_name} to clear: a look failed (the watching goes on)")
+                continue
             if answers is not None:
                 answers.append(cleared)       # the last answer tells walk_alternating() whether the need was still showing
             if cleared:
@@ -1059,29 +1123,41 @@ HELD_KEYS: set[str] = set()                    # the keys key_down() has pressed
 HELD_KEYS_LOCK = threading.Lock()
 
 def key_down(key: str) -> None:
-    """Press `key` and keep it, until key_up(), in HELD_KEYS - so that release_all_inputs() lets go of exactly the keys that are down, whichever they are."""
+    """Press `key` and keep it, until key_up(), in HELD_KEYS - so that release_all_inputs() lets go of exactly the keys that are down, whichever they are.
+    Nothing is pressed once a stop has been asked for (StopRequested): a stop must not be followed by one more press."""
+    check_stop()
     with HELD_KEYS_LOCK:
         HELD_KEYS.add(key)                         # (before the press: one that failed half-way is let go of too)
     pydirectinput.keyDown(key)
 
 def key_up(key: str) -> None:
-    """Let go of a key key_down() pressed."""
-    try:
-        pydirectinput.keyUp(key)
-    finally:
-        with HELD_KEYS_LOCK:
-            HELD_KEYS.discard(key)
+    """Let go of a key key_down() pressed (it stays in HELD_KEYS if that raises)."""
+    pydirectinput.keyUp(key)                       # (one that raises - the fail-safe - stays in HELD_KEYS, for release_all_inputs() to try again)
+    with HELD_KEYS_LOCK:
+        HELD_KEYS.discard(key)
+
+def mouse_down(button: str = "left") -> None:
+    """Press a mouse button (let go of with pydirectinput.mouseUp, and by release_all_inputs() if that is missed); not once a stop has been asked for."""
+    check_stop()
+    pydirectinput.mouseDown(button=button)
+
+def unchecked(function: Callable[..., Any]) -> Callable[..., Any]:
+    """`function` (a PyDirectInput key or mouse call) without its fail-safe check and its pause: the call itself, which `functools.wraps` keeps as __wrapped__.
+    Only for letting go of what is held. With the cursor in a corner - the fail-safe's sign - every checked call raises, and the keys and buttons the macro
+    holds would stay held after the very stop that corner asked for. The fail-safe stays on for everything else, and the cursor is not moved."""
+    return getattr(function, "__wrapped__", function)
 
 def release_all_inputs() -> None:
     """Best-effort safety net: release every key the macro holds (those in HELD_KEYS, and the keys of cfg.HELD_KEYS) and the mouse buttons that are down,
-    called when a background task ends. See docs/ARCHITECTURE.md#stopping--focus-safety.
+    called when a background task ends and at once when a stop is asked for. The releases skip the fail-safe check (unchecked()): see there.
+    See docs/ARCHITECTURE.md#stopping--focus-safety.
     """
     with HELD_KEYS_LOCK:
         keys = [*dict.fromkeys((*HELD_KEYS, *cfg.HELD_KEYS))]
         HELD_KEYS.clear()
     for key in keys:
         try:
-            pydirectinput.keyUp(key)
+            unchecked(pydirectinput.keyUp)(key)
         except Exception:
             pass
     # Only a button that is down: a right button released with none pressed is a click as far as the window under the mouse is
@@ -1094,7 +1170,7 @@ def release_all_inputs() -> None:
         if f"mouse_{button}" not in held:
             continue
         try:
-            pydirectinput.mouseUp(button=button)
+            unchecked(pydirectinput.mouseUp)(button=button)
         except Exception:
             pass
 
@@ -1282,7 +1358,7 @@ def respawn_character() -> None:
     logger.debug("Respawning...")
     if not focus_roblox_click():
         return
-    for key in cfg.RESPAWN_KEYS:
+    for key in cfg.KEY_SEQUENCES["respawn"]:
         key_down(key)
         try:
             time.sleep(cfg.RESPAWN_KEY_DURATION)
@@ -1314,7 +1390,7 @@ def walk_to_buttons() -> None:
     if not focus_roblox():
         return
     logger.debug("Walking to buttons...")
-    hold_key("w", cfg.WALK_TO_BUTTONS_DURATION)
+    hold_key(cfg.KEYS["forward"], cfg.WALK_TO_BUTTONS_DURATION)
     wait_interruptible(cfg.UI_SETTLE)
     logger.debug("Arrived at buttons")
 
@@ -1379,10 +1455,10 @@ def lure_collect() -> bool:
     if not focus_roblox():
         return False
     logger.debug(f"Walking to the lure for {cfg.LURE_COLLECT_WALK_DURATION}s...")
-    hold_key("a", cfg.LURE_COLLECT_WALK_DURATION)
-    pydirectinput.press(cfg.KEY_INTERACT)
+    hold_key(cfg.KEYS["left"], cfg.LURE_COLLECT_WALK_DURATION)
+    pydirectinput.press(cfg.KEYS["interact"])
     wait_interruptible(cfg.LURE_COLLECT_SETTLE_DELAY)
-    pydirectinput.press(cfg.KEY_INTERACT)
+    pydirectinput.press(cfg.KEYS["interact"])
     wait_interruptible(cfg.UI_SETTLE)
     if not set_new_lure():
         return False
@@ -1408,10 +1484,10 @@ def tree_collect() -> bool:
     if not focus_roblox():
         return False
     logger.debug(f"Walking to the money tree for {cfg.TREE_COLLECT_WALK_DURATION}s...")
-    hold_key("d", cfg.TREE_COLLECT_WALK_DURATION)
+    hold_key(cfg.KEYS["right"], cfg.TREE_COLLECT_WALK_DURATION)
     logger.debug(f"Stepping back for {cfg.TREE_COLLECT_BACKWARD_DURATION}s...")
-    hold_key("s", cfg.TREE_COLLECT_BACKWARD_DURATION)
-    pydirectinput.press(cfg.KEY_INTERACT)
+    hold_key(cfg.KEYS["back"], cfg.TREE_COLLECT_BACKWARD_DURATION)
+    pydirectinput.press(cfg.KEYS["interact"])
     respawn_character()
     logger.info("Tree collect complete")
     return True
@@ -1432,7 +1508,7 @@ def _setup_steps() -> bool:
     hover_click(*cfg.SETUP_LOCK_HOUSE_POS)
 
     logger.debug("Opening backpack...")
-    pydirectinput.press(cfg.KEY_BACKPACK)
+    pydirectinput.press(cfg.KEYS["backpack"])
     wait_interruptible(cfg.UI_SETTLE)
     logger.debug("Opening settings...")
     hover_click(*cfg.SETUP_BACKPACK_SETTINGS_POS)
@@ -1507,7 +1583,7 @@ def travel_to_trade_hub() -> bool:
     if not focus_roblox():
         return False
     logger.debug("Opening backpack...")
-    pydirectinput.press(cfg.KEY_BACKPACK)
+    pydirectinput.press(cfg.KEYS["backpack"])
     wait_interruptible(cfg.UI_SETTLE)
     steps = [("Toys tab", cfg.TRADE_HUB_TOYS_TAB_POS), ("Trading Hub Phone", cfg.TRADE_HUB_PHONE_POS), ("Equip", cfg.TRADE_HUB_EQUIP_POS)]
     if not click_steps(steps):
@@ -1555,7 +1631,7 @@ def close_roblox(clean_leave: bool = True) -> None:
     window = roblox_window()
     if clean_leave and window is not None and window.height >= cfg.REJOIN_MIN_LEAVE_HEIGHT and focus_roblox():
         logger.debug("Leaving the game...")
-        for key in cfg.REJOIN_LEAVE_KEYS:
+        for key in cfg.KEY_SEQUENCES["leave_game"]:
             pydirectinput.press(key)
             wait_stoppable(cfg.REJOIN_LEAVE_KEY_GAP)
     logger.debug("Closing Roblox...")
@@ -1752,7 +1828,7 @@ def equip_favorite_vehicle() -> None:
     """
     with backpack_on_purpose():
         logger.debug("Opening backpack...")
-        pydirectinput.press(cfg.KEY_BACKPACK)
+        pydirectinput.press(cfg.KEYS["backpack"])
         wait_interruptible(cfg.UI_SETTLE)
 
         logger.debug("Opening vehicles...")
@@ -1797,7 +1873,7 @@ class WalkNeedHandler(NeedHandler):
 
     def handle(self) -> bool:
         logger.info("Walk need")
-        walk_alternating(("a", "d"), cfg.NEED_GONE_MAX_WAIT, need_name="walk")
+        walk_alternating((cfg.KEYS["left"], cfg.KEYS["right"]), cfg.NEED_GONE_MAX_WAIT, need_name="walk")
         return True
 
 class CatchNeedHandler(NeedHandler):
@@ -1812,7 +1888,7 @@ class CatchNeedHandler(NeedHandler):
         with backpack_on_purpose():
             # Open backpack with 'b' key
             logger.debug("Opening backpack...")
-            pydirectinput.press(cfg.KEY_BACKPACK)
+            pydirectinput.press(cfg.KEYS["backpack"])
             wait_interruptible(cfg.UI_SETTLE)
 
             # Navigate to toys
@@ -1839,7 +1915,7 @@ class CatchNeedHandler(NeedHandler):
         wait_interruptible(cfg.CATCH_WAIT_AFTER_EQUIP)
 
         # Zoom in, to avoid focusing the pet on toy throw
-        hold_key(cfg.KEY_ZOOM_IN, cfg.CATCH_ZOOM_DURATION)
+        hold_key(cfg.KEYS["zoom_in"], cfg.CATCH_ZOOM_DURATION)
         
         # Click empty space to throw, with a delay between throws
         for i in range(cfg.CATCH_THROW_COUNT):
@@ -1881,7 +1957,7 @@ class PetNeedHandler(NeedHandler):
         pydirectinput.moveTo(*to_screen(cfg.REFERENCE_CENTER_X, start_y))
         time.sleep(cfg.PET_SETTLE_DELAY)
         # Hold down and move with incremental steps (much more reliable for games)
-        pydirectinput.mouseDown()
+        mouse_down()
         try:
             start_time = time.time()
             while True:
@@ -1945,24 +2021,24 @@ class RideNeedHandler(NeedHandler):
 
         # Step back before mounting
         logger.debug(f"Stepping back for {cfg.RIDE_BACKWARD_DURATION}s...")
-        hold_key("s", cfg.RIDE_BACKWARD_DURATION)
+        hold_key(cfg.KEYS["back"], cfg.RIDE_BACKWARD_DURATION)
 
         logger.debug("Pressing e...")
-        pydirectinput.press(cfg.KEY_MOUNT)
+        pydirectinput.press(cfg.KEYS["mount"])
         wait_interruptible(cfg.RIDE_WAIT_AFTER_E)
 
         # Walk forward briefly after mounting, before opening the backpack
         logger.debug(f"Walking forward for {cfg.RIDE_FORWARD_DURATION}s...")
-        hold_key("w", cfg.RIDE_FORWARD_DURATION)
+        hold_key(cfg.KEYS["forward"], cfg.RIDE_FORWARD_DURATION)
 
         equip_favorite_vehicle()
 
         # Hold r briefly before starting to move
-        logger.debug(f"Holding {cfg.KEY_HELICOPTER} for {cfg.RIDE_R_HOLD_DURATION}s...")
-        hold_key(cfg.KEY_HELICOPTER, cfg.RIDE_R_HOLD_DURATION)
+        logger.debug(f"Holding {cfg.KEYS['helicopter']} for {cfg.RIDE_R_HOLD_DURATION}s...")
+        hold_key(cfg.KEYS["helicopter"], cfg.RIDE_R_HOLD_DURATION)
 
         # Walk back and forth (forward/backward, not left/right) while riding
-        walk_alternating(("w", "s"), cfg.NEED_GONE_MAX_WAIT, need_name="ride")
+        walk_alternating((cfg.KEYS["forward"], cfg.KEYS["back"]), cfg.NEED_GONE_MAX_WAIT, need_name="ride")
 
         logger.info("Ride complete")
         return True
@@ -1973,7 +2049,7 @@ def teleport_to(category_pos: Point) -> None:
     """
     with backpack_on_purpose():
         logger.debug("Opening backpack...")
-        pydirectinput.press(cfg.KEY_BACKPACK)
+        pydirectinput.press(cfg.KEYS["backpack"])
         wait_interruptible(cfg.UI_SETTLE)
 
         logger.debug("Selecting category...")
@@ -1991,7 +2067,7 @@ def teleport_to(category_pos: Point) -> None:
             log_run_event("teleport: nothing happened after the dialog's Yes")
     wait_interruptible(cfg.TELEPORT_WAIT)
     logger.debug("Walking backward...")
-    hold_key("s", cfg.TELEPORT_BACK_DURATION)
+    hold_key(cfg.KEYS["back"], cfg.TELEPORT_BACK_DURATION)
     wait_interruptible(cfg.TELEPORT_SETTLE_WAIT)
 
 class TeleportWalkNeedHandler(NeedHandler):
@@ -2014,10 +2090,10 @@ class TeleportWalkNeedHandler(NeedHandler):
         helicopter = self.config.get("helicopter", cfg.HELICOPTER_REQUIRED)
         if helicopter:
             logger.debug(f"Stepping forward for {cfg.HELICOPTER_FORWARD_DURATION}s...")
-            hold_key("w", cfg.HELICOPTER_FORWARD_DURATION)
+            hold_key(cfg.KEYS["forward"], cfg.HELICOPTER_FORWARD_DURATION)
             equip_favorite_vehicle()
-            logger.debug(f"Holding {cfg.KEY_HELICOPTER} for {cfg.HELICOPTER_HOLD_DURATION}s...")
-            hold_key(cfg.KEY_HELICOPTER, cfg.HELICOPTER_HOLD_DURATION)
+            logger.debug(f"Holding {cfg.KEYS['helicopter']} for {cfg.HELICOPTER_HOLD_DURATION}s...")
+            hold_key(cfg.KEYS["helicopter"], cfg.HELICOPTER_HOLD_DURATION)
 
         for i, (key, duration) in enumerate(self.config["steps"]):
             if i:
@@ -2027,7 +2103,7 @@ class TeleportWalkNeedHandler(NeedHandler):
 
         if helicopter:
             logger.debug("Arrived, pressing space...")
-            pydirectinput.press(cfg.KEY_JUMP)
+            pydirectinput.press(cfg.KEYS["jump"])
 
         final_click = self.config.get("final_click")
         if final_click:
@@ -2297,7 +2373,7 @@ def close_backpack_if_open(step: str = "") -> bool:
                 log_run_event("backpack was left open - closed it (BACK)" + (f" after {step}" if step else ""))
                 return True
     for _ in range(2):
-        pydirectinput.press(cfg.KEY_BACKPACK)
+        pydirectinput.press(cfg.KEYS["backpack"])
         wait_interruptible(cfg.UI_SETTLE)
         if not detect_backpack_open(grab_screen()):
             log_run_event("backpack was left open - closed it" + (f" after {step}" if step else ""))
@@ -2309,7 +2385,7 @@ def close_backpack(step: str) -> None:
     """End of a click sequence: press the backpack key and check it really closed.
     See docs/ARCHITECTURE.md#click--input-primitives.
     """
-    pydirectinput.press(cfg.KEY_BACKPACK)
+    pydirectinput.press(cfg.KEYS["backpack"])
     wait_interruptible(cfg.UI_SETTLE)
     close_backpack_if_open(step)
 
@@ -2558,34 +2634,28 @@ def dismiss_stray_windows() -> Optional[str]:
         return name
     return None
 
-def detect_minigame_victory(img: Image) -> bool:
-    """True if the minigame victory screen is on screen in `img`: the red
+def detect_minigame_finished(img: Image) -> bool:
+    """True if the minigame finish screen is on screen in `img`: the red
     GAME OVER! banner and the green NICE! button, both by exact color (the
     same green is the Yes button's, so the banner is what rules that out)."""
     for color, tolerance, box, minimum in (
-            (cfg.MINIGAME_VICTORY_BANNER_COLOR, cfg.MINIGAME_VICTORY_BANNER_TOLERANCE,
-             cfg.MINIGAME_VICTORY_BANNER_BOX, cfg.MINIGAME_VICTORY_BANNER_MIN_PIXELS),
+            (cfg.MINIGAME_FINISH_BANNER_COLOR, cfg.MINIGAME_FINISH_BANNER_TOLERANCE,
+             cfg.MINIGAME_FINISH_BANNER_BOX, cfg.MINIGAME_FINISH_BANNER_MIN_PIXELS),
             (cfg.GREEN_BUTTON_COLOR, cfg.GREEN_BUTTON_TOLERANCE,
-             cfg.MINIGAME_VICTORY_BUTTON_BOX, cfg.MINIGAME_VICTORY_BUTTON_MIN_PIXELS)):
+             cfg.MINIGAME_FINISH_BUTTON_BOX, cfg.MINIGAME_FINISH_BUTTON_MIN_PIXELS)):
         if color_pixels(img, box, color, tolerance) < minimum:
             return False
     return True
 
-def detect_minigame_overlay(img: Image) -> Optional[str]:
-    """Which minigame's overlay (MINIGAME_OVERLAYS, crops in
-    MINIGAME_OVERLAY_DIR) is on screen in `img`, or None."""
-    crops = load_templates(cfg.MINIGAME_OVERLAY_DIR)
-    best_name, best_score = None, cfg.MINIGAME_OVERLAY_THRESHOLD
-    for name, box in cfg.MINIGAME_OVERLAYS.items():
-        crop = crops.get(name)
-        score = template_score(img, crop, box) if crop is not None else 0.0
-        if score >= best_score:
-            best_name, best_score = name, score
-    return best_name
+def minigame_overlay_visible(img: Image, name: str) -> bool:
+    """True if minigame `name`'s overlay (its crop in MINIGAME_OVERLAY_DIR, within its box in MINIGAME_OVERLAYS) is on screen in `img`, at least
+    MINIGAME_OVERLAY_THRESHOLD: one template match, not one per minigame, since this is asked at every look."""
+    crop = load_templates(cfg.MINIGAME_OVERLAY_DIR).get(name)
+    return crop is not None and name in cfg.MINIGAME_OVERLAYS and template_score(img, crop, cfg.MINIGAME_OVERLAYS[name]) >= cfg.MINIGAME_OVERLAY_THRESHOLD
 
 class MinigameWatch:
     """Keeps track of whether the minigame being played is on screen (its
-    overlay - detect_minigame_overlay()) and whether the game disconnected
+    overlay - minigame_overlay_visible()) and whether the game disconnected
     (detect_disconnect()), fed one screenshot at a time by minigame_look() and minigame_wait().
     `problem` says why to stop, or None."""
 
@@ -2598,7 +2668,7 @@ class MinigameWatch:
     def update(self, img: Image) -> None:
         if detect_disconnect(img):
             self.disconnected = True
-        elif detect_minigame_overlay(img) == self.name:
+        elif minigame_overlay_visible(img, self.name):
             self.last_seen = time.time()
 
     def start_wait_over(self) -> None:
@@ -2637,10 +2707,10 @@ def minigame_look(watch: MinigameWatch) -> Image:
     return img
 
 def zoom_out() -> None:
-    """Zoom the camera out (KEY_ZOOM_OUT held MINIGAME_ZOOM_OUT_DURATION seconds) to see the whole room: close up, the TVs
+    """Zoom the camera out (KEYS["zoom_out"] held MINIGAME_ZOOM_OUT_DURATION seconds) to see the whole room: close up, the TVs
     over a Hauntlet 2 room's doors are cut off by the top of the screen."""
     logger.debug("Zooming the camera out")
-    hold_key(cfg.KEY_ZOOM_OUT, cfg.MINIGAME_ZOOM_OUT_DURATION)
+    hold_key(cfg.KEYS["zoom_out"], cfg.MINIGAME_ZOOM_OUT_DURATION)
 
 def minigame_wait(duration: float, watch: MinigameWatch) -> None:
     """wait_interruptible(), with the popup checks every
@@ -2825,14 +2895,14 @@ def hauntlet_strafe(img: Image, doors: list[HauntletDoor], index: int) -> tuple[
     if spacing <= 0:
         if len(doors) == 1 or (len(doors) == 3 and index == 1):
             return None, 0.0
-        return (cfg.HAUNTLET_LEFT_KEY if index == 0 else cfg.HAUNTLET_RIGHT_KEY), cfg.HAUNTLET_STRAFE_DURATION
+        return (cfg.KEYS["left"] if index == 0 else cfg.KEYS["right"]), cfg.HAUNTLET_STRAFE_DURATION
     hearts = read_hauntlet_hearts(img)
     circles = find_door_circles(img)
     target = circles[index][0] if len(circles) == len(doors) == 3 else doors[index].x       # the circle in front of the door, where it can be seen: it is what is to be stepped in
     distance = (target - (hearts.center_x if hearts else cfg.REFERENCE_CENTER_X)) / spacing
     if abs(distance) < cfg.HAUNTLET_STRAFE_MIN:
         return None, 0.0
-    return (cfg.HAUNTLET_RIGHT_KEY if distance > 0 else cfg.HAUNTLET_LEFT_KEY), min(abs(distance), cfg.HAUNTLET_STRAFE_MAX) * cfg.HAUNTLET_STRAFE_DURATION
+    return (cfg.KEYS["right"] if distance > 0 else cfg.KEYS["left"]), min(abs(distance), cfg.HAUNTLET_STRAFE_MAX) * cfg.HAUNTLET_STRAFE_DURATION
 
 def hauntlet_use_item(name: str, watch: MinigameWatch) -> Optional[Image]:
     """Click the slot of the item called `name` and give the game HAUNTLET_ITEM_WAIT seconds to use it. The slots move together
@@ -2887,11 +2957,11 @@ def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun, wat
     return index, img
 
 def hauntlet_view(img: Image) -> np.ndarray:
-    """`img` shrunk to a grey 96x54, without the room panel at the top and the item bar at the bottom: what the walk looks at to
+    """`img` shrunk to a grey HAUNTLET_VIEW_SIZE, without the room panel at the top and the item bar at the bottom (HAUNTLET_VIEW_ROWS): what the walk looks at to
     tell whether anything is moving (the camera follows the player, so a player who moves makes the whole view move)."""
-    small = cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), (96, 54), interpolation=cv2.INTER_AREA).astype(np.int16)
-    small[:8] = 0
-    small[45:] = 0
+    small = cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), cfg.HAUNTLET_VIEW_SIZE, interpolation=cv2.INTER_AREA).astype(np.int16)
+    small[:cfg.HAUNTLET_VIEW_ROWS[0]] = 0
+    small[cfg.HAUNTLET_VIEW_ROWS[1]:] = 0
     return small
 
 def hauntlet_unstick(img: Image, target_index: Optional[int], tries: int, last_key: Optional[str]) -> str:
@@ -2904,17 +2974,17 @@ def hauntlet_unstick(img: Image, target_index: Optional[int], tries: int, last_k
     where = [x for x, _ in tvs] if len(tvs) == 3 else list(find_fork_doorways(img) or ())
     key: Optional[str] = None
     if last_key is not None:
-        key = cfg.HAUNTLET_RIGHT_KEY if last_key == cfg.HAUNTLET_LEFT_KEY else cfg.HAUNTLET_LEFT_KEY
+        key = cfg.KEYS["right"] if last_key == cfg.KEYS["left"] else cfg.KEYS["left"]
     elif target_index is not None and target_index < len(where):
         hearts = read_hauntlet_hearts(img)
         dx = where[target_index] - (hearts.center_x if hearts else cfg.REFERENCE_CENTER_X)
         if abs(dx) >= cfg.HAUNTLET_UNSTICK_MARGIN:
-            key = cfg.HAUNTLET_RIGHT_KEY if dx > 0 else cfg.HAUNTLET_LEFT_KEY
+            key = cfg.KEYS["right"] if dx > 0 else cfg.KEYS["left"]
     if key is None:
-        key = random.choice((cfg.HAUNTLET_LEFT_KEY, cfg.HAUNTLET_RIGHT_KEY))
+        key = random.choice((cfg.KEYS["left"], cfg.KEYS["right"]))
     logger.debug(f"Hauntlet 2: not moving - a step {key}")
     mark_run_capture("Hauntlet 2: not moving")
-    pydirectinput.press(cfg.KEY_JUMP)
+    pydirectinput.press(cfg.KEYS["jump"])
     hold_key(key, min(cfg.HAUNTLET_UNSTICK_STEP * (tries + 1), cfg.HAUNTLET_UNSTICK_MAX))
     return key
 
@@ -2939,15 +3009,15 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
     fork's doorways can be seen (find_fork_doorways()). The view is looked at every HAUNTLET_LOOK_INTERVAL
     seconds: if it hasn't moved (hauntlet_view(), HAUNTLET_STILL_LEVEL) for HAUNTLET_STILL_AFTER seconds the player is caught
     on something and hauntlet_unstick() steps sideways, towards door `target_index` of the three (or the fork's two). A walk that doesn't get
-    anywhere counts in `run.stuck`; the next one steps back first (HAUNTLET_BACKUP_DURATION). True if the victory screen showed."""
+    anywhere counts in `run.stuck`; the next one steps back first (HAUNTLET_BACKUP_DURATION). True if the minigame finished."""
     run.walked_at = time.time()
     if run.stuck > 0:
-        hold_key(cfg.HAUNTLET_BACK_KEY, cfg.HAUNTLET_BACKUP_DURATION)
+        hold_key(cfg.KEYS["back"], cfg.HAUNTLET_BACKUP_DURATION)
     aimed = False
     if target_index is not None and not run.fork:                               # aimed in small steps, looking at the doors again before each (HAUNTLET_AIM_STEPS)
         for _ in range(cfg.HAUNTLET_AIM_STEPS):
             img = minigame_look(watch)
-            if detect_minigame_victory(img):
+            if detect_minigame_finished(img):
                 return True
             steer = hauntlet_steer(img, target_index)
             if steer is None:
@@ -2958,7 +3028,7 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
         hold_key(direction, duration)                                           # one key at a time: the strafe, then the walk (what couldn't be aimed is a strafe worked out in one go)
     arrived = False
     started = time.time()
-    key_down(cfg.HAUNTLET_2_FORWARD_KEY)
+    key_down(cfg.KEYS["forward"])
     try:
         last_view: Optional[np.ndarray] = None
         still_since: Optional[float] = None
@@ -2967,7 +3037,7 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
         steer_at = started + cfg.HAUNTLET_STEER_EVERY
         while time.time() < started + cfg.HAUNTLET_WALK_MAX:
             img = minigame_look(watch)
-            if detect_minigame_victory(img):
+            if detect_minigame_finished(img):
                 return True
             room = read_hauntlet_room(img)
             if room is not None and room != run.room:
@@ -2996,9 +3066,9 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
                 steer = hauntlet_steer(img, target_index)
                 if steer is not None:
                     logger.debug(f"Hauntlet 2: off the door - a step {steer[0]} for {steer[1]:.2f}s")
-                    key_up(cfg.HAUNTLET_2_FORWARD_KEY)                # one key at a time
+                    key_up(cfg.KEYS["forward"])                # one key at a time
                     hold_key(*steer)
-                    key_down(cfg.HAUNTLET_2_FORWARD_KEY)
+                    key_down(cfg.KEYS["forward"])
                     still_since, last_view = None, None
                     continue
             view = hauntlet_view(img)
@@ -3014,7 +3084,7 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
                 continue
             wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
     finally:
-        key_up(cfg.HAUNTLET_2_FORWARD_KEY)
+        key_up(cfg.KEYS["forward"])
         run.walked_at = time.time()
         run.stuck = 0 if arrived else run.stuck + 1
     if not arrived:
@@ -3023,19 +3093,19 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
 
 def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
     """Hauntlet 2: wait for it to start, then room after room choose a door and walk to it (HauntletRun,
-    hauntlet_choose(), hauntlet_walk()) until the victory screen shows or the overlay says it's over. True if won
-    before `deadline`. See docs/ARCHITECTURE.md#playing-hauntlet-2.
+    hauntlet_choose(), hauntlet_walk()) until the minigame finishes or the overlay says it's over. True if it
+    finished before `deadline`. See docs/ARCHITECTURE.md#playing-hauntlet-2.
     """
     wait_for_minigame_start(watch, "hauntlet_2")
     zoom_out()
     if cfg.HAUNTLET_START_FORWARD > 0:
         wait_interruptible(cfg.HAUNTLET_START_DELAY)                   # the doors of the entrance hall open after a moment...
-        hold_key(cfg.HAUNTLET_2_FORWARD_KEY, cfg.HAUNTLET_START_FORWARD)    # ...and the way out is a step or two ahead
+        hold_key(cfg.KEYS["forward"], cfg.HAUNTLET_START_FORWARD)    # ...and the way out is a step or two ahead
     run = HauntletRun()
     try:
         while time.time() < deadline and not watch.problem:
             img = minigame_look(watch)
-            if detect_minigame_victory(img):
+            if detect_minigame_finished(img):
                 return True
             doors = run.look(img, time.time())
             if doors is None:
@@ -3114,14 +3184,15 @@ def find_ghost_alerts(img: Image) -> list[tuple[int, int, int]]:
     level = cfg.GHOST_ALERT_WHITE
     white = cv2.inRange(img[top:bottom], (level, level, level), (255, 255, 255))
     count, _, stats, _ = cv2.connectedComponentsWithStats(white, connectivity=8)
-    pieces = [tuple(int(v) for v in stats[i]) for i in range(1, count) if stats[i, cv2.CC_STAT_AREA] >= 8]
+    pieces = [tuple(int(v) for v in stats[i]) for i in range(1, count) if stats[i, cv2.CC_STAT_AREA] >= cfg.GHOST_ALERT_MIN_PIECE]
     found = []
     for x, y, w, h, area in pieces:
-        if h < cfg.GHOST_ALERT_ASPECT * w or h < cfg.GHOST_ALERT_MIN_HEIGHT or area < 0.55 * w * h:
+        if h < cfg.GHOST_ALERT_ASPECT * w or h < cfg.GHOST_ALERT_MIN_HEIGHT or area < cfg.GHOST_ALERT_BAR_FILL * w * h:
             continue                                                                   # not a bar
         for x2, y2, w2, h2, area2 in pieces:
-            if (y + h < y2 <= y + 1.5 * h and abs((x2 + w2 / 2) - (x + w / 2)) <= 0.8 * w + 4 and 0.35 * w <= w2 <= 1.6 * w
-                    and h2 <= 1.6 * w2 + 2 and area2 >= 0.5 * w2 * h2):                    # a dot under it
+            if (y + h < y2 <= y + cfg.GHOST_ALERT_DOT_GAP * h and abs((x2 + w2 / 2) - (x + w / 2)) <= cfg.GHOST_ALERT_DOT_SHIFT * w + cfg.GHOST_ALERT_DOT_SLACK
+                    and cfg.GHOST_ALERT_DOT_WIDTH[0] * w <= w2 <= cfg.GHOST_ALERT_DOT_WIDTH[1] * w
+                    and h2 <= cfg.GHOST_ALERT_DOT_ASPECT * w2 + 2 and area2 >= cfg.GHOST_ALERT_DOT_FILL * w2 * h2):                    # a dot under it
                 found.append((x + w // 2, top + y + h // 2, h))
                 break
     return sorted(found)
@@ -3162,7 +3233,7 @@ def start_camera_drag() -> None:
     hundreds of px, and a right button released over the window's border or title bar opens its menu and takes the focus from
     the game - which is where the cursor was left by whatever had been aimed at before."""
     pydirectinput.moveTo(*to_screen(cfg.REFERENCE_CENTER_X, cfg.REFERENCE_CENTER_Y))
-    pydirectinput.mouseDown(button="right")
+    mouse_down("right")
 
 def tilt_camera_down() -> None:
     """Drag the mouse down with the right button held, GHOST_START_TILT px: the camera rises behind the character, for a view
@@ -3192,8 +3263,8 @@ def ghost_chase_key(target: Point) -> Optional[str]:
     if max(abs(dx), abs(dy)) <= cfg.GHOST_TOWARD_MARGIN:
         return None
     if abs(dx) > abs(dy):
-        return cfg.HAUNTLET_RIGHT_KEY if dx > 0 else cfg.HAUNTLET_LEFT_KEY
-    return cfg.HAUNTLET_BACK_KEY if dy > 0 else "w"
+        return cfg.KEYS["right"] if dx > 0 else cfg.KEYS["left"]
+    return cfg.KEYS["back"] if dy > 0 else cfg.KEYS["forward"]
 
 def rotate_camera(drag: tuple[int, int] = cfg.GHOST_CAMERA_DRAG, tilt: int = cfg.GHOST_CAMERA_TILT, direction: Optional[int] = None) -> None:
     """Turn the camera: hold the right mouse button and drag the mouse sideways (`direction` -1 or 1, else a random way; `drag` = least and most px, and
@@ -3327,19 +3398,19 @@ class GhostFeedback:
 
 def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     """Ghost Gallery: once its overlay shows (or the start wait is over), look at the screen every GHOST_LOOK_INTERVAL,
-    aim the mouse at a ghost (choose_ghost_target()) and hold the button down on it, until the victory screen shows or the
+    aim the mouse at a ghost (choose_ghost_target()) and hold the button down on it, until the minigame finishes or the
     overlay says it's over. It begins by zooming the camera out and tilting it down for a better view. In the boss phase it is the boss, but while the boss's bar shows ghost icons it can't be hurt
     (ghost_boss_shielded()) and the small ghosts are aimed at instead. With no ghost in sight, before the boss phase the beam
     is held on random furniture (ghosts hide there), and the camera is turned every GHOST_CAMERA_PERIOD to find some;
     it jumps now and then, and walks about a step at a time. The score is watched (GhostFeedback): a ghost the beam scores nothing on is
     taken to hide, and the furniture around it is tried; no score for GHOST_STALL seconds moves the player and turns the camera.
-    True if won before `deadline`. See docs/ARCHITECTURE.md#playing-ghost-gallery.
+    True if the minigame finished before `deadline`. See docs/ARCHITECTURE.md#playing-ghost-gallery.
     """
     wait_for_minigame_start(watch, "ghost_gallery")
     minigame_wait(cfg.GHOST_INTRO_WAIT, watch)
     zoom_out()
     tilt_camera_down()
-    hold_key("w", cfg.GHOST_START_FORWARD)           # into the middle of the hall, from where the game puts the player
+    hold_key(cfg.KEYS["forward"], cfg.GHOST_START_FORWARD)           # into the middle of the hall, from where the game puts the player
     target: Optional[Point] = None
     held = False
     moving: Optional[str] = None                     # the key being held to walk, and until when
@@ -3362,7 +3433,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
         nonlocal held
         pydirectinput.moveTo(*to_screen(*point))
         if not held:
-            pydirectinput.mouseDown()
+            mouse_down()
             held = True
 
     def let_go() -> None:
@@ -3380,7 +3451,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
     try:
         while time.time() < deadline and not watch.problem:
             img = minigame_look(watch)
-            if detect_minigame_victory(img):
+            if detect_minigame_finished(img):
                 return True
             if feedback.look(img, time.time()):
                 hide_spot, hide_until = None, 0.0                           # it scored: whatever the beam is on is right
@@ -3412,7 +3483,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
                 stop_walking()
                 chasing = None
                 hold_key(random.choice(cfg.MOVE_KEYS), cfg.GHOST_STALL_WALK)
-                pydirectinput.press(cfg.KEY_JUMP)
+                pydirectinput.press(cfg.KEYS["jump"])
                 rotate_camera(cfg.GHOST_STALL_TURN, 0, random.choice((-1, 1)))
                 feedback.scored_at = last_turn = time.time()
                 feedback.new_spot(last_turn)
@@ -3475,7 +3546,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
             elif chasing is None:
                 stop_walking()
             if now >= next_jump:
-                pydirectinput.press(cfg.KEY_JUMP)
+                pydirectinput.press(cfg.KEYS["jump"])
                 next_jump = now + random.uniform(cfg.GHOST_JUMP_MIN, cfg.GHOST_JUMP_MAX)
             wait_interruptible(cfg.GHOST_LOOK_INTERVAL)
     finally:
@@ -3508,7 +3579,7 @@ class RingCamera:
     shows they work the other way."""
 
     def __init__(self) -> None:
-        self.keys = cfg.STITCHES_TURN_KEYS
+        self.keys = (cfg.KEYS["camera_left"], cfg.KEYS["camera_right"])
         self.bias = 0.0
         self.lost_since: Optional[float] = None
 
@@ -3553,10 +3624,10 @@ def calibrate_ring_camera(camera: RingCamera, watch: MinigameWatch) -> None:
 
 def play_stitches_spotlight(deadline: float, watch: MinigameWatch) -> bool:
     """Stitches' Spotlight: once its overlay shows, wait (at most STITCHES_INTRO_MAX seconds) for the ring's edge line - the game's intro camera looks at
-    the sky first - test which way the arrow keys turn the camera (calibrate_ring_camera()), then walk round the ring by holding KEY_STITCHES_WALK and, every
-    STITCHES_CENTER_INTERVAL, turn the camera (RingCamera) until the line runs straight across the screen, i.e. the camera looks at the middle. KEY_STITCHES_BOOST
+    the sky first - test which way the arrow keys turn the camera (calibrate_ring_camera()), then walk round the ring by holding KEYS["right"] and, every
+    STITCHES_CENTER_INTERVAL, turn the camera (RingCamera) until the line runs straight across the screen, i.e. the camera looks at the middle. KEYS["speed_boost"]
     is pressed every STITCHES_BOOST_INTERVAL. Nothing is read or avoided: the candy corn on the way is picked up by walking over it.
-    True if won before `deadline`. See docs/ARCHITECTURE.md#playing-stitches-spotlight."""
+    True if the minigame finished before `deadline`. See docs/ARCHITECTURE.md#playing-stitches-spotlight."""
     wait_for_minigame_start(watch, "stitches_spotlight")
     intro_until = time.time() + cfg.STITCHES_INTRO_MAX
     while time.time() < intro_until and not watch.problem and stitches_ring_angle(minigame_look(watch)) is None:
@@ -3564,11 +3635,11 @@ def play_stitches_spotlight(deadline: float, watch: MinigameWatch) -> bool:
     camera = RingCamera()
     calibrate_ring_camera(camera, watch)
     next_boost = time.time()
-    key_down(cfg.KEY_STITCHES_WALK)
+    key_down(cfg.KEYS["right"])
     try:
         while time.time() < deadline and not watch.problem:
             img = minigame_look(watch)
-            if detect_minigame_victory(img):
+            if detect_minigame_finished(img):
                 return True
             angle = stitches_ring_angle(img)
             turn = camera.decide(angle, time.time(), cfg.STITCHES_CENTER_INTERVAL)
@@ -3576,31 +3647,31 @@ def play_stitches_spotlight(deadline: float, watch: MinigameWatch) -> bool:
             if turn is not None:
                 hold_key(*turn)
             if time.time() >= next_boost:
-                pydirectinput.press(cfg.KEY_STITCHES_BOOST)
+                pydirectinput.press(cfg.KEYS["speed_boost"])
                 next_boost = time.time() + cfg.STITCHES_BOOST_INTERVAL
             wait_interruptible(cfg.STITCHES_CENTER_INTERVAL)
     finally:
-        key_up(cfg.KEY_STITCHES_WALK)
+        key_up(cfg.KEYS["right"])
     return False
 
 MINIGAME_PLAYERS = {"hauntlet_2": play_hauntlet_2, "ghost_gallery": play_ghost_gallery, "stitches_spotlight": play_stitches_spotlight}
 
 def click_nice_until_gone() -> bool:
-    """Click the win screen's NICE! until it is gone (up to MINIGAME_VICTORY_CLICK_TRIES).
+    """Click the finish screen's NICE! until it is gone (up to MINIGAME_FINISH_CLICK_TRIES).
     Returns True if it is. See docs/ARCHITECTURE.md#need-handlers.
     """
-    for attempt in range(cfg.MINIGAME_VICTORY_CLICK_TRIES):
-        hover_click(*cfg.MINIGAME_VICTORY_BUTTON_POS)
+    for attempt in range(cfg.MINIGAME_FINISH_CLICK_TRIES):
+        hover_click(*cfg.MINIGAME_FINISH_BUTTON_POS)
         wait_interruptible(cfg.MINIGAME_FINISH_WAIT)
-        if not detect_minigame_victory(grab_screen()):
+        if not detect_minigame_finished(grab_screen()):
             return True
-        logger.debug(f"Win screen still up after click {attempt + 1}")
-    log_failure("minigame win screen would not close")
+        logger.debug(f"Finish screen still up after click {attempt + 1}")
+    log_failure("minigame finish screen would not close")
     return False
 
 def screen_changed(before: Image, after: Image) -> bool:
     """Whether the view is a different one: the mean grey-level difference of the two (shrunk) screens is over MINIGAME_TELEPORT_CHANGE."""
-    small = [cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), (80, 45), interpolation=cv2.INTER_AREA).astype(np.int16) for img in (before, after)]
+    small = [cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), cfg.SCREEN_CHANGE_SIZE, interpolation=cv2.INTER_AREA).astype(np.int16) for img in (before, after)]
     return bool(np.abs(small[0] - small[1]).mean() > cfg.MINIGAME_TELEPORT_CHANGE)
 
 def minigame_teleported(before: Image) -> bool:
@@ -3675,9 +3746,8 @@ def save_minigame_result(name: str) -> Optional[str]:
         return None
 
 def play_minigame(name: str) -> bool:
-    """Take the popup's Yes, play `name` until its GAME OVER! screen (which every run ends on: it is not a win, which would
-    give a crypt key, and the macro can't tell - what a run earned is the candy corn on that screen, which is saved, see
-    save_minigame_result()), click NICE!, respawn. Gives up (a logged failure) if the overlay shows it over or never
+    """Take the popup's Yes, play `name` until its GAME OVER! screen (which every run ends on: what a run earned is the candy corn
+    on that screen, which is saved, see save_minigame_result()), click NICE!, respawn. Gives up (a logged failure) if the overlay shows it over or never
     started, or after MINIGAME_MAX_DURATION. Counts as progress only if it ran to the end. See docs/ARCHITECTURE.md#need-handlers.
     """
     label = cfg.MINIGAME_LABELS.get(name, name)
@@ -3720,7 +3790,7 @@ def play_minigame(name: str) -> bool:
         state.last_detection = time.time()
         return False
     else:
-        reason = watch.problem or f"did not reach the victory screen within {cfg.MINIGAME_MAX_DURATION:g}s"
+        reason = watch.problem or f"did not finish within {cfg.MINIGAME_MAX_DURATION:g}s"
         log_failure(f"{label} {reason}")
     state.last_detection = time.time()      # no needs could be seen while it ran
     if finished:
@@ -3728,14 +3798,14 @@ def play_minigame(name: str) -> bool:
     respawn_character()
     return finished
 
-def close_minigame_win_screen(abandon: bool = True) -> bool:
-    """If the win screen is up, click NICE!; with `abandon` also count it as progress and
+def close_minigame_finish_screen(abandon: bool = True) -> bool:
+    """If the finish screen is up, click NICE!; with `abandon` also count it as progress and
     respawn. Returns True if it was there. See docs/ARCHITECTURE.md#need-handlers.
     """
-    if not detect_minigame_victory(grab_screen()):
+    if not detect_minigame_finished(grab_screen()):
         return False
-    logger.debug("Minigame win screen is up, clicking NICE!...")
-    log_run_event("minigame win screen closed")
+    logger.debug("Minigame finish screen is up, clicking NICE!...")
+    log_run_event("minigame finish screen closed")
     click_nice_until_gone()
     if abandon:
         state.last_progress = state.last_detection = time.time()
@@ -3787,7 +3857,7 @@ def unscrew(in_task: bool = False, play_minigames: bool = True) -> Optional[str]
     # count as stuck - and closes it itself at the end, so the check leaves it alone there.
     backpack_open = False if (in_task and not play_minigames) else close_backpack_if_stuck(in_task)
     closed = dismiss_stray_windows()
-    if cfg.HALLOWEEN and close_minigame_win_screen(abandon=play_minigames):
+    if cfg.HALLOWEEN and close_minigame_finish_screen(abandon=play_minigames):
         if play_minigames:
             return "played"    # back in the world somewhere unknown: the task is abandoned like after a minigame
     played = minigame_popup(play=play_minigames) if cfg.HALLOWEEN else None
@@ -3952,7 +4022,7 @@ def start_recording_if_requested() -> Optional[RunRecorder]:
 # ============================================================================
 # INPUT CAPTURE
 # ============================================================================
-# Press CAPTURE_HOTKEY (any window) to start recording what is on screen and every key, mouse button and mouse
+# Press HOTKEYS["capture"] (any window) to start recording what is on screen and every key, mouse button and mouse
 # movement; press it again to stop. For working out how something is played by hand (the Hauntlet 2 rooms, say):
 # the frames are lossless PNGs and the events carry the same clock. See docs/ARCHITECTURE.md#input-capture.
 
@@ -4100,7 +4170,7 @@ class InputCapture:
         last_move = 0.0
         while not self.stop_event.wait(cfg.CAPTURE_POLL_INTERVAL):
             try:
-                now_held = pressed_inputs() - {cfg.CAPTURE_HOTKEY}
+                now_held = pressed_inputs() - {cfg.HOTKEYS["capture"]}
                 for name in sorted(now_held - held):
                     if name.startswith("mouse_"):
                         self._emit("mouse_down", button=name[len("mouse_"):], **self._where())
@@ -4405,7 +4475,7 @@ def toggle_input_capture() -> Optional[InputCapture]:
     capture = InputCapture(os.path.join(cfg.CAPTURES_DIR, "capture_" + time.strftime("%Y%m%d_%H%M%S")))
     capture.start()
     state.capture = capture
-    logger.info(f"Capture started (press {cfg.CAPTURE_HOTKEY.upper()} again to stop): {capture.folder}")
+    logger.info(f"Capture started (press {cfg.HOTKEYS['capture'].upper()} again to stop): {capture.folder}")
     return capture
 
 # ============================================================================
@@ -5533,8 +5603,17 @@ class Blackout:
             logger.warning("The screen was not blanked: " + ("the macro's screenshots would see the black window too" if seen else "the screen is too bright to test whether they would (try again from a darker view)"))
             return False
         window.configure(bg="black")
-        logger.info(f"Screen blanked ({cfg.BLACKOUT_HOTKEY.upper()} again to show it)")
+        logger.info(f"Screen blanked ({cfg.HOTKEYS['blackout'].upper()} again to show it)")
         return True
+
+    def raise_over(self) -> None:
+        """Put the black window back on top of everything, the control window included (that one coming back up from the taskbar lands above it)."""
+        if self.window is not None:
+            try:
+                self.window.attributes("-topmost", True)
+                self.window.lift()
+            except tk.TclError:
+                pass
 
     def hide(self) -> None:
         if self.window is not None:
@@ -5591,15 +5670,19 @@ class AdoptMeGUI:
         logger.info("=" * 60)
 
         self.is_running = False
-        self.rejoin_waits = 0                    # looks so far for the loop to stop, before a rejoin asked for from outside
+        self.pending: list[str] = []             # actions asked for from outside (OUTSIDE_ACTIONS), in order, waiting for what runs to end
+        self.pending_chain = False               # drain_pending() is scheduled
+        self.pending_waits = 0                   # looks so far for a loop that was told to stop to end
+        self.running_loop = False                # what run_async() runs is the loop
         self.blackout = Blackout(self.root)
+        self.root.bind("<Map>", self.on_window_mapped)
         self.watch_stop_hotkey()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
     def start_remote_control(self, loop: bool) -> None:
-        """Begin looking for commands in COMMANDS_PATH every COMMAND_POLL_MS (see poll_commands()), and with `loop` (the --loop argument) start the
+        """Begin looking for commands in COMMANDS_DIR every COMMAND_POLL_MS (see poll_commands()), and with `loop` (the --loop argument) start the
         loop once the window is up, as if the loop button was pressed; without it the status file says that nothing is running. Commands left from before are dropped first."""
-        read_command()
+        discard_commands()
         self.root.after(cfg.COMMAND_POLL_MS, self.poll_commands)
         if loop:
             self.root.after(cfg.START_LOOP_DELAY_MS, self.start_loop_from_outside)
@@ -5615,7 +5698,7 @@ class AdoptMeGUI:
         self.run_async(run_workflow_loop)
 
     def poll_commands(self) -> None:
-        """Do the command waiting in COMMANDS_PATH, if any (Tk's thread): `start` the loop, `stop` it (the cooperative stop, same as [STOP]), `exit`
+        """Do the oldest command waiting in COMMANDS_DIR, if any (Tk's thread): `start` the loop, `stop` it (the cooperative stop, same as [STOP]), `exit`
         (stop, release every key and the mouse, and close the window - what the X button does) `set` a switch (set_switch()), `rejoin`, `setup`, `trade_hub` or `leave_trade_hub` (act_from_outside()), or `refresh_debug`. Looks again
         COMMAND_POLL_MS later - scheduled before the command is done, and a command that raises is logged and does not stop the polling."""
         data = read_command()
@@ -5644,36 +5727,50 @@ class AdoptMeGUI:
         elif command == "set" and data:
             self.set_switch(data["kind"], data["name"], data["value"])
         elif command in OUTSIDE_ACTIONS:
-            self.rejoin_waits = 0
             self.act_from_outside(command)
         elif command == "refresh_debug":
             self.refresh_debug_from_outside()
 
     def act_from_outside(self, command: str) -> None:
-        """Do what the button of the same name does (OUTSIDE_ACTIONS: `rejoin` is Leave & rejoin, `setup` is Setup). A running loop is stopped first and
-        the action starts once it has ended, looking again every REJOIN_STOP_POLL_MS for up to REJOIN_STOP_WAIT_MS."""
-        if self.is_running:
-            self.stop()
-            if self.rejoin_waits * cfg.REJOIN_STOP_POLL_MS >= cfg.REJOIN_STOP_WAIT_MS:
-                logger.warning(f"{command} asked for, but the running loop did not stop")
-                return
-            self.rejoin_waits += 1
-            self.root.after(cfg.REJOIN_STOP_POLL_MS, lambda: self.act_from_outside(command))
+        """Queue what the button of the same name does (OUTSIDE_ACTIONS: `rejoin` is Leave & rejoin, `setup` is Setup, and the Trading Hub trips). Actions are
+        done one after the other, in the order asked for (drain_pending()); a `stop` command stops what is running now and leaves the queue alone."""
+        self.pending.append(command)
+        if not self.pending_chain:
+            self.pending_chain, self.pending_waits = True, 0
+            self.drain_pending()
+
+    def drain_pending(self) -> None:
+        """Do the first queued action once nothing is running, looking again every REJOIN_STOP_POLL_MS. A running loop is told to stop (once) and is waited for
+        up to REJOIN_STOP_WAIT_MS, after which the action is given up; another action is waited for as long as it takes."""
+        if not self.pending:
+            self.pending_chain = False
             return
-        log_run_event(f"{command} asked for from outside (the Discord bot)")
-        self.run_async(OUTSIDE_ACTIONS[command])
+        if self.is_running:
+            if self.running_loop:
+                if self.pending_waits == 0:
+                    self.stop()
+                self.pending_waits += 1
+                if self.pending_waits * cfg.REJOIN_STOP_POLL_MS >= cfg.REJOIN_STOP_WAIT_MS:
+                    logger.warning(f"{self.pending.pop(0)} asked for, but the running loop did not stop")
+                    self.pending_waits = 0
+        else:
+            self.pending_waits = 0
+            command = self.pending.pop(0)
+            log_run_event(f"{command} asked for from outside (the Discord bot)")
+            self.run_async(OUTSIDE_ACTIONS[command])
+        self.root.after(cfg.REJOIN_STOP_POLL_MS, self.drain_pending)
 
     def refresh_debug_from_outside(self) -> None:
         """Empty the debug folder as the Refresh debug button does, without asking; not while something is running, which is writing there."""
-        if self.is_running:
-            logger.warning("Refresh debug asked for, but the macro is running - stop it first")
+        if self.is_running or state.capture is not None or state.run_capture is not None:
+            logger.warning("Refresh debug asked for, but the macro is running or recording - stop it first")
             return
         logger.debug(f"Debug folder refreshed ({refresh_debug()} entries removed)")
         mark_stopped()                                           # (the status file went with the rest)
 
     def set_switch(self, kind: str, name: str, value: bool) -> None:
         """Change a switch as its checkbox does - persist it and tick or untick the checkbox in the window: a need's (the Debug tab), or an option (the
-        Options tab, the Debug tab's Other subtab, and `show_debug_lines`, which is only a checkbox)."""
+        Settings tab, the Debug tab's Options subtab, and `show_debug_lines`, which is only a checkbox)."""
         if kind == "need":
             self.set_need_enabled(name, value)
             self.need_vars[name].set(value)
@@ -5687,62 +5784,81 @@ class AdoptMeGUI:
                 self.config_flag_vars[key].set(value)
 
     def close(self) -> None:
-        """The window's X button: stop whatever is running and let go of every key and the mouse before the
-        process ends - the worker is a daemon thread, which dies with the process before its own cleanup can run
-        (a movement key or the mouse button would stay held down in the game)."""
+        """The window's X button, and the `exit` command: end the macro cleanly. The stop is asked for first (a recording that takes seconds to finish
+        must not be waited for while the worker still clicks and holds keys in the game), then the capture is closed, the status says nothing is running, the worker
+        is given a moment to unwind and let go of what it holds (it is a daemon thread, which dies with the process before its own cleanup could run), every key
+        and the mouse are released whatever it did, the blackout is taken away, and the window is destroyed."""
+        STOP_EVENT.set()
         if state.capture is not None:
             state.capture.stop()
             state.capture = None
-        self.blackout.hide()
-        STOP_EVENT.set()
         mark_stopped()
-        time.sleep(cfg.STOP_CHECK_INTERVAL * 3)   # the worker notices the stop within a check or two and releases what it holds
+        worker = getattr(self, "worker", None)
+        if worker is not None and worker.is_alive():
+            worker.join(cfg.CLOSE_WORKER_WAIT)
+        else:
+            time.sleep(cfg.STOP_CHECK_INTERVAL * 3)
         release_all_inputs()
+        self.blackout.hide()
         self.root.destroy()
 
     def watch_stop_hotkey(self) -> None:
-        """Start a thread that watches the hotkeys: STOP_HOTKEY stops the macro (in any window), CAPTURE_HOTKEY starts or
+        """Start a thread that watches the hotkeys: HOTKEYS["stop"] stops the macro (in any window), HOTKEYS["capture"] starts or
         stops an input capture (only while Roblox is focused). See docs/ARCHITECTURE.md#gui-internals."""
-        hotkeys = [(cfg.STOP_HOTKEY, self.stop_by_hotkey, True, False),
-                   (cfg.CAPTURE_HOTKEY, self.capture_by_hotkey, False, True),
-                   (cfg.BLACKOUT_HOTKEY, self.blackout_by_hotkey, False, True)]   # (key, action, only while a run is going, only while Roblox is focused)
+        hotkeys = [(cfg.HOTKEYS["stop"], self.stop_by_hotkey, True, False),
+                   (cfg.HOTKEYS["capture"], self.capture_by_hotkey, False, True),
+                   (cfg.HOTKEYS["blackout"], self.blackout_by_hotkey, False, True)]   # (key, action, only while a run is going, only while Roblox is focused)
 
         def watch():
             was_down = [False] * len(hotkeys)
+            reported = [False] * len(hotkeys)
             while True:
-                try:
-                    for i, (key, action, only_while_running, only_in_roblox) in enumerate(hotkeys):
+                for i, (key, action, only_while_running, only_in_roblox) in enumerate(hotkeys):
+                    try:
                         down = hotkey_down(key)
                         if hotkey_fires(down, was_down[i], only_while_running, self.is_running, only_in_roblox):
                             self.root.after(0, action)
                         was_down[i] = down
-                except (RuntimeError, tk.TclError):
-                    return  # the window is gone
+                    except (RuntimeError, tk.TclError):
+                        return  # the window is gone
+                    except Exception:     # (a look at the focused window that failed: this key is tried again at the next poll, and STOP stays alive for as long as the window does)
+                        if not reported[i]:
+                            reported[i] = True
+                            logger.exception(f"Watching the '{key}' hotkey failed (the watching goes on)")
                 time.sleep(cfg.STOP_HOTKEY_POLL_INTERVAL)
         threading.Thread(target=watch, daemon=True).start()
 
     def capture_by_hotkey(self) -> None:
-        """CAPTURE_HOTKEY was pressed: start or stop the input capture (Tk's thread; the capture's own threads do the work)."""
+        """HOTKEYS["capture"] was pressed: start or stop the input capture (Tk's thread; the capture's own threads do the work)."""
         try:
             toggle_input_capture()
         except OSError as error:
             logger.warning(f"Input capture: {error}")
 
     def blackout_by_hotkey(self) -> None:
-        """BLACKOUT_HOTKEY was pressed: blank the screen or show it again (Tk's thread)."""
+        """HOTKEYS["blackout"] was pressed: blank the screen or show it again (Tk's thread), unless the Options subtab's checkbox has the key off (it is
+        then typed in the game)."""
+        if not self.config_flag_vars["blackout_hotkey_enabled"].get():
+            return
         try:
             self.blackout.toggle()
         except Exception:
             logger.exception("Blanking the screen failed")
             self.blackout.hide()
 
+    def on_window_mapped(self, event: Any) -> None:
+        """The window came back up (from the taskbar, say): the black window goes back over it, once Windows has put it back in the stack - the control window
+        is blanked with the rest of the screen."""
+        if event.widget is self.root and self.blackout.shown:
+            self.root.after(cfg.BLACKOUT_RAISE_DELAY_MS, self.blackout.raise_over)
+
     def stop_by_hotkey(self) -> None:
-        """STOP_HOTKEY was pressed: stop, same as the [STOP] button, and say so."""
+        """HOTKEYS["stop"] was pressed: stop, same as the [STOP] button, and say so."""
         if self.is_running:
-            logger.info(f"'{cfg.STOP_HOTKEY.upper()}' pressed")
+            logger.info(f"'{cfg.HOTKEYS['stop'].upper()}' pressed")
             self.stop()   # first: a failing log write must not keep the macro running
             try:
-                log_run_event(f"stopped with the {cfg.STOP_HOTKEY.upper()} key")
+                log_run_event(f"stopped with the {cfg.HOTKEYS['stop'].upper()} key")
             except OSError:
                 pass
 
@@ -5757,7 +5873,7 @@ class AdoptMeGUI:
         options_tab = tk.Frame(notebook, bg=self.bg)
         debug_tab = tk.Frame(notebook, bg=self.bg)
         notebook.add(btn_frame, text="Main")
-        notebook.add(options_tab, text="Options")
+        notebook.add(options_tab, text="Settings")
         notebook.add(debug_tab, text="Debug")
 
         self.action_buttons = []  # every button that starts a background task
@@ -5789,7 +5905,7 @@ class AdoptMeGUI:
         btn_loop.pack(fill=tk.BOTH, expand=True)
         self.action_buttons.append(btn_loop)
 
-        tk.Label(btn_frame, text=f"Press {cfg.STOP_HOTKEY.upper()} anywhere to stop", font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE),
+        tk.Label(btn_frame, text=f"Press {cfg.HOTKEYS['stop'].upper()} anywhere to stop", font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE),
                  bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X)
 
         tk.Frame(btn_frame, bg=self.accent, height=cfg.GUI_DIVIDER_HEIGHT).pack(fill=tk.X, pady=cfg.GUI_ROW_SPACING)
@@ -5797,14 +5913,15 @@ class AdoptMeGUI:
         tk.Label(btn_frame, text="Functions", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"),
                  bg=self.bg, fg=self.accent).pack(anchor=tk.W)
 
-        for label, action in (("Respawn", respawn_character), ("Setup", setup_game), ("Leave & rejoin", leave_and_rejoin)):
+        for label, action in (("Respawn", respawn_character), ("Setup", setup_game), ("Leave & rejoin", leave_and_rejoin),
+                              ("Go to the Trading Hub", travel_to_trade_hub), ("Leave the Trading Hub", leave_trade_hub)):
             btn = tk.Button(btn_frame, text=label, command=lambda a=action: self.run_async(a),  # type: ignore[misc]
                             font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_RESPAWN_COLOR, fg=self.fg,
                             height=cfg.GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
             btn.pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
             self.action_buttons.append(btn)
 
-        # Options tab
+        # Settings tab
         # Persisted switches (see load_game_config()). Deliberately not in
         # action_buttons: they must stay usable while a workflow is running,
         # which is safe since update_game_config() is locked.
@@ -5887,6 +6004,7 @@ class AdoptMeGUI:
             return
 
         self.is_running = True
+        self.running_loop = func is run_workflow_loop
         STOP_EVENT.clear()
         self._set_running_ui(True)
 
@@ -5935,13 +6053,18 @@ class AdoptMeGUI:
             finally:
                 release_all_inputs()  # last line of defense against stuck keys/mouse
                 STOP_EVENT.clear()
-                self.is_running = False
-                # Tkinter widgets may only be touched from the main thread;
-                # root.after() hands this callback to it instead of calling
-                # .config() directly from this background thread.
-                self.root.after(0, lambda status=final_status: self._set_running_ui(False, status))  # type: ignore[misc]
+                # Tkinter widgets may only be touched from the main thread; root.after() hands this callback to it instead of calling
+                # .config() directly from this background thread. The flag goes down there too, in the same step as the buttons: set from here
+                # first, an action asked for from outside could start in between and have its buttons put back to "Ready" under it.
+                self.root.after(0, lambda status=final_status: self._finish_running(status))  # type: ignore[misc]
 
-        threading.Thread(target=worker, daemon=True).start()
+        self.worker = threading.Thread(target=worker, daemon=True)
+        self.worker.start()
+
+    def _finish_running(self, status_text: str) -> None:
+        """What a finished run_async() worker leaves to Tk's thread: nothing runs any more, and the buttons and the status say so."""
+        self.is_running = False
+        self._set_running_ui(False, status_text)
 
     def _set_running_ui(self, running: bool, status_text: Optional[str] = None) -> None:
         """Single place that toggles button state + status text. Called both
@@ -5968,6 +6091,8 @@ class AdoptMeGUI:
         """Persist one of the config's on/off switches (a checkbox was clicked)."""
         update_game_config(lambda c: c.update({key: value}))
         logger.info(f"{key} = {value}")
+        if key == "blackout_hotkey_enabled" and not value:
+            self.blackout.hide()                                  # (a screen that is blank must not stay so with no key to show it)
 
     def save_server_link(self) -> None:
         """Persist the private server link typed into the entry box."""
@@ -5987,16 +6112,16 @@ class AdoptMeGUI:
         logger.info("Config reset to defaults")
 
     def build_debug_tab(self, parent: Any) -> None:
-        """The Debug tab: a Needs subtab (build_needs_tab()) and an Other one
-        (build_other_tab())."""
+        """The Debug tab: an Options subtab (build_other_tab()) and a Needs one
+        (build_needs_tab())."""
         subtabs = ttk.Notebook(parent)
         subtabs.pack(fill=tk.BOTH, expand=True)
         needs_tab = tk.Frame(subtabs, bg=self.bg)
         other_tab = tk.Frame(subtabs, bg=self.bg)
+        subtabs.add(other_tab, text="Options")
         subtabs.add(needs_tab, text="Needs")
-        subtabs.add(other_tab, text="Other")
-        self.build_needs_tab(needs_tab)
         self.build_other_tab(other_tab)
+        self.build_needs_tab(needs_tab)
 
     def build_needs_tab(self, parent: Any) -> None:
         """Fill the Needs subtab: a button that runs every teleport handler in turn, then a two-column grid with a switch
@@ -6031,17 +6156,18 @@ class AdoptMeGUI:
         logger.info(f"{name} need {'on' if value else 'off'}")
 
     def build_other_tab(self, parent: Any) -> None:
-        """Fill the Other subtab: record the next run, show the debug lines in the output or not, refresh the debug
+        """Fill the Options subtab: record the next run, show the debug lines in the output or not, refresh the debug
         folder, reset the config."""
         self.add_config_checkbox(parent, "Record the next run (low quality video)", "record_next_run", load_game_config())
+        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['blackout'].upper()} blanks the screen in Roblox (off: type it)", "blackout_hotkey_enabled", load_game_config())
         self.show_debug_var = tk.BooleanVar(value=True)
         tk.Checkbutton(parent, text="Show debug lines in the output", variable=self.show_debug_var, command=self.set_debug_lines_shown,
                        font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.bg, fg=self.fg,
                        selectcolor=self.bg, activebackground=self.bg, activeforeground=self.fg,
                        anchor=tk.W, cursor="hand2").pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
-        tk.Label(parent, text=f"Press {cfg.CAPTURE_HOTKEY.upper()} anywhere to start / stop capturing screenshots and input",
+        tk.Label(parent, text=f"Press {cfg.HOTKEYS['capture'].upper()} anywhere to start / stop capturing screenshots and input",
                  font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
-        tk.Label(parent, text=f"Press {cfg.BLACKOUT_HOTKEY.upper()} in Roblox to blank / show the screen (the macro still sees it)",
+        tk.Label(parent, text=f"Press {cfg.HOTKEYS['blackout'].upper()} in Roblox to blank / show the screen (the macro still sees it)",
                  font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
         tk.Button(parent, text="Refresh debug", command=self.refresh_debug_folder,
                   font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.accent, fg=self.fg, cursor="hand2"
@@ -6054,8 +6180,8 @@ class AdoptMeGUI:
     def refresh_debug_folder(self) -> None:
         """Ask, then empty the debug folder (refresh_debug()). Not while a run
         is going - it's writing there."""
-        if self.is_running:
-            logger.debug("Stop the run before refreshing the debug folder")
+        if self.is_running or state.capture is not None or state.run_capture is not None:
+            logger.debug("Stop the run and the capture before refreshing the debug folder")
             return
         if messagebox.askyesno("Refresh debug", "Delete everything in the debug folder (logs, images, recordings)?\n"
                                                 "The game config is kept."):
@@ -6082,6 +6208,7 @@ class AdoptMeGUI:
             return
         logger.info("Stopping...")
         STOP_EVENT.set()
+        release_all_inputs()                      # at once, from here: the macro stops doing things the moment the stop is asked for, not when the worker next looks
         self.status.config(text="Stopping...")
 
 # ============================================================================

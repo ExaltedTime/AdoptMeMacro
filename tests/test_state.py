@@ -725,7 +725,7 @@ def test_the_zoom_keys_and_the_mouse_buttons_that_are_down_are_released_with_the
     monkeypatch.setattr(macro.pydirectinput, "mouseUp", lambda button="left": buttons.append(button), raising=False)
     monkeypatch.setattr(macro, "pressed_inputs", lambda: held[0])
     macro.release_all_inputs()
-    assert {macro.cfg.KEY_ZOOM_IN, macro.cfg.KEY_ZOOM_OUT, macro.cfg.KEY_HELICOPTER} <= set(released)
+    assert {macro.cfg.KEYS["zoom_in"], macro.cfg.KEYS["zoom_out"], macro.cfg.KEYS["helicopter"]} <= set(released)
     assert sorted(buttons) == ["left", "right"]                                      # (the camera is turned with the right one)
     buttons.clear()
     held[0] = {"mouse_left"}
@@ -763,7 +763,7 @@ def test_a_dismissed_minigame_popup_does_not_lose_the_abort(macro, monkeypatch):
     monkeypatch.setattr(macro, "rejoin_game", lambda kinds=None: False)
     monkeypatch.setattr(macro, "close_backpack_if_stuck", lambda in_task: False)
     monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: "cant_spawn_vehicle")     # flagged abort_task
-    monkeypatch.setattr(macro, "close_minigame_win_screen", lambda abandon=True: False)
+    monkeypatch.setattr(macro, "close_minigame_finish_screen", lambda abandon=True: False)
     monkeypatch.setattr(macro, "minigame_popup", lambda play=True: "dismissed")
     monkeypatch.setattr(macro, "detect_paycheck", lambda: False)
     monkeypatch.setattr(macro.cfg, "HALLOWEEN", True)
@@ -791,16 +791,18 @@ def test_the_in_task_check_closes_a_backpack_seen_open_twice_but_not_one_a_handl
     monkeypatch.setattr(macro, "detect_backpack_open", lambda img: True)
     monkeypatch.setattr(macro, "close_backpack_if_open", lambda step="": closed.append(step))
     stuck = macro.close_backpack_if_stuck
-    assert stuck(True) is True and closed == []                                            # one sighting is not enough...
-    assert stuck(True) is False and len(closed) == 1                                       # the second one closes it
+    confirmations = macro.cfg.BACKPACK_CLOSE_CONFIRMATIONS
+    before = [True] * (confirmations - 1)                                                  # the sightings that are not enough yet
+    assert [stuck(True) for _ in before] == before and closed == []
+    assert stuck(True) is False and len(closed) == 1                                       # the last one closes it
     closed.clear()
     with macro.backpack_on_purpose():
-        assert [stuck(True) for _ in range(4)] == [True] * 4 and closed == []              # a handler has it open: never
-    assert stuck(True) is True and closed == []                                            # (and what it saw before doesn't count: a first sighting again)
-    macro.state.backpack_strikes = 1
+        assert [stuck(True) for _ in range(confirmations + 3)] == [True] * (confirmations + 3) and closed == []     # a handler has it open: never
+    assert [stuck(True) for _ in before] == before and closed == []                        # (and what it saw before doesn't count: first sightings again)
+    macro.state.backpack_strikes = confirmations - 1
     with macro.backpack_on_purpose():
         pass
-    assert stuck(True) is True and closed == []                                            # a sighting from before the block does not count after it either
+    assert [stuck(True) for _ in before] == before and closed == []                        # sightings from before the block do not count after it either
 
 
 def test_an_equip_sequence_is_not_closed_in_the_middle_by_the_in_task_check(macro, monkeypatch):
@@ -816,7 +818,7 @@ def test_an_equip_sequence_is_not_closed_in_the_middle_by_the_in_task_check(macr
     opened, presses, logged = [False], [], []
 
     def press(key, **kwargs):
-        if key == macro.cfg.KEY_BACKPACK:
+        if key == macro.cfg.KEYS["backpack"]:
             opened[0] = not opened[0]
             presses.append(opened[0])
     monkeypatch.setattr(macro.pydirectinput, "press", press, raising=False)
@@ -1246,11 +1248,11 @@ def test_a_failed_minigame_does_not_count_as_progress_but_a_won_one_does(macro, 
     monkeypatch.setattr(macro, "click_nice_until_gone", lambda: True)
     monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: None)
     monkeypatch.setattr(macro, "read_candy_corn_settled", lambda tries=4: None)                  # (no screen to read the total off)
-    for won in (False, True):
+    for finished in (False, True):
         macro.state.last_progress = stalled
-        monkeypatch.setitem(macro.MINIGAME_PLAYERS, "ghost_gallery", lambda deadline, watch, won=won: won)
-        assert macro.play_minigame("ghost_gallery") is won
-        assert (macro.state.last_progress == stalled) is (not won)
+        monkeypatch.setitem(macro.MINIGAME_PLAYERS, "ghost_gallery", lambda deadline, watch, finished=finished: finished)
+        assert macro.play_minigame("ghost_gallery") is finished
+        assert (macro.state.last_progress == stalled) is (not finished)
         assert time.time() - macro.state.last_detection < 5                            # needs couldn't be seen meanwhile either way
 
 
@@ -1363,7 +1365,7 @@ def test_the_end_wait_is_marked_while_a_need_is_waited_for_and_a_held_popup_is_n
     macro.wait_until_need_gone("potty")
     assert seen == ["potty"] and macro.state.end_wait_need is None
     checked = []
-    for name in ("rejoin_game", "close_backpack_if_stuck", "dismiss_stray_windows", "close_minigame_win_screen"):
+    for name in ("rejoin_game", "close_backpack_if_stuck", "dismiss_stray_windows", "close_minigame_finish_screen"):
         monkeypatch.setattr(macro, name, lambda *a, **k: False)
     monkeypatch.setattr(macro, "minigame_popup", lambda play=True: "waiting")
     monkeypatch.setattr(macro, "detect_paycheck", lambda: checked.append(1) or True)
@@ -1393,28 +1395,64 @@ def test_the_run_logs_and_charts_of_an_older_layout_are_moved_into_the_runs_fold
 
 # --- commands from outside (the Discord bot): read_command(), poll_commands() ---
 
+def write_raw_command(macro, text):
+    """A command file with `text` in it, named after the time so that the oldest is read first (the bot's names do that too)."""
+    os.makedirs(macro.cfg.COMMANDS_DIR, exist_ok=True)
+    name = f"{time.time():015.3f}-{len(os.listdir(macro.cfg.COMMANDS_DIR)):03d}"
+    with open(os.path.join(macro.cfg.COMMANDS_DIR, name + ".json"), "w", encoding="utf-8") as f:
+        f.write(text)
+    return name
+
+
 def write_command(macro, command, age=0, **extra):
-    with open(macro.cfg.COMMANDS_PATH, "w", encoding="utf-8") as f:
-        json.dump({"command": command, "time": time.time() - age, **extra}, f)
+    return write_raw_command(macro, json.dumps({"command": command, "time": time.time() - age, **extra}))
+
+
+def commands_waiting(macro):
+    return [name for name in os.listdir(macro.cfg.COMMANDS_DIR) if name.endswith(".json")] if os.path.isdir(macro.cfg.COMMANDS_DIR) else []
+
+
+def answer(macro, name):
+    with open(os.path.join(macro.cfg.COMMANDS_DIR, name + ".ack"), encoding="utf-8") as f:
+        return f.read()
 
 
 def test_a_fresh_command_is_read_once_and_the_file_is_removed(macro, monkeypatch, tmp_path):
-    monkeypatch.setattr(macro.cfg, "COMMANDS_PATH", str(tmp_path / "commands.json"))
+    monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
     assert macro.read_command() is None                                       # (no file)
     for command in ("start", "stop", "exit", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub"):
-        write_command(macro, command)
-        assert macro.read_command()["command"] == command and not os.path.exists(macro.cfg.COMMANDS_PATH)
+        name = write_command(macro, command)
+        assert macro.read_command()["command"] == command and commands_waiting(macro) == []
+        assert answer(macro, name) == "taken"
 
 
-def test_a_command_that_is_old_unknown_or_unreadable_is_dropped_but_its_file_still_goes(macro, monkeypatch, tmp_path):
-    monkeypatch.setattr(macro.cfg, "COMMANDS_PATH", str(tmp_path / "commands.json"))
+def test_a_command_that_is_old_unknown_or_unreadable_is_dropped_with_a_warning_but_its_file_still_goes(macro, monkeypatch, tmp_path, caplog):
+    monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
     for write in (lambda: write_command(macro, "exit", age=macro.cfg.COMMAND_MAX_AGE + 5),      # left over from before the macro started
                   lambda: write_command(macro, "format-c"),                                       # not in the fixed list
                   lambda: write_command(macro, "stop", time="soon"),
-                  lambda: open(macro.cfg.COMMANDS_PATH, "w").write("{not json"),
-                  lambda: open(macro.cfg.COMMANDS_PATH, "w").write("[\"exit\"]")):
-        write()
-        assert macro.read_command() is None and not os.path.exists(macro.cfg.COMMANDS_PATH)
+                  lambda: write_raw_command(macro, "{not json"),
+                  lambda: write_raw_command(macro, "[\"exit\"]")):
+        name = write()
+        caplog.clear()
+        assert macro.read_command() is None and commands_waiting(macro) == []
+        assert answer(macro, name).startswith("dropped: ")                      # (the bot is told, not left waiting)
+        assert "Command from outside dropped" in caplog.text                  # (said, not silently ignored: a host with the wrong time gets every command dropped)
+
+
+def test_commands_sent_close_together_are_read_one_at_a_time_oldest_first(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
+    for command in ("rejoin", "start", "stop"):
+        write_command(macro, command)
+    assert [macro.read_command()["command"] for _ in range(3)] == ["rejoin", "start", "stop"]
+    assert macro.read_command() is None
+
+
+def test_commands_left_from_before_the_macro_started_are_all_dropped_and_answered(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
+    names = [write_command(macro, command) for command in ("exit", "start", "rejoin")]
+    macro.discard_commands()
+    assert commands_waiting(macro) == [] and all(answer(macro, name).startswith("dropped: ") for name in names)
 
 
 class FakeRoot:
@@ -1425,9 +1463,10 @@ class FakeRoot:
 
 
 def remote_gui(macro, monkeypatch, tmp_path, running=False):
-    monkeypatch.setattr(macro.cfg, "COMMANDS_PATH", str(tmp_path / "commands.json"))
+    monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
     gui = object.__new__(macro.AdoptMeGUI)
     gui.root, gui.is_running, gui.calls = FakeRoot(), running, []
+    gui.pending, gui.pending_chain, gui.pending_waits, gui.running_loop = [], False, 0, running
     gui.run_async = lambda func: gui.calls.append(("run_async", func.__name__))
     gui.stop = lambda: gui.calls.append(("stop",))
     gui.close = lambda: gui.calls.append(("close",))
@@ -1448,24 +1487,45 @@ def test_the_commands_do_what_the_buttons_do_and_polling_goes_on_except_after_ex
     assert gui.calls == [] and gui.root.scheduled[-1][1] == "poll_commands"
 
 
-def test_rejoin_and_setup_run_what_their_buttons_run_and_first_stop_a_running_loop_but_give_up_if_it_does_not_end(macro, monkeypatch, tmp_path):
-    for command, action in (("rejoin", "leave_and_rejoin"), ("setup", "setup_game"), ("trade_hub", "travel_to_trade_hub"), ("leave_trade_hub", "leave_trade_hub")):
+def test_outside_actions_run_what_their_buttons_run_one_after_the_other_in_the_order_asked(macro, monkeypatch, tmp_path):
+    names = {"rejoin": "leave_and_rejoin", "setup": "setup_game", "trade_hub": "travel_to_trade_hub", "leave_trade_hub": "leave_trade_hub"}
+    for command, action in names.items():
         gui = remote_gui(macro, monkeypatch, tmp_path)
         write_command(macro, command)
         gui.poll_commands()
         assert gui.calls == [("run_async", action)]
-        gui = remote_gui(macro, monkeypatch, tmp_path, running=True)
-        write_command(macro, command)
-        gui.poll_commands()
-        assert gui.calls == [("stop",)] and len(gui.root.scheduled) == 2
-        gui.is_running = False                                                # the loop has ended: the next look does it
-        gui.act_from_outside(command)
-        assert gui.calls[-1] == ("run_async", action)
-    gui = remote_gui(macro, monkeypatch, tmp_path, running=True)              # a loop that never ends
-    gui.rejoin_waits = macro.cfg.REJOIN_STOP_WAIT_MS // macro.cfg.REJOIN_STOP_POLL_MS
-    gui.root.scheduled.clear()
+    gui = remote_gui(macro, monkeypatch, tmp_path, running=False)             # two asked for while something else runs, then it ends
+    gui.is_running, gui.running_loop = True, False                            # (an action, not the loop: it is waited for, not stopped)
+    gui.act_from_outside("rejoin")
     gui.act_from_outside("setup")
-    assert gui.root.scheduled == [] and ("run_async", "setup_game") not in gui.calls
+    gui.drain_pending()
+    assert gui.calls == [] and gui.pending == ["rejoin", "setup"]
+    gui.is_running = False
+    gui.drain_pending()
+    assert gui.calls == [("run_async", "leave_and_rejoin")] and gui.pending == ["setup"]
+    gui.drain_pending()
+    assert gui.calls[-1] == ("run_async", "setup_game") and gui.pending == []
+    gui.root.scheduled.clear()
+    gui.drain_pending()
+    assert gui.root.scheduled == [] and not gui.pending_chain                  # the queue is empty: the checking ends
+
+
+def test_a_running_loop_is_told_to_stop_once_and_given_up_on_if_it_never_ends_and_stop_leaves_the_queue_alone(macro, monkeypatch, tmp_path):
+    gui = remote_gui(macro, monkeypatch, tmp_path, running=True)               # the loop is running
+    gui.act_from_outside("rejoin")
+    gui.act_from_outside("setup")
+    gui.drain_pending()
+    gui.drain_pending()
+    assert gui.calls == [("stop",)] and gui.pending == ["rejoin", "setup"]      # (stopped once, not at every look)
+    write_command(macro, "stop")                                                # a stop command stops what runs and clears nothing
+    gui.poll_commands()
+    assert gui.pending == ["rejoin", "setup"]
+    gui.pending_waits = macro.cfg.REJOIN_STOP_WAIT_MS // macro.cfg.REJOIN_STOP_POLL_MS - 1
+    gui.drain_pending()                                                         # a loop that never ends: the first action is given up, the next waits its turn
+    assert gui.pending == ["setup"] and not any(call[0] == "run_async" for call in gui.calls)
+    gui.is_running = False
+    gui.drain_pending()
+    assert gui.calls[-1] == ("run_async", "setup_game")
 
 
 def test_the_trade_hub_trips_click_the_recorded_positions_in_order(macro, monkeypatch):
@@ -1476,7 +1536,7 @@ def test_the_trade_hub_trips_click_the_recorded_positions_in_order(macro, monkey
     monkeypatch.setattr(macro, "log_run_event", lambda message: None)
     monkeypatch.setattr(macro, "close_backpack", lambda step: keys.append("closed"))
     monkeypatch.setattr(macro.pydirectinput, "press", lambda key: keys.append(key))
-    assert macro.travel_to_trade_hub() and keys == [cfg.KEY_BACKPACK, "closed"]
+    assert macro.travel_to_trade_hub() and keys == [cfg.KEYS["backpack"], "closed"]
     assert clicks == [cfg.TRADE_HUB_TOYS_TAB_POS, cfg.TRADE_HUB_PHONE_POS, cfg.TRADE_HUB_EQUIP_POS, cfg.TRADE_HUB_USE_POS, cfg.TRADE_HUB_TRAVEL_POS, cfg.TRADE_HUB_YES_POS]
     clicks.clear()
     assert macro.leave_trade_hub() and clicks == [cfg.TRADE_HUB_HOME_POS, cfg.TRADE_HUB_REGULAR_SERVER_POS]
@@ -1518,7 +1578,7 @@ def test_start_does_nothing_to_a_loop_that_is_running_and_the_loop_argument_star
     gui = remote_gui(macro, monkeypatch, tmp_path)
     write_command(macro, "exit")                                              # (a command left from before is dropped, not done)
     gui.start_remote_control(loop=True)
-    assert [name for _, name in gui.root.scheduled] == ["poll_commands", "start_loop_from_outside"] and not os.path.exists(macro.cfg.COMMANDS_PATH)
+    assert [name for _, name in gui.root.scheduled] == ["poll_commands", "start_loop_from_outside"] and commands_waiting(macro) == []
     assert gui.calls == []
     gui.root.scheduled.clear()
     marked = []
@@ -1539,7 +1599,7 @@ def test_stopping_on_purpose_is_written_to_the_status_and_a_new_run_clears_it(ma
 
 
 def test_a_set_command_is_only_read_for_a_switch_that_exists_with_a_true_or_false_value(macro, monkeypatch, tmp_path):
-    monkeypatch.setattr(macro.cfg, "COMMANDS_PATH", str(tmp_path / "commands.json"))
+    monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
     good = [dict(kind="need", name="hungry", value=False), dict(kind="option", name="play_stitches_spotlight", value=True), dict(kind="option", name="show_debug_lines", value=False)]
     for details in good:
         write_command(macro, "set", **details)
@@ -1632,17 +1692,34 @@ def test_a_key_is_let_go_of_whatever_happens_during_the_hold_and_the_safety_net_
     macro.release_all_inputs()                                          # (does not raise: what follows in the caller still happens)
 
 
-def test_a_key_that_fails_to_come_up_is_still_forgotten_and_the_others_are_let_go_of(macro, monkeypatch):
-    attempts = []
-    def up(key):
-        attempts.append(key)
-        raise RuntimeError("fail-safe")                                 # (e.g. the cursor in a screen corner)
+def test_held_keys_and_buttons_are_released_without_the_fail_safe_check_and_without_moving_the_cursor(macro, monkeypatch):
+    """With the cursor in a corner PyDirectInput's checked calls raise; its unchecked ones (the wrapped function) do not, so everything is let go of."""
+    ups, mouse_ups, moves = [], [], []
+    def checked_up(key):
+        raise RuntimeError("fail-safe: the cursor is in a corner")
+    def checked_mouse_up(button="left"):
+        raise RuntimeError("fail-safe: the cursor is in a corner")
+    checked_up.__wrapped__ = lambda key: ups.append(key)                          # (what functools.wraps keeps)
+    checked_mouse_up.__wrapped__ = lambda button="left": mouse_ups.append(button)
     monkeypatch.setattr(macro.pydirectinput, "keyDown", lambda key: None)
-    monkeypatch.setattr(macro.pydirectinput, "keyUp", up)
-    monkeypatch.setattr(macro, "pressed_inputs", lambda: set())
+    monkeypatch.setattr(macro.pydirectinput, "keyUp", checked_up)
+    monkeypatch.setattr(macro.pydirectinput, "mouseUp", checked_mouse_up, raising=False)
+    monkeypatch.setattr(macro.pydirectinput, "moveTo", lambda *a, **k: moves.append(a), raising=False)
+    monkeypatch.setattr(macro, "pressed_inputs", lambda: {"mouse_right"})
     macro.key_down("a")
     macro.release_all_inputs()
-    assert "a" in attempts and set(macro.cfg.HELD_KEYS) <= set(attempts)       # each tried, though each raised
+    assert "a" in ups and set(macro.cfg.HELD_KEYS) <= set(ups) and mouse_ups == ["right"] and moves == []
+    assert macro.pydirectinput.keyUp is checked_up                                  # (the checked call itself is left as it was: the fail-safe stays on)
+
+
+def test_a_key_that_could_not_be_let_go_of_stays_known_so_that_the_safety_net_tries_it_again(macro, monkeypatch):
+    monkeypatch.setattr(macro.pydirectinput, "keyDown", lambda key: None)
+    monkeypatch.setattr(macro.pydirectinput, "keyUp", lambda key: (_ for _ in ()).throw(RuntimeError("fail-safe")))
+    macro.key_down("some_key")
+    with pytest.raises(RuntimeError):
+        macro.key_up("some_key")
+    assert "some_key" in macro.HELD_KEYS
+    macro.HELD_KEYS.clear()
 
 
 # --- blanking the screen (the H key) ---
@@ -1695,3 +1772,183 @@ def test_the_screen_is_not_blanked_when_the_screenshots_would_see_the_window_or_
     assert shown.toggle() is False and not shown.shown
     shown, fake = blackout_with(macro, monkeypatch, [], supported=False)               # not Windows
     assert shown.toggle() is False and not fake.destroyed
+
+
+def test_closing_asks_for_the_stop_before_it_closes_the_capture_and_waits_for_the_worker_before_it_lets_go(macro, monkeypatch):
+    order = []
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.root = types.SimpleNamespace(destroy=lambda: order.append("destroyed"))
+    gui.blackout = types.SimpleNamespace(hide=lambda: order.append("blackout away"))
+    gui.worker = types.SimpleNamespace(is_alive=lambda: True, join=lambda timeout: order.append(f"worker joined ({timeout == macro.cfg.CLOSE_WORKER_WAIT})"))
+    macro.STOP_EVENT.clear()
+    class Capture:
+        def stop(self):
+            order.append(f"capture stopped (stop already asked: {macro.STOP_EVENT.is_set()})")
+    macro.state.capture = Capture()
+    monkeypatch.setattr(macro, "mark_stopped", lambda: order.append("status"))
+    monkeypatch.setattr(macro, "release_all_inputs", lambda: order.append("released"))
+    gui.close()
+    macro.STOP_EVENT.clear()
+    assert order == ["capture stopped (stop already asked: True)", "status", "worker joined (True)", "released", "blackout away", "destroyed"]
+
+
+class FakeBlackout:
+    def __init__(self, shown=False):
+        self.shown, self.toggles, self.hides, self.raised = shown, 0, 0, 0
+
+    def toggle(self):
+        self.toggles += 1
+        self.shown = not self.shown
+
+    def hide(self):
+        self.hides += 1
+        self.shown = False
+
+    def raise_over(self):
+        self.raised += 1
+
+
+def blackout_gui(macro, monkeypatch, tmp_path, hotkey_on=True, shown=False):
+    monkeypatch.setattr(macro.cfg, "GAME_CONFIG_PATH", str(tmp_path / ".config"))
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.scheduled = []
+    gui.root = types.SimpleNamespace(after=lambda ms, func: gui.scheduled.append((ms, func.__name__)))
+    gui.blackout = FakeBlackout(shown)
+    gui.config_flag_vars = {"blackout_hotkey_enabled": types.SimpleNamespace(get=lambda: hotkey_on)}
+    return gui
+
+
+def test_the_blackout_key_blanks_the_screen_only_while_its_checkbox_is_on(macro, monkeypatch, tmp_path):
+    off = blackout_gui(macro, monkeypatch, tmp_path, hotkey_on=False)
+    off.blackout_by_hotkey()
+    assert off.blackout.toggles == 0 and not off.blackout.shown        # (the key is typed in the game)
+    on = blackout_gui(macro, monkeypatch, tmp_path)
+    on.blackout_by_hotkey()
+    assert on.blackout.toggles == 1 and on.blackout.shown
+    on.blackout_by_hotkey()
+    assert on.blackout.toggles == 2 and not on.blackout.shown
+    assert macro.load_game_config()["blackout_hotkey_enabled"] is True                       # on unless it was turned off
+
+
+def test_the_black_window_goes_back_over_the_control_window_when_that_comes_back_up(macro, monkeypatch, tmp_path):
+    gui = blackout_gui(macro, monkeypatch, tmp_path, shown=True)
+    gui.on_window_mapped(types.SimpleNamespace(widget=gui.root))
+    assert gui.scheduled == [(macro.cfg.BLACKOUT_RAISE_DELAY_MS, "raise_over")]            # (later, once Windows has put the window back in the stack)
+    gui.on_window_mapped(types.SimpleNamespace(widget=object()))                              # a widget inside it was mapped: not the window coming back
+    assert len(gui.scheduled) == 1
+    clear = blackout_gui(macro, monkeypatch, tmp_path)
+    clear.on_window_mapped(types.SimpleNamespace(widget=clear.root))
+    assert clear.scheduled == []                                                               # no black window: nothing to do
+
+
+def test_turning_the_blackout_key_off_takes_a_blank_screen_away(macro, monkeypatch, tmp_path):
+    gui = blackout_gui(macro, monkeypatch, tmp_path, shown=True)
+    gui.set_config_flag("blackout_hotkey_enabled", True)
+    assert gui.blackout.shown and gui.blackout.hides == 0
+    gui.set_config_flag("blackout_hotkey_enabled", False)
+    assert not gui.blackout.shown and gui.blackout.hides == 1
+    assert macro.load_game_config()["blackout_hotkey_enabled"] is False
+
+
+def test_two_threads_writing_the_status_at_once_leave_one_whole_file(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "STATUS_PATH", str(tmp_path / "status.json"))
+    errors = []
+    def writer():
+        for _ in range(150):
+            macro.write_status()
+            try:
+                json.load(open(macro.cfg.STATUS_PATH))
+            except Exception as error:                                  # a half-written or missing file would show here
+                errors.append(error)
+    threads = [threading.Thread(target=writer) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+
+
+def test_a_stop_lets_go_of_everything_at_once_and_nothing_is_pressed_after_it(macro, monkeypatch):
+    events = []
+    monkeypatch.setattr(macro.pydirectinput, "keyDown", lambda key: events.append(("down", key)))
+    monkeypatch.setattr(macro.pydirectinput, "keyUp", lambda key: events.append(("up", key)))
+    monkeypatch.setattr(macro.pydirectinput, "mouseDown", lambda button="left": events.append(("mouse down", button)), raising=False)
+    monkeypatch.setattr(macro, "pressed_inputs", lambda: set())
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.is_running, gui.status = True, types.SimpleNamespace(config=lambda **k: None)
+    macro.STOP_EVENT.clear()
+    macro.key_down("w")
+    gui.stop()                                                                        # (from the Tk thread, while the worker is still in its wait)
+    assert ("up", "w") in events and macro.STOP_EVENT.is_set()
+    events.clear()
+    with pytest.raises(macro.StopRequested):
+        macro.key_down("d")
+    with pytest.raises(macro.StopRequested):
+        macro.mouse_down("right")
+    assert events == []                                                               # the worker's next press is refused
+    macro.STOP_EVENT.clear()
+
+
+def test_the_hotkey_watcher_survives_a_failed_look_and_ends_only_when_the_window_is_gone(macro, monkeypatch, caplog):
+    monkeypatch.setattr(macro.cfg, "STOP_HOTKEY_POLL_INTERVAL", 0.001)
+    calls = []
+    def hotkey_down(key):
+        calls.append(key)
+        if len(calls) <= 6:
+            raise ValueError("the focused window could not be read")           # (pygetwindow on an odd window)
+        if len(calls) > 40:
+            raise RuntimeError("the window is gone")
+        return False
+    monkeypatch.setattr(macro, "hotkey_down", hotkey_down)
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.root, gui.is_running = types.SimpleNamespace(after=lambda ms, f: None), False
+    before = threading.active_count()
+    gui.watch_stop_hotkey()
+    deadline = time.time() + 10
+    while len(calls) <= 40 and time.time() < deadline:
+        time.sleep(0.01)
+    assert len(calls) > 40                                                       # it went on after the failures, and every key was watched
+    assert "failed (the watching goes on)" in caplog.text and caplog.text.count("failed (the watching goes on)") <= len(macro.cfg.HOTKEYS)       # (said once per key, not at every poll)
+    time.sleep(0.1)
+    assert threading.active_count() <= before                                    # and the thread ended when the window was gone
+
+
+def test_the_need_watcher_goes_on_after_a_look_that_failed_and_still_reports_the_need_gone(macro, monkeypatch, caplog):
+    monkeypatch.setattr(macro.cfg, "NEED_GONE_POLL_INTERVAL", 0.001)
+    answers_given = iter([RuntimeError("a screenshot failed"), RuntimeError("again"), False, True])
+    def need_cleared(name):
+        answer = next(answers_given)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    monkeypatch.setattr(macro, "_need_cleared", need_cleared)
+    cleared, stop, answers = threading.Event(), threading.Event(), []
+    macro._watch_need_gone("hungry", cleared, stop, answers)
+    assert cleared.is_set() and answers == [False, True]
+    assert caplog.text.count("a look failed") == 1                               # (said once)
+
+
+def test_the_flag_that_nothing_runs_goes_down_on_tks_thread_together_with_the_buttons(macro):
+    queued, buttons = [], []
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.is_running, gui.root = False, types.SimpleNamespace(after=lambda ms, f: queued.append(f))
+    gui.pending, gui.pending_chain, gui.pending_waits, gui.running_loop = [], False, 0, False
+    gui._set_running_ui = lambda running, status=None: buttons.append((running, status))
+    gui.run_async(lambda: None)
+    gui.worker.join(10)
+    assert gui.is_running is True and buttons == [(True, None)]                    # (the worker is done, but Tk's thread has not been told yet: nothing can start in between)
+    queued[-1]()
+    assert gui.is_running is False and buttons[-1] == (False, "[DONE]")
+
+
+def test_refresh_debug_from_outside_is_refused_while_a_capture_is_recording(macro, monkeypatch, tmp_path):
+    done = []
+    monkeypatch.setattr(macro, "refresh_debug", lambda: done.append("refreshed") or 0)
+    monkeypatch.setattr(macro, "mark_stopped", lambda: None)
+    gui = remote_gui(macro, monkeypatch, tmp_path)
+    monkeypatch.setattr(macro.state, "capture", object())
+    gui.refresh_debug_from_outside()
+    assert done == []
+    monkeypatch.setattr(macro.state, "capture", None)
+    gui.refresh_debug_from_outside()
+    assert done == ["refreshed"]

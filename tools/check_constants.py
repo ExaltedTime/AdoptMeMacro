@@ -5,6 +5,7 @@
 - a constant in magic_numbers.py that nothing uses (not main.py, bot/, tools/, tests/, nor another constant), or a function or method of main.py or
   bot/ that nothing but tests calls: dead code, and the comments and docs that still describe it;
 - a constant the docs name in backticks that no code file has;
+- a key table label (`cfg.KEYS["x"]`) that does not exist, or a key written as a letter where the code presses one;
 - a `pydirectinput.keyDown`/`keyUp` in main.py outside the wrappers that keep track of the keys held;
 - a test that asks for tmp_path, monkeypatch, caplog or capsys and doesn't use it.
 
@@ -70,6 +71,31 @@ def unknown_constants(defined):
         for node in ast.walk(ast.parse(read(path))):
             if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "cfg" and node.attr not in defined):
                 problems.append((node.lineno, path, f"cfg.{node.attr} is not defined in magic_numbers.py"))
+    return problems
+
+
+def key_labels():
+    """The labels of the key tables of magic_numbers.py (KEYS, KEY_SEQUENCES, HOTKEYS), read without importing it."""
+    labels = {}
+    for node in ast.parse(read("magic_numbers.py")).body:
+        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id in ("KEYS", "KEY_SEQUENCES", "HOTKEYS"):
+            labels[node.targets[0].id] = {key.value for key in node.value.keys if isinstance(key, ast.Constant)}   # type: ignore[attr-defined]
+    return labels
+
+
+def key_problems():
+    """A cfg.KEYS["x"] (or KEY_SEQUENCES, HOTKEYS) with a label the table does not have, and a key written as a letter where the code presses one
+    (hold_key("a", ...), key_down("w"), press("e")): every key is named by what it is for, in the tables."""
+    labels, problems = key_labels(), []
+    for path in CODE:
+        for node in ast.walk(ast.parse(read(path))):
+            if (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute) and node.value.attr in labels
+                    and isinstance(node.slice, ast.Constant) and node.slice.value not in labels[node.value.attr]):
+                problems.append((node.lineno, path, f"{node.value.attr}[{node.slice.value!r}] is not in the table"))
+            if (isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)
+                    and ((isinstance(node.func, ast.Name) and node.func.id in ("hold_key", "key_down", "key_up"))
+                         or (isinstance(node.func, ast.Attribute) and node.func.attr == "press"))):
+                problems.append((node.lineno, path, f"a key written as {node.args[0].value!r}: use cfg.KEYS, cfg.KEY_SEQUENCES or cfg.HOTKEYS"))
     return problems
 
 
@@ -146,7 +172,7 @@ def unused_test_parameters():
 
 def main():
     defined = defined_names("magic_numbers.py")
-    problems = unknown_constants(defined) + unused_constants(defined) + unused_functions() + unused_test_parameters() + unknown_names_in_docs() + bare_key_calls()
+    problems = unknown_constants(defined) + unused_constants(defined) + unused_functions() + unused_test_parameters() + unknown_names_in_docs() + bare_key_calls() + key_problems()
     for line, path, message in sorted(problems):
         print(f"{path}:{line}: {message}")
     return 1 if problems else 0

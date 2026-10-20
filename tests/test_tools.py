@@ -35,3 +35,17 @@ def test_the_constants_check_names_an_unused_constant_a_typo_and_an_uncalled_fun
     assert [m for _, _, m in check_constants.unused_constants(defined)] == ["UNUSED is not used anywhere"]
     assert [m for _, _, m in check_constants.unknown_names_in_docs()] == ["GONE_NAME is named in the docs and exists in no code file"]
     assert [m for _, _, m in check_constants.unused_functions()] == ["lonely() is not called anywhere in the code"]
+
+
+def test_the_constants_check_names_a_key_label_that_does_not_exist_and_a_key_written_as_a_letter(tmp_path, monkeypatch):
+    sys.path.insert(0, conftest.ROOT + "/tools")
+    try:
+        import check_constants
+    finally:
+        sys.path.pop(0)
+    (tmp_path / "magic_numbers.py").write_text('KEYS = {"forward": "w", "jump": "space"}\nHOTKEYS = {"stop": "p"}\n')
+    (tmp_path / "main.py").write_text('def f():\n    hold_key(cfg.KEYS["forward"], 1)\n    hold_key(cfg.KEYS["sideways"], 1)\n    hold_key("a", 1)\n    pydirectinput.press("e")\n    cfg.HOTKEYS["stop"]\n')
+    monkeypatch.setattr(check_constants, "ROOT", str(tmp_path))
+    monkeypatch.setattr(check_constants, "CODE", ["main.py"])
+    messages = [m for _, _, m in sorted(check_constants.key_problems())]                      # (by line)
+    assert messages == ["KEYS['sideways'] is not in the table", "a key written as 'a': use cfg.KEYS, cfg.KEY_SEQUENCES or cfg.HOTKEYS", "a key written as 'e': use cfg.KEYS, cfg.KEY_SEQUENCES or cfg.HOTKEYS"]

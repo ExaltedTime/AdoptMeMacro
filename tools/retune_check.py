@@ -28,12 +28,21 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # A variant that changes those settings on purpose ("deselect") leaves it out.
 SCREENSHOT_TEST = "tests/test_icon_screenshots.py"
 
+# The durations whose names don't end in a word the scaling looks for (a variant that left them alone would scale the walks and not the steps in them).
+OTHER_TIMES = ("CAPTURE_MAX_SKIP", "RUN_CAPTURE_BURST", "RUN_CAPTURE_TAIL", "MINIGAME_TELEPORT_POLL", "ROBLOX_RECT_TTL", "SICK_PROMPT_LOOK",
+               "GHOST_BOSS_TRIAL", "GHOST_SKIP_TIME", "GHOST_FURNITURE_PERIOD", "GHOST_CAMERA_PERIOD", "GHOST_MOVE_PERIOD", "GHOST_MOVE_STEP_MIN", "GHOST_MOVE_STEP_MAX",
+               "GHOST_REGRAB_PERIOD", "GHOST_START_FORWARD", "GHOST_JUMP_MIN", "GHOST_JUMP_MAX", "GHOST_SPOT_TRIAL", "GHOST_BAD_SPOT_TIME", "GHOST_STALL", "GHOST_STALL_WALK",
+               "STITCHES_TURN_MIN_HOLD", "STITCHES_LOST_AFTER", "STITCHES_INTRO_MAX", "STITCHES_CALIBRATE_HOLD", "STITCHES_TURN_HOLD_MAX",
+               "HAUNTLET_WALK_MAX", "HAUNTLET_STEER_EVERY", "HAUNTLET_STEER_MAX",
+               "HAUNTLET_START_FORWARD", "HAUNTLET_STILL_AFTER", "HAUNTLET_UNSTICK_STEP", "HAUNTLET_UNSTICK_MAX")
+
 SCALE = '''
 import re as _re
+_OTHER_TIMES = %s
 def _scale(_k):
     for _n, _v in list(globals().items()):
-        if (isinstance(_v, (int, float)) and not isinstance(_v, bool) and _n not in ("STOP_CHECK_INTERVAL", "REJOIN_INTERVAL")
-                and _re.search(r"(WAIT|DURATION|INTERVAL|DELAY|TIMEOUT|GAP|SETTLE|GRACE)$", _n)):
+        if (isinstance(_v, (int, float)) and not isinstance(_v, bool) and _n not in ("STOP_CHECK_INTERVAL", "REJOIN_INTERVAL", "GHOST_ALERT_DOT_GAP")
+                and (_n in _OTHER_TIMES or _re.search(r"(WAIT|DURATION|INTERVAL|DELAY|TIMEOUT|GAP|SETTLE|GRACE)$", _n))):
             globals()[_n] = _v * _k
     for _table in (TELEPORT_WALK_NEEDS_NORMAL, TELEPORT_WALK_NEEDS_HALLOWEEN):
         for _entry in _table.values():
@@ -42,12 +51,17 @@ _scale(%s)
 TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN else TELEPORT_WALK_NEEDS_NORMAL
 '''
 
+def scaled(factor: str) -> str:
+    """The patch that multiplies every duration by `factor`."""
+    return SCALE % (repr(OTHER_TIMES), factor)
+
+
 VARIANTS = {
     "baseline": "",
     # the event ends: the Halloween-only needs (sick) stop existing
     "halloween_off": "HALLOWEEN = False\nTELEPORT_WALK_NEEDS = TELEPORT_WALK_NEEDS_NORMAL\n",
-    "timings_x1.7": SCALE % "1.7",
-    "timings_x0.5": SCALE % "0.5",
+    "timings_x1.7": scaled("1.7"),
+    "timings_x0.5": scaled("0.5"),
     "other_tuning": '''
 NEED_GONE_MAX_WAIT = 60.0
 NEED_GONE_POLL_INTERVAL = 2.0
@@ -67,7 +81,7 @@ STITCHES_LINE_DEADBAND = 7.0
 UNSCREW_TASK_INTERVAL = 6.0
 NEED_STUCK_CHECKS = 3
 DISABLED_NEEDS_REJOIN_THRESHOLD = 2
-MINIGAME_VICTORY_CLICK_TRIES = 2
+MINIGAME_FINISH_CLICK_TRIES = 2
 ENABLED_NEEDS = ENABLED_NEEDS - {"walk", "pet"}
 ''',
     # every click position moved a little
@@ -88,27 +102,30 @@ TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLO
 
 
 
+KEYS_REBUILD = ('MOVE_KEYS = tuple(KEYS[name] for name in ("forward", "left", "back", "right"))\n'      # (what magic_numbers.py derives from the key tables, derived again)
+                'HELD_KEYS = tuple(dict.fromkeys([*KEYS.values(), *(key for keys in KEY_SEQUENCES.values() for key in keys)]))\n')
 REBUILD = "TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN else TELEPORT_WALK_NEEDS_NORMAL\n"
 
 VARIANTS.update({
     # a need deleted from the table / a new one added
-    "needs_removed": 'for _n in ("cafe", "pizza", "camping", "bored"):\n    TELEPORT_WALK_NEEDS_NORMAL.pop(_n, None)\n    TELEPORT_WALK_NEEDS_HALLOWEEN.pop(_n, None)\n' + REBUILD,
-    "need_added": 'TELEPORT_WALK_NEEDS_NORMAL["museum"] = dict(teleport_pos=TELEPORT_PETS_TAB_POS, steps=(("w", 3.0), ("d", 2.0)))\n' + REBUILD,
+    "needs_removed": 'for _n in ("cafe", "pizza", "camping", "bored"):\n    TELEPORT_WALK_NEEDS_NORMAL.pop(_n, None)\n    TELEPORT_WALK_NEEDS_HALLOWEEN.pop(_n, None)\nNEED_NAMES = tuple(_n for _n in NEED_NAMES if _n not in ("cafe", "pizza", "camping", "bored"))\n' + REBUILD,
+    "need_added": 'TELEPORT_WALK_NEEDS_NORMAL["museum"] = dict(teleport_pos=TELEPORT_PETS_TAB_POS, steps=(("w", 3.0), ("d", 2.0)))\nNEED_NAMES = (*NEED_NAMES, "museum")\n' + REBUILD,
     "button_names_reordered": 'BUTTON_NAMES[:] = ["sleepy", "potty", "dirty", "thirsty", "hungry"]\n',
     "helicopter_everywhere": "HELICOPTER_REQUIRED = True\n",
     # thresholds and tolerances nudged either way (detection tuning)
     "thresholds_up": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_THRESHOLD") and isinstance(_v, float):\n        globals()[_n] = min(0.99, _v * 1.03)\nfor _e in POPUP_TEMPLATES.values():\n    _e["threshold"] = min(0.99, _e["threshold"] * 1.03)\n',
     "thresholds_down": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_THRESHOLD") and isinstance(_v, float):\n        globals()[_n] = _v * 0.94\nfor _e in POPUP_TEMPLATES.values():\n    _e["threshold"] = _e["threshold"] * 0.94\n',
-    "tolerances_wider": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_TOLERANCE") and isinstance(_v, int):\n        globals()[_n] = _v * 2 + 1\n',
+    "tolerances_wider": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_TOLERANCE") and "SLOT" not in _n and isinstance(_v, int):\n        globals()[_n] = _v * 2 + 1\n',
     # every search box moved a few pixels
     "boxes_shifted": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_BOX") and isinstance(_v, tuple) and len(_v) == 4:\n        globals()[_n] = (_v[0] + 4, _v[1] + 3, _v[2] + 4, _v[3] + 3)\nfor _e in POPUP_TEMPLATES.values():\n    _v = _e["box"]\n    _e["box"] = (_v[0] + 4, _v[1] + 3, _v[2] + 4, _v[3] + 3)\n',
-    "timings_x0.05": SCALE % "0.05",
-    "timings_x20": SCALE % "20",
+    "timings_x0.05": scaled("0.05"),
+    "timings_x20": scaled("20"),
     # counts and limits at both ends
-    "counts_low": {"patch": "NEED_STUCK_CHECKS = 1\nBACKPACK_CLOSE_CONFIRMATIONS = 1\nREJOIN_MAX_ATTEMPTS = 1\nFOCUS_RESUME_MAX_IN_A_ROW = 1\nMINIGAME_VICTORY_CLICK_TRIES = 1\nMAX_FAILURE_FOLDERS = 1\nMAX_REPORTS = 1\nMAX_RECORDINGS = 1\nCONSOLE_MAX_LINES = 10\nICON_SHIFT_TOLERANCE = 0\nDISABLED_NEEDS_REJOIN_THRESHOLD = 1\nRUN_CAPTURES_BEST = 1\nRUN_CAPTURES_WORST = 1\nRUN_CAPTURES_FAILED = 1\nSTITCHES_LINE_DEADBAND = 0.0\n", "deselect": [SCREENSHOT_TEST]},
-    "counts_high": "NEED_STUCK_CHECKS = 10\nBACKPACK_CLOSE_CONFIRMATIONS = 4\nREJOIN_MAX_ATTEMPTS = 8\nFOCUS_RESUME_MAX_IN_A_ROW = 20\nMINIGAME_VICTORY_CLICK_TRIES = 6\nMAX_FAILURE_FOLDERS = 1000\nMAX_REPORTS = 1000\nMAX_RECORDINGS = 50\nCONSOLE_MAX_LINES = 100000\nICON_SHIFT_TOLERANCE = 4\nDISABLED_NEEDS_REJOIN_THRESHOLD = 9\nRUN_CAPTURES_BEST = 8\nRUN_CAPTURES_WORST = 8\nRUN_CAPTURES_FAILED = 9\nSTITCHES_LINE_DEADBAND = 30.0\n",
+    "counts_low": {"patch": "NEED_STUCK_CHECKS = 1\nBACKPACK_CLOSE_CONFIRMATIONS = 1\nREJOIN_MAX_ATTEMPTS = 1\nFOCUS_RESUME_MAX_IN_A_ROW = 1\nMINIGAME_FINISH_CLICK_TRIES = 1\nMAX_FAILURE_FOLDERS = 1\nMAX_REPORTS = 1\nMAX_RECORDINGS = 1\nCONSOLE_MAX_LINES = 10\nICON_SHIFT_TOLERANCE = 0\nDISABLED_NEEDS_REJOIN_THRESHOLD = 1\nRUN_CAPTURES_BEST = 1\nRUN_CAPTURES_WORST = 1\nRUN_CAPTURES_FAILED = 1\nSTITCHES_LINE_DEADBAND = 0.0\n", "deselect": [SCREENSHOT_TEST]},
+    "counts_high": "NEED_STUCK_CHECKS = 10\nBACKPACK_CLOSE_CONFIRMATIONS = 4\nREJOIN_MAX_ATTEMPTS = 8\nFOCUS_RESUME_MAX_IN_A_ROW = 20\nMINIGAME_FINISH_CLICK_TRIES = 6\nMAX_FAILURE_FOLDERS = 1000\nMAX_REPORTS = 1000\nMAX_RECORDINGS = 50\nCONSOLE_MAX_LINES = 100000\nICON_SHIFT_TOLERANCE = 4\nDISABLED_NEEDS_REJOIN_THRESHOLD = 9\nRUN_CAPTURES_BEST = 8\nRUN_CAPTURES_WORST = 8\nRUN_CAPTURES_FAILED = 9\nSTITCHES_LINE_DEADBAND = 30.0\n",
     # other key bindings in the game
-    "keys_remapped": 'KEY_BACKPACK = "v"\nKEY_MOUNT = "f"\nKEY_INTERACT = "f"\nKEY_ZOOM_IN = "o"\nKEY_HELICOPTER = "t"\nKEY_JUMP = "x"\nSTOP_HOTKEY = "q"\n',
+    "keys_remapped": 'KEYS.update(backpack="v", mount="f", interact="f", zoom_in="o", helicopter="t", jump="x")\nHOTKEYS["stop"] = "q"\n' + KEYS_REBUILD,
+
     # behaviour flags flipped
     "flags_flipped": {"patch": "MATCH_ONLY_LEFT_HALF = False\nFOCUS_WINDOW_ON_ACTION = False\nSAVE_NEW_NEEDS = True\n", "deselect": [SCREENSHOT_TEST]},
     # the machine and the folders around the code
@@ -176,11 +193,12 @@ def run_variant(name: str) -> bool:
             cwd = os.path.join(folder, "elsewhere")
             os.makedirs(cwd)
             target = [os.path.join(copy, "tests")]
+        workers = [] if options.get("env", {}).get("RETUNE_ORDER") or options.get("alone") else ["-n", "4"]     # (the order variants need one process: the order is the point)
         deselect = [arg for test in options.get("deselect", []) for arg in ("--deselect", test)]
         runs = [[t] for t in sorted(glob.glob(os.path.join(copy, "tests", "test_*.py")))] if options.get("alone") else [target]
         ok, summaries, failed = True, [], set()
         for paths in runs:
-            result = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "retune_plugin", *deselect, *paths],
+            result = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "retune_plugin", *workers, *deselect, *paths],
                                     cwd=cwd, env=env, capture_output=True, text=True)
             ok = ok and result.returncode == 0
             failed |= set(re.findall(r"^(?:FAILED|ERROR) (\S+)", result.stdout, re.M))

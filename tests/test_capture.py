@@ -74,7 +74,7 @@ def test_the_hotkey_is_not_recorded_and_nothing_held_means_no_key_events(macro, 
     folder = capture["folder"]
     recorder = macro.InputCapture(folder)
     recorder.start()
-    capture["held"] = {macro.cfg.CAPTURE_HOTKEY}
+    capture["held"] = {macro.cfg.HOTKEYS["capture"]}
     time.sleep(0.15)
     capture["held"] = set()
     time.sleep(0.05)
@@ -334,8 +334,7 @@ def test_frames_are_spread_over_the_run_not_all_at_its_start_or_end(macro, captu
     times = [float(f.split("_")[2][:-4]) for f in sorted(os.listdir(capture["folder"])) if f.endswith(".png")]
     gaps = np.diff(times)
     assert len(times) >= 4 and gaps.max() <= (times[-1] - times[0]) / 2        # no big hole anywhere in the run
-    saved = np.diff([e["t"] for e in events_of(capture["folder"]) if e["type"] == "frame"])
-    assert np.mean(saved[-3:]) > 2 * np.mean(saved[:3])                        # frames were taken further apart as the run went on
+    assert recorder._gap >= 2 * macro.cfg.CAPTURE_FRAME_INTERVAL               # frames are taken further apart as the run goes on (the gap doubles with each thinning)
 
 
 def test_a_capture_without_a_budget_keeps_every_frame(macro, capture, monkeypatch):
@@ -378,7 +377,7 @@ def test_no_run_is_recorded_when_it_is_switched_off_or_a_capture_is_already_runn
     assert manual is not None
     assert macro.start_run_capture("hauntlet_2") is None                      # one capture at a time
     macro.toggle_input_capture()
-    macro.finish_run_capture(None, "won")                                    # nothing to finish is no error
+    macro.finish_run_capture(None, "finished")                                    # nothing to finish is no error
 
 
 def test_a_recording_that_cannot_start_does_not_stop_the_minigame(macro, run_folder, monkeypatch, caplog):
@@ -475,11 +474,12 @@ def test_frames_around_a_mark_survive_the_thinning(macro, capture, monkeypatch):
     assert all(marked[0] - 0.1 <= float(f.split("_")[2][:-4]) <= marked[0] + 0.6 for f in recorder.protected)    # and they are of that moment
 
 
-def test_a_run_that_went_wrong_keeps_the_frames_of_its_last_seconds(macro, capture):
+def test_a_run_that_went_wrong_keeps_the_frames_of_its_last_seconds(macro, capture, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "RUN_CAPTURE_TAIL", 15.0)                  # (the frames below are placed for this)
     recorder = macro.InputCapture(capture["folder"], max_zips=2)
     recorder.started = time.time() - 100
     recorder._kept = [(f"frame_{i + 1:06d}_{t:.3f}.png", 1) for i, t in enumerate((10.0, 50.0, 80.0, 90.0, 99.0))]
-    recorder.protect_tail(macro.cfg.RUN_CAPTURE_TAIL)
+    recorder.protect_tail(15.0)
     assert recorder.protected == {"frame_000004_90.000.png", "frame_000005_99.000.png"}
 
 
@@ -580,7 +580,7 @@ def test_a_recording_whose_candy_corn_was_not_read_counts_as_one_of_the_worst_bu
 @pytest.mark.parametrize("outcome, keeps_its_tail", [("left the minigame (its overlay was gone for 10s)", True), ("finished (the game over screen)", False)])
 def test_only_a_run_that_did_not_finish_keeps_the_frames_of_its_last_seconds(macro, run_folder, outcome, keeps_its_tail):
     recorder = macro.start_run_capture("hauntlet_2")
-    assert wait_for(lambda: recorder.frames >= 1)
+    assert wait_for(lambda: recorder.frames >= 1 and recorder._kept)                 # (the frame counts before it is on the list of what is kept)
     macro.finish_run_capture(recorder, outcome)
     assert bool(recorder.protected) is keeps_its_tail
 

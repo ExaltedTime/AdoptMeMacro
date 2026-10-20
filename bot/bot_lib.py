@@ -1,11 +1,13 @@
 """The logic of the Discord bot (discord_bot.py) that needs neither Discord nor Windows: reading the config, deciding who may give
 orders, and turning the files the macro writes (status.json, run_log.txt, results.jsonl, the run charts) into what is posted.
 Plain functions, so tests/test_bot.py can run them anywhere. See docs/ARCHITECTURE.md#discord-bot."""
+import contextlib
 import glob
 import json
 import os
 import re
 import shutil
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Optional
@@ -258,6 +260,24 @@ def fits_a_message(text: str) -> bool:
     return len(text) + 8 <= DISCORD_MESSAGE_LIMIT
 
 
+class Said(Exception):
+    """An error whose message is for the channel as it is (error_text() does not dress it): "the processes cannot be listed", and the like."""
+
+
+def followup_needs_the_channel(status: Optional[int], expired: bool) -> bool:
+    """Whether an answer to a command has to go to the channel itself: the 15 minutes an interaction can be followed up for are over (`expired`), or Discord
+    said the token is no good (HTTP 401) or the interaction is unknown (404). Any other failure is a real one."""
+    return expired or status in (401, 404)
+
+
+def error_text(error: BaseException) -> str:
+    """What the channel is told when a command raised: the kind of error and its message, cut short (the details are in the bot's log); a `Said` as it is."""
+    if isinstance(error, Said):
+        return clip_message(str(error), 300)
+    message = str(error).strip().replace("\n", " ")
+    return clip_message(f"The command failed: {type(error).__name__}" + (f": {message}" if message else "") + " (see the bot's log)", 300)
+
+
 def clip_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> str:
     """`text` cut to fit one Discord message (a longer one is refused, and the whole command with it): whole lines from the start, then "... (N more lines)";
     a code block stays closed."""
@@ -292,9 +312,12 @@ def looks_blank(rgb: bytes, sample: int = 20000) -> bool:
 
 # --- is the macro running ---
 
+MAIN_PY = re.compile(r"""(?:^|[\\/\s"'])main\.py(?=$|[\s"'])""")      # `main.py` as a whole file name: not test_main.py, main.pyc or xmain.py
+
+
 def main_py_in(command_lines: list[str]) -> bool:
-    """Whether one of the process command lines is the macro (`... main.py ...`), not the bot itself."""
-    return any("main.py" in line and "discord_bot" not in line for line in command_lines)
+    """Whether one of the process command lines is the macro (`... main.py ...`, the file by that exact name), not the bot itself."""
+    return any(MAIN_PY.search(line) and "discord_bot" not in line for line in command_lines)
 
 
 # --- alerts: what the macro writes that the bot watches ---
@@ -331,7 +354,8 @@ def failure_screenshot_path(failure: Failure) -> Optional[str]:
 
 def read_new_lines(path: str, offset: int) -> tuple[list[str], int]:
     """The whole lines added to the text file since byte `offset`, and the offset after them. A file that is shorter than `offset` was
-    deleted or started again (Refresh debug does that): it is read from its start. A last line without its newline is left for next time."""
+    deleted or started again (Refresh debug does that): it is read from its start. A last line without its newline is left for next time. A file that
+    is not there is no lines; one that cannot be read (a lock by OneDrive or a virus scanner) raises OSError, so that the offset is kept and not started over."""
     try:
         size = os.path.getsize(path)
         if size < offset:
@@ -339,7 +363,7 @@ def read_new_lines(path: str, offset: int) -> tuple[list[str], int]:
         with open(path, "rb") as f:
             f.seek(offset)
             data = f.read()
-    except OSError:
+    except FileNotFoundError:
         return [], 0
     end = data.rfind(b"\n") + 1
     return data[:end].decode("utf-8", errors="replace").splitlines(), offset + end
@@ -427,11 +451,12 @@ def state_path() -> str:
 
 @dataclass
 class BotState:
+    log_unreadable: bool = False                             # the run log could not be read and that was posted
     log_offset: Optional[int] = None                         # None: never started - begin at the end of the run log, not at its start
     charts: list[str] = field(default_factory=list)          # run charts already posted (or there when the bot first started)
     stale: bool = False
     last_heartbeat: Optional[float] = None
-    desired_state: Optional[str] = None                      # "running" or "stopped" after the bot's /start, /loop and /exit, None before: a macro that is gone is a crash only if it should run
+    desired_state: Optional[str] = None                      # after the bot's /start ("open": the window, no loop), /loop ("running": the loop too), /stop ("open") and /exit ("stopped"); None before: a macro that is gone is a crash only if it should be there
     crash_reported: bool = False                             # the macro's process is gone and that was posted
     restarts: list[float] = field(default_factory=list)      # when the bot restarted the macro by itself (the last hour counts)
     previous_commit: Optional[str] = None                    # the commit the PC was on before the last /update: what /rollback goes back to
@@ -451,10 +476,10 @@ def load_state(path: str) -> BotState:
         state.previous_commit = data["previous_commit"]
     if isinstance(data.get("restarts"), list):
         state.restarts = [item for item in data["restarts"] if isinstance(item, (int, float)) and not isinstance(item, bool)]
-    for key in ("stale", "crash_reported"):
+    for key in ("stale", "crash_reported", "log_unreadable"):
         if isinstance(data.get(key), bool):
             setattr(state, key, data[key])
-    if data.get("desired_state") in ("running", "stopped"):
+    if data.get("desired_state") in ("running", "open", "stopped"):
         state.desired_state = data["desired_state"]
     return state
 
@@ -566,15 +591,53 @@ def copy_pull(files: list[tuple[str, str]], onedrive_dir: str, source: str, max_
 
 # --- control: start, stop, restart the macro ---
 
-def write_command(path: str, command: str, now: float, **details: Any) -> None:
-    """Leave `command` (one of magic_numbers.COMMANDS) for the macro to find at `path`: {"command": ..., "time": ..., plus `details`}, written all at
-    once. The macro removes the file once it has read it, and ignores a command that is old (COMMAND_MAX_AGE) or a `set` for a switch it doesn't have."""
+def write_command(folder: str, command: str, now: float, **details: Any) -> str:
+    """Leave `command` (one of magic_numbers.COMMANDS) for the macro to find in `folder`, as a file of its own named <time>-<id> (so two commands sent close
+    together are both kept and done in order): {"command": ..., "time": ..., plus `details`}, written all at once. Returns the name to ask about it
+    (take_ack(), withdraw_command()). The macro removes the file once it has read it, answers in <name>.ack, and ignores a command that is old
+    (COMMAND_MAX_AGE) or a `set` for a switch it doesn't have."""
     if command not in cfg.COMMANDS:
         raise ValueError(f"not a command the macro knows: {command!r}")
-    temp = path + ".tmp"
+    os.makedirs(folder, exist_ok=True)
+    for old in glob.glob(os.path.join(folder, "*.ack")):                  # (answers nobody came for)
+        if now - os.path.getmtime(old) > cfg.BOT_ACK_KEEP:
+            with contextlib.suppress(OSError):
+                os.remove(old)
+    name = f"{now:015.3f}-{uuid.uuid4().hex[:6]}"
+    temp = os.path.join(folder, name + ".tmp")
     with open(temp, "w", encoding="utf-8") as f:
         json.dump({"command": command, "time": now, **details}, f)
-    os.replace(temp, path)
+    os.replace(temp, os.path.join(folder, name + ".json"))
+    return name
+
+
+def take_ack(folder: str, name: str) -> Optional[str]:
+    """What the macro answered about the command `name` ("taken" or "dropped: why"), removing the answer; None if it has not answered."""
+    path = os.path.join(folder, name + ".ack")
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read().strip()
+    except OSError:
+        return None
+    with contextlib.suppress(OSError):
+        os.remove(path)
+    return text or None
+
+
+def withdraw_command(folder: str, name: str) -> bool:
+    """Take the command `name` back if the macro has not read it; False if it is gone (the macro took it)."""
+    try:
+        os.remove(os.path.join(folder, name + ".json"))
+        return True
+    except OSError:
+        return False
+
+
+def clear_commands(folder: str) -> None:
+    """Remove the commands nobody read (after the macro was killed, say) and their answers."""
+    for path in glob.glob(os.path.join(folder, "*.json")) + glob.glob(os.path.join(folder, "*.ack")):
+        with contextlib.suppress(OSError):
+            os.remove(path)
 
 
 def switch_command(kind: str, name: str, value: bool) -> dict[str, Any]:
@@ -635,7 +698,7 @@ def restart_allowed(history: list[float], now: float, per_hour: int) -> tuple[bo
 def crash_check(desired: Optional[str], running: Optional[bool], reported: bool) -> tuple[bool, Optional[str]]:
     """Whether the macro's process is gone when the bot's /start or /loop (and not /exit) says it should be there: the new "reported" state and "alert" or
     "recovered" when that changes. Nothing is known (None) when the process check can't tell, or `/start` was never used."""
-    if desired != "running":
+    if desired not in ("running", "open"):
         return False, None                                   # (stopped on purpose, or the bot never started it: no crash to report)
     if running is None:
         return reported, None
@@ -648,7 +711,7 @@ def crash_check(desired: Optional[str], running: Optional[bool], reported: bool)
 
 def crash_check_due(desired: Optional[str], updating: bool) -> bool:
     """Whether the macro's process is looked for now: when the bot has it that it should be running, and not while /update or /rollback has stopped it on purpose."""
-    return desired == "running" and not updating
+    return desired in ("running", "open") and not updating
 
 
 def started_since(status: Optional[dict[str, Any]], since: datetime) -> bool:
@@ -666,6 +729,27 @@ class UpdatePlan:
     """What /update or /rollback will do: `kind` is "update" (or "rollback") to go ahead, anything else to stop with `text` as the reason."""
     kind: str
     text: str
+
+
+def python_changes(numstat: str) -> tuple[int, int, int]:
+    """(files, lines added, lines removed) of the Python files in `git diff --numstat` output (`added<TAB>removed<TAB>path`; a binary file has dashes)."""
+    files = added = removed = 0
+    for line in numstat.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 3 and parts[2].endswith(".py"):
+            files += 1
+            added += int(parts[0]) if parts[0].isdigit() else 0
+            removed += int(parts[1]) if parts[1].isdigit() else 0
+    return files, added, removed
+
+
+def python_changes_text(changes: tuple[int, int, int]) -> str:
+    """"N lines changed in M Python files (+A / -R)" - or that no Python file changed."""
+    files, added, removed = changes
+    if not files:
+        return "No Python file changed."
+    lines = added + removed
+    return f"{lines} line{'s' if lines != 1 else ''} changed in {files} Python file{'s' if files != 1 else ''} (+{added} / -{removed})."
 
 
 def short(commit: str) -> str:
@@ -687,7 +771,7 @@ def log_text(lines: list[str], limit: int = 15) -> str:
     return "\n".join(shown) + (f"\n... and {len(lines) - limit} more" if len(lines) > limit else "")
 
 
-def update_plan(head: str, target: str, dirty: list[str], head_in_target: bool, target_in_head: bool, log_lines: list[str], name: str) -> UpdatePlan:
+def update_plan(head: str, target: str, dirty: list[str], head_in_target: bool, target_in_head: bool, log_lines: list[str], name: str, changes: str = "") -> UpdatePlan:
     """Whether /update may move the PC from commit `head` to `target` (`name`, say origin/main) and what to say: nothing to do when they are the same,
     never over local changes to tracked files, and only forward - `head_in_target` (head is an ancestor of target: a fast-forward). If target is
     behind head (`target_in_head`) the PC is ahead; otherwise the histories have diverged."""
@@ -699,7 +783,7 @@ def update_plan(head: str, target: str, dirty: list[str], head_in_target: bool, 
         if target_in_head:
             return UpdatePlan("ahead", f"The PC is ahead of {name} ({short(head)} is past {short(target)}) - nothing to pull.")
         return UpdatePlan("diverged", f"The PC's history and {name} have diverged ({short(head)} vs {short(target)}) - not updating. Nothing was changed.")
-    return UpdatePlan("update", f"Updating {short(head)} -> {short(target)}:\n{log_text(log_lines)}")
+    return UpdatePlan("update", f"Updating {short(head)} -> {short(target)}:\n{log_text(log_lines)}" + (f"\n{changes}" if changes else ""))
 
 
 def rollback_plan(head: str, previous: Optional[str], dirty: list[str], previous_exists: bool) -> UpdatePlan:
@@ -752,4 +836,5 @@ def make_plan(run: GitRunner, remote: str, branch: str, previous: Optional[str],
     head_in_target = run(["merge-base", "--is-ancestor", head, target])[0] == 0
     target_in_head = run(["merge-base", "--is-ancestor", target, head])[0] == 0
     log = git_ok(run, "log", "--oneline", f"{head}..{target}").splitlines() if head_in_target else []
-    return update_plan(head, target, dirty, head_in_target, target_in_head, log, name), ["merge", "--ff-only", target], head
+    changes = python_changes_text(python_changes(git_ok(run, "diff", "--numstat", head, target))) if head_in_target and head != target else ""
+    return update_plan(head, target, dirty, head_in_target, target_in_head, log, name, changes), ["merge", "--ff-only", target], head

@@ -56,7 +56,7 @@ def test_the_handler_carries_out_the_real_entry(macro, monkeypatch, name):
     monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=0, **kw: waited.append(max_wait))
     assert macro.TeleportWalkNeedHandler(name).handle() is True
     assert teleports == [entry["teleport_pos"]]
-    flight = ([("w", cfg.HELICOPTER_FORWARD_DURATION), (cfg.KEY_HELICOPTER, cfg.HELICOPTER_HOLD_DURATION)]
+    flight = ([("w", cfg.HELICOPTER_FORWARD_DURATION), (cfg.KEYS["helicopter"], cfg.HELICOPTER_HOLD_DURATION)]
               if entry.get("helicopter", cfg.HELICOPTER_REQUIRED) else [])
     assert held == flight + list(entry["steps"])
     if "final_click" in entry:

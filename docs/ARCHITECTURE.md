@@ -812,8 +812,9 @@ lure and tree actions are only reachable through `side_quest()`.
      for the private server link saved in the GUI (`parse_server_link()` also
      understands the older `privateServerLinkCode=` form), or
      `roblox://placeID=ROBLOX_PLACE_ID` for a public server if no link is
-     saved. A saved link that doesn't parse aborts instead of silently
-     joining a public server.
+     saved or the **Rejoin the private server** checkbox is off
+     (`use_private_server`; `rejoin_server()` decides). A saved link that
+     doesn't parse aborts instead of silently joining a public server.
   3. Wait up to `REJOIN_WINDOW_TIMEOUT` for a Roblox window to exist, then up
      to `REJOIN_LOAD_TIMEOUT` for the game's green Play button
      (`GREEN_BUTTON_COLOR`) to show up around `REJOIN_JOIN_POS`
@@ -1032,6 +1033,10 @@ actually on disk (so an old config missing a newer key still works), and
   joins, typed into the GUI's entry box (saved when you press Enter or click
   away). It lives here rather than in `magic_numbers.py` because it's a key
   to your server and the source is in a git repo. **Reset Config** keeps it.
+- **`use_private_server`** - the **Rejoin the private server (off: a public
+  one)** checkbox on the Settings tab, above the link (default on). Off, a
+  rejoin goes to a public server and the link stays saved. **Reset Config**
+  puts it back on.
 
 During a run, this file is read and updated by:
 
@@ -1092,7 +1097,7 @@ knowing if you're modifying it:
   flatten Tk's default border/focus-ring rendering.
 - The **Main** tab has the loop/stop row and the Respawn, Setup, Leave &
   rejoin and Trading Hub (go, leave) buttons; the **Settings** tab holds the persisted switches (Run side
-  quest, Resume after focus loss, Play <minigame>) and the private server link;
+  quest, Resume after focus loss, Play <minigame>, Rejoin the private server) and the private server link;
   the **Debug** tab has two subtabs: **Options** (Record the next run, Show debug
   lines, Refresh debug, Reset Config) and **Needs** (a button that tests every need
   in turn, and one per need handler).

@@ -735,6 +735,7 @@ def _read_game_config() -> dict[str, Any]:
         "needs_enabled": {},        # {need: whether it is acted on}, the Debug tab's switches; a need not in it follows ENABLED_NEEDS (see need_is_enabled())
         **{f"{name}_enabled": False for name in cfg.MINIGAME_LABELS},  # which Halloween minigames get played (see minigame_popup())
         "private_server_link": "",  # used by leave_and_rejoin(); kept here, not in the source, since it's a join key
+        "use_private_server": True,   # whether a rejoin goes to that private server (off: a public one, with the link kept)
     }
     try:
         with open(cfg.GAME_CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -1648,20 +1649,30 @@ def detect_play_button(img: Image) -> bool:
     mask = exact_color_mask(box, cfg.GREEN_BUTTON_COLOR, cfg.GREEN_BUTTON_TOLERANCE)
     return int(np.count_nonzero(mask)) >= cfg.REJOIN_PLAY_MIN_PIXELS
 
+def rejoin_server(config: dict[str, Any]) -> tuple[Optional[tuple[str, str]], Optional[str]]:
+    """The server a rejoin goes to, as (type, code), and what is wrong if it can't: None for a public server - when the private server is switched off
+    (`use_private_server`) or no link is saved. A saved link that isn't recognised is a problem (and no rejoin), not a public server by accident."""
+    link = str(config["private_server_link"]).strip()
+    if not config["use_private_server"]:
+        logger.info("The private server is switched off - rejoining a public server")
+        return None, None
+    if not link:
+        logger.info("No private server link saved - rejoining a public server")
+        return None, None
+    server = parse_server_link(link)
+    if server is None:
+        return None, "the saved private server link isn't recognised"
+    return server, None
+
 def leave_and_rejoin(clean_leave: bool = True) -> bool:
     """Close Roblox, relaunch through a deeplink, wait for the game, click Play and respawn;
     up to REJOIN_MAX_ATTEMPTS times. Returns True once back in the game.
     See docs/ARCHITECTURE.md#side-actions.
     """
-    link = load_game_config()["private_server_link"].strip()
-    server = None
-    if link:
-        server = parse_server_link(link)
-        if server is None:
-            logger.warning("Rejoin failed: the saved private server link isn't recognised")
-            return False
-    else:
-        logger.info("No private server link saved - rejoining a public server")
+    server, problem = rejoin_server(load_game_config())
+    if problem:
+        logger.warning(f"Rejoin failed: {problem}")
+        return False
 
     for attempt in range(1, cfg.REJOIN_MAX_ATTEMPTS + 1):
         logger.debug(f"Rejoin attempt {attempt}/{cfg.REJOIN_MAX_ATTEMPTS}")
@@ -5946,6 +5957,7 @@ class AdoptMeGUI:
                            *((f"Play {label}" + ("" if name in MINIGAME_PLAYERS else " (no player yet)"), f"{name}_enabled") for name, label in cfg.MINIGAME_LABELS.items())):
             self.add_config_checkbox(options_tab, label, key, config)
 
+        self.add_config_checkbox(options_tab, "Rejoin the private server (off: a public one)", "use_private_server", config)
         tk.Label(options_tab, text="Private server link", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
                  bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X)
         self.server_link_var = tk.StringVar(value=config["private_server_link"])

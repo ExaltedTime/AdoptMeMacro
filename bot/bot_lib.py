@@ -352,7 +352,8 @@ def failure_screenshot_path(failure: Failure) -> Optional[str]:
 
 def read_new_lines(path: str, offset: int) -> tuple[list[str], int]:
     """The whole lines added to the text file since byte `offset`, and the offset after them. A file that is shorter than `offset` was
-    deleted or started again (Refresh debug does that): it is read from its start. A last line without its newline is left for next time."""
+    deleted or started again (Refresh debug does that): it is read from its start. A last line without its newline is left for next time. A file that
+    is not there is no lines; one that cannot be read (a lock by OneDrive or a virus scanner) raises OSError, so that the offset is kept and not started over."""
     try:
         size = os.path.getsize(path)
         if size < offset:
@@ -360,7 +361,7 @@ def read_new_lines(path: str, offset: int) -> tuple[list[str], int]:
         with open(path, "rb") as f:
             f.seek(offset)
             data = f.read()
-    except OSError:
+    except FileNotFoundError:
         return [], 0
     end = data.rfind(b"\n") + 1
     return data[:end].decode("utf-8", errors="replace").splitlines(), offset + end
@@ -448,11 +449,12 @@ def state_path() -> str:
 
 @dataclass
 class BotState:
+    log_unreadable: bool = False                             # the run log could not be read and that was posted
     log_offset: Optional[int] = None                         # None: never started - begin at the end of the run log, not at its start
     charts: list[str] = field(default_factory=list)          # run charts already posted (or there when the bot first started)
     stale: bool = False
     last_heartbeat: Optional[float] = None
-    desired_state: Optional[str] = None                      # "running" or "stopped" after the bot's /start, /loop and /exit, None before: a macro that is gone is a crash only if it should run
+    desired_state: Optional[str] = None                      # after the bot's /start ("open": the window, no loop), /loop ("running": the loop too), /stop ("open") and /exit ("stopped"); None before: a macro that is gone is a crash only if it should be there
     crash_reported: bool = False                             # the macro's process is gone and that was posted
     restarts: list[float] = field(default_factory=list)      # when the bot restarted the macro by itself (the last hour counts)
     previous_commit: Optional[str] = None                    # the commit the PC was on before the last /update: what /rollback goes back to
@@ -472,10 +474,10 @@ def load_state(path: str) -> BotState:
         state.previous_commit = data["previous_commit"]
     if isinstance(data.get("restarts"), list):
         state.restarts = [item for item in data["restarts"] if isinstance(item, (int, float)) and not isinstance(item, bool)]
-    for key in ("stale", "crash_reported"):
+    for key in ("stale", "crash_reported", "log_unreadable"):
         if isinstance(data.get(key), bool):
             setattr(state, key, data[key])
-    if data.get("desired_state") in ("running", "stopped"):
+    if data.get("desired_state") in ("running", "open", "stopped"):
         state.desired_state = data["desired_state"]
     return state
 
@@ -656,7 +658,7 @@ def restart_allowed(history: list[float], now: float, per_hour: int) -> tuple[bo
 def crash_check(desired: Optional[str], running: Optional[bool], reported: bool) -> tuple[bool, Optional[str]]:
     """Whether the macro's process is gone when the bot's /start or /loop (and not /exit) says it should be there: the new "reported" state and "alert" or
     "recovered" when that changes. Nothing is known (None) when the process check can't tell, or `/start` was never used."""
-    if desired != "running":
+    if desired not in ("running", "open"):
         return False, None                                   # (stopped on purpose, or the bot never started it: no crash to report)
     if running is None:
         return reported, None
@@ -669,7 +671,7 @@ def crash_check(desired: Optional[str], running: Optional[bool], reported: bool)
 
 def crash_check_due(desired: Optional[str], updating: bool) -> bool:
     """Whether the macro's process is looked for now: when the bot has it that it should be running, and not while /update or /rollback has stopped it on purpose."""
-    return desired == "running" and not updating
+    return desired in ("running", "open") and not updating
 
 
 def started_since(status: Optional[dict[str, Any]], since: datetime) -> bool:
@@ -687,6 +689,27 @@ class UpdatePlan:
     """What /update or /rollback will do: `kind` is "update" (or "rollback") to go ahead, anything else to stop with `text` as the reason."""
     kind: str
     text: str
+
+
+def python_changes(numstat: str) -> tuple[int, int, int]:
+    """(files, lines added, lines removed) of the Python files in `git diff --numstat` output (`added<TAB>removed<TAB>path`; a binary file has dashes)."""
+    files = added = removed = 0
+    for line in numstat.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 3 and parts[2].endswith(".py"):
+            files += 1
+            added += int(parts[0]) if parts[0].isdigit() else 0
+            removed += int(parts[1]) if parts[1].isdigit() else 0
+    return files, added, removed
+
+
+def python_changes_text(changes: tuple[int, int, int]) -> str:
+    """"N lines changed in M Python files (+A / -R)" - or that no Python file changed."""
+    files, added, removed = changes
+    if not files:
+        return "No Python file changed."
+    lines = added + removed
+    return f"{lines} line{'s' if lines != 1 else ''} changed in {files} Python file{'s' if files != 1 else ''} (+{added} / -{removed})."
 
 
 def short(commit: str) -> str:
@@ -708,7 +731,7 @@ def log_text(lines: list[str], limit: int = 15) -> str:
     return "\n".join(shown) + (f"\n... and {len(lines) - limit} more" if len(lines) > limit else "")
 
 
-def update_plan(head: str, target: str, dirty: list[str], head_in_target: bool, target_in_head: bool, log_lines: list[str], name: str) -> UpdatePlan:
+def update_plan(head: str, target: str, dirty: list[str], head_in_target: bool, target_in_head: bool, log_lines: list[str], name: str, changes: str = "") -> UpdatePlan:
     """Whether /update may move the PC from commit `head` to `target` (`name`, say origin/main) and what to say: nothing to do when they are the same,
     never over local changes to tracked files, and only forward - `head_in_target` (head is an ancestor of target: a fast-forward). If target is
     behind head (`target_in_head`) the PC is ahead; otherwise the histories have diverged."""
@@ -720,7 +743,7 @@ def update_plan(head: str, target: str, dirty: list[str], head_in_target: bool, 
         if target_in_head:
             return UpdatePlan("ahead", f"The PC is ahead of {name} ({short(head)} is past {short(target)}) - nothing to pull.")
         return UpdatePlan("diverged", f"The PC's history and {name} have diverged ({short(head)} vs {short(target)}) - not updating. Nothing was changed.")
-    return UpdatePlan("update", f"Updating {short(head)} -> {short(target)}:\n{log_text(log_lines)}")
+    return UpdatePlan("update", f"Updating {short(head)} -> {short(target)}:\n{log_text(log_lines)}" + (f"\n{changes}" if changes else ""))
 
 
 def rollback_plan(head: str, previous: Optional[str], dirty: list[str], previous_exists: bool) -> UpdatePlan:
@@ -773,4 +796,5 @@ def make_plan(run: GitRunner, remote: str, branch: str, previous: Optional[str],
     head_in_target = run(["merge-base", "--is-ancestor", head, target])[0] == 0
     target_in_head = run(["merge-base", "--is-ancestor", target, head])[0] == 0
     log = git_ok(run, "log", "--oneline", f"{head}..{target}").splitlines() if head_in_target else []
-    return update_plan(head, target, dirty, head_in_target, target_in_head, log, name), ["merge", "--ff-only", target], head
+    changes = python_changes_text(python_changes(git_ok(run, "diff", "--numstat", head, target))) if head_in_target and head != target else ""
+    return update_plan(head, target, dirty, head_in_target, target_in_head, log, name, changes), ["merge", "--ff-only", target], head

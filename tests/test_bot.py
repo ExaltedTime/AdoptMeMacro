@@ -237,6 +237,22 @@ def test_a_log_that_was_deleted_or_started_again_is_read_from_its_start(tmp_path
     assert bot_lib.file_end(str(log)) == 0
 
 
+def test_a_log_that_cannot_be_read_keeps_the_offset_and_a_missing_one_does_not(tmp_path, monkeypatch):
+    log = tmp_path / "run_log.txt"
+    log.write_text("one\n")
+    real_open = open
+
+    def locked(path, *args, **kwargs):
+        if str(path) == str(log):
+            raise PermissionError("locked by a scanner")
+        return real_open(path, *args, **kwargs)
+    monkeypatch.setattr("builtins.open", locked)
+    with pytest.raises(OSError):
+        bot_lib.read_new_lines(str(log), 4)
+    monkeypatch.undo()
+    assert bot_lib.read_new_lines(str(log), 0) == (["one"], 4)
+
+
 def test_failures_are_posted_one_a_minute_and_the_rest_counted():
     limiter = bot_lib.RateLimiter(60)
     assert limiter.check(1000) == (True, 0)
@@ -304,6 +320,7 @@ def test_the_process_is_not_looked_for_while_an_update_has_it_stopped():
     assert bot_lib.crash_check_due("running", updating=False)
     assert not bot_lib.crash_check_due("running", updating=True)                 # (/update stops the macro, moves the code and starts it again)
     assert not bot_lib.crash_check_due("stopped", updating=False) and not bot_lib.crash_check_due(None, updating=False)
+    assert bot_lib.crash_check_due("open", updating=False) and not bot_lib.crash_check_due("open", updating=True)
 
 
 def test_a_macro_stopped_on_purpose_is_not_reported_as_not_updating():
@@ -481,6 +498,8 @@ def test_the_bot_restarts_the_macro_by_itself_only_so_often():
     ("running", False, False, (True, "alert")),          # it should be there and is gone
     ("running", False, True, (True, None)),              # ...said once
     ("running", True, True, (False, "recovered")),
+    ("open", False, False, (True, "alert")),             # the window without the loop is meant to be there too
+    ("open", True, True, (False, "recovered")),
     ("running", True, False, (False, None)),
     ("running", None, False, (False, None)),             # (the process check can't tell)
     ("running", None, True, (True, None)),
@@ -511,6 +530,8 @@ def test_the_control_config_keys_and_state_are_read_and_checked(tmp_path):
     state = bot_lib.BotState(desired_state="running", crash_reported=True, restarts=[1.5, 2.0])
     bot_lib.save_state(path, state)
     assert bot_lib.load_state(path) == state
+    bot_lib.save_state(path, bot_lib.BotState(desired_state="open"))
+    assert bot_lib.load_state(path).desired_state == "open"
     (tmp_path / "bot_state.json").write_text(json.dumps({"desired_state": "paused", "restarts": [1, "x", True], "crash_reported": "no"}))
     assert bot_lib.load_state(path) == bot_lib.BotState(restarts=[1])
 
@@ -584,6 +605,20 @@ def test_the_update_plan_goes_ahead_only_over_a_clean_copy_and_only_forward():
     assert bot_lib.files_text([f"f{i}" for i in range(10)]) == "f0, f1, f2, f3, f4, f5, f6, f7 and 2 more"
 
 
+def test_python_changes_count_only_python_files_and_binary_files_as_none():
+    numstat = "10\t2\tmain.py\n3\t0\tbot/bot_lib.py\n5\t5\tdocs/notes.md\n-\t-\ttests/fixture.png\n-\t-\tlogo.py"
+    assert bot_lib.python_changes(numstat) == (3, 13, 2)
+    assert bot_lib.python_changes("") == (0, 0, 0)
+    assert bot_lib.python_changes_text((3, 13, 2)) == "15 lines changed in 3 Python files (+13 / -2)."
+    assert bot_lib.python_changes_text((1, 1, 0)) == "1 line changed in 1 Python file (+1 / -0)."
+    assert bot_lib.python_changes_text((0, 0, 0)) == "No Python file changed."
+
+
+def test_the_update_plan_carries_the_changes_text_last():
+    plan = bot_lib.update_plan("a" * 40, "b" * 40, [], True, False, ["bbbbbbb fix"], "origin/main", "4 lines changed in 1 Python file (+3 / -1).")
+    assert plan.text.splitlines()[1:] == ["bbbbbbb fix", "4 lines changed in 1 Python file (+3 / -1)."]
+
+
 def test_the_rollback_plan_goes_back_only_to_a_known_commit_over_a_clean_copy():
     head, previous = "b" * 40, "a" * 40
     assert bot_lib.rollback_plan(head, previous, [], True).kind == "rollback"
@@ -608,6 +643,7 @@ def test_with_real_git_an_update_is_planned_and_done_only_forward_over_a_clean_c
     commit(repos.up, repos.upstream, "requirements.txt", "numpy", "fourth: packages")
     plan, move, head = bot_lib.make_plan(repos.pc, "origin", "main", None, False)
     assert plan.kind == "update" and "fourth: packages" in plan.text and "third: the macro" in plan.text and move[:2] == ["merge", "--ff-only"]
+    assert "2 lines changed in 1 Python file (+1 / -1)." in plan.text                                    # (main.py one -> two; requirements.txt is not Python)
     (repos.pc_dir / "main.py").write_text("edited on the PC")
     assert bot_lib.make_plan(repos.pc, "origin", "main", None, False)[0].kind == "dirty"                          # a tracked file changed here: not touched
     assert repos.pc(["checkout", "main.py"])[0] == 0

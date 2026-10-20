@@ -7,7 +7,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install pyflakes mypy pytest pytest-xdist numpy opencv-python-headless
+      - run: pip install pyflakes mypy pytest pytest-xdist numpy opencv-python-headless discord.py
       - run: pyflakes main.py magic_numbers.py tools bot tests
       - run: python tools/check_constants.py
       - run: mypy main.py bot/bot_lib.py

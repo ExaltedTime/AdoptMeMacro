@@ -31,8 +31,18 @@ log = logging.getLogger("adoptme-bot")
 
 async def say(interaction: discord.Interaction, text: Optional[str] = None, **kwargs) -> None:
     """Follow up on a command with `text`, cut to fit a message first (bot_lib.clip_message()): a message over Discord's limit is refused, and the command would
-    end with nothing said."""
-    await interaction.followup.send(bot_lib.clip_message(text) if text else text, **kwargs)  # type: ignore[arg-type]
+    end with nothing said. An interaction can only be followed up for 15 minutes (a long /update or /pull outlasts that): after that, or when Discord says the
+    token is no good, the answer goes to the channel itself (bot_lib.followup_needs_the_channel())."""
+    text = bot_lib.clip_message(text) if text else text
+    if not interaction.is_expired():
+        try:
+            await interaction.followup.send(text, **kwargs)  # type: ignore[arg-type]
+            return
+        except discord.HTTPException as error:
+            if not bot_lib.followup_needs_the_channel(error.status, False):
+                raise
+    channel = interaction.channel or await interaction.client.fetch_channel(interaction.channel_id or 0)
+    await channel.send(text, **kwargs)  # type: ignore[union-attr,arg-type]
 
 
 def roblox_region(monitor: dict) -> dict:
@@ -109,9 +119,11 @@ def release_inputs() -> None:
         import pydirectinput
     except ImportError:
         return
+    key_up = getattr(pydirectinput.keyUp, "__wrapped__", pydirectinput.keyUp)       # (without the fail-safe check: see main.unchecked())
+    mouse_up = getattr(pydirectinput.mouseUp, "__wrapped__", pydirectinput.mouseUp)
     for key in cfg.HELD_KEYS:
         try:
-            pydirectinput.keyUp(key)
+            key_up(key)
         except Exception:
             pass
     if os.name == "nt":
@@ -119,7 +131,7 @@ def release_inputs() -> None:
         for button, code in (("left", 0x01), ("right", 0x02)):
             try:
                 if ctypes.windll.user32.GetAsyncKeyState(code) & 0x8000:  # type: ignore[attr-defined]
-                    pydirectinput.mouseUp(button=button)
+                    mouse_up(button=button)
             except Exception:
                 pass
 
@@ -149,22 +161,41 @@ def kill_macro(pids: list[int]) -> None:
     release_inputs()
 
 
-def current_macro_pids() -> list[int]:
-    return bot_lib.macro_pids(list_processes() or [])
+def current_macro_pids() -> Optional[list[int]]:
+    """The ids of the macro's processes, or None when the processes of this PC cannot be listed - which is not the same as "not running"."""
+    processes = list_processes()
+    return None if processes is None else bot_lib.macro_pids(processes)
+
+
+async def running_pids() -> list[int]:
+    """The ids of the macro's processes. A listing that fails is tried again (BOT_PROCESS_LIST_TRIES times, a second apart); one that keeps failing is an error
+    said in the channel (bot_lib.Said), not "the macro is not running": nothing is stopped, started or killed on a guess."""
+    for attempt in range(cfg.BOT_PROCESS_LIST_TRIES):
+        pids = await asyncio.to_thread(current_macro_pids)
+        if pids is not None:
+            return pids
+        await asyncio.sleep(1)
+    raise bot_lib.Said("I can't list this PC's processes (psutil is not installed and PowerShell did not answer in time), so I can't tell whether the macro is running - nothing was done. "
+                       "`pip install psutil` in the macro's environment fixes it.")
 
 
 async def stop_macro(config: bot_lib.Config) -> str:
     """Ask the macro to exit (its cooperative stop: the loop ends, every key and the mouse are released, the window closes) and wait up to
-    stop_timeout_seconds for its process to end; if it hasn't, kill it and release the inputs from here. Returns what happened, as a sentence."""
-    if not await asyncio.to_thread(current_macro_pids):
+    stop_timeout_seconds for its process to end; if it hasn't, kill it and release the inputs from here. Returns what happened, as a sentence.
+    A listing of the processes that fails in the middle is waited through; if it still fails at the end nothing is claimed and nothing is killed."""
+    if not await running_pids():
         return "The macro was not running."
     bot_lib.write_command(cfg.COMMANDS_PATH, "exit", time.time())
     deadline = time.time() + config.stop_timeout_seconds
     while time.time() < deadline:
         await asyncio.sleep(1)
-        if not await asyncio.to_thread(current_macro_pids):
+        if await asyncio.to_thread(current_macro_pids) == []:
             return "The macro stopped (it released its keys and closed)."
     pids = await asyncio.to_thread(current_macro_pids)
+    if pids is None:
+        return "I asked the macro to exit, but can't list this PC's processes, so I can't tell whether it ended (or kill it if it did not) - look at the PC."
+    if not pids:
+        return "The macro stopped (it released its keys and closed)."
     await asyncio.to_thread(kill_macro, pids)
     with contextlib.suppress(OSError):
         os.remove(cfg.COMMANDS_PATH)
@@ -173,20 +204,20 @@ async def stop_macro(config: bot_lib.Config) -> str:
 
 async def open_macro(config: bot_lib.Config) -> str:
     """Start the macro with its window up and no loop going (`main.py`), unless it is running already."""
-    if await asyncio.to_thread(current_macro_pids):
+    if await running_pids():
         return "The macro is already running."
     await asyncio.to_thread(launch_macro, config, False)
     deadline = time.time() + cfg.BOT_START_CONFIRM
     while time.time() < deadline:
         await asyncio.sleep(2)
-        if await asyncio.to_thread(current_macro_pids):
+        if await asyncio.to_thread(current_macro_pids):                  # (a failed listing here is just "not yet")
             return "Started the macro (its window is up, no loop going - /loop starts the loop)."
     return "Started the macro, but its process is not there - see /log and macro_stderr.log."
 
 
 async def stop_loop() -> str:
     """Ask the running macro to stop its loop (the [STOP] button); its window stays open."""
-    if not await asyncio.to_thread(current_macro_pids):
+    if not await running_pids():
         return "The macro is not running."
     bot_lib.write_command(cfg.COMMANDS_PATH, "stop", time.time())
     return "Asked the macro to stop (its keys are released; its window stays open - /exit closes it)."
@@ -196,7 +227,7 @@ async def start_macro(config: bot_lib.Config) -> str:
     """Start the macro's loop: launch `main.py --loop` if it is not running; if it is (its window may be open with the loop stopped), ask it to start
     the loop. Then wait up to BOT_START_CONFIRM seconds for status.json to be written, and say what was seen."""
     since = datetime.now()
-    if await asyncio.to_thread(current_macro_pids):
+    if await running_pids():
         bot_lib.write_command(cfg.COMMANDS_PATH, "start", time.time())
         what = "The macro was already running - asked it to start its loop (nothing happens if it is going already)."
     else:
@@ -245,7 +276,7 @@ async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say) -
     the packages if requirements.txt changed, start the macro again if it was running, and ask for the bot's own restart if its code changed.
     `say` posts a message. A step that fails stops it there, with what to do."""
     global RESTART_BOT
-    was_running = bool(await asyncio.to_thread(current_macro_pids))
+    was_running = bool(await running_pids())
     if was_running:
         await say(await stop_macro(config))
     await git(config, *move)
@@ -448,7 +479,7 @@ def build(config: bot_lib.Config) -> discord.Client:
     async def ask_macro(interaction: discord.Interaction, command_name: str, said: str, idle_only: bool = False) -> None:
         """Leave the running macro `command_name` (its window does it) and say `said`; with `idle_only` not while its loop runs."""
         await interaction.response.defer(thinking=True)
-        if not await asyncio.to_thread(current_macro_pids):
+        if not await running_pids():
             await say(interaction, "The macro isn't running - /start it first (it is done by its window).")
             return
         if idle_only and not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path())):
@@ -480,7 +511,7 @@ def build(config: bot_lib.Config) -> discord.Client:
     async def change_switch(interaction: discord.Interaction, kind: str, name: str, value: bool) -> None:
         """Ask the running macro to change a switch (the command file) and say what the game config shows a moment later."""
         await interaction.response.defer(thinking=True)
-        if not await asyncio.to_thread(current_macro_pids):
+        if not await running_pids():
             await say(interaction, "The macro isn't running - a switch can only be changed while its window is open (or by hand in the window).")
             return
         bot_lib.write_command(cfg.COMMANDS_PATH, "set", time.time(), **bot_lib.switch_command(kind, name, value))
@@ -529,6 +560,7 @@ def build(config: bot_lib.Config) -> discord.Client:
         await say(interaction, f"```\n{plan.text}\n```")
         if plan.kind not in ("update", "rollback"):
             return
+        await running_pids()                      # (before anything is changed: if the processes cannot be listed, whether the macro runs is not known, and nothing is done)
         state.previous_commit = None if rollback else head
         bot_lib.save_state(bot_lib.state_path(), state)
         try:

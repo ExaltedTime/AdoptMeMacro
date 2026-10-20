@@ -211,6 +211,7 @@ BOT_START_CONFIRM = 60                                     # seconds the bot wai
 BOT_MAX_PULL_MB = 10240                                     # /pull copies nothing that comes to more than this (10 GB)
 BOT_PULL_CONFIRM_MB = 1024                                  # a /pull of more than this says its size and waits for a yes (1 GB)
 BOT_PULL_CONFIRM_TIMEOUT = 120.0                            # seconds that yes is waited for
+BOT_PROCESS_LIST_TRIES = 3                                  # times the bot lists the PC's processes (a second apart) before it says it cannot tell whether the macro runs
 BOT_GIT_TIMEOUT = 120                                       # seconds a git command of /update may take (a fetch over a slow connection)
 BOT_PIP_TIMEOUT = 900                                       # seconds pip may take to install the packages of an update
 BOT_WATCH_INTERVAL = 10                                     # seconds between the Discord bot's looks at what the macro wrote (failures, run charts, captures, status)

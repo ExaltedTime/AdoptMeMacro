@@ -258,8 +258,20 @@ def fits_a_message(text: str) -> bool:
     return len(text) + 8 <= DISCORD_MESSAGE_LIMIT
 
 
+class Said(Exception):
+    """An error whose message is for the channel as it is (error_text() does not dress it): "the processes cannot be listed", and the like."""
+
+
+def followup_needs_the_channel(status: Optional[int], expired: bool) -> bool:
+    """Whether an answer to a command has to go to the channel itself: the 15 minutes an interaction can be followed up for are over (`expired`), or Discord
+    said the token is no good (HTTP 401) or the interaction is unknown (404). Any other failure is a real one."""
+    return expired or status in (401, 404)
+
+
 def error_text(error: BaseException) -> str:
-    """What the channel is told when a command raised: the kind of error and its message, cut short (the details are in the bot's log)."""
+    """What the channel is told when a command raised: the kind of error and its message, cut short (the details are in the bot's log); a `Said` as it is."""
+    if isinstance(error, Said):
+        return clip_message(str(error), 300)
     message = str(error).strip().replace("\n", " ")
     return clip_message(f"The command failed: {type(error).__name__}" + (f": {message}" if message else "") + " (see the bot's log)", 300)
 
@@ -298,9 +310,12 @@ def looks_blank(rgb: bytes, sample: int = 20000) -> bool:
 
 # --- is the macro running ---
 
+MAIN_PY = re.compile(r"""(?:^|[\\/\s"'])main\.py(?=$|[\s"'])""")      # `main.py` as a whole file name: not test_main.py, main.pyc or xmain.py
+
+
 def main_py_in(command_lines: list[str]) -> bool:
-    """Whether one of the process command lines is the macro (`... main.py ...`), not the bot itself."""
-    return any("main.py" in line and "discord_bot" not in line for line in command_lines)
+    """Whether one of the process command lines is the macro (`... main.py ...`, the file by that exact name), not the bot itself."""
+    return any(MAIN_PY.search(line) and "discord_bot" not in line for line in command_lines)
 
 
 # --- alerts: what the macro writes that the bot watches ---

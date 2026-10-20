@@ -265,6 +265,27 @@ def test_a_message_is_cut_to_fit_discord_whole_lines_first_and_a_code_block_stay
     assert len(bot_lib.clip_message("z" * 3000, limit=500)) <= 500
 
 
+def test_the_macro_is_found_by_the_exact_file_name_main_py_and_not_by_anything_with_it_in_its_name():
+    macro_lines = [r"D:\AdoptMeMacro\.venv\Scripts\python.exe D:\AdoptMeMacro\main.py --loop", "python main.py", '"C:\\Python\\python.exe" "D:\\a b\\main.py"', "/usr/bin/python3 /home/me/AdoptMeMacro/main.py"]
+    other_lines = ["python -m pytest tests/test_main.py", "notepad.exe C:\\notes\\main.py.txt", "python xmain.py", "python main.pyc", "python D:\\AdoptMeMacro\\bot\\discord_bot.py main.py", "code D:\\x\\domain.py"]
+    for line in macro_lines:
+        assert bot_lib.main_py_in([line]), line
+    for line in other_lines:
+        assert not bot_lib.main_py_in([line]), line
+    assert bot_lib.macro_pids([(1, "python main.py"), (2, "python test_main.py"), (3, "python main.py --loop")]) == [1, 3]
+
+
+def test_an_answer_goes_to_the_channel_itself_when_the_interaction_is_too_old_or_its_token_is_refused():
+    assert bot_lib.followup_needs_the_channel(None, expired=True)
+    assert bot_lib.followup_needs_the_channel(401, expired=False) and bot_lib.followup_needs_the_channel(404, expired=False)
+    assert not bot_lib.followup_needs_the_channel(400, expired=False) and not bot_lib.followup_needs_the_channel(500, expired=False)    # (a real failure is a failure)
+
+
+def test_a_said_error_is_told_as_it_is_and_other_errors_with_their_kind():
+    assert bot_lib.error_text(bot_lib.Said("I can't list the processes.")) == "I can't list the processes."
+    assert bot_lib.error_text(RuntimeError("boom")).startswith("The command failed: RuntimeError: boom")
+
+
 def test_a_command_that_raised_is_told_to_the_channel_briefly_with_the_kind_of_error():
     text = bot_lib.error_text(PermissionError("[Errno 13] the file is open elsewhere"))
     assert text.startswith("The command failed: PermissionError: ") and "open elsewhere" in text and "bot's log" in text

@@ -428,7 +428,7 @@ def test_the_beam_is_held_on_the_furniture_that_gets_the_outline(macro, world, m
         moved = [m for m in world.mouse if m[0] == "move"]
         return white_ring(chosen) if moved and moved[-1][1:] == chosen else blank()
     world.screens = screen
-    play(macro, world, cfg.GHOST_FURNITURE_PERIOD * 0.5)
+    play(macro, world, cfg.GHOST_OUTLINE_WAIT * 8)                                     # (three tries: the third place gets the outline)
     held = left_held_on(world)
     assert held and held[0] == chosen                                                  # the third place tried got the outline: the beam goes there
 

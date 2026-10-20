@@ -1742,7 +1742,7 @@ them, and the loop test runs until it has seen what it checks instead of for a
 fixed time, so a slow machine only makes it slower.
 `python tools/retune_check.py` runs the suite against changed copies of the repo
 and names any test that breaks - run it when a change could depend on tuned
-values, not on every commit (about 30 runs, about 15 minutes; `python tools/retune_check.py halloween_off timings_x20` runs just those).
+values, not on every commit (about 30 runs, about 15 minutes with the 4 workers each uses; `python tools/retune_check.py halloween_off timings_x20` runs just those).
 The variants: every timing and walk step scaled by 0.05, 0.5, 1.7 and 20; other
 intervals, hours and counts changed; counts at their lowest and highest; the
 event flag off; needs removed from or added to the table; button names reordered;

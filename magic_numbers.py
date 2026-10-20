@@ -628,6 +628,10 @@ LOOP_DELAY = 2.0               # pause between iterations of the workflow loop
 STOP_CHECK_INTERVAL = 0.1      # granularity of the interruptible wait loop
 STOP_HOTKEY = "p"              # a letter or digit: pressing it, in any window, stops a running macro
                                # (so you can take over the computer) - see watch_stop_hotkey()
+BLACKOUT_HOTKEY = "h"         # a letter or digit: pressed while Roblox is focused, it blanks the screen with a black window (and again, to take it away)
+BLACKOUT_SETTLE = 0.4         # seconds the test flash is shown before the screen is looked at, to see whether the macro's screenshots see the window
+BLACKOUT_SEEN_RISE = 40       # if the screenshot's mean grey level rises this much (0-255) while the white test window is up, the screenshots see the window
+BLACKOUT_TOO_BRIGHT = 215     # a screen whose mean grey level is above this is too bright for that test to tell (white against white)
 STOP_HOTKEY_POLL_INTERVAL = 0.05  # how often the key is looked at (seconds)
 CONSOLE_DRAIN_INTERVAL_MS = 50   # how often queued output is put on the GUI console (see DebugCapture)
 CATCH_WAIT_AFTER_EQUIP = 1.0   # wait after equipping toy before throwing

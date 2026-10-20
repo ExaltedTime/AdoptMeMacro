@@ -91,3 +91,62 @@ def test_a_crashed_macro_comes_back_with_its_loop_only_if_the_loop_was_wanted(wa
     watch.state.desired_state = desired
     asyncio.run(discord_bot.watch_once(watch.channel, watch.config, watch.state, bot_lib.RateLimiter(60)))
     assert launched == [with_loop] and "restarting" in watch.channel.sent[0]
+
+
+def _http_error(cls):
+    return cls(types.SimpleNamespace(status=500, reason="x"), "boom")
+
+
+class FakeClient:
+    def __init__(self, outcomes, cached=None):
+        self.outcomes, self.cached, self.fetches = list(outcomes), cached, 0
+
+    def get_channel(self, channel_id):
+        return self.cached
+
+    async def fetch_channel(self, channel_id):
+        self.fetches += 1
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+@pytest.fixture
+def slept(monkeypatch):
+    waits = []
+
+    async def sleep(seconds):
+        waits.append(seconds)
+    monkeypatch.setattr(discord_bot.asyncio, "sleep", sleep)
+    return waits
+
+
+def test_the_channel_is_fetched_again_after_a_hiccup_with_a_growing_wait(slept):
+    import discord
+    client = FakeClient([_http_error(discord.HTTPException), OSError("net"), "the channel"])
+    assert asyncio.run(discord_bot.find_channel(client, 2)) == "the channel"
+    assert client.fetches == 3 and slept == [discord_bot.cfg.BOT_CHANNEL_RETRY_WAIT, discord_bot.cfg.BOT_CHANNEL_RETRY_WAIT * 2]
+    assert asyncio.run(discord_bot.find_channel(FakeClient([], cached="cached"), 2)) == "cached"      # (no fetch when it is known)
+
+
+def test_a_channel_that_is_forbidden_is_not_retried_and_one_that_never_comes_is_given_up(slept):
+    import discord
+    forbidden = FakeClient([_http_error(discord.Forbidden)])
+    assert asyncio.run(discord_bot.find_channel(forbidden, 2)) is None and forbidden.fetches == 1 and slept == []
+    failing = FakeClient([_http_error(discord.HTTPException)] * discord_bot.cfg.BOT_CHANNEL_TRIES)
+    assert asyncio.run(discord_bot.find_channel(failing, 2)) is None
+    assert failing.fetches == discord_bot.cfg.BOT_CHANNEL_TRIES and len(slept) == failing.fetches - 1
+
+
+def test_a_watcher_that_ends_by_an_exception_is_logged(caplog):
+    async def boom():
+        raise ValueError("watcher died")
+
+    async def run():
+        task = asyncio.ensure_future(boom())
+        task.add_done_callback(discord_bot.task_ended)
+        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.sleep(0)
+    asyncio.run(run())
+    assert any("the watcher ended" in record.message for record in caplog.records)

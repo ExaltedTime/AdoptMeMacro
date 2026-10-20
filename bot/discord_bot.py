@@ -655,15 +655,28 @@ def build(config: bot_lib.Config) -> discord.Client:
         await interaction.response.defer(thinking=True)
         await say(interaction, f"```\n{bot_lib.captures_text(bot_lib.captures_dir())}\n```")
 
+    background: list[asyncio.Task] = []                                # (kept: a task nobody holds can be collected while it runs)
+
     async def setup_hook() -> None:
-        client.loop.create_task(watch(client, config))
+        task = client.loop.create_task(watch(client, config))
+        background.append(task)
+        task.add_done_callback(task_ended)
 
     client.setup_hook = setup_hook  # type: ignore[method-assign]
+    synced = False
 
     @client.event
     async def on_ready() -> None:
-        await tree.sync(guild=guild)
+        nonlocal synced
         log.info("ready as %s", client.user)
+        if synced:                                                     # (on_ready comes again after every reconnect; the commands are registered once)
+            return
+        synced = True
+        try:
+            await tree.sync(guild=guild)
+        except (app_commands.CommandSyncFailure, discord.HTTPException) as error:
+            log.exception("syncing the slash commands failed")
+            await tell_channel(client, config, f"**The slash commands could not be registered:** {error}\nThe ones Discord already has still work; a new or changed command will not show until this is fixed (see the bot's console).")
 
     client.tree = tree  # type: ignore[attr-defined]       # (kept, so the commands can be listed)
     return client
@@ -677,12 +690,51 @@ async def post(channel: discord.abc.Messageable, text: str, path: Optional[str] 
         await channel.send(bot_lib.clip_message(text))
 
 
+def task_ended(task: asyncio.Task) -> None:
+    """Done-callback of the watcher: a watcher that ended by an exception is logged (it would otherwise only show when the task is collected)."""
+    if not task.cancelled() and task.exception() is not None:
+        log.error("the watcher ended", exc_info=task.exception())
+
+
+async def find_channel(client: discord.Client, channel_id: int) -> Optional[discord.abc.Messageable]:
+    """The bot's channel: from the cache, else fetched, trying `BOT_CHANNEL_TRIES` times with a doubling wait for a network or Discord hiccup. A channel that is
+    not there or not allowed (NotFound, Forbidden) is not retried - the id or the permissions are wrong. None when it could not be had; said in the log."""
+    channel = client.get_channel(channel_id)
+    if channel is not None:
+        return channel  # type: ignore[return-value]
+    for attempt in range(cfg.BOT_CHANNEL_TRIES):
+        try:
+            return await client.fetch_channel(channel_id)  # type: ignore[return-value]
+        except (discord.NotFound, discord.Forbidden) as error:
+            log.error("channel %s cannot be used (%s) - check channel_id in bot_config.json and the bot's permissions there", channel_id, error)
+            return None
+        except (discord.HTTPException, OSError) as error:
+            log.warning("fetching channel %s failed (%s), try %d of %d", channel_id, error, attempt + 1, cfg.BOT_CHANNEL_TRIES)
+            if attempt + 1 < cfg.BOT_CHANNEL_TRIES:
+                await asyncio.sleep(cfg.BOT_CHANNEL_RETRY_WAIT * 2 ** attempt)
+    log.error("channel %s could not be fetched in %d tries - the watching (alerts, charts, heartbeat) is off; commands still work", channel_id, cfg.BOT_CHANNEL_TRIES)
+    return None
+
+
+async def tell_channel(client: discord.Client, config: bot_lib.Config, text: str) -> None:
+    """Post `text` in the bot's channel if it can be had; a failure is logged, not raised (this is for reporting a problem)."""
+    channel = await find_channel(client, config.channel_id)
+    if channel is None:
+        return
+    try:
+        await channel.send(bot_lib.clip_message(text))  # type: ignore[attr-defined]
+    except (discord.HTTPException, OSError):
+        log.exception("could not post to the channel")
+
+
 async def watch(client: discord.Client, config: bot_lib.Config) -> None:
     """Every BOT_WATCH_INTERVAL seconds look at what the macro wrote and post what is new: failures (with their screenshot), a status that has gone
     stale (and its recovery), run charts, a heartbeat, a macro that is gone. A failure inside a look is logged and the watching
     goes on. What it has dealt with is kept in bot_state.json, so a restart neither posts it again nor misses what came while it was down."""
     await client.wait_until_ready()
-    channel = client.get_channel(config.channel_id) or await client.fetch_channel(config.channel_id)
+    channel = await find_channel(client, config.channel_id)
+    if channel is None:
+        return
     path = bot_lib.state_path()
     state = client.bot_state  # type: ignore[attr-defined]
     limiter = bot_lib.RateLimiter(cfg.BOT_ALERT_GAP)

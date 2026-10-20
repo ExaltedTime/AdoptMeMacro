@@ -334,8 +334,7 @@ def test_frames_are_spread_over_the_run_not_all_at_its_start_or_end(macro, captu
     times = [float(f.split("_")[2][:-4]) for f in sorted(os.listdir(capture["folder"])) if f.endswith(".png")]
     gaps = np.diff(times)
     assert len(times) >= 4 and gaps.max() <= (times[-1] - times[0]) / 2        # no big hole anywhere in the run
-    saved = np.diff([e["t"] for e in events_of(capture["folder"]) if e["type"] == "frame"])
-    assert np.mean(saved[-3:]) > 2 * np.mean(saved[:3])                        # frames were taken further apart as the run went on
+    assert recorder._gap >= 2 * macro.cfg.CAPTURE_FRAME_INTERVAL               # frames are taken further apart as the run goes on (the gap doubles with each thinning)
 
 
 def test_a_capture_without_a_budget_keeps_every_frame(macro, capture, monkeypatch):

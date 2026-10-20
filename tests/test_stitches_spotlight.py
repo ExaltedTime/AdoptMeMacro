@@ -33,7 +33,8 @@ def camera(macro, monkeypatch, deadband=5.0):
 
 def test_the_camera_is_turned_towards_the_side_the_line_says_and_not_when_it_is_straight(macro, monkeypatch):
     left_key, right_key = (macro.cfg.KEYS["camera_left"], macro.cfg.KEYS["camera_right"])
-    interval = 0.5
+    interval = macro.cfg.STITCHES_TURN_HOLD_MAX * 2.5                           # (a look interval)
+    monkeypatch.setattr(macro.cfg, "STITCHES_TURN_BIAS_GAIN", 0.001 / interval)     # (what is learned in a look is the same whatever the interval)
     ring = camera(macro, monkeypatch)
     assert ring.decide(2.0, 0.0, interval) is None and ring.decide(-5.0, 0.5, interval) is None           # level enough
     assert ring.decide(45.0, 1.0, interval)[0] == right_key                                                  # falls to the right: the middle is to the right
@@ -48,17 +49,19 @@ def test_the_camera_is_turned_towards_the_side_the_line_says_and_not_when_it_is_
 def test_a_line_that_stays_off_teaches_a_steady_turn_which_goes_on_while_the_line_is_out_of_sight(macro, monkeypatch):
     right_key = macro.cfg.KEYS["camera_right"]
     ring = camera(macro, monkeypatch)
-    now, interval = 0.0, 0.5
+    interval = macro.cfg.STITCHES_TURN_HOLD_MAX * 2.5                           # (a look interval: a turn is learned and held for part of it)
+    monkeypatch.setattr(macro.cfg, "STITCHES_TURN_BIAS_GAIN", 0.001 / interval)     # (the learning is per second: what is learned in ten looks is the same whatever the interval)
+    now = 0.0
     for _ in range(10):                                                         # the line sits 12 degrees off, look after look: the walk needs turning all the time
         ring.decide(12.0, now, interval)
         now += interval
     assert 0 < ring.bias <= macro.cfg.STITCHES_TURN_BIAS_MAX
     learned = ring.bias
     turn = ring.decide(None, now, interval)                                     # the line is gone (red light): the learned turn goes on
-    assert turn is not None and turn[0] == right_key and turn[1] == pytest.approx(learned * interval, abs=0.01)
-    now += macro.cfg.STITCHES_LOST_AFTER + 1
+    assert turn is not None and turn[0] == right_key and turn[1] == pytest.approx(learned * interval, abs=interval * 0.02)
+    now += macro.cfg.STITCHES_LOST_AFTER * 1.25
     assert ring.decide(None, now, interval) == (right_key, macro.cfg.STITCHES_TURN_HOLD_MAX)       # out of sight for long: the camera is swept round to find it
-    assert ring.decide(0.0, now + 1, interval) is None or ring.lost_since is None                   # and it stops being lost when the line is back
+    assert ring.decide(0.0, now + interval * 2, interval) is None or ring.lost_since is None                   # and it stops being lost when the line is back
     assert ring.lost_since is None
 
 

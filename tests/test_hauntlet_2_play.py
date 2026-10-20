@@ -21,7 +21,7 @@ def no_first_step(macro, monkeypatch):
     """The first step out of the entrance hall (HAUNTLET_START_FORWARD, 0: none) is looked at by a test of its own."""
     monkeypatch.setattr(macro.cfg, "HAUNTLET_START_FORWARD", 0.0)
     monkeypatch.setattr(macro.cfg, "HAUNTLET_STEER_EVERY", 10 ** 6)               # (steering has tests of its own)
-    monkeypatch.setattr(macro.cfg, "MINIGAME_START_WAIT", 2.0)                    # (the tests' deadlines have it in them, and the fake clock lives through all of it)
+    monkeypatch.setattr(macro.cfg, "MINIGAME_START_WAIT", 4 * macro.cfg.MINIGAME_START_LOOK_INTERVAL)                    # (the tests' deadlines have it in them, and the fake clock lives through all of it)
 
 
 def frame(macro, doors=None, room=None, timer=True, bar=None):
@@ -355,7 +355,7 @@ def test_a_walk_steers_towards_its_door_one_key_at_a_time(macro, world, monkeypa
     cfg = macro.cfg
     monkeypatch.setattr(cfg, "HAUNTLET_AIM_STEPS", 0)                                     # (the aiming before the walk is the next test's)
     monkeypatch.setattr(cfg, "HAUNTLET_STEER_EVERY", 0.0)
-    monkeypatch.setattr(cfg, "HAUNTLET_WALK_MAX", 1.0)
+    monkeypatch.setattr(cfg, "HAUNTLET_WALK_MAX", cfg.HAUNTLET_STILL_AFTER * 0.9)      # (a walk too short to be taken for a stuck one)
     screen = frame(macro, "boarded-boarded-locked", room=5)
     doors = macro.find_hauntlet_doors(screen)
     hearts_at(macro, monkeypatch, doors[1].x)
@@ -373,7 +373,7 @@ def test_a_walk_steers_towards_its_door_one_key_at_a_time(macro, world, monkeypa
 
 def test_a_walk_aims_in_small_steps_before_it_holds_forward_and_does_not_when_aimed(macro, world, monkeypatch):
     cfg = macro.cfg
-    monkeypatch.setattr(cfg, "HAUNTLET_WALK_MAX", 0.5)
+    monkeypatch.setattr(cfg, "HAUNTLET_WALK_MAX", cfg.HAUNTLET_STILL_AFTER * 0.6)
     screen = frame(macro, "boarded-boarded-locked", room=5)
     doors = macro.find_hauntlet_doors(screen)
     hearts_at(macro, monkeypatch, doors[1].x)
@@ -428,7 +428,7 @@ def test_a_white_screen_after_a_ghost_starts_the_room_afresh_so_it_is_not_taken_
     run.look(frame(macro, room=5), 0.0)
     assert run.room == 5
     assert run.look(white, 100.0) is None and run.since == 100.0 and run.tvs is None   # (the room was entered long ago: its clock starts over)
-    assert run.look(frame(macro, room=5), 101.0) is None                                # the room again, with no TVs yet: not "one doorway, no doors found"
+    assert run.look(frame(macro, room=5), 100.0 + macro.cfg.HAUNTLET_DOORS_TIMEOUT / 2) is None                                # the room again, with no TVs yet: not "one doorway, no doors found"
     assert run.look(frame(macro, room=5), 100.0 + macro.cfg.HAUNTLET_DOORS_TIMEOUT + 1) == [macro.HauntletDoor(0, 0, None)]   # a room that stays without TVs is still found to have none
 
 
@@ -523,9 +523,10 @@ def test_room_1_is_the_entrance_hall_a_single_doorway_found_as_soon_as_it_has_se
     run = macro.HauntletRun()
     hall = frame(macro, "fork_hall__no_doors", room=1)
     assert run.look(hall, 100.0) is None
-    assert run.look(hall, 100.0 + cfg.HAUNTLET_ROOM_SETTLE + 0.1) is None             # one look without TVs is not enough
-    doors = run.look(hall, 100.0 + cfg.HAUNTLET_ROOM_SETTLE + 0.5)
-    assert doors is not None and len(doors) == 1 and 100.0 + cfg.HAUNTLET_ROOM_SETTLE + 0.5 < 100.0 + cfg.HAUNTLET_DOORS_TIMEOUT
+    step = (cfg.HAUNTLET_DOORS_TIMEOUT - cfg.HAUNTLET_ROOM_SETTLE) / 4                  # (the looks are between the settling and the timeout)
+    assert run.look(hall, 100.0 + cfg.HAUNTLET_ROOM_SETTLE + step) is None             # one look without TVs is not enough
+    doors = run.look(hall, 100.0 + cfg.HAUNTLET_ROOM_SETTLE + 2 * step)
+    assert doors is not None and len(doors) == 1 and 100.0 + cfg.HAUNTLET_ROOM_SETTLE + 2 * step < 100.0 + cfg.HAUNTLET_DOORS_TIMEOUT
 
 
 # --- the whole loop ---
@@ -702,7 +703,7 @@ def test_a_walk_that_gets_nowhere_is_followed_by_one_that_steps_back_first(macro
 
 def test_a_player_caught_on_something_steps_sideways_towards_its_door_and_jumps(macro, world, monkeypatch):
     cfg = macro.cfg
-    monkeypatch.setattr(cfg, "HAUNTLET_WALK_MAX", 8.0)
+    monkeypatch.setattr(cfg, "HAUNTLET_WALK_MAX", (cfg.HAUNTLET_STILL_AFTER + cfg.HAUNTLET_UNSTICK_MAX) * 3)       # (three unsticks, the longest)
     monkeypatch.setattr(cfg, "HAUNTLET_AIM_STEPS", 0)                            # (no aiming and steering here: the doors in sight are never reached)
     monkeypatch.setattr(cfg, "HAUNTLET_STEER_EVERY", 10 ** 6)
     run = macro.HauntletRun()
@@ -831,7 +832,7 @@ def test_the_strafe_goes_to_the_circle_in_front_of_the_door_not_to_its_tv(macro)
 
 def test_a_player_in_a_circle_is_held_so_it_is_not_unstuck_and_the_door_stays_picked_for_the_retry(macro, world, monkeypatch):
     cfg = macro.cfg
-    monkeypatch.setattr(cfg, "HAUNTLET_WALK_MAX", cfg.HAUNTLET_LOCK_WAIT + 3)
+    monkeypatch.setattr(cfg, "HAUNTLET_WALK_MAX", cfg.HAUNTLET_LOCK_WAIT + cfg.HAUNTLET_STILL_AFTER * 4)
     run = macro.HauntletRun()
     run.room = 5
     world.screens = [circles_screen("middle_hidden")]                                       # standing in the middle circle, not moving
@@ -852,7 +853,7 @@ def test_a_player_in_a_circle_is_held_so_it_is_not_unstuck_and_the_door_stays_pi
 def test_it_waits_for_the_games_overlay_then_after_a_delay_steps_forward_once_so_the_doors_can_open(macro, world, monkeypatch):
     cfg = macro.cfg
     monkeypatch.setattr(cfg, "HAUNTLET_START_FORWARD", 1.4)
-    monkeypatch.setattr(cfg, "MINIGAME_START_WAIT", 50.0)
+    monkeypatch.setattr(cfg, "MINIGAME_START_WAIT", 100 * cfg.MINIGAME_START_LOOK_INTERVAL)
     looks = []
     watch = types.SimpleNamespace(problem=None, start_wait_over=lambda: None, last_seen=None)
 
@@ -864,7 +865,7 @@ def test_it_waits_for_the_games_overlay_then_after_a_delay_steps_forward_once_so
     monkeypatch.setattr(macro, "minigame_wait", wait)
     world.screens = [frame(macro, room=1)]
     start = world.clock.now
-    macro.play_hauntlet_2(start + cfg.HAUNTLET_START_DELAY + 10, watch)
+    macro.play_hauntlet_2(start + cfg.MINIGAME_START_WAIT + cfg.HAUNTLET_START_DELAY + 10 * cfg.HAUNTLET_LOOK_INTERVAL, watch)
     assert len(looks) == 4 and looks[-1] - start < cfg.MINIGAME_START_WAIT / 2          # it did not wait out the whole start wait
     first = [(kind, key, at) for kind, key, at in world.keys if key == cfg.KEYS["forward"]][:2]
     assert [k[:2] for k in first] == [("down", "w"), ("up", "w")]
@@ -888,9 +889,9 @@ def test_a_fork_stays_a_fork_after_a_walk_even_past_the_doors_timeout(macro):
     run = macro.HauntletRun()
     hall = frame(macro, "fork_hall__no_doors", room=fork_room(macro))
     run.look(hall, 100.0)
-    run.look(hall, 100.0 + cfg.HAUNTLET_ROOM_SETTLE + 0.5)                                 # (two looks: it is a fork)
-    late = 100.0 + cfg.HAUNTLET_DOORS_TIMEOUT + 5
-    run.walked_at = late - 0.1                                                             # a walk just ended: the looks start over...
+    run.look(hall, 100.0 + cfg.HAUNTLET_ROOM_SETTLE + (cfg.HAUNTLET_DOORS_TIMEOUT - cfg.HAUNTLET_ROOM_SETTLE) / 2)       # (two looks: it is a fork)
+    late = 100.0 + cfg.HAUNTLET_DOORS_TIMEOUT * 2
+    run.walked_at = late - cfg.HAUNTLET_RETRY_WAIT / 10                                                             # a walk just ended: the looks start over...
     assert run.look(hall, late) is None
     run.walked_at = None
     assert run.look(hall, late + cfg.HAUNTLET_RETRY_WAIT) is None                          # ...the first one of them is not one doorway, as it was
@@ -962,7 +963,7 @@ def play_a_fork(macro, world, monkeypatch, near_after):
 
 def test_a_fork_is_walked_towards_until_both_doorways_are_seen_and_then_strafed_to_the_chosen_one(macro, world, monkeypatch):
     cfg = macro.cfg
-    keys = play_a_fork(macro, world, monkeypatch, near_after=1.0)
+    keys = play_a_fork(macro, world, monkeypatch, near_after=macro.cfg.HAUNTLET_STILL_AFTER * 1.25)
     assert [(kind, key) for kind, key, _ in keys[:5]] == [("down", "w"), ("up", "w"), ("down", cfg.KEYS["left"]), ("up", cfg.KEYS["left"]), ("down", "w")]
     assert keys[1][2] - keys[0][2] < cfg.HAUNTLET_WALK_MAX                        # it stopped when the doorways showed, not after the full walk time
     screen = fork_screen(macro, "near_wall_a")

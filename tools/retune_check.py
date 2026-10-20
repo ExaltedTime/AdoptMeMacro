@@ -28,12 +28,21 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # A variant that changes those settings on purpose ("deselect") leaves it out.
 SCREENSHOT_TEST = "tests/test_icon_screenshots.py"
 
+# The durations whose names don't end in a word the scaling looks for (a variant that left them alone would scale the walks and not the steps in them).
+OTHER_TIMES = ("CAPTURE_MAX_SKIP", "RUN_CAPTURE_BURST", "RUN_CAPTURE_TAIL", "MINIGAME_TELEPORT_POLL", "ROBLOX_RECT_TTL", "SICK_PROMPT_LOOK",
+               "GHOST_BOSS_TRIAL", "GHOST_SKIP_TIME", "GHOST_FURNITURE_PERIOD", "GHOST_CAMERA_PERIOD", "GHOST_MOVE_PERIOD", "GHOST_MOVE_STEP_MIN", "GHOST_MOVE_STEP_MAX",
+               "GHOST_REGRAB_PERIOD", "GHOST_START_FORWARD", "GHOST_JUMP_MIN", "GHOST_JUMP_MAX", "GHOST_SPOT_TRIAL", "GHOST_BAD_SPOT_TIME", "GHOST_STALL", "GHOST_STALL_WALK",
+               "STITCHES_TURN_MIN_HOLD", "STITCHES_LOST_AFTER", "STITCHES_INTRO_MAX", "STITCHES_CALIBRATE_HOLD", "STITCHES_TURN_HOLD_MAX",
+               "HAUNTLET_WALK_MAX", "HAUNTLET_STEER_EVERY", "HAUNTLET_STEER_MAX",
+               "HAUNTLET_START_FORWARD", "HAUNTLET_STILL_AFTER", "HAUNTLET_UNSTICK_STEP", "HAUNTLET_UNSTICK_MAX")
+
 SCALE = '''
 import re as _re
+_OTHER_TIMES = %s
 def _scale(_k):
     for _n, _v in list(globals().items()):
         if (isinstance(_v, (int, float)) and not isinstance(_v, bool) and _n not in ("STOP_CHECK_INTERVAL", "REJOIN_INTERVAL", "GHOST_ALERT_DOT_GAP")
-                and _re.search(r"(WAIT|DURATION|INTERVAL|DELAY|TIMEOUT|GAP|SETTLE|GRACE)$", _n)):
+                and (_n in _OTHER_TIMES or _re.search(r"(WAIT|DURATION|INTERVAL|DELAY|TIMEOUT|GAP|SETTLE|GRACE)$", _n))):
             globals()[_n] = _v * _k
     for _table in (TELEPORT_WALK_NEEDS_NORMAL, TELEPORT_WALK_NEEDS_HALLOWEEN):
         for _entry in _table.values():
@@ -42,12 +51,17 @@ _scale(%s)
 TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN else TELEPORT_WALK_NEEDS_NORMAL
 '''
 
+def scaled(factor: str) -> str:
+    """The patch that multiplies every duration by `factor`."""
+    return SCALE % (repr(OTHER_TIMES), factor)
+
+
 VARIANTS = {
     "baseline": "",
     # the event ends: the Halloween-only needs (sick) stop existing
     "halloween_off": "HALLOWEEN = False\nTELEPORT_WALK_NEEDS = TELEPORT_WALK_NEEDS_NORMAL\n",
-    "timings_x1.7": SCALE % "1.7",
-    "timings_x0.5": SCALE % "0.5",
+    "timings_x1.7": scaled("1.7"),
+    "timings_x0.5": scaled("0.5"),
     "other_tuning": '''
 NEED_GONE_MAX_WAIT = 60.0
 NEED_GONE_POLL_INTERVAL = 2.0
@@ -104,8 +118,8 @@ VARIANTS.update({
     "tolerances_wider": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_TOLERANCE") and "SLOT" not in _n and isinstance(_v, int):\n        globals()[_n] = _v * 2 + 1\n',
     # every search box moved a few pixels
     "boxes_shifted": 'for _n, _v in list(globals().items()):\n    if _n.endswith("_BOX") and isinstance(_v, tuple) and len(_v) == 4:\n        globals()[_n] = (_v[0] + 4, _v[1] + 3, _v[2] + 4, _v[3] + 3)\nfor _e in POPUP_TEMPLATES.values():\n    _v = _e["box"]\n    _e["box"] = (_v[0] + 4, _v[1] + 3, _v[2] + 4, _v[3] + 3)\n',
-    "timings_x0.05": SCALE % "0.05",
-    "timings_x20": SCALE % "20",
+    "timings_x0.05": scaled("0.05"),
+    "timings_x20": scaled("20"),
     # counts and limits at both ends
     "counts_low": {"patch": "NEED_STUCK_CHECKS = 1\nBACKPACK_CLOSE_CONFIRMATIONS = 1\nREJOIN_MAX_ATTEMPTS = 1\nFOCUS_RESUME_MAX_IN_A_ROW = 1\nMINIGAME_FINISH_CLICK_TRIES = 1\nMAX_FAILURE_FOLDERS = 1\nMAX_REPORTS = 1\nMAX_RECORDINGS = 1\nCONSOLE_MAX_LINES = 10\nICON_SHIFT_TOLERANCE = 0\nDISABLED_NEEDS_REJOIN_THRESHOLD = 1\nRUN_CAPTURES_BEST = 1\nRUN_CAPTURES_WORST = 1\nRUN_CAPTURES_FAILED = 1\nSTITCHES_LINE_DEADBAND = 0.0\n", "deselect": [SCREENSHOT_TEST]},
     "counts_high": "NEED_STUCK_CHECKS = 10\nBACKPACK_CLOSE_CONFIRMATIONS = 4\nREJOIN_MAX_ATTEMPTS = 8\nFOCUS_RESUME_MAX_IN_A_ROW = 20\nMINIGAME_FINISH_CLICK_TRIES = 6\nMAX_FAILURE_FOLDERS = 1000\nMAX_REPORTS = 1000\nMAX_RECORDINGS = 50\nCONSOLE_MAX_LINES = 100000\nICON_SHIFT_TOLERANCE = 4\nDISABLED_NEEDS_REJOIN_THRESHOLD = 9\nRUN_CAPTURES_BEST = 8\nRUN_CAPTURES_WORST = 8\nRUN_CAPTURES_FAILED = 9\nSTITCHES_LINE_DEADBAND = 30.0\n",

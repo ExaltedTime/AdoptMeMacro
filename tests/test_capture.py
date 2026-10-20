@@ -474,11 +474,12 @@ def test_frames_around_a_mark_survive_the_thinning(macro, capture, monkeypatch):
     assert all(marked[0] - 0.1 <= float(f.split("_")[2][:-4]) <= marked[0] + 0.6 for f in recorder.protected)    # and they are of that moment
 
 
-def test_a_run_that_went_wrong_keeps_the_frames_of_its_last_seconds(macro, capture):
+def test_a_run_that_went_wrong_keeps_the_frames_of_its_last_seconds(macro, capture, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "RUN_CAPTURE_TAIL", 15.0)                  # (the frames below are placed for this)
     recorder = macro.InputCapture(capture["folder"], max_zips=2)
     recorder.started = time.time() - 100
     recorder._kept = [(f"frame_{i + 1:06d}_{t:.3f}.png", 1) for i, t in enumerate((10.0, 50.0, 80.0, 90.0, 99.0))]
-    recorder.protect_tail(macro.cfg.RUN_CAPTURE_TAIL)
+    recorder.protect_tail(15.0)
     assert recorder.protected == {"frame_000004_90.000.png", "frame_000005_99.000.png"}
 
 

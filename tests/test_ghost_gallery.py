@@ -17,7 +17,7 @@ def no_intro_wait(macro, monkeypatch):
     monkeypatch.setattr(macro.cfg, "GHOST_INTRO_WAIT", 0.0)
     monkeypatch.setattr(macro.cfg, "GHOST_START_FORWARD", 0.0)
     monkeypatch.setattr(macro.cfg, "GHOST_REGRAB_PERIOD", 10 ** 6)                  # (the tests that look at it set it)
-    monkeypatch.setattr(macro.cfg, "MINIGAME_START_WAIT", 6.0)                       # (the fake clock still has every look of it to do)
+    monkeypatch.setattr(macro.cfg, "MINIGAME_START_WAIT", 12 * macro.cfg.MINIGAME_START_LOOK_INTERVAL)                       # (the fake clock still has every look of it to do)
 
 
 def shot(name):
@@ -81,6 +81,11 @@ def test_a_ghost_being_followed_is_not_swapped_for_a_nearer_one(macro):
 
 # --- the player ---
 
+def looks(macro, count):
+    """The seconds `count` looks at the screen take (a test that is about a few looks says so, whatever GHOST_LOOK_INTERVAL is)."""
+    return count * macro.cfg.GHOST_LOOK_INTERVAL
+
+
 def play(macro, world, seconds):
     """Play Ghost Gallery for `seconds` after its start: the intro wait and the walk into the hall come first, and take as long as they take."""
     cfg = macro.cfg
@@ -96,7 +101,7 @@ def test_it_aims_at_the_ghost_follows_it_and_moves_on_to_furniture_when_it_is_go
     ghost = shot("ghosts_50")
     big = macro.find_ghost_blobs(ghost)[0][:2]
     world.screens = [ghost] * 5 + [blank()]
-    play(macro, world, 4)
+    play(macro, world, looks(macro, 66))
     assert world.mouse[:2] == [("move", *big), ("down",)]                                  # aimed first, then held
     moves = [m for m in world.mouse if m[0] == "move"]
     assert all(m[1:] == big for m in moves[:5])                                            # follows it every look
@@ -109,7 +114,7 @@ def test_in_the_boss_phase_it_holds_on_the_boss(macro, world):
     boss = shot("boss_100")
     x, y, _ = macro.find_ghost_blobs(boss, boss=True)[0]
     world.screens = [boss]
-    play(macro, world, 1)
+    play(macro, world, looks(macro, 16))
     assert world.mouse[0] == ("move", x, y) and ("down",) in world.mouse
 
 
@@ -197,12 +202,12 @@ def test_the_player_aims_at_the_small_ghosts_while_shielded_and_at_the_boss_othe
     shielded = shot("shield_129")
     want = macro.choose_ghost_target(macro.find_ghost_blobs(shielded, boss=True), False, None)
     world.screens = [shielded]
-    play(macro, world, 1)
+    play(macro, world, looks(macro, 16))
     assert world.mouse[0] == ("move", *want)
     world.mouse.clear()
     boss = shot("boss_100")
     world.screens = [boss]
-    play(macro, world, 1)
+    play(macro, world, looks(macro, 16))
     assert world.mouse[0] == ("move", *macro.find_ghost_blobs(boss, boss=True)[0][:2])
 
 
@@ -242,7 +247,7 @@ def test_a_game_that_never_shows_its_overlay_is_acted_in_after_the_start_wait(ma
     cfg = macro.cfg
     world.screens = [shot("ghosts_50")]
     start = world.clock.now
-    macro.play_ghost_gallery(start + cfg.MINIGAME_START_WAIT + 3, watch_started(macro, started=False))
+    macro.play_ghost_gallery(start + cfg.MINIGAME_START_WAIT + cfg.GHOST_INTRO_WAIT + cfg.GHOST_START_FORWARD + looks(macro, 50), watch_started(macro, started=False))
     assert world.mouse and world.clock.now - start >= cfg.MINIGAME_START_WAIT           # it waited the whole time, then went on regardless
 
 
@@ -281,7 +286,7 @@ def test_it_starts_with_a_zoomed_out_tilted_down_view_once_the_overlay_shows(mac
     watch = watch_started(macro, started=False)
     monkeypatch.setattr(macro, "minigame_look", look)
     monkeypatch.setattr(macro, "minigame_wait", lambda duration, w: (world.clock.__setattr__("now", world.clock.now + duration), look(w)))
-    macro.play_ghost_gallery(world.clock.now + cfg.GHOST_INTRO_WAIT + cfg.GHOST_START_FORWARD + 1, watch)
+    macro.play_ghost_gallery(world.clock.now + cfg.MINIGAME_START_WAIT + cfg.GHOST_INTRO_WAIT + cfg.GHOST_START_FORWARD + 1, watch)
     assert seen["zoomed_before"] == 0 and len(world.zooms) == 1 and len(world.tilts) == 1      # once, after the game began
 
 
@@ -333,7 +338,7 @@ def test_the_camera_is_set_up_only_after_the_games_intro_camera_has_run(macro, w
     monkeypatch.setattr(cfg, "GHOST_INTRO_WAIT", 6.0)
     world.screens = [blank()]
     start = world.clock.now
-    play(macro, world, 10)
+    play(macro, world, looks(macro, 166))
     assert len(world.zooms) == 1 and world.zooms[0] - start >= cfg.GHOST_INTRO_WAIT          # zoomed out after the intro, not during it
     assert world.tilts and world.tilts[0] >= world.zooms[0]
 
@@ -371,7 +376,7 @@ def test_a_ghost_far_from_the_character_is_chased_with_a_key_held_until_it_is_ne
     near = shot("ghosts_50")                                                         # one close to the character
     key = macro.ghost_chase_key(macro.choose_ghost_target(macro.find_ghost_blobs(far, True), False, None))
     world.screens = [far] * 6 + [near]
-    play(macro, world, 4)
+    play(macro, world, looks(macro, 66))
     moves = [(kind, k, at) for kind, k, at in world.keys if k == key]
     assert key != "w" and [m[0] for m in moves[:2]] == ["down", "up"]                # held, then let go
     assert moves[1][2] - moves[0][2] >= 5 * cfg.GHOST_LOOK_INTERVAL                  # for as many looks as the ghost was far, not a step of GHOST_MOVE_STEP_MAX
@@ -384,7 +389,7 @@ def test_in_the_boss_phase_with_nothing_in_sight_it_turns_the_camera_one_way_unt
     left, top, right, bottom = cfg.GHOST_BOSS_BAR_BOX
     bar_only[top:270, left:right] = boss[top:270, left:right]
     world.screens = [bar_only] * 8 + [boss]
-    play(macro, world, 6)
+    play(macro, world, looks(macro, 100))
     drags, current = [], None
     for event in world.mouse:
         if event == ("down", "right"):
@@ -463,7 +468,7 @@ def test_in_the_shielded_phase_a_blob_too_big_for_a_small_ghost_is_not_aimed_at(
     glow, small = (1000, 700, cfg.GHOST_SMALL_MAX + 1000), (1500, 845, 1121)       # (the glow nearer the character than the small ghost)
     monkeypatch.setattr(macro, "find_ghost_blobs", lambda image, boss=False: [glow, small])
     world.screens = [img]
-    play(macro, world, 1)
+    play(macro, world, looks(macro, 16))
     assert world.mouse[0] == ("move", small[0], small[1])                          # the small ghost, not the glow
 
 
@@ -479,7 +484,7 @@ def test_in_the_boss_phase_a_blob_too_small_for_the_boss_is_a_minion_not_the_bos
     screen[400:400 + big_side, 300:300 + big_side] = ghost                         # bigger than the other, smaller than a boss, far from the character
     screen[420:420 + small_side, 1300:1300 + small_side] = ghost                   # a small one near the character (not where the pet sits)
     world.screens = [screen]
-    play(macro, world, 1)
+    play(macro, world, looks(macro, 16))
     first = next(m[1:] for m in world.mouse if m[0] == "move")
     assert abs(first[0] - 1300 - small_side / 2) < 40 and abs(first[1] - 420 - small_side / 2) < 40       # the near small one: nothing is the boss
 
@@ -532,7 +537,7 @@ def test_the_beam_goes_to_the_furniture_under_an_exclamation_mark_before_any_gho
     screen = with_banner(alert_screen("alert_528_330.png"), "banner_450")
     screen[300:300 + 60, 1500:1500 + 60] = shot("ghosts_50")[400:460, 1000:1060]              # (a ghost in sight, too: no longer first)
     world.screens = [screen]
-    play(macro, world, 1)
+    play(macro, world, looks(macro, 16))
     first = left_held_on(world)[0]
     assert distance(first, (728, 490 + cfg.GHOST_ALERT_BELOW * 21)) <= 25
 
@@ -541,15 +546,16 @@ def test_a_blob_skipped_for_scoring_nothing_stays_skipped_wherever_it_flies_and_
     cfg = macro.cfg
     feedback = macro.GhostFeedback(0.0)
     pet = (1000, 600, 800)
-    feedback.skip(pet[:2], 10.0)
-    assert feedback.follow_skipped([pet], 11.0) == []
+    skipped_at, tenth = 10.0, cfg.GHOST_SKIP_TIME / 10
+    feedback.skip(pet[:2], skipped_at)
+    assert feedback.follow_skipped([pet], skipped_at + tenth) == []
     flown = (pet[0] + cfg.GHOST_STICK - 10, pet[1], pet[2])                                   # it has moved: a bit at each look
-    assert feedback.follow_skipped([flown], 12.0) == []
+    assert feedback.follow_skipped([flown], skipped_at + 2 * tenth) == []
     again = (flown[0] + cfg.GHOST_STICK - 10, flown[1], flown[2])
-    assert feedback.follow_skipped([again], 13.0) == []                                       # (the mark followed it, so this is within reach of where it was)
+    assert feedback.follow_skipped([again], skipped_at + 3 * tenth) == []                                       # (the mark followed it, so this is within reach of where it was)
     ghost = (300, 300, 900)
-    assert feedback.follow_skipped([ghost, again], 14.0) == [ghost]
-    assert feedback.follow_skipped([again], 10.0 + cfg.GHOST_SKIP_TIME + 1) == [again]       # its time is up
+    assert feedback.follow_skipped([ghost, again], skipped_at + 4 * tenth) == [ghost]
+    assert feedback.follow_skipped([again], skipped_at + cfg.GHOST_SKIP_TIME * 1.1) == [again]       # its time is up
 
 
 def test_what_scores_nothing_in_spite_of_the_furniture_around_it_is_left_alone_and_the_beam_moves_on(macro, world, short_trial, monkeypatch, caplog):
@@ -569,18 +575,18 @@ def test_what_scores_nothing_in_spite_of_the_furniture_around_it_is_left_alone_a
 def test_in_the_boss_phase_what_scores_nothing_is_not_the_boss_but_what_scores_is(macro, world, monkeypatch):
     """fog_129.png: the biggest blob is a light shaft along the left side (the boss was out of sight). boss_141.png: the boss, the score going up."""
     cfg = macro.cfg
-    monkeypatch.setattr(cfg, "GHOST_BOSS_TRIAL", 2.0)
+    monkeypatch.setattr(cfg, "GHOST_BOSS_TRIAL", cfg.GHOST_BOSS_TRIAL / 3)
     fog = shot("fog_129")
     shaft = macro.find_ghost_blobs(fog, True)[0][:2]
     world.screens = [fog]
     start = world.clock.now
-    play(macro, world, cfg.GHOST_BOSS_TRIAL + 2)
+    play(macro, world, cfg.GHOST_BOSS_TRIAL * 1.3)
     assert distance(left_held_on(world)[0], shaft) < 40 and distance(left_held_on(world)[-1], shaft) > 100
     boss = shot("boss_141")
     boss_at = macro.find_ghost_blobs(boss, True)[0][:2]
     world.mouse.clear()
     start = world.clock.now
-    world.screens = lambda: with_banner(boss, ["banner_450", "banner_1450"][int((world.clock.now - start) / 0.3) % 2])        # the score changes all the time
+    world.screens = lambda: with_banner(boss, ["banner_450", "banner_1450"][int((world.clock.now - start) / looks(macro, 5)) % 2])        # the score changes all the time
     play(macro, world, cfg.GHOST_BOSS_TRIAL * 3)
     assert all(distance(place, boss_at) < 60 for place in left_held_on(world))
 
@@ -619,12 +625,14 @@ def test_a_spot_has_a_trial_a_stall_is_a_long_time_without_a_score_and_bad_place
     cfg = macro.cfg
     feedback = macro.GhostFeedback(100.0)
     feedback.look(with_banner(blank(), "banner_450"), 100.0)
-    assert not feedback.trial_over(100.0 + cfg.GHOST_SPOT_TRIAL - 0.1) and feedback.trial_over(100.0 + cfg.GHOST_SPOT_TRIAL)
-    feedback.new_spot(110.0)
-    assert not feedback.trial_over(110.0 + cfg.GHOST_SPOT_TRIAL - 0.1) and feedback.trial_over(110.0 + cfg.GHOST_SPOT_TRIAL)       # a new spot has a trial of its own
-    assert not feedback.stalled(100.0 + cfg.GHOST_STALL - 0.1) and feedback.stalled(100.0 + cfg.GHOST_STALL)                       # but the stall counts from the last score
+    just_before, just_after = 0.99, 1.01                                                                       # (of the time: a sum of floats is not exact)
+    assert not feedback.trial_over(100.0 + cfg.GHOST_SPOT_TRIAL * just_before) and feedback.trial_over(100.0 + cfg.GHOST_SPOT_TRIAL * just_after)
+    later = 100.0 + cfg.GHOST_SPOT_TRIAL * 3
+    feedback.new_spot(later)
+    assert not feedback.trial_over(later + cfg.GHOST_SPOT_TRIAL * just_before) and feedback.trial_over(later + cfg.GHOST_SPOT_TRIAL * just_after)       # a new spot has a trial of its own
+    assert not feedback.stalled(100.0 + cfg.GHOST_STALL * just_before) and feedback.stalled(100.0 + cfg.GHOST_STALL * just_after)                       # but the stall counts from the last score
     feedback.mark_bad((5, 5), 100.0)
-    assert feedback.avoid(100.0 + cfg.GHOST_BAD_SPOT_TIME - 1) == [(5, 5)] and feedback.avoid(100.0 + cfg.GHOST_BAD_SPOT_TIME + 1) == []
+    assert feedback.avoid(100.0 + cfg.GHOST_BAD_SPOT_TIME * 0.9) == [(5, 5)] and feedback.avoid(100.0 + cfg.GHOST_BAD_SPOT_TIME * 1.1) == []
 
 
 def test_furniture_is_looked_for_around_a_hiding_ghost_and_away_from_places_that_scored_nothing(macro, world):
@@ -646,7 +654,7 @@ def ghost_with_banner(macro, name="banner_450"):
 
 @pytest.fixture
 def short_trial(macro, monkeypatch):
-    monkeypatch.setattr(macro.cfg, "GHOST_SPOT_TRIAL", 1.0)                                   # (less fake time to live through)
+    monkeypatch.setattr(macro.cfg, "GHOST_SPOT_TRIAL", macro.cfg.GHOST_SPOT_TRIAL / 3)          # (less fake time to live through)
 
 
 def test_a_ghost_the_beam_scores_nothing_on_is_taken_to_hide_and_the_furniture_around_it_is_tried(macro, world, short_trial):
@@ -709,7 +717,7 @@ def test_a_new_ghost_gets_a_trial_of_its_own(macro, world, short_trial):
 @pytest.fixture
 def quiet_player(macro, monkeypatch):
     """A player that does nothing of its own with no ghost in sight: no camera turns, walking about or jumping."""
-    for name, value in (("GHOST_CAMERA_PERIOD", 10 ** 6), ("GHOST_MOVE_PERIOD", 10 ** 6), ("GHOST_JUMP_MIN", 10 ** 6), ("GHOST_JUMP_MAX", 10 ** 6), ("GHOST_STALL", 2.0)):
+    for name, value in (("GHOST_CAMERA_PERIOD", 10 ** 6), ("GHOST_MOVE_PERIOD", 10 ** 6), ("GHOST_JUMP_MIN", 10 ** 6), ("GHOST_JUMP_MAX", 10 ** 6), ("GHOST_STALL", macro.cfg.GHOST_STALL / 6)):      # (a shorter stall: less fake time to live through)
         monkeypatch.setattr(macro.cfg, name, value)
 
 

@@ -1076,7 +1076,9 @@ HELD_KEYS: set[str] = set()                    # the keys key_down() has pressed
 HELD_KEYS_LOCK = threading.Lock()
 
 def key_down(key: str) -> None:
-    """Press `key` and keep it, until key_up(), in HELD_KEYS - so that release_all_inputs() lets go of exactly the keys that are down, whichever they are."""
+    """Press `key` and keep it, until key_up(), in HELD_KEYS - so that release_all_inputs() lets go of exactly the keys that are down, whichever they are.
+    Nothing is pressed once a stop has been asked for (StopRequested): a stop must not be followed by one more press."""
+    check_stop()
     with HELD_KEYS_LOCK:
         HELD_KEYS.add(key)                         # (before the press: one that failed half-way is let go of too)
     pydirectinput.keyDown(key)
@@ -1087,28 +1089,30 @@ def key_up(key: str) -> None:
     with HELD_KEYS_LOCK:
         HELD_KEYS.discard(key)
 
-def move_cursor_off_the_corner() -> None:
-    """Put the mouse in the middle of the screen (not through PyDirectInput, whose calls check the fail-safe): with the cursor in a corner - the fail-safe's
-    sign - every key and button PyDirectInput lets go of raises, so what the macro holds would stay held. The fail-safe stays on; this is only the cleanup after it."""
-    if os.name != "nt":
-        return
-    user32 = ctypes.windll.user32  # type: ignore[attr-defined]  # Windows only
-    user32.SetCursorPos(user32.GetSystemMetrics(0) // 2, user32.GetSystemMetrics(1) // 2)
+def mouse_down(button: str = "left") -> None:
+    """Press a mouse button (let go of with pydirectinput.mouseUp, and by release_all_inputs() if that is missed); not once a stop has been asked for."""
+    check_stop()
+    pydirectinput.mouseDown(button=button)
+
+def unchecked(function: Callable[..., Any]) -> Callable[..., Any]:
+    """`function` (a PyDirectInput key or mouse call) without its fail-safe check and its pause: the call itself, which `functools.wraps` keeps as __wrapped__.
+    Only for letting go of what is held. With the cursor in a corner - the fail-safe's sign - every checked call raises, and the keys and buttons the macro
+    holds would stay held after the very stop that corner asked for. The fail-safe stays on for everything else, and the cursor is not moved."""
+    return getattr(function, "__wrapped__", function)
 
 def release_all_inputs() -> None:
     """Best-effort safety net: release every key the macro holds (those in HELD_KEYS, and the keys of cfg.HELD_KEYS) and the mouse buttons that are down,
-    called when a background task ends. A release that raises (the fail-safe, with the cursor in a corner) is tried again once the cursor has been moved
-    away from it. See docs/ARCHITECTURE.md#stopping--focus-safety.
+    called when a background task ends and at once when a stop is asked for. The releases skip the fail-safe check (unchecked()): see there.
+    See docs/ARCHITECTURE.md#stopping--focus-safety.
     """
     with HELD_KEYS_LOCK:
         keys = [*dict.fromkeys((*HELD_KEYS, *cfg.HELD_KEYS))]
         HELD_KEYS.clear()
-    refused: list[Callable[[], None]] = []
     for key in keys:
         try:
-            pydirectinput.keyUp(key)
+            unchecked(pydirectinput.keyUp)(key)
         except Exception:
-            refused.append(partial(pydirectinput.keyUp, key))
+            pass
     # Only a button that is down: a right button released with none pressed is a click as far as the window under the mouse is
     # concerned, and over its border or title bar that opens the window's menu and takes the focus from the game.
     try:
@@ -1119,16 +1123,9 @@ def release_all_inputs() -> None:
         if f"mouse_{button}" not in held:
             continue
         try:
-            pydirectinput.mouseUp(button=button)
+            unchecked(pydirectinput.mouseUp)(button=button)
         except Exception:
-            refused.append(partial(pydirectinput.mouseUp, button=button))
-    if refused:
-        move_cursor_off_the_corner()
-        for release in refused:
-            try:
-                release()
-            except Exception:
-                pass
+            pass
 
 # ============================================================================
 # BUTTON DETECTION
@@ -1913,7 +1910,7 @@ class PetNeedHandler(NeedHandler):
         pydirectinput.moveTo(*to_screen(cfg.REFERENCE_CENTER_X, start_y))
         time.sleep(cfg.PET_SETTLE_DELAY)
         # Hold down and move with incremental steps (much more reliable for games)
-        pydirectinput.mouseDown()
+        mouse_down()
         try:
             start_time = time.time()
             while True:
@@ -3189,7 +3186,7 @@ def start_camera_drag() -> None:
     hundreds of px, and a right button released over the window's border or title bar opens its menu and takes the focus from
     the game - which is where the cursor was left by whatever had been aimed at before."""
     pydirectinput.moveTo(*to_screen(cfg.REFERENCE_CENTER_X, cfg.REFERENCE_CENTER_Y))
-    pydirectinput.mouseDown(button="right")
+    mouse_down("right")
 
 def tilt_camera_down() -> None:
     """Drag the mouse down with the right button held, GHOST_START_TILT px: the camera rises behind the character, for a view
@@ -3389,7 +3386,7 @@ def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
         nonlocal held
         pydirectinput.moveTo(*to_screen(*point))
         if not held:
-            pydirectinput.mouseDown()
+            mouse_down()
             held = True
 
     def let_go() -> None:
@@ -6132,6 +6129,7 @@ class AdoptMeGUI:
             return
         logger.info("Stopping...")
         STOP_EVENT.set()
+        release_all_inputs()                      # at once, from here: the macro stops doing things the moment the stop is asked for, not when the worker next looks
         self.status.config(text="Stopping...")
 
 # ============================================================================

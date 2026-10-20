@@ -1656,27 +1656,24 @@ def test_a_key_is_let_go_of_whatever_happens_during_the_hold_and_the_safety_net_
     macro.release_all_inputs()                                          # (does not raise: what follows in the caller still happens)
 
 
-def test_keys_and_buttons_the_fail_safe_refused_to_release_are_released_once_the_cursor_is_moved_off_the_corner(macro, monkeypatch):
-    state = {"corner": True}
-    ups, mouse_ups = [], []
-    def up(key):
-        if state["corner"]:
-            raise RuntimeError("fail-safe: the cursor is in a corner")
-        ups.append(key)
-    def mouse_up(button):
-        if state["corner"]:
-            raise RuntimeError("fail-safe: the cursor is in a corner")
-        mouse_ups.append(button)
-    moves = []
+def test_held_keys_and_buttons_are_released_without_the_fail_safe_check_and_without_moving_the_cursor(macro, monkeypatch):
+    """With the cursor in a corner PyDirectInput's checked calls raise; its unchecked ones (the wrapped function) do not, so everything is let go of."""
+    ups, mouse_ups, moves = [], [], []
+    def checked_up(key):
+        raise RuntimeError("fail-safe: the cursor is in a corner")
+    def checked_mouse_up(button="left"):
+        raise RuntimeError("fail-safe: the cursor is in a corner")
+    checked_up.__wrapped__ = lambda key: ups.append(key)                          # (what functools.wraps keeps)
+    checked_mouse_up.__wrapped__ = lambda button="left": mouse_ups.append(button)
     monkeypatch.setattr(macro.pydirectinput, "keyDown", lambda key: None)
-    monkeypatch.setattr(macro.pydirectinput, "keyUp", up)
-    monkeypatch.setattr(macro.pydirectinput, "mouseUp", mouse_up, raising=False)
+    monkeypatch.setattr(macro.pydirectinput, "keyUp", checked_up)
+    monkeypatch.setattr(macro.pydirectinput, "mouseUp", checked_mouse_up, raising=False)
+    monkeypatch.setattr(macro.pydirectinput, "moveTo", lambda *a, **k: moves.append(a), raising=False)
     monkeypatch.setattr(macro, "pressed_inputs", lambda: {"mouse_right"})
-    monkeypatch.setattr(macro, "move_cursor_off_the_corner", lambda: (moves.append(True), state.update(corner=False)))
     macro.key_down("a")
     macro.release_all_inputs()
-    assert moves == [True]                                                           # (moved once, for all that was refused)
-    assert "a" in ups and set(macro.cfg.HELD_KEYS) <= set(ups) and mouse_ups == ["right"]
+    assert "a" in ups and set(macro.cfg.HELD_KEYS) <= set(ups) and mouse_ups == ["right"] and moves == []
+    assert macro.pydirectinput.keyUp is checked_up                                  # (the checked call itself is left as it was: the fail-safe stays on)
 
 
 def test_a_key_that_could_not_be_let_go_of_stays_known_so_that_the_safety_net_tries_it_again(macro, monkeypatch):
@@ -1775,3 +1772,24 @@ def test_two_threads_writing_the_status_at_once_leave_one_whole_file(macro, monk
     for t in threads:
         t.join()
     assert errors == []
+
+
+def test_a_stop_lets_go_of_everything_at_once_and_nothing_is_pressed_after_it(macro, monkeypatch):
+    events = []
+    monkeypatch.setattr(macro.pydirectinput, "keyDown", lambda key: events.append(("down", key)))
+    monkeypatch.setattr(macro.pydirectinput, "keyUp", lambda key: events.append(("up", key)))
+    monkeypatch.setattr(macro.pydirectinput, "mouseDown", lambda button="left": events.append(("mouse down", button)), raising=False)
+    monkeypatch.setattr(macro, "pressed_inputs", lambda: set())
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.is_running, gui.status = True, types.SimpleNamespace(config=lambda **k: None)
+    macro.STOP_EVENT.clear()
+    macro.key_down("w")
+    gui.stop()                                                                        # (from the Tk thread, while the worker is still in its wait)
+    assert ("up", "w") in events and macro.STOP_EVENT.is_set()
+    events.clear()
+    with pytest.raises(macro.StopRequested):
+        macro.key_down("d")
+    with pytest.raises(macro.StopRequested):
+        macro.mouse_down("right")
+    assert events == []                                                               # the worker's next press is refused
+    macro.STOP_EVENT.clear()

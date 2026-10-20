@@ -1199,9 +1199,8 @@ It is only turned on after a test (`Blackout.show()`): the window is first shown
 `BLACKOUT_TOO_BRIGHT` cannot be tested (`blackout_seen_by_capture()` is None) and is refused the same way (try again from a darker view). A Windows that refuses
 the capture exclusion gets the same warning. Only then is the window made black. The test shows as a brief white flash. It does not dim the backlight, and the
 window goes with the process (`close()` takes it away first). Typing the hotkey in Roblox is the only way to toggle it, while the Options subtab's checkbox has it on (`blackout_hotkey_enabled`); the cursor is hidden over it.
-The control window is raised over the black one when the screen is blanked and again when the window comes back up from being minimized
-(`on_window_mapped()`, `BLACKOUT_RAISE_DELAY_MS` later, once Windows has put it back in the stack; `keep_above_blackout()`), unless it was sent to the back
-for a minigame.
+The control window is blanked with the rest of the screen: when it comes back up from the taskbar Windows puts it above the black one, so the black window is
+raised over it again (`on_window_mapped()`, `Blackout.raise_over()`, `BLACKOUT_RAISE_DELAY_MS` later, once Windows has put the control window back in the stack).
 
 ### Reading Hauntlet 2
 

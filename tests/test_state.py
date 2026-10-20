@@ -1794,7 +1794,7 @@ def test_closing_asks_for_the_stop_before_it_closes_the_capture_and_waits_for_th
 
 class FakeBlackout:
     def __init__(self, shown=False):
-        self.shown, self.toggles, self.hides = shown, 0, 0
+        self.shown, self.toggles, self.hides, self.raised = shown, 0, 0, 0
 
     def toggle(self):
         self.toggles += 1
@@ -1804,12 +1804,15 @@ class FakeBlackout:
         self.hides += 1
         self.shown = False
 
+    def raise_over(self):
+        self.raised += 1
 
-def blackout_gui(macro, monkeypatch, tmp_path, hotkey_on=True, shown=False, topmost=True):
+
+def blackout_gui(macro, monkeypatch, tmp_path, hotkey_on=True, shown=False):
     monkeypatch.setattr(macro.cfg, "GAME_CONFIG_PATH", str(tmp_path / ".config"))
     gui = object.__new__(macro.AdoptMeGUI)
-    gui.raised, gui.scheduled = [], []
-    gui.root = types.SimpleNamespace(attributes=lambda name: topmost, lift=lambda: gui.raised.append("lift"), after=lambda ms, func: gui.scheduled.append((ms, func.__name__)))
+    gui.scheduled = []
+    gui.root = types.SimpleNamespace(after=lambda ms, func: gui.scheduled.append((ms, func.__name__)))
     gui.blackout = FakeBlackout(shown)
     gui.config_flag_vars = {"blackout_hotkey_enabled": types.SimpleNamespace(get=lambda: hotkey_on)}
     return gui
@@ -1818,26 +1821,21 @@ def blackout_gui(macro, monkeypatch, tmp_path, hotkey_on=True, shown=False, topm
 def test_the_blackout_key_blanks_the_screen_only_while_its_checkbox_is_on(macro, monkeypatch, tmp_path):
     off = blackout_gui(macro, monkeypatch, tmp_path, hotkey_on=False)
     off.blackout_by_hotkey()
-    assert off.blackout.toggles == 0 and not off.blackout.shown and off.raised == []        # (the key is typed in the game)
+    assert off.blackout.toggles == 0 and not off.blackout.shown        # (the key is typed in the game)
     on = blackout_gui(macro, monkeypatch, tmp_path)
     on.blackout_by_hotkey()
-    assert on.blackout.toggles == 1 and on.blackout.shown and on.raised == ["lift"]          # the window goes above the black one
+    assert on.blackout.toggles == 1 and on.blackout.shown
     on.blackout_by_hotkey()
-    assert on.blackout.toggles == 2 and not on.blackout.shown and on.raised == ["lift"]      # (nothing to be above when it is away)
+    assert on.blackout.toggles == 2 and not on.blackout.shown
     assert macro.load_game_config()["blackout_hotkey_enabled"] is True                       # on unless it was turned off
 
 
-def test_the_window_is_raised_over_the_black_one_when_it_comes_back_up_but_not_when_it_was_sent_to_the_back(macro, monkeypatch, tmp_path):
+def test_the_black_window_goes_back_over_the_control_window_when_that_comes_back_up(macro, monkeypatch, tmp_path):
     gui = blackout_gui(macro, monkeypatch, tmp_path, shown=True)
     gui.on_window_mapped(types.SimpleNamespace(widget=gui.root))
-    assert gui.scheduled == [(macro.cfg.BLACKOUT_RAISE_DELAY_MS, "keep_above_blackout")]
-    gui.on_window_mapped(types.SimpleNamespace(widget=object()))                              # (a widget inside it was mapped)
+    assert gui.scheduled == [(macro.cfg.BLACKOUT_RAISE_DELAY_MS, "raise_over")]            # (later, once Windows has put the window back in the stack)
+    gui.on_window_mapped(types.SimpleNamespace(widget=object()))                              # a widget inside it was mapped: not the window coming back
     assert len(gui.scheduled) == 1
-    gui.keep_above_blackout()
-    assert gui.raised == ["lift"]
-    sent_back = blackout_gui(macro, monkeypatch, tmp_path, shown=True, topmost=False)
-    sent_back.keep_above_blackout()
-    assert sent_back.raised == []                                                              # a minigame is being played: the window stays behind
     clear = blackout_gui(macro, monkeypatch, tmp_path)
     clear.on_window_mapped(types.SimpleNamespace(widget=clear.root))
     assert clear.scheduled == []                                                               # no black window: nothing to do

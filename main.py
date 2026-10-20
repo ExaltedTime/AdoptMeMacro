@@ -5606,6 +5606,15 @@ class Blackout:
         logger.info(f"Screen blanked ({cfg.HOTKEYS['blackout'].upper()} again to show it)")
         return True
 
+    def raise_over(self) -> None:
+        """Put the black window back on top of everything, the control window included (that one coming back up from the taskbar lands above it)."""
+        if self.window is not None:
+            try:
+                self.window.attributes("-topmost", True)
+                self.window.lift()
+            except tk.TclError:
+                pass
+
     def hide(self) -> None:
         if self.window is not None:
             try:
@@ -5828,7 +5837,7 @@ class AdoptMeGUI:
 
     def blackout_by_hotkey(self) -> None:
         """HOTKEYS["blackout"] was pressed: blank the screen or show it again (Tk's thread), unless the Options subtab's checkbox has the key off (it is
-        then typed in the game). The window stays above the black one."""
+        then typed in the game)."""
         if not self.config_flag_vars["blackout_hotkey_enabled"].get():
             return
         try:
@@ -5836,18 +5845,12 @@ class AdoptMeGUI:
         except Exception:
             logger.exception("Blanking the screen failed")
             self.blackout.hide()
-        self.keep_above_blackout()
-
-    def keep_above_blackout(self) -> None:
-        """Raise the window over the black one (both are always on top, and the later one is the higher) - not when the window was sent to the back on purpose
-        (a minigame is being played)."""
-        if self.blackout.shown and self.root.attributes('-topmost'):
-            self.root.lift()
 
     def on_window_mapped(self, event: Any) -> None:
-        """The window came back up (from the taskbar, say): it is above the black window again, once Windows has put it back."""
+        """The window came back up (from the taskbar, say): the black window goes back over it, once Windows has put it back in the stack - the control window
+        is blanked with the rest of the screen."""
         if event.widget is self.root and self.blackout.shown:
-            self.root.after(cfg.BLACKOUT_RAISE_DELAY_MS, self.keep_above_blackout)
+            self.root.after(cfg.BLACKOUT_RAISE_DELAY_MS, self.blackout.raise_over)
 
     def stop_by_hotkey(self) -> None:
         """HOTKEYS["stop"] was pressed: stop, same as the [STOP] button, and say so."""

@@ -100,25 +100,13 @@ clear in `run_workflow_loop()`.
 
 ### Dead code, duplication, size
 
-- `MINIGAME_VICTORY_CHECK_INTERVAL` is unused (victory is checked on every look); its comment in `magic_numbers.py` and the docs still say it sets an interval.
-  `tools/check_constants.py` only finds undefined names, not unused constants; adding that check would have caught it.
-- `minigame_won()` is never called (only the docs mention it). The `hearts` parameter of `choose_hauntlet_door()` is unused ("for the decision logic to come").
-- `HAUNTLET_SEARCH_TURNS` is deliberately zero, which makes the camera-search branch, `HauntletRun.turns` and `HAUNTLET_CAMERA_DRAG` inert as shipped. Fine as a kill
-  switch; say so in its comment.
-- `play_ghost_gallery()` is about 160 lines with six closure-captured state variables; a `GhostPlayer` class (as `HauntletRun` and `GhostFeedback` were done) would
-  make it testable in parts. `hauntlet_walk()` is about 90 lines.
-- Inline literals remain where constants belong: the 96x54 and 8/45 in `hauntlet_view()`, the 80x45 in `screen_changed()`, the thresholds in `find_ghost_alerts()`,
-  Ghost Gallery's hard-coded `"w"` and its borrowed `HAUNTLET_LEFT/RIGHT/BACK_KEY`. `TARGET_BUCKETS`, `BUCKET_STEPS` and `COLOR_*` live in `main.py`, against the
-  statement in the docs that every tunable is in `magic_numbers.py`.
-- Naming: `detect_minigame_victory()` and `minigame_popup_checks()` say "victory" but the screen is the GAME OVER screen for any outcome; the players' docstrings
-  say "True if won".
+Checked against the code: the unused `MINIGAME_VICTORY_CHECK_INTERVAL`, `minigame_won()` and the `hearts` parameter are gone, the inline literals are constants, the movement keys are one set, `detect_minigame_victory()` is `detect_minigame_finished()`, and `HAUNTLET_SEARCH_TURNS`'s comment says it is a kill switch. Still there:
+- `play_ghost_gallery()` is about 160 lines with several closure-captured state variables; a `GhostPlayer` class (as `HauntletRun` and `GhostFeedback` were done) would make it testable in parts. `hauntlet_walk()` is about 90 lines.
+- `TARGET_BUCKETS`, `BUCKET_STEPS` and `COLOR_*` (the run report's chart) live in `main.py`; `ARCHITECTURE.md` names that as the one exception to "every tunable is in `magic_numbers.py`".
 
 ### Stale comments
 
-- `MinigameWatch` says it is fed by `minigame_won()`; it is fed by `minigame_look()` and `minigame_wait()`.
-- `magic_numbers.py`: "both end on the victory screen" and "both minigames wait/hold" (three minigames); the overlay comment omits Stitches' Spotlight; the
-  Hauntlet 2 comment "then W alone until the room number changes" predates steering and unsticking; the "Record the next run" comment points to the Options tab, it is
-  on Debug > Other.
+None found in `main.py` or `magic_numbers.py` that the earlier review listed (the `MinigameWatch` feeding, "both" for three minigames, the overlay list, the Hauntlet 2 walk comment); the "Record the next run" comment now says the Options subtab.
 
 ## Discord bot
 
@@ -226,17 +214,8 @@ These also make the docs wrong the moment a value is retuned.
 
 ### Incomplete or inconsistent
 
-- "Two minigames" or "both" where there are three (`MINIGAME_LABELS`); the overlay list omits Stitches' Spotlight.
-- The persisted-config list omits `hauntlet_2_enabled`, `ghost_gallery_enabled` and `stitches_spotlight_enabled`.
-- The Discord constants row omits `BOT_GIT_TIMEOUT` (documented nowhere), `BOT_PIP_TIMEOUT`, `NEED_NAMES`, `OPTION_SWITCHES`, `SHOW_DEBUG_LINES_OPTION`, `TRADE_HUB_*`.
-  There is no group for the `KEY_*` constants; `KEY_MOUNT`, `KEY_ZOOM_IN`, `WATCH_POLL_INTERVAL`, `TAB_SELECTED_*` and `NEED_WATCH_JOIN_TIMEOUT` are named nowhere.
-- Side actions omits `travel_to_trade_hub()`, `leave_trade_hub()` and `click_steps()` (they appear only under Discord). The debug layout omits `captures/`,
-  `minigame_captures/`, `commands.json` and `logs/macro_stderr.log`.
-- Run capture naming: `<minigame>_<date>_<time>` is incomplete (the suffix from `run_capture_suffix()`); a sentence about which runs are kept lost a comma.
-- The `ButtonNeedHandler` row repeats "without waiting for the icon" and contradicts itself. "`run_workflow_loop()` is the only thing that runs" is no longer true.
-- Fork doorway counts differ between `ARCHITECTURE.md` and `PLANNED.md`; `retune_check.py` is "a few minutes" in one place and about 15 in `CLAUDE.md`;
-  `PLANNED.md` says the sick dialog is up "after `e`" while the handler clicks the doctor's prompt; "the table of `STITCHES_TURN_KEYS`" (it is a tuple); the door
-  fixture naming rule has exceptions (`fork_hall__no_doors`, `phone_arrow`, `room1_close`, `thin_one`).
+Checked against `ARCHITECTURE.md`: the lists the review found short (the persisted config, the Discord constants row, the side actions, the debug layout, the capture naming, the fixture naming exceptions) are complete now, and the "both" and "two minigames" wording says every minigame. Left:
+- `PLANNED.md` says the sick dialog is up "after `e`" while the handler clicks the doctor's prompt (outside the Claude section, so not edited), and its fork doorway counts were not compared with `ARCHITECTURE.md` again.
 
 ## Tests and tools
 

@@ -241,7 +241,7 @@ MAX_FAILURE_FOLDERS = 100                # oldest failure folders are deleted be
 MAX_REPORTS = 50                         # oldest run report images (run<N>.png in RUNS_DIR) are deleted beyond this many (the run logs they are drawn from are kept)
 CONSOLE_MAX_LINES = 2000                 # the GUI's output box keeps its last this many lines (output.log keeps them all)
 
-# Recording a run ("Record the next run" on the Debug tab, in Other): low quality on purpose, a video of a whole
+# Recording a run ("Record the next run" on the Debug tab, in Options): low quality on purpose, a video of a whole
 # unattended run is large. Every frame has the time on it, to line it up with the logs.
 RECORD_WIDTH = 640
 RECORD_HEIGHT = 360

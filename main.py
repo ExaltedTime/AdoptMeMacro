@@ -5624,7 +5624,9 @@ class Blackout:
         try:
             user32 = ctypes.windll.user32  # type: ignore[attr-defined]  # Windows only
             hwnd = user32.GetParent(self.window.winfo_id()) or self.window.winfo_id()
-            user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)    # HWND_TOPMOST; SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
+            topmost = ctypes.c_void_p(-1)                                            # HWND_TOPMOST (a handle is as wide as a pointer: a plain -1 would be passed as 32 bits and not be the value)
+            if not user32.SetWindowPos(ctypes.c_void_p(hwnd), topmost, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010):     # SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
+                logger.debug("Putting the black window back on top failed")
         except (tk.TclError, AttributeError, OSError):
             pass
 
@@ -5990,6 +5992,7 @@ class AdoptMeGUI:
         """Always-on-top again, as at startup."""
         self.root.attributes('-topmost', True)
         self.root.lift()
+        self.blackout.raise_over()                                    # (a blank screen covers the window too, at once)
 
     def run_on_ui_thread(self, func: Callable[[], Any], timeout: Optional[float] = 5.0) -> Any:
         """Run `func` on Tk's thread and wait up to `timeout` (None = as long as it takes);

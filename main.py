@@ -1630,12 +1630,12 @@ def travel_to_trade_hub() -> bool:
     return True
 
 def scroll_down(clicks: int) -> None:
-    """Turn the mouse wheel `clicks` notches down, over wherever the mouse is, INVENTORY_SCROLL_CHUNK at a time with INVENTORY_SCROLL_PAUSE between: a game may
+    """Turn the mouse wheel `clicks` notches down (WHEEL_NOTCH units each), over wherever the mouse is, INVENTORY_SCROLL_CHUNK at a time with INVENTORY_SCROLL_PAUSE between: a game may
     take one huge turn of the wheel for a small one."""
     while clicks > 0:
         check_running()
         step = min(clicks, cfg.INVENTORY_SCROLL_CHUNK)
-        pyautogui.scroll(-step)
+        pyautogui.scroll(-step * cfg.WHEEL_NOTCH)                    # (Windows takes the wheel in 120ths of a notch: -10 would hardly move a list)
         clicks -= step
         time.sleep(cfg.INVENTORY_SCROLL_PAUSE)
 
@@ -1656,6 +1656,7 @@ def inventory_tour() -> bool:
     shutil.rmtree(cfg.INVENTORY_DIR, ignore_errors=True)
     os.makedirs(cfg.INVENTORY_DIR, exist_ok=True)
     pictures, ended = 0, "stopped"
+    send_macro_window_to_back()                              # it is always on top and would be in every picture
     try:
         if not focus_roblox():
             ended = "Roblox could not be focused"
@@ -1692,6 +1693,7 @@ def inventory_tour() -> bool:
                 wait_interruptible(cfg.INVENTORY_SCROLL_SETTLE)
             close_backpack("the inventory")
     finally:
+        bring_macro_window_to_front()
         with open(cfg.INVENTORY_DONE_PATH, "w", encoding="utf-8") as f:
             json.dump({"pictures": pictures, "ended": ended}, f)
     log_run_event(f"inventory: {pictures} pictures ({ended})")
@@ -5854,6 +5856,8 @@ class AdoptMeGUI:
             self.stop()
         elif command == "set" and data:
             self.set_switch(data["kind"], data["name"], data["value"])
+        elif command == "focus":
+            focus_roblox()                                                          # the window to the front (no click): after an update the macro's own window may be
         elif command == "sloop":
             self.act_from_outside("setup", stem, resume=True)                       # Setup, and then the loop, whether or not one was running
         elif command in OUTSIDE_ACTIONS:

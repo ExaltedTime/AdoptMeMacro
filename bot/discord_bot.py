@@ -418,7 +418,11 @@ async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say, l
             await say(f"pip failed (exit {code}) - the macro was not started. Use /rollback.\n```\n{output[-1200:]}\n```")
             return False
     if was_running:
-        if not await start_again(config, loop_was_running, say):
+        if await start_again(config, loop_was_running, say):
+            problem = await send_command("focus")                       # the macro's own window is up again: the game is brought back to the front
+            if problem:
+                await say(f"The Roblox window could not be brought to the front: {problem}")
+        else:
             await say(f"Use /rollback to go back to {bot_lib.short(old)}.")
     else:
         await say("The macro was not running, so it was not started (/loop).")

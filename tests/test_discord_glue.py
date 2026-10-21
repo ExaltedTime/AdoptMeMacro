@@ -542,3 +542,49 @@ def test_an_update_that_stops_part_way_does_not_say_it_finished(tmp_path, monkey
 
 async def _git_plain(args):
     return "abc1234\n" if args[0] == "rev-parse" else ""
+
+
+def test_after_an_update_that_started_the_macro_again_the_roblox_window_is_brought_to_the_front(macro_calls, monkeypatch):
+    sent = []
+
+    async def send(command, **details):
+        sent.append(command)
+        return ""
+
+    async def git_plain(config, *args):
+        return "abc1234\n" if args[0] == "rev-parse" else ""
+
+    async def running():
+        return [5]
+    monkeypatch.setattr(discord_bot, "send_command", send)
+    monkeypatch.setattr(discord_bot, "git", git_plain)
+    monkeypatch.setattr(discord_bot, "running_pids", running)
+    assert asyncio.run(discord_bot.apply_commit(macro_calls.config, ["merge"], "0" * 40, macro_calls.say, True)) is True
+    assert macro_calls.calls == ["stop", "loop"] and sent == ["focus"]                    # (after the macro was started again)
+
+    async def not_started(config):
+        return "Started the macro. No sign of its loop yet - see /status and /log."
+    monkeypatch.setattr(discord_bot, "start_macro", not_started)
+    sent.clear()
+    asyncio.run(discord_bot.apply_commit(macro_calls.config, ["merge"], "0" * 40, macro_calls.say, True))
+    assert sent == []                                                                     # a macro that does not look started is not focused on
+
+    async def nobody():
+        return []
+    monkeypatch.setattr(discord_bot, "running_pids", nobody)
+    asyncio.run(discord_bot.apply_commit(macro_calls.config, ["merge"], "0" * 40, macro_calls.say, True))
+    assert sent == []                                                                     # nor is one that was not running
+
+    async def refused(command, **details):
+        return "The macro dropped the command (too old) - nothing was done."
+    monkeypatch.setattr(discord_bot, "send_command", refused)
+    monkeypatch.setattr(discord_bot, "running_pids", running)
+    monkeypatch.setattr(discord_bot, "start_macro", lambda config: _started(macro_calls))
+    macro_calls.said.clear()
+    asyncio.run(discord_bot.apply_commit(macro_calls.config, ["merge"], "0" * 40, macro_calls.say, True))
+    assert any("could not be brought to the front" in text for text in macro_calls.said)
+
+
+async def _started(macro_calls):
+    macro_calls.calls.append("loop")
+    return "Started the macro. Its loop is running."

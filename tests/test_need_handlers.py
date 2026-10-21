@@ -194,7 +194,8 @@ def test_the_wheel_is_turned_in_chunks_with_a_pause_between_that_add_up_to_what_
     monkeypatch.setattr(macro, "check_running", lambda: None)
     monkeypatch.setattr(macro.cfg, "INVENTORY_SCROLL_CHUNK", 10)
     macro.scroll_down(25)
-    assert turned == [-10, -10, -5] and len(slept) == 3 and sum(turned) == -25                  # (down is negative)
+    notch = macro.cfg.WHEEL_NOTCH
+    assert turned == [-10 * notch, -10 * notch, -5 * notch] and len(slept) == 3 and sum(turned) == -25 * notch      # (down is negative, in the units Windows takes: 120 to a notch)
     turned.clear()
     macro.scroll_down(0)
     assert turned == []
@@ -215,6 +216,22 @@ def test_a_stop_in_the_middle_of_the_tour_still_leaves_the_marker_for_the_bot(ma
     with pytest.raises(macro.StopRequested):
         macro.inventory_tour()
     assert done_marker(tour) == {"pictures": 1, "ended": "stopped"}
+
+
+def test_the_macro_window_is_sent_to_the_back_for_the_tour_and_brought_back_however_it_ends(macro, tour, monkeypatch):
+    window = types.SimpleNamespace(run_on_ui_thread=lambda func, timeout=5.0: func(), send_to_back=lambda: tour.log.append(("gui back",)), bring_to_front=lambda: tour.log.append(("gui front",)))
+    monkeypatch.setattr(macro.state, "macro_window", window)
+    tour.screens.extend([tour.screen(level) for level in (50, 50, 50, 120, 120)])
+    assert macro.inventory_tour() is True
+    assert tour.log[0] == ("gui back",) and tour.log[-1] == ("gui front",) and ("close", "the inventory") in tour.log        # back before the first look, front after the backpack is closed
+    tour.log.clear()
+    monkeypatch.setattr(macro, "detect_backpack_open", lambda img: False)
+    macro.inventory_tour()
+    assert tour.log == [("gui back",), ("press", macro.cfg.KEYS["backpack"]), ("gui front",)]
+    tour.log.clear()
+    monkeypatch.setattr(macro, "focus_roblox", lambda: False)
+    macro.inventory_tour()
+    assert tour.log == [("gui back",), ("gui front",)]
 
 
 def test_two_pictures_of_the_panel_are_the_same_when_their_grey_levels_hardly_differ(macro):

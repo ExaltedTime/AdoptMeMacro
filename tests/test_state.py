@@ -1445,7 +1445,7 @@ def answer(macro, name):
 def test_a_fresh_command_is_read_once_and_the_file_is_removed(macro, monkeypatch, tmp_path):
     monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
     assert macro.read_command_with_id()[1] is None                                       # (no file)
-    for command in ("start", "stop", "exit", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop"):
+    for command in ("start", "stop", "exit", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus"):
         name = write_command(macro, command)
         assert macro.read_command_with_id()[1]["command"] == command and commands_waiting(macro) == []
         assert answer(macro, name) == "taken"
@@ -1912,6 +1912,14 @@ def test_sloop_runs_setup_and_then_the_loop_whether_or_not_one_was_running(macro
     stopped.resume_loop = True
     stopped._finish_running("[STOPPED]")
     assert ("start_loop",) not in stopped.calls
+
+
+def test_the_focus_command_brings_the_roblox_window_to_the_front_without_stopping_a_loop(macro, monkeypatch, tmp_path):
+    focused = []
+    monkeypatch.setattr(macro, "focus_roblox", lambda: focused.append(1) or True)
+    gui = remote_gui(macro, monkeypatch, tmp_path, running=True)                           # a loop runs
+    gui.do_command("focus", {"command": "focus"}, "f1")
+    assert focused == [1] and gui.calls == [] and gui.pending == []                       # (nothing stopped, nothing queued)
 
 
 def test_only_the_actions_in_resume_loop_after_bring_the_loop_back(macro, monkeypatch, tmp_path):

@@ -5854,6 +5854,8 @@ class AdoptMeGUI:
             self.stop()
         elif command == "set" and data:
             self.set_switch(data["kind"], data["name"], data["value"])
+        elif command == "focus":
+            focus_roblox()                                                          # the window to the front (no click): after an update the macro's own window may be
         elif command == "sloop":
             self.act_from_outside("setup", stem, resume=True)                       # Setup, and then the loop, whether or not one was running
         elif command in OUTSIDE_ACTIONS:

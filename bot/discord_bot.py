@@ -180,19 +180,54 @@ async def running_pids() -> list[int]:
 
 
 async def send_command(command: str, **details: Any) -> str:
-    """Leave the macro `command` and wait up to BOT_COMMAND_ACK_WAIT seconds for it to answer that it took it. "" when it did; else what to tell the owner:
-    the macro dropped it (and why), or did not look in time (its window may be stuck) and the command was withdrawn, so that it does not run later."""
+    """submit_command() without the command's name: "" when the macro took it, else what to tell the owner."""
+    return (await submit_command(command, **details))[0]
+
+
+async def submit_command(command: str, **details: Any) -> tuple[str, str]:
+    """Leave the macro `command` and wait up to BOT_COMMAND_ACK_WAIT seconds for it to answer that it took it: ("", its name) when it did - the name to ask
+    about how its action ended (announce_when_done()) - else (what to tell the owner, ""): the macro dropped it (and why), or did not look in time (its
+    window may be stuck) and the command was withdrawn, so that it does not run later."""
+    problem, name = await _submit(command, **details)
+    return problem, ("" if problem else name)
+
+
+async def _submit(command: str, **details: Any) -> tuple[str, str]:
     name = bot_lib.write_command(cfg.COMMANDS_DIR, command, time.time(), **details)
     deadline = time.time() + cfg.BOT_COMMAND_ACK_WAIT
     while True:
         answer = bot_lib.take_ack(cfg.COMMANDS_DIR, name)
         if answer is None and time.time() >= deadline:
             if bot_lib.withdraw_command(cfg.COMMANDS_DIR, name):
-                return f"The macro did not take the command within {cfg.BOT_COMMAND_ACK_WAIT:g} s (its window may be stuck) - it was withdrawn and nothing was done."
+                return f"The macro did not take the command within {cfg.BOT_COMMAND_ACK_WAIT:g} s (its window may be stuck) - it was withdrawn and nothing was done.", name
             answer = bot_lib.take_ack(cfg.COMMANDS_DIR, name) or "taken"            # (taken just now)
         if answer is not None:
-            return "" if answer == "taken" else f"The macro dropped the command ({answer.removeprefix('dropped: ')}) - nothing was done."
+            return ("" if answer == "taken" else f"The macro dropped the command ({answer.removeprefix('dropped: ')}) - nothing was done."), name
         await asyncio.sleep(cfg.BOT_COMMAND_ACK_POLL)
+
+
+def action_end_text(label: str, ended: str, then: str = "") -> str:
+    """What to say when the macro's action `label` has ended as `ended` (what it wrote: "done", "stopped", "error", "given up: why" ...); `then` is what
+    follows an action that was done."""
+    text = f"{label} finished ({ended})."
+    if ended == "done" and then:
+        text += " " + then
+    elif ended == "error":
+        text += " See /log."
+    return text
+
+
+async def announce_when_done(client: discord.Client, config: bot_lib.Config, name: str, label: str, then: str = "") -> None:
+    """Say in the channel how the macro's action for the command `name` ended - it writes that when it does (finish_command()) - or that it has not reported in
+    BOT_ACTION_WAIT seconds."""
+    deadline = time.time() + cfg.BOT_ACTION_WAIT
+    while time.time() < deadline:
+        ended = bot_lib.take_ack(cfg.COMMANDS_DIR, name, "done")
+        if ended is not None:
+            await tell_channel(client, config, action_end_text(label, ended, then))
+            return
+        await asyncio.sleep(cfg.BOT_ACTION_POLL)
+    await tell_channel(client, config, f"{label} has not reported that it finished in {cfg.BOT_ACTION_WAIT:g} s - see /status.")
 
 
 async def collect_inventory() -> tuple[str, list[str]]:
@@ -335,6 +370,19 @@ async def start_again(config: bot_lib.Config, loop_was_running: bool, say) -> bo
     return True
 
 
+async def online_text(config: bot_lib.Config) -> str:
+    """What the bot says when it has started (a fresh start, or after /update or /restart made it start again): the commit it runs and what the macro is."""
+    code, commit = await asyncio.to_thread(run_command, ["git", "rev-parse", "--short", "HEAD"], repo_folder(config), cfg.BOT_GIT_TIMEOUT)
+    pids = await asyncio.to_thread(current_macro_pids)
+    if pids is None:
+        macro = "not known (the processes cannot be listed)"
+    elif not pids:
+        macro = "not running"
+    else:
+        macro = "open with no loop" if bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path())) else "running its loop"
+    return f"**The bot is online**{f' (at commit {commit})' if code == 0 and commit else ''}. The macro is {macro}."
+
+
 async def restart_all(config: bot_lib.Config, say, loop_was_running: bool) -> None:
     """/restart: the macro stopped as /exit does it and started again as it was (as /update does, with no change of code), if it was running, and the bot to
     start again itself once the macro is back (RESTART_BOT: main() starts the same command again once the client has closed)."""
@@ -348,11 +396,11 @@ async def restart_all(config: bot_lib.Config, say, loop_was_running: bool) -> No
     RESTART_BOT = True
 
 
-async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say, loop_was_running: bool = True, moved=None) -> None:
+async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say, loop_was_running: bool = True, moved=None) -> bool:
     """The steps both /update and /rollback share, once the plan is made: stop the macro, move the repository (`move`: the git arguments), install
     the packages if requirements.txt changed, start the macro again if it was running (with its loop only if `loop_was_running`: a window that was open with
     no loop comes back the same), and ask for the bot's own restart if its code changed and still imports. `say` posts a message. A step that fails stops it
-    there, with what to do. `moved` is called once the repository has moved (not before: a move that fails keeps the rollback target there was)."""
+    there, with what to do. `moved` is called once the repository has moved (not before: a move that fails keeps the rollback target there was). True when every step was done, False when one stopped it."""
     global RESTART_BOT
     was_running = bool(await running_pids())
     if was_running:
@@ -368,7 +416,7 @@ async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say, l
         code, output = await asyncio.to_thread(run_command, [config.python or sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], repo_folder(config), cfg.BOT_PIP_TIMEOUT)
         if code != 0:
             await say(f"pip failed (exit {code}) - the macro was not started. Use /rollback.\n```\n{output[-1200:]}\n```")
-            return
+            return False
     if was_running:
         if not await start_again(config, loop_was_running, say):
             await say(f"Use /rollback to go back to {bot_lib.short(old)}.")
@@ -379,9 +427,10 @@ async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say, l
         if code != 0:
             await say(f"The bot's own code changed, but it does not import (exit {code}) - the bot is **not** restarted and goes on with the old code in memory, which would not "
                       f"start again. Use /rollback to go back to {bot_lib.short(old)}.\n```\n{output[-1200:]}\n```")
-            return
+            return False
         await say("The bot's own code changed - the bot restarts now.")
         RESTART_BOT = True
+    return True
 
 
 class ConfirmView(discord.ui.View):
@@ -574,28 +623,46 @@ def build(config: bot_lib.Config) -> discord.Client:
         remember("stopped")
         await say(interaction, await stop_macro(config))
 
-    async def ask_macro(interaction: discord.Interaction, command_name: str, said: str, idle_only: bool = False) -> None:
-        """Leave the running macro `command_name` (its window does it) and say `said`; with `idle_only` not while its loop runs."""
+    def announce(name: str, label: str, then: str = "") -> None:
+        task = asyncio.ensure_future(announce_when_done(client, config, name, label, then))
+        background.append(task)
+        task.add_done_callback(task_ended)
+
+    async def ask_macro(interaction: discord.Interaction, command_name: str, said: str, idle_only: bool = False, label: str = "", then: str = "") -> bool:
+        """Leave the running macro `command_name` (its window does it) and say `said`; with `idle_only` not while its loop runs. With a `label` the channel is told
+        when the action ends (announce_when_done()), and what `then` says after one that was done. True if the macro took the command."""
         await interaction.response.defer(thinking=True)
         if not await running_pids():
             await say(interaction, "The macro isn't running - /start it first (it is done by its window).")
-            return
+            return False
         if idle_only and not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path())):
             await say(interaction, "The macro's loop is running - /stop it first.")
-            return
-        await say(interaction, await send_command(command_name) or said)
+            return False
+        problem, name = await submit_command(command_name)
+        await say(interaction, problem or said)
+        if label and not problem:
+            announce(name, label, then)
+        return not problem
 
     @command("rejoin", "Have the macro leave the game and rejoin it (stops its loop first)")
     async def rejoin(interaction: discord.Interaction) -> None:
-        await ask_macro(interaction, "rejoin", "Asked the macro to leave and rejoin. Its loop is stopped; /loop it again once it is back in the game.")
+        await ask_macro(interaction, "rejoin", "Asked the macro to leave and rejoin. Its loop is stopped; /loop it again once it is back in the game.", label="The rejoin")
 
     @command("setup", "Have the macro run Setup (stops its loop first)")
     async def setup(interaction: discord.Interaction) -> None:
-        await ask_macro(interaction, "setup", "Asked the macro to run Setup. Its loop is stopped; /loop it again once Setup is done.")
+        loop_running = not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path()))
+        await ask_macro(interaction, "setup", "Asked the macro to run Setup." + (" Its loop starts again once Setup is done." if loop_running else ""),
+                        label="Setup", then="Its loop starts again." if loop_running else "")
+
+    @command("sloop", "Have the macro run Setup and then its loop (stops its loop first if it runs)")
+    async def sloop(interaction: discord.Interaction) -> None:
+        if await ask_macro(interaction, "sloop", "Asked the macro to run Setup and then its loop.", label="Setup", then="Its loop starts now."):
+            remember("running")
 
     @command("trade_hub", "Have the macro travel to the Trading Hub (stops its loop first)")
     async def trade_hub(interaction: discord.Interaction) -> None:
-        await ask_macro(interaction, "trade_hub", "Asked the macro to travel to the Trading Hub. Its loop is stopped; /leave_trade_hub and /loop when you want it back.")
+        await ask_macro(interaction, "trade_hub", "Asked the macro to travel to the Trading Hub. Its loop is stopped; /leave_trade_hub and /loop when you want it back.",
+                        label="The trip to the Trading Hub")
 
     @command("inventory", "Have the macro scroll down the backpack's pets tab and send pictures of it (stops its loop first)")
     async def inventory(interaction: discord.Interaction) -> None:
@@ -611,7 +678,8 @@ def build(config: bot_lib.Config) -> discord.Client:
 
     @command("leave_trade_hub", "Have the macro leave the Trading Hub for a regular server")
     async def leave_trade_hub(interaction: discord.Interaction) -> None:
-        await ask_macro(interaction, "leave_trade_hub", "Asked the macro to leave the Trading Hub for a regular server. Its loop is stopped; /loop it again once it is back.")
+        await ask_macro(interaction, "leave_trade_hub", "Asked the macro to leave the Trading Hub for a regular server. Its loop is stopped; /loop it again once it is back.",
+                        label="Leaving the Trading Hub")
 
     @command("refresh_debug", "Empty the macro's debug folder (the game config stays); not while its loop runs")
     async def refresh_debug(interaction: discord.Interaction) -> None:
@@ -692,7 +760,8 @@ def build(config: bot_lib.Config) -> discord.Client:
         bot_lib.save_state(bot_lib.state_path(), state)
         UPDATING = True
         try:
-            await apply_commit(config, move, head, lambda text: say(interaction, text), loop_running, moved)
+            if await apply_commit(config, move, head, lambda text: say(interaction, text), loop_running, moved):
+                await say(interaction, f"**{'Rollback' if rollback else 'Update'} finished.**")
         except RuntimeError as error:
             await say(interaction, f"**Stopped:** {error}\nThe macro may be stopped - see /status.")
         finally:
@@ -808,6 +877,7 @@ def build(config: bot_lib.Config) -> discord.Client:
         except (app_commands.CommandSyncFailure, discord.HTTPException) as error:
             log.exception("syncing the slash commands failed")
             await tell_channel(client, config, f"**The slash commands could not be registered:** {error}\nThe ones Discord already has still work; a new or changed command will not show until this is fixed (see the bot's console).")
+        await tell_channel(client, config, await online_text(config))
 
     client.tree = tree  # type: ignore[attr-defined]       # (kept, so the commands can be listed)
     return client

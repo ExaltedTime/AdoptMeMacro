@@ -129,6 +129,8 @@ def tour(macro, monkeypatch, tmp_path):
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
     monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
     monkeypatch.setattr(macro, "detect_backpack_open", lambda img: True)
+    monkeypatch.setattr(macro, "detect_backpack_expanded", lambda img: True)
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: log.append(("click", (x, y))))
     monkeypatch.setattr(macro, "select_backpack_tab", lambda pos: log.append(("tab", pos)))
     monkeypatch.setattr(macro, "close_backpack", lambda step: log.append(("close", step)))
     monkeypatch.setattr(macro, "scroll_down", lambda clicks: log.append(("scroll", clicks)))
@@ -149,14 +151,14 @@ def done_marker(tour):
 
 def test_the_tour_takes_a_picture_scrolls_and_stops_when_a_step_moves_nothing(macro, tour):
     cfg = macro.cfg
-    tour.screens.extend([tour.screen(50), tour.screen(50), tour.screen(120), tour.screen(200), tour.screen(200)])      # (the first is the look at the backpack opening)
+    tour.screens.extend([tour.screen(level) for level in (50, 50, 50, 120, 200, 200)])      # (the first two are the looks at the backpack opening and expanding)
     (tour.folder).mkdir(parents=True)
     (tour.folder / "007.png").write_text("from an earlier tour")
     assert macro.inventory_tour() is True
     assert sorted(os.listdir(tour.folder)) == ["001.png", "002.png", "003.png", "done.json"]
     assert done_marker(tour) == {"pictures": 3, "ended": "the end of the list"}
     kinds = [event[0] for event in tour.log]
-    assert tour.log[0] == ("press", cfg.KEYS["backpack"]) and tour.log[1] == ("tab", cfg.INVENTORY_PETS_TAB_POS) and tour.log[2] == ("move", *cfg.INVENTORY_SCROLL_POS)
+    assert tour.log[:4] == [("press", cfg.KEYS["backpack"]), ("tab", cfg.INVENTORY_PETS_TAB_POS), ("click", cfg.INVENTORY_EXPAND_POS), ("move", *cfg.INVENTORY_SCROLL_POS)]     # the expand button, not the selected tab again
     assert kinds.count("scroll") == 3 and tour.log[-1] == ("close", "the inventory") and ("scroll", cfg.INVENTORY_SCROLL_CLICKS) in tour.log
     import cv2
     left, top, right, bottom = cfg.INVENTORY_PANEL_BOX
@@ -176,6 +178,26 @@ def test_a_backpack_that_did_not_open_is_said_in_the_marker_and_nothing_is_scrol
     monkeypatch.setattr(macro, "detect_backpack_open", lambda img: False)
     assert macro.inventory_tour() is False
     assert done_marker(tour) == {"pictures": 0, "ended": "the backpack did not open"} and not [e for e in tour.log if e[0] == "scroll"]
+
+
+def test_a_backpack_that_did_not_expand_is_closed_and_said_in_the_marker(macro, tour, monkeypatch):
+    tour.screens.append(tour.screen(50))
+    monkeypatch.setattr(macro, "detect_backpack_expanded", lambda img: False)
+    assert macro.inventory_tour() is False
+    assert done_marker(tour) == {"pictures": 0, "ended": "the backpack did not expand"} and tour.log[-1] == ("close", "the inventory") and not [e for e in tour.log if e[0] == "scroll"]
+
+
+def test_the_wheel_is_turned_in_chunks_with_a_pause_between_that_add_up_to_what_was_asked(macro, monkeypatch):
+    turned, slept = [], []
+    monkeypatch.setattr(macro.pyautogui, "scroll", lambda amount: turned.append(amount), raising=False)
+    monkeypatch.setattr(macro.time, "sleep", slept.append)
+    monkeypatch.setattr(macro, "check_running", lambda: None)
+    monkeypatch.setattr(macro.cfg, "INVENTORY_SCROLL_CHUNK", 10)
+    macro.scroll_down(25)
+    assert turned == [-10, -10, -5] and len(slept) == 3 and sum(turned) == -25                  # (down is negative)
+    turned.clear()
+    macro.scroll_down(0)
+    assert turned == []
 
 
 def test_a_roblox_that_cannot_be_focused_is_said_in_the_marker(macro, tour, monkeypatch):

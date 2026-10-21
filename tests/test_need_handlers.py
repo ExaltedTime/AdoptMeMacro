@@ -1,4 +1,5 @@
 """The catch, pet and ride needs as the game sees them: the order of the keys, clicks and waits, recorded with everything that touches the game replaced."""
+import os
 import types
 
 import pytest
@@ -114,3 +115,88 @@ def test_every_constant_and_key_a_step_table_names_exists(macro):
             if action == "say":
                 arguments[0].format_map(vars(cfg))                                                    # (every {CONSTANT} in a line exists)
     assert checked > 20
+
+
+# --- the inventory tour ---
+
+@pytest.fixture
+def tour(macro, monkeypatch, tmp_path):
+    """inventory_tour() with the game replaced: `screens` is what grab_screen() shows next (the last one stays), and `log` what the tour did."""
+    import numpy as np
+    log, screens = [], []
+    monkeypatch.setattr(macro.cfg, "INVENTORY_DIR", str(tmp_path / "inventory"))
+    monkeypatch.setattr(macro.cfg, "INVENTORY_DONE_PATH", str(tmp_path / "inventory" / "done.json"))
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "detect_backpack_open", lambda img: True)
+    monkeypatch.setattr(macro, "select_backpack_tab", lambda pos: log.append(("tab", pos)))
+    monkeypatch.setattr(macro, "close_backpack", lambda step: log.append(("close", step)))
+    monkeypatch.setattr(macro, "scroll_down", lambda clicks: log.append(("scroll", clicks)))
+    monkeypatch.setattr(macro, "to_screen", lambda x, y: (x, y))
+    monkeypatch.setattr(macro.pydirectinput, "press", lambda key, **k: log.append(("press", key)), raising=False)
+    monkeypatch.setattr(macro.pydirectinput, "moveTo", lambda x, y, **k: log.append(("move", x, y)), raising=False)
+    monkeypatch.setattr(macro, "grab_screen", lambda: screens.pop(0) if len(screens) > 1 else screens[0])
+
+    def screen(level):
+        return np.full((macro.cfg.REFERENCE_HEIGHT, macro.cfg.REFERENCE_WIDTH, 3), level, np.uint8)
+    return types.SimpleNamespace(log=log, screens=screens, screen=screen, folder=tmp_path / "inventory")
+
+
+def done_marker(tour):
+    import json
+    return json.loads((tour.folder / "done.json").read_text())
+
+
+def test_the_tour_takes_a_picture_scrolls_and_stops_when_a_step_moves_nothing(macro, tour):
+    cfg = macro.cfg
+    tour.screens.extend([tour.screen(50), tour.screen(50), tour.screen(120), tour.screen(200), tour.screen(200)])      # (the first is the look at the backpack opening)
+    (tour.folder).mkdir(parents=True)
+    (tour.folder / "007.png").write_text("from an earlier tour")
+    assert macro.inventory_tour() is True
+    assert sorted(os.listdir(tour.folder)) == ["001.png", "002.png", "003.png", "done.json"]
+    assert done_marker(tour) == {"pictures": 3, "ended": "the end of the list"}
+    kinds = [event[0] for event in tour.log]
+    assert tour.log[0] == ("press", cfg.KEYS["backpack"]) and tour.log[1] == ("tab", cfg.INVENTORY_PETS_TAB_POS) and tour.log[2] == ("move", *cfg.INVENTORY_SCROLL_POS)
+    assert kinds.count("scroll") == 3 and tour.log[-1] == ("close", "the inventory") and ("scroll", cfg.INVENTORY_SCROLL_CLICKS) in tour.log
+    import cv2
+    left, top, right, bottom = cfg.INVENTORY_PANEL_BOX
+    assert cv2.imread(str(tour.folder / "001.png")).shape[:2] == (bottom - top, right - left)               # each picture is the panel
+
+
+def test_the_tour_ends_at_the_most_pictures_asked_for_when_the_list_goes_on(macro, tour, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "INVENTORY_MAX_PICTURES", 2)
+    counter = iter(range(10, 250, 10))
+    monkeypatch.setattr(macro, "grab_screen", lambda: tour.screen(next(counter)))
+    assert macro.inventory_tour() is True
+    assert done_marker(tour) == {"pictures": 2, "ended": "2 pictures taken"} and tour.log[-1] == ("close", "the inventory")
+
+
+def test_a_backpack_that_did_not_open_is_said_in_the_marker_and_nothing_is_scrolled(macro, tour, monkeypatch):
+    tour.screens.append(tour.screen(50))
+    monkeypatch.setattr(macro, "detect_backpack_open", lambda img: False)
+    assert macro.inventory_tour() is False
+    assert done_marker(tour) == {"pictures": 0, "ended": "the backpack did not open"} and not [e for e in tour.log if e[0] == "scroll"]
+
+
+def test_a_roblox_that_cannot_be_focused_is_said_in_the_marker(macro, tour, monkeypatch):
+    monkeypatch.setattr(macro, "focus_roblox", lambda: False)
+    assert macro.inventory_tour() is False and done_marker(tour)["ended"] == "Roblox could not be focused" and tour.log == []
+
+
+def test_a_stop_in_the_middle_of_the_tour_still_leaves_the_marker_for_the_bot(macro, tour, monkeypatch):
+    tour.screens.extend([tour.screen(50), tour.screen(90)])
+    monkeypatch.setattr(macro, "grab_screen", lambda: tour.screen(90))
+
+    def stopped(clicks):
+        raise macro.StopRequested()
+    monkeypatch.setattr(macro, "scroll_down", stopped)
+    with pytest.raises(macro.StopRequested):
+        macro.inventory_tour()
+    assert done_marker(tour) == {"pictures": 1, "ended": "stopped"}
+
+
+def test_two_pictures_of_the_panel_are_the_same_when_their_grey_levels_hardly_differ(macro):
+    import numpy as np
+    flat = np.full((10, 10, 3), 100, np.uint8)
+    assert macro.same_picture(flat, flat + 0) and macro.same_picture(flat, np.full((10, 10, 3), 100 + int(macro.cfg.INVENTORY_SAME_LEVEL) - 1, np.uint8))
+    assert not macro.same_picture(flat, np.full((10, 10, 3), 100 + int(macro.cfg.INVENTORY_SAME_LEVEL) + 5, np.uint8)) and not macro.same_picture(flat, flat[:5])

@@ -289,6 +289,16 @@ def test_a_loop_has_started_when_the_status_is_new_and_does_not_say_that_nothing
     assert not bot_lib.loop_started(None, since)
 
 
+def test_the_pictures_of_an_inventory_tour_are_listed_in_order_cleared_and_sent_ten_at_a_time(tmp_path):
+    for name in ("002.png", "001.png", "010.png", "notes.png", "done.json"):
+        (tmp_path / name).write_text("x")
+    pictures = bot_lib.inventory_pictures(str(tmp_path))
+    assert [os.path.basename(p) for p in pictures] == ["001.png", "002.png", "010.png"]
+    bot_lib.clear_inventory(str(tmp_path))
+    assert sorted(os.listdir(tmp_path)) == ["notes.png"]                                  # (only the tour's own files)
+    assert bot_lib.in_batches(list("abcdefghijklmnopqrstuvwxy"), 10) == [list("abcdefghij"), list("klmnopqrst"), list("uvwxy")] and bot_lib.in_batches([], 10) == []
+
+
 def test_the_loop_is_idle_only_when_the_status_says_so():
     assert bot_lib.loop_idle({"stopped": "2026-10-17 12:00:00"}) and not bot_lib.loop_idle({"stopped": None}) and not bot_lib.loop_idle(None)
 
@@ -799,7 +809,7 @@ def test_every_slash_command_has_a_name_and_descriptions_discord_accepts():
     commands = re.findall(r'@command\("([^"]+)", "((?:[^"\\]|\\.)*)"\)', source)
     names = {name for name, _ in commands}
     assert {"status", "screenshot", "rview", "log", "report", "results", "captures", "pull", "start", "loop", "stop", "exit", "rejoin", "setup", "refresh_debug",
-            "trade_hub", "leave_trade_hub", "update", "restart", "rollback", "need", "option", "options"} <= names
+            "trade_hub", "leave_trade_hub", "inventory", "update", "restart", "rollback", "need", "option", "options"} <= names
     for name, description in commands:
         assert re.fullmatch(r"[a-z0-9_-]{1,32}", name) and 1 <= len(description) <= 100, name
     for described in re.findall(r'@app_commands\.describe\((.*)\)', source):

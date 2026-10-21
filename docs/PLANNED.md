@@ -19,6 +19,8 @@ Suggestions from reading through the code, none of them started. Roughly in orde
 - [ ] Confirm the teleport steps really ran by checking against screenshots: after each teleport, backpack click and walk, compare the screen with what's expected (the backpack panel is open, the view changed after the teleport, the sick need's "Ask Doctor Heart" dialog - `sick_dialog` - is up after the doctor's prompt is clicked) and retry or log a failure when it isn't. Run 3 had a dealership need (17:51) whose sequence never teleported and a sick need (17:09) that never cleared, and nothing in the log says which step was skipped
 - [ ] Navigate to the hospital (sick) by centering the camera on its door and moving forward, instead of timed key holds: find the door on screen, turn the camera until it is in the middle, walk forward until the white screen of going indoors shows (an earlier attempt that stepped towards the door's light and panes was removed; it fired on shop windows in the plaza)
 
+- [ ] `/inventory` in the game (`inventory_tour()`): whether the mouse wheel scrolls the pets tab (the tour ends after one picture if it does not; dragging the scroll bar would be the other way), and whether `INVENTORY_PETS_TAB_POS`, `INVENTORY_PANEL_BOX` and `INVENTORY_SCROLL_POS` suit the backpack; the pictures it sends are the first sight of it.
+
 ## Stitches' Spotlight
 
 - [ ] Check the player in the game (`play_stitches_spotlight()`): send a run capture and the debug lines of its log. It never worked in the first version; the second (a controller that learns the steady turn, tests which arrow key turns which way and presses the speed boost) is untried. Still to do after that: the searchlight (hide behind planks) and the candy corn off the ring.

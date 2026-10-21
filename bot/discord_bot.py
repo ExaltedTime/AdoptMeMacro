@@ -195,6 +195,23 @@ async def send_command(command: str, **details: Any) -> str:
         await asyncio.sleep(cfg.BOT_COMMAND_ACK_POLL)
 
 
+async def collect_inventory() -> tuple[str, list[str]]:
+    """Ask the macro for its inventory tour (/inventory) and wait up to BOT_INVENTORY_WAIT seconds for it to end: what to say, and the pictures it took."""
+    bot_lib.clear_inventory(cfg.INVENTORY_DIR)
+    problem = await send_command("inventory")
+    if problem:
+        return problem, []
+    deadline = time.time() + cfg.BOT_INVENTORY_WAIT
+    done = None
+    while done is None and time.time() < deadline:
+        await asyncio.sleep(cfg.BOT_INVENTORY_POLL)
+        done = bot_lib.read_json(cfg.INVENTORY_DONE_PATH)
+    if done is None:
+        return f"The macro has not ended its tour in {cfg.BOT_INVENTORY_WAIT:g} s (its loop may not have stopped) - see /status.", []
+    pictures = bot_lib.inventory_pictures(cfg.INVENTORY_DIR)
+    return f"{len(pictures)} picture{'s' if len(pictures) != 1 else ''} of the pets tab ({done.get('ended', 'ended')}). Its loop is stopped; /loop it again when you want it back.", pictures
+
+
 async def stop_macro(config: bot_lib.Config) -> str:
     """Ask the macro to exit (its cooperative stop: the loop ends, every key and the mouse are released, the window closes) and wait up to
     stop_timeout_seconds for its process to end; if it hasn't, kill it and release the inputs from here. Returns what happened, as a sentence.
@@ -579,6 +596,18 @@ def build(config: bot_lib.Config) -> discord.Client:
     @command("trade_hub", "Have the macro travel to the Trading Hub (stops its loop first)")
     async def trade_hub(interaction: discord.Interaction) -> None:
         await ask_macro(interaction, "trade_hub", "Asked the macro to travel to the Trading Hub. Its loop is stopped; /leave_trade_hub and /loop when you want it back.")
+
+    @command("inventory", "Have the macro scroll down the backpack's pets tab and send pictures of it (stops its loop first)")
+    async def inventory(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        if not await running_pids():
+            await say(interaction, "The macro isn't running - /start it first (it is done by its window).")
+            return
+        text, pictures = await collect_inventory()
+        batches = bot_lib.in_batches(pictures, cfg.BOT_FILES_PER_MESSAGE)
+        await say(interaction, text, files=[discord.File(path) for path in batches[0]] if batches else [])
+        for batch in batches[1:]:
+            await say(interaction, files=[discord.File(path) for path in batch])
 
     @command("leave_trade_hub", "Have the macro leave the Trading Hub for a regular server")
     async def leave_trade_hub(interaction: discord.Interaction) -> None:

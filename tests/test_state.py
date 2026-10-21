@@ -1443,7 +1443,7 @@ def answer(macro, name):
 def test_a_fresh_command_is_read_once_and_the_file_is_removed(macro, monkeypatch, tmp_path):
     monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
     assert macro.read_command() is None                                       # (no file)
-    for command in ("start", "stop", "exit", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub"):
+    for command in ("start", "stop", "exit", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory"):
         name = write_command(macro, command)
         assert macro.read_command()["command"] == command and commands_waiting(macro) == []
         assert answer(macro, name) == "taken"

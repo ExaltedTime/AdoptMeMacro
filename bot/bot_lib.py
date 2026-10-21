@@ -669,6 +669,23 @@ def withdraw_command(folder: str, name: str) -> bool:
         return False
 
 
+def inventory_pictures(folder: str) -> list[str]:
+    """The pictures of an inventory tour in `folder` (001.png, 002.png ...), in order."""
+    return sorted(glob.glob(os.path.join(folder, "[0-9][0-9][0-9].png")))
+
+
+def clear_inventory(folder: str) -> None:
+    """Remove the pictures and the end marker of an earlier tour."""
+    for path in [*inventory_pictures(folder), os.path.join(folder, "done.json")]:
+        with contextlib.suppress(OSError):
+            os.remove(path)
+
+
+def in_batches(items: list[str], size: int) -> list[list[str]]:
+    """`items` in lists of at most `size`, in order."""
+    return [items[i:i + size] for i in range(0, len(items), size)]
+
+
 def clear_commands(folder: str) -> None:
     """Remove the commands nobody read (after the macro was killed, say) and their answers."""
     for path in glob.glob(os.path.join(folder, "*.json")) + glob.glob(os.path.join(folder, "*.ack")):

@@ -74,3 +74,15 @@ def test_need_group(macro):
     assert macro.need_group("hungry", {"hungry"}, {"beach"}) == "basic"
     assert macro.need_group("beach", {"hungry"}, {"beach"}) == "teleport"
     assert macro.need_group("pet", {"hungry"}, {"beach"}) == "other"
+
+
+def test_a_rejoin_goes_to_the_private_server_only_while_it_is_switched_on_and_a_bad_link_is_no_public_server(macro):
+    code = "a" * 32
+    link = f"https://www.roblox.com/share?code={code}&type=Server"
+    assert macro.rejoin_server({"private_server_link": link, "use_private_server": True}) == (("ShareCode", code), None)
+    assert macro.rejoin_server({"private_server_link": link, "use_private_server": False}) == (None, None)      # off: a public one, the link kept
+    assert macro.rejoin_server({"private_server_link": "", "use_private_server": True}) == (None, None)          # no link saved
+    server, problem = macro.rejoin_server({"private_server_link": "https://example.com", "use_private_server": True})
+    assert server is None and "isn't recognised" in problem                                                      # not a public server by accident
+    assert macro.rejoin_server({"private_server_link": "https://example.com", "use_private_server": False}) == (None, None)    # (off: the link is not looked at)
+    assert macro.load_game_config()["use_private_server"] is True                                                # on unless it was turned off

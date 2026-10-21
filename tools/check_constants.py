@@ -30,7 +30,7 @@ def files(pattern):
 
 CODE = ["main.py", *files("bot/*.py")]                                         # what uses the constants
 OTHER = [*files("tools/*.py"), *files("tests/*.py")]
-EXTERNAL_NAMES = {"TM_CCOEFF_NORMED", "SIGKILL", "HALLOWEEN", "WS_EX_TRANSPARENT", "WS_EX_NOACTIVATE", "WDA_EXCLUDEFROMCAPTURE", "HWND_TOPMOST"}                       # named in the docs, from a library or the OS
+EXTERNAL_NAMES = {"TM_CCOEFF_NORMED", "SIGKILL", "HALLOWEEN", "WS_EX_TRANSPARENT", "WS_EX_NOACTIVATE", "WDA_EXCLUDEFROMCAPTURE", "HWND_TOPMOST", "MAX_PATH", "FETCH_HEAD"}                       # named in the docs, from a library or the OS
 ENTRY_POINTS = {"main", "build", "setup_hook", "on_ready", "on_error", "interaction_check", "on_timeout", "run", "emit"}   # called by a framework, not by name
 
 

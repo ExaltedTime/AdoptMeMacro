@@ -2,8 +2,11 @@
 Discord does with a message (rate limits, an expired interaction) is not here; what the bot decides to send, and when, is."""
 import asyncio
 import json
+import pathlib
+import tempfile
 import time
 import types
+from datetime import datetime
 
 import pytest
 
@@ -43,7 +46,7 @@ def watch(tmp_path, monkeypatch):
 
     def once():
         asyncio.run(discord_bot.watch_once(channel, config, state, limiter))
-    return types.SimpleNamespace(once=once, channel=channel, posted=posted, state=state, folder=tmp_path, config=config)
+    return types.SimpleNamespace(once=once, channel=channel, posted=posted, state=state, folder=tmp_path, config=config, limiter=limiter)
 
 
 def _config(tmp_path, **values):
@@ -217,3 +220,126 @@ def test_a_post_that_fails_is_tried_again_at_the_next_look_and_does_not_stop_the
     broken["on"] = False
     watch.once()
     assert watch.state.charts == ["run1.png"] and [text for text, _ in watch.posted] == ["Run chart run1.png"]
+
+
+def test_a_restart_that_fails_is_not_counted_against_the_hourly_limit_and_is_said(watch, monkeypatch):
+    def refused(config, loop=True):
+        raise OSError("python.exe is gone")
+    monkeypatch.setattr(discord_bot, "macro_process_running", lambda: False)
+    monkeypatch.setattr(discord_bot, "launch_macro", refused)
+    watch.config = bot_lib.load_config(_config(watch.folder, auto_restart=True))
+    watch.state.desired_state = "running"
+    asyncio.run(discord_bot.watch_once(watch.channel, watch.config, watch.state, bot_lib.RateLimiter(60)))
+    assert watch.state.restarts == [] and any("could not be started again" in text and "python.exe is gone" in text for text in watch.channel.sent)
+    launched = []
+    monkeypatch.setattr(discord_bot, "launch_macro", lambda config, loop=True: launched.append(loop))
+    watch.state.crash_reported = False
+    asyncio.run(discord_bot.watch_once(watch.channel, watch.config, watch.state, bot_lib.RateLimiter(60)))
+    assert launched == [True] and len(watch.state.restarts) == 1                         # a restart that was made is counted
+
+
+def test_a_macro_that_is_being_started_is_not_taken_for_a_crash(watch, monkeypatch):
+    monkeypatch.setattr(discord_bot, "macro_process_running", lambda: False)
+    watch.state.desired_state = "running"
+    with discord_bot.launching():
+        watch.once()
+    assert not any("process is gone" in text for text in watch.channel.sent)
+    watch.once()                                                                          # (once it is no longer being started it is looked for)
+    assert any("process is gone" in text for text in watch.channel.sent)
+
+
+def test_failures_held_back_by_the_rate_limit_are_counted_in_a_post_of_their_own_when_no_later_one_comes(watch):
+    watch.limiter.check(time.time())                                                      # a post just made...
+    watch.limiter.check(time.time())
+    watch.limiter.check(time.time())                                                      # ...and two held back
+    watch.once()
+    assert not any("more failure" in text for text in watch.channel.sent)                  # (the gap has not passed)
+    watch.limiter.last -= watch.limiter.gap + 1
+    watch.once()
+    assert any(text.startswith("2 more failures") for text in watch.channel.sent)
+    watch.once()
+    assert sum("more failure" in text for text in watch.channel.sent) == 1                 # said once
+
+
+def test_buttons_nobody_pressed_are_taken_off_the_message_at_the_timeout():
+    edits = []
+
+    async def run():
+        view = discord_bot.ConfirmView(bot_lib.load_config(_config(pathlib.Path(tempfile.mkdtemp()))), 1.0)
+        view.message = types.SimpleNamespace(edit=lambda **kw: _record(edits, kw))
+        await view.on_timeout()
+    asyncio.run(run())
+    assert edits == [{"view": None}]
+
+
+async def _record(edits, kw):
+    edits.append(kw)
+
+
+def test_a_loop_already_going_is_said_so_and_one_that_was_idle_is_asked_to_start_and_seen_to_begin(monkeypatch, tmp_path):
+    monkeypatch.setattr(bot_lib.cfg, "STATUS_PATH", str(tmp_path / "status.json"))
+    sent = []
+
+    async def pids():
+        return [123]
+
+    async def send(command, **details):
+        sent.append(command)
+        return ""
+    monkeypatch.setattr(discord_bot, "running_pids", pids)
+    monkeypatch.setattr(discord_bot, "send_command", send)
+    monkeypatch.setattr(discord_bot.cfg, "BOT_START_CONFIRM", 3)
+    config = bot_lib.load_config(_config(tmp_path))
+    status = tmp_path / "status.json"
+    status.write_text(json.dumps({"updated": datetime.now().strftime(bot_lib.TIME_FORMAT)}))              # a loop that is going
+    assert "running already" in asyncio.run(discord_bot.start_macro(config)) and sent == []                # nothing was asked of it
+    status.write_text(json.dumps({"updated": "2000-01-01 00:00:00", "stopped": True}))                      # a window with no loop
+    monkeypatch.setattr(discord_bot.asyncio, "sleep", lambda s: _later(status))
+
+    text = asyncio.run(discord_bot.start_macro(config))
+    assert sent == ["start"] and text.endswith("Its loop is running.")
+
+
+async def _later(status):
+    status.write_text(json.dumps({"updated": datetime.now().strftime(bot_lib.TIME_FORMAT)}))              # the loop writes the status, and no longer says it is stopped
+
+
+def test_the_macro_is_launched_in_a_process_group_of_its_own_and_killed_with_its_children(tmp_path, monkeypatch):
+    launched, killed = [], []
+    monkeypatch.setattr(discord_bot.subprocess, "CREATE_NEW_PROCESS_GROUP", 512, raising=False)
+    monkeypatch.setattr(discord_bot.subprocess, "Popen", lambda *a, **kw: launched.append(kw) or types.SimpleNamespace(pid=7))
+    monkeypatch.setattr(discord_bot.cfg, "LOGS_DIR", str(tmp_path / "logs"))
+    assert discord_bot.launch_macro(bot_lib.load_config(_config(tmp_path)), False) == 7
+    assert launched[0]["creationflags"] == 512                                         # (Ctrl+C in the bot's console is not sent to it)
+    monkeypatch.setattr(discord_bot.os, "name", "nt")
+    monkeypatch.setattr(discord_bot.subprocess, "run", lambda command, **kw: killed.append(command))
+    monkeypatch.setattr(discord_bot, "release_inputs", lambda: None)
+    discord_bot.kill_macro([11])
+    assert killed == [["taskkill", "/F", "/T", "/PID", "11"]]
+
+
+def test_the_rollback_target_is_kept_until_the_repository_has_moved(tmp_path, monkeypatch):
+    moved, said = [], []
+    config = bot_lib.load_config(_config(tmp_path))
+
+    async def nobody():
+        return []
+
+    async def say(text):
+        said.append(text)
+
+    async def fail_on_merge(config, *args):
+        if args[0] == "merge":
+            raise RuntimeError("git merge failed")
+        return "abc1234\n" if args[0] == "rev-parse" else ""
+    monkeypatch.setattr(discord_bot, "running_pids", nobody)
+    monkeypatch.setattr(discord_bot, "git", fail_on_merge)
+    with pytest.raises(RuntimeError, match="merge failed"):
+        asyncio.run(discord_bot.apply_commit(config, ["merge", "--ff-only", "x"], "0" * 40, say, True, lambda: moved.append(1)))
+    assert moved == []                                                                  # the move failed: what /rollback goes back to is as it was
+
+    async def move_works(config, *args):
+        return "abc1234\n" if args[0] == "rev-parse" else ""
+    monkeypatch.setattr(discord_bot, "git", move_works)
+    asyncio.run(discord_bot.apply_commit(config, ["merge", "--ff-only", "x"], "0" * 40, say, True, lambda: moved.append(1)))
+    assert moved == [1]

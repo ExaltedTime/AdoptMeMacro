@@ -4,6 +4,7 @@ here and not at the PC."""
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import types
 from datetime import datetime, timedelta
@@ -253,6 +254,11 @@ def test_a_log_that_cannot_be_read_keeps_the_offset_and_a_missing_one_does_not(t
     assert bot_lib.read_new_lines(str(log), 0) == (["one"], 4)
 
 
+def test_a_screenshot_with_no_common_root_with_the_debug_folder_is_none_and_no_error(monkeypatch):
+    monkeypatch.setattr(bot_lib.cfg, "DEBUG_DIR", "relative_debug")              # a path with no common root with an absolute one (another drive, on Windows): commonpath refuses it
+    assert bot_lib.failure_screenshot_path(bot_lib.Failure("t", 1, "r", "/etc/passwd")) is None
+
+
 def test_failures_are_posted_one_a_minute_and_the_rest_counted():
     limiter = bot_lib.RateLimiter(60)
     assert limiter.check(1000) == (True, 0)
@@ -262,6 +268,25 @@ def test_failures_are_posted_one_a_minute_and_the_rest_counted():
     failure = bot_lib.Failure("2026-10-16 12:37:30", 6, "sleepy handler could not resolve it", None)
     assert "run 6" in bot_lib.failure_text(failure) and "more" not in bot_lib.failure_text(failure)
     assert "1 more failure since" in bot_lib.failure_text(failure, 1) and "3 more failures since" in bot_lib.failure_text(failure, 3)
+
+
+def test_held_failures_are_flushed_once_the_gap_has_passed_and_not_before(  ):
+    limiter = bot_lib.RateLimiter(60)
+    assert limiter.flush(1000) == 0                                            # nothing held, nothing posted yet
+    limiter.check(1000)
+    assert limiter.flush(1010) == 0
+    limiter.check(1010), limiter.check(1020)
+    assert limiter.flush(1030) == 0                                            # (two held, but a post was made 30 s ago)
+    assert limiter.flush(1061) == 2 and limiter.flush(1062) == 0               # said, once
+    assert limiter.check(1100) == (False, 0) and limiter.check(1122) == (True, 1)      # (the gap counts from the flush)
+
+
+def test_a_loop_has_started_when_the_status_is_new_and_does_not_say_that_nothing_runs():
+    since = datetime(2026, 10, 17, 12, 0, 5)
+    new, old = "2026-10-17 12:00:05", "2026-10-17 12:00:04"
+    assert bot_lib.loop_started({"updated": new}, since) and not bot_lib.loop_started({"updated": old}, since)
+    assert not bot_lib.loop_started({"updated": new, "stopped": "2026-10-17 12:00:05"}, since)      # a window with no loop writes the status too
+    assert not bot_lib.loop_started(None, since)
 
 
 def test_the_loop_is_idle_only_when_the_status_says_so():
@@ -405,13 +430,22 @@ def touch(path, age, text="x"):
     os.utime(path, (time.time() - age, time.time() - age))
 
 
-def test_what_can_be_pulled_is_what_is_in_the_folder_newest_first_and_nothing_else(debug_folders):
+def test_what_can_be_pulled_is_what_is_in_the_folder_newest_first_and_nothing_else(debug_folders, monkeypatch):
     touch(debug_folders / "failures" / "f_old" / "screen.png", 300)
     touch(debug_folders / "failures" / "f_new" / "screen.png", 10)
     os.utime(debug_folders / "failures" / "f_old", (1000, 1000)), os.utime(debug_folders / "failures" / "f_new", (2000, 2000))
     touch(debug_folders / "failures" / ".hidden", 5)
     assert bot_lib.pull_entries("failures") == ["f_new", "f_old"]
     assert bot_lib.pull_entries("nothing") == [] and bot_lib.pull_entries("logs") == []
+    real = os.path.getmtime
+
+    def vanishing(path):
+        if path.endswith("f_new"):
+            raise FileNotFoundError(path)                                     # emptied by Refresh debug between the listing and the look
+        return real(path)
+    with monkeypatch.context() as patch:
+        patch.setattr(os.path, "getmtime", vanishing)
+        assert bot_lib.pull_entries("failures") == ["f_old", "f_new"]           # (listed last, not an error)
     assert bot_lib.resolve_pull("failures", None) == (str(debug_folders / "failures" / "f_new"), "f_new")             # no item: the newest
     assert bot_lib.resolve_pull("failures", "f_old")[1] == "f_old"
     assert bot_lib.resolve_pull("failures", bot_lib.PULL_ALL) == (str(debug_folders / "failures"), "failures")
@@ -454,6 +488,33 @@ def test_pulled_files_are_copied_into_a_folder_of_the_source_and_a_too_big_pull_
     with pytest.raises(ValueError, match="no files"):
         bot_lib.copy_pull([], str(other), "logs", 100)
 
+
+def test_a_copy_that_fails_half_way_takes_away_what_it_made_but_not_what_was_there(debug_folders, tmp_path, monkeypatch):
+    onedrive = tmp_path / "onedrive"
+    (onedrive / "logs").mkdir(parents=True)
+    old = onedrive / "logs" / "a.txt"
+    old.write_text("from an earlier pull")
+    sources = []
+    for name in ("a.txt", "b.txt", "c.txt"):
+        (debug_folders / name).write_text(name)
+        sources.append((str(debug_folders / name), name))
+    real = shutil.copy2
+
+    def failing(src, dst, **kw):
+        if src.endswith("c.txt"):
+            raise OSError("disk full")
+        return real(src, dst, **kw)
+    monkeypatch.setattr(shutil, "copy2", failing)
+    with pytest.raises(OSError, match="disk full"):
+        bot_lib.copy_pull(sources, str(onedrive), "logs", 100)
+    assert sorted(os.listdir(onedrive / "logs")) == ["a.txt"] and old.read_text() == "a.txt"        # b.txt is gone again; a.txt was there before (and was copied over)
+
+
+def test_a_windows_path_is_made_long_so_it_may_pass_max_path(monkeypatch):
+    assert bot_lib.long_path("/tmp/x") == "/tmp/x"                                    # (not Windows: as it is)
+    monkeypatch.setattr(bot_lib.os, "name", "nt")
+    long = bot_lib.long_path("/tmp/x")
+    assert long.startswith("\\\\?\\") and long.endswith("x") and bot_lib.long_path(long) == long
 
 def test_the_onedrive_folder_and_heartbeat_keys_are_read_and_checked(tmp_path):
     config = bot_lib.load_config(write_config(tmp_path, onedrive_dir=" C:/OneDrive/AdoptMeMacro/captures ", heartbeat_hours=6))
@@ -689,6 +750,14 @@ def test_with_real_git_an_update_is_planned_and_done_only_forward_over_a_clean_c
     bot_lib.git_ok(repos.pc, *move)
     assert (repos.pc_dir / "main.py").read_text() == "one" and not (repos.pc_dir / "requirements.txt").exists() and (repos.pc_dir / "notes.txt").exists()
     assert bot_lib.make_plan(repos.pc, "origin", "main", head, True)[0].kind == "same"
+
+
+def test_with_real_git_the_update_target_is_what_was_fetched_whatever_the_remotes_fetch_refspec_is(repos):
+    assert repos.pc(["config", "remote.origin.fetch", "+refs/heads/other:refs/remotes/origin/other"])[0] == 0         # main is no longer tracked: refs/remotes/origin/main never moves
+    old = bot_lib.git_ok(repos.pc, "rev-parse", "HEAD").strip()
+    commit(repos.up, repos.upstream, "main.py", "two", "third")
+    plan, move, head = bot_lib.make_plan(repos.pc, "origin", "main", None, False)
+    assert plan.kind == "update" and "third" in plan.text and head == old
 
 
 def test_with_real_git_a_copy_that_is_ahead_or_has_diverged_is_not_updated(repos):

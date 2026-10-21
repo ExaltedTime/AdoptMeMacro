@@ -714,14 +714,18 @@ BACKPACK_NORMAL_MIN_PIXELS = 800
 BACKPACK_NORMAL_WHITE_BOX = (850, 690, 1190, 920)
 BACKPACK_NORMAL_WHITE_LEVEL = 240
 BACKPACK_NORMAL_MIN_WHITE_FRACTION = 0.2
-# The inventory tour (inventory_tour(), the bot's /inventory): the backpack's pets tab, scrolled a step at a time with a picture of its panel after each. Not yet
-# tried in the game: the tab is the one the teleport needs click, and the panel and the place to scroll over are the normal backpack's, from the numbers above.
+# The inventory tour (inventory_tour(), the bot's /inventory): the backpack's pets tab, in the EXPANDED backpack (the selected tab clicked once more), scrolled
+# a step at a time with a picture of its panel after each. Not yet tried in the game: the tab is the one the teleport needs click; the expanded backpack's panel and
+# the place to scroll over are estimates from the header bar above (BACKPACK_HEADER_BOX) and are to be set from the first pictures.
 INVENTORY_DIR = os.path.join(DEBUG_DIR, "inventory")            # the pictures (001.png, 002.png ...), emptied at the start of each tour
 INVENTORY_DONE_PATH = os.path.join(INVENTORY_DIR, "done.json")  # written when the tour ends, however it ends: {"pictures": N, "ended": why}
 INVENTORY_PETS_TAB_POS = (817, 713)
-INVENTORY_PANEL_BOX = BACKPACK_NORMAL_PANEL_BOX                 # (left, top, right, bottom) of each picture
-INVENTORY_SCROLL_POS = (1020, 805)                              # the mouse is over the pets here while the wheel turns
-INVENTORY_SCROLL_CLICKS = 2                                     # notches of the wheel per step
+INVENTORY_EXPAND_SETTLE = 1.0                                   # seconds after the tab is clicked again, for the backpack to expand
+INVENTORY_PANEL_BOX = (1090, 36, 1840, 1050)                    # (left, top, right, bottom) of each picture: the expanded backpack, below and including its header bar
+INVENTORY_SCROLL_POS = (1465, 560)                              # the mouse is over the pets here while the wheel turns
+INVENTORY_SCROLL_CLICKS = 300                                   # notches of the wheel per step
+INVENTORY_SCROLL_CHUNK = 10                                     # notches sent at a time (a game may take one huge turn of the wheel for a small one)
+INVENTORY_SCROLL_PAUSE = 0.02                                   # seconds between those
 INVENTORY_SCROLL_SETTLE = 0.6                                   # seconds after a step, before the picture
 INVENTORY_MAX_PICTURES = 40                                     # the tour ends at this many, if the list has not ended
 INVENTORY_SAME_LEVEL = 1.0                                      # a panel whose mean grey level differs from the last picture's by less than this is the same: the list did not move, it has ended

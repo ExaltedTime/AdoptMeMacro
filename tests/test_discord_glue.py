@@ -401,3 +401,52 @@ def test_a_macro_that_does_not_look_started_is_said_with_its_error_output(macro_
     (tmp_path / "macro_stderr.log").write_text("Traceback: boom\n")
     run_restart(macro_calls, monkeypatch, running=True, loop_was_running=True)
     assert any("does not look started" in text and "boom" in text for text in macro_calls.said) and discord_bot.RESTART_BOT is True        # (the bot restarts anyway)
+
+
+@pytest.fixture
+def tour_folder(tmp_path, monkeypatch):
+    folder = tmp_path / "inventory"
+    folder.mkdir()
+    monkeypatch.setattr(discord_bot.cfg, "INVENTORY_DIR", str(folder))
+    monkeypatch.setattr(discord_bot.cfg, "INVENTORY_DONE_PATH", str(folder / "done.json"))
+    monkeypatch.setattr(discord_bot.cfg, "BOT_INVENTORY_POLL", 0.01)
+    monkeypatch.setattr(discord_bot.cfg, "BOT_INVENTORY_WAIT", 0.3)
+    return folder
+
+
+def test_an_inventory_tour_is_asked_for_waited_for_and_its_pictures_are_listed_in_order(tour_folder, monkeypatch):
+    sent = []
+
+    async def send(command, **details):
+        sent.append(command)
+        return ""
+    monkeypatch.setattr(discord_bot, "send_command", send)
+    (tour_folder / "007.png").write_text("from an earlier tour")                       # cleared before the macro is asked
+
+    async def macro_tour():
+        await asyncio.sleep(0.05)
+        for name in ("002.png", "001.png"):
+            (tour_folder / name).write_text("picture")
+        (tour_folder / "done.json").write_text(json.dumps({"pictures": 2, "ended": "the end of the list"}))
+
+    async def both():
+        task = asyncio.ensure_future(macro_tour())
+        result = await discord_bot.collect_inventory()
+        await task
+        return result
+    text, pictures = asyncio.run(both())
+    assert sent == ["inventory"] and [pathlib.Path(p).name for p in pictures] == ["001.png", "002.png"]
+    assert text.startswith("2 pictures of the pets tab (the end of the list)") and "/loop" in text
+
+
+def test_an_inventory_tour_that_never_ends_or_is_refused_is_said(tour_folder, monkeypatch):
+    async def send_ok(command, **details):
+        return ""
+    monkeypatch.setattr(discord_bot, "send_command", send_ok)
+    text, pictures = asyncio.run(discord_bot.collect_inventory())
+    assert "has not ended its tour" in text and pictures == []
+
+    async def send_refused(command, **details):
+        return "The macro dropped the command (too old) - nothing was done."
+    monkeypatch.setattr(discord_bot, "send_command", send_refused)
+    assert asyncio.run(discord_bot.collect_inventory()) == ("The macro dropped the command (too old) - nothing was done.", [])

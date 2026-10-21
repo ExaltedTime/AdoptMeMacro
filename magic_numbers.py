@@ -198,7 +198,7 @@ for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
 COMMANDS_DIR = os.path.join(DEBUG_DIR, "commands")          # the commands for the macro, one <time>-<id>.json file each, written by the Discord bot (see read_command()); the macro removes each once read and leaves a <time>-<id>.ack saying it was taken or why not
-COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, or travel to / leave the Trading Hub
+COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, travel to / leave the Trading Hub, or take pictures of the backpack's pets tab
 NEED_NAMES = ("catch", "pet", "choose", "ride", "walk", "hungry", "thirsty", "dirty", "potty", "sleepy", "bored", "beach", "school", "cafe", "salon", "pizza", "camping", "sick")   # the Debug tab's need switches (the keys of main.py's NEED_HANDLER_CLASSES)
 OPTION_SWITCHES = {"side_quest": "side_quest_enabled", "resume_on_focus_loss": "resume_on_focus_loss", "record_next_run": "record_next_run",
                    **{f"play_{name}": f"{name}_enabled" for name in MINIGAME_LABELS}}   # the other switches a command may change: name -> the game config's key ("show_debug_lines" too, which is only in the window)
@@ -211,6 +211,9 @@ START_LOOP_DELAY_MS = 1500                                  # after the window i
 BOT_COMMAND_ACK_WAIT = 5.0                                  # seconds the bot waits for the macro to take a command (it looks every COMMAND_POLL_MS) before it withdraws it and says so
 BOT_COMMAND_ACK_POLL = 0.25                                 # seconds between the bot's looks for the macro's answer
 BOT_ACK_KEEP = 300                                          # seconds an answer of the macro that nobody read stays in the commands folder
+BOT_INVENTORY_WAIT = 300.0                                  # seconds the bot waits, after /inventory, for the macro to end its tour (INVENTORY_DONE_PATH)
+BOT_INVENTORY_POLL = 1.0                                    # seconds between its looks for that
+BOT_FILES_PER_MESSAGE = 10                                  # pictures in one message (Discord takes ten attachments)
 BOT_START_CONFIRM = 60                                     # seconds the bot waits, after /start, for the macro's loop to show in status.json
 BOT_MAX_PULL_MB = 10240                                     # /pull copies nothing that comes to more than this (10 GB)
 BOT_PULL_CONFIRM_MB = 1024                                  # a /pull of more than this says its size and waits for a yes (1 GB)
@@ -711,6 +714,17 @@ BACKPACK_NORMAL_MIN_PIXELS = 800
 BACKPACK_NORMAL_WHITE_BOX = (850, 690, 1190, 920)
 BACKPACK_NORMAL_WHITE_LEVEL = 240
 BACKPACK_NORMAL_MIN_WHITE_FRACTION = 0.2
+# The inventory tour (inventory_tour(), the bot's /inventory): the backpack's pets tab, scrolled a step at a time with a picture of its panel after each. Not yet
+# tried in the game: the tab is the one the teleport needs click, and the panel and the place to scroll over are the normal backpack's, from the numbers above.
+INVENTORY_DIR = os.path.join(DEBUG_DIR, "inventory")            # the pictures (001.png, 002.png ...), emptied at the start of each tour
+INVENTORY_DONE_PATH = os.path.join(INVENTORY_DIR, "done.json")  # written when the tour ends, however it ends: {"pictures": N, "ended": why}
+INVENTORY_PETS_TAB_POS = (817, 713)
+INVENTORY_PANEL_BOX = BACKPACK_NORMAL_PANEL_BOX                 # (left, top, right, bottom) of each picture
+INVENTORY_SCROLL_POS = (1020, 805)                              # the mouse is over the pets here while the wheel turns
+INVENTORY_SCROLL_CLICKS = 2                                     # notches of the wheel per step
+INVENTORY_SCROLL_SETTLE = 0.6                                   # seconds after a step, before the picture
+INVENTORY_MAX_PICTURES = 40                                     # the tour ends at this many, if the list has not ended
+INVENTORY_SAME_LEVEL = 1.0                                      # a panel whose mean grey level differs from the last picture's by less than this is the same: the list did not move, it has ended
 # unscrew() closes either backpack at once at the start of a cycle; during a task (where a handler has the
 # normal one open for a few seconds on purpose) only once it's been seen open on this many checks in a
 # row, UNSCREW_TASK_INTERVAL apart.

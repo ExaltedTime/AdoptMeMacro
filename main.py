@@ -1616,6 +1616,62 @@ def travel_to_trade_hub() -> bool:
     log_run_event("travelling to the Trading Hub")
     return True
 
+def scroll_down(clicks: int) -> None:
+    """Turn the mouse wheel `clicks` notches down, over wherever the mouse is."""
+    check_running()
+    pyautogui.scroll(-clicks)
+
+def panel_picture(img: Image) -> Image:
+    left, top, right, bottom = cfg.INVENTORY_PANEL_BOX
+    return img[top:bottom, left:right]
+
+def same_picture(a: Image, b: Image) -> bool:
+    """Whether two pictures of the panel show the same thing: their mean grey levels differ by less than INVENTORY_SAME_LEVEL."""
+    return a.shape == b.shape and float(np.abs(a.astype(np.int16) - b.astype(np.int16)).mean()) < cfg.INVENTORY_SAME_LEVEL
+
+def inventory_tour() -> bool:
+    """Open the backpack, select its pets tab and scroll down it a step at a time (INVENTORY_SCROLL_CLICKS notches of the wheel, over INVENTORY_SCROLL_POS),
+    saving a picture of the panel (INVENTORY_PANEL_BOX) at each step in INVENTORY_DIR - emptied first - until a step moves nothing (the end of the list) or there
+    are INVENTORY_MAX_PICTURES. The backpack is closed again. INVENTORY_DONE_PATH says how many pictures and why it ended, however it ended (the bot waits for it).
+    True if the tour was made, even if scrolling moved nothing at all (then there is one picture)."""
+    shutil.rmtree(cfg.INVENTORY_DIR, ignore_errors=True)
+    os.makedirs(cfg.INVENTORY_DIR, exist_ok=True)
+    pictures, ended = 0, "stopped"
+    try:
+        if not focus_roblox():
+            ended = "Roblox could not be focused"
+            return False
+        with backpack_on_purpose():
+            logger.debug("Opening backpack...")
+            pydirectinput.press(cfg.KEYS["backpack"])
+            wait_interruptible(cfg.UI_SETTLE)
+            if not detect_backpack_open(grab_screen()):
+                ended = "the backpack did not open"
+                return False
+            select_backpack_tab(cfg.INVENTORY_PETS_TAB_POS)
+            wait_interruptible(cfg.UI_SETTLE)
+            pydirectinput.moveTo(*to_screen(*cfg.INVENTORY_SCROLL_POS))
+            previous = None
+            while True:
+                picture = panel_picture(grab_screen())
+                if previous is not None and same_picture(previous, picture):
+                    ended = "the end of the list"
+                    break
+                if pictures >= cfg.INVENTORY_MAX_PICTURES:
+                    ended = f"{pictures} pictures taken"
+                    break
+                pictures += 1
+                cv2.imwrite(os.path.join(cfg.INVENTORY_DIR, f"{pictures:03d}.png"), picture)
+                previous = picture
+                scroll_down(cfg.INVENTORY_SCROLL_CLICKS)
+                wait_interruptible(cfg.INVENTORY_SCROLL_SETTLE)
+            close_backpack("the inventory")
+    finally:
+        with open(cfg.INVENTORY_DONE_PATH, "w", encoding="utf-8") as f:
+            json.dump({"pictures": pictures, "ended": ended}, f)
+    log_run_event(f"inventory: {pictures} pictures ({ended})")
+    return True
+
 def leave_trade_hub() -> bool:
     """In the Trading Hub: the GO HOME button at the top and REGULAR SERVER in what opens; the game then loads a regular server."""
     if not click_steps([("Go home button", cfg.TRADE_HUB_HOME_POS), ("Regular server", cfg.TRADE_HUB_REGULAR_SERVER_POS)]):
@@ -5576,7 +5632,7 @@ class DebugCapture(logging.Handler):
         self.text.insert(tk.END, line + "\n", level)
         self.at_line_start = True
 
-OUTSIDE_ACTIONS: dict[str, Callable[[], Any]] = {"rejoin": leave_and_rejoin, "setup": setup_game, "trade_hub": travel_to_trade_hub, "leave_trade_hub": leave_trade_hub}   # the commands that do what a button does (AdoptMeGUI.act_from_outside())
+OUTSIDE_ACTIONS: dict[str, Callable[[], Any]] = {"rejoin": leave_and_rejoin, "setup": setup_game, "trade_hub": travel_to_trade_hub, "leave_trade_hub": leave_trade_hub, "inventory": inventory_tour}   # the commands that do what a button does (AdoptMeGUI.act_from_outside())
 
 def blackout_seen_by_capture(before: Image, after: Image) -> Optional[bool]:
     """Whether the macro's screenshots see the window of the blackout test: `before` is a screenshot without it, `after` one with it up, white. Seen if

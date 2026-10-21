@@ -450,3 +450,95 @@ def test_an_inventory_tour_that_never_ends_or_is_refused_is_said(tour_folder, mo
         return "The macro dropped the command (too old) - nothing was done."
     monkeypatch.setattr(discord_bot, "send_command", send_refused)
     assert asyncio.run(discord_bot.collect_inventory()) == ("The macro dropped the command (too old) - nothing was done.", [])
+
+
+class ChannelClient:
+    def __init__(self):
+        self.channel = FakeChannel()
+
+    def get_channel(self, channel_id):
+        return self.channel
+
+
+def test_what_is_said_when_an_action_ends_follows_how_it_ended():
+    assert discord_bot.action_end_text("Setup", "done", "Its loop starts now.") == "Setup finished (done). Its loop starts now."
+    assert discord_bot.action_end_text("Setup", "stopped", "Its loop starts now.") == "Setup finished (stopped)."                  # (no loop after a Setup that did not end)
+    assert discord_bot.action_end_text("The rejoin", "error") == "The rejoin finished (error). See /log."
+    assert discord_bot.action_end_text("The rejoin", "given up: the running loop did not stop").startswith("The rejoin finished (given up:")
+
+
+def test_the_channel_is_told_when_an_action_ends_and_when_it_never_says(tmp_path, monkeypatch):
+    monkeypatch.setattr(discord_bot.cfg, "COMMANDS_DIR", str(tmp_path))
+    monkeypatch.setattr(discord_bot.cfg, "BOT_ACTION_POLL", 0.01)
+    monkeypatch.setattr(discord_bot.cfg, "BOT_ACTION_WAIT", 0.2)
+    config = bot_lib.load_config(_config(tmp_path))
+    client = ChannelClient()
+
+    async def macro_ends():
+        await asyncio.sleep(0.05)
+        (tmp_path / "setup-1.done").write_text("done")
+
+    async def both():
+        task = asyncio.ensure_future(macro_ends())
+        await discord_bot.announce_when_done(client, config, "setup-1", "Setup", "Its loop starts again.")
+        await task
+    asyncio.run(both())
+    assert client.channel.sent == ["Setup finished (done). Its loop starts again."] and not (tmp_path / "setup-1.done").exists()          # (read once)
+    asyncio.run(discord_bot.announce_when_done(client, config, "never", "The rejoin"))
+    assert "has not reported that it finished" in client.channel.sent[-1]
+
+
+def test_a_command_submitted_says_its_name_so_that_its_end_can_be_waited_for(tmp_path, monkeypatch):
+    monkeypatch.setattr(discord_bot.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
+    monkeypatch.setattr(discord_bot.cfg, "BOT_COMMAND_ACK_WAIT", 0.3)
+    monkeypatch.setattr(discord_bot.cfg, "BOT_COMMAND_ACK_POLL", 0.02)
+    folder = tmp_path / "commands"
+
+    async def both():
+        task = asyncio.ensure_future(_answer_with(folder, "taken")())
+        result = await discord_bot.submit_command("setup")
+        await task
+        return result
+    problem, name = asyncio.run(both())
+    assert problem == "" and name and not (folder / (name + ".json")).exists()
+    problem, name = asyncio.run(discord_bot.submit_command("setup"))                                  # nobody takes it
+    assert "withdrawn" in problem and name == ""
+
+
+def test_the_bot_says_what_it_runs_and_what_the_macro_is_when_it_is_online(tmp_path, monkeypatch):
+    config = bot_lib.load_config(_config(tmp_path))
+    monkeypatch.setattr(discord_bot, "run_command", lambda command, folder, timeout: (0, "abc1234"))
+    monkeypatch.setattr(bot_lib.cfg, "STATUS_PATH", str(tmp_path / "status.json"))
+    for pids, status, expected in (([], None, "not running"), ([5], {"stopped": "x"}, "open with no loop"), ([5], {"updated": "x"}, "running its loop"), (None, None, "not known")):
+        monkeypatch.setattr(discord_bot, "current_macro_pids", lambda pids=pids: pids)
+        (tmp_path / "status.json").write_text(json.dumps(status))
+        text = asyncio.run(discord_bot.online_text(config))
+        assert text.startswith("**The bot is online** (at commit abc1234)") and expected in text
+    monkeypatch.setattr(discord_bot, "run_command", lambda command, folder, timeout: (1, "not a git repository"))
+    assert asyncio.run(discord_bot.online_text(config)).startswith("**The bot is online**. ")          # (no commit to say)
+
+
+def test_an_update_that_stops_part_way_does_not_say_it_finished(tmp_path, monkeypatch):
+    said = []
+    config = bot_lib.load_config(_config(tmp_path))
+
+    async def nobody():
+        return []
+
+    async def say(text):
+        said.append(text)
+
+    async def git_changes(config, *args):
+        return "requirements.txt\n" if args[0] == "diff" else "abc1234\n" if args[0] == "rev-parse" else ""
+    monkeypatch.setattr(discord_bot, "running_pids", nobody)
+    monkeypatch.setattr(discord_bot, "git", git_changes)
+    monkeypatch.setattr(discord_bot, "run_command", lambda command, folder, timeout: (1, "pip is broken"))              # the packages cannot be installed
+    assert asyncio.run(discord_bot.apply_commit(config, ["merge", "--ff-only", "x"], "0" * 40, say, True)) is False
+    assert any("pip failed" in text for text in said)
+    monkeypatch.setattr(discord_bot, "git", lambda config, *args: _git_plain(args))
+    monkeypatch.setattr(discord_bot, "run_command", lambda command, folder, timeout: (0, ""))
+    assert asyncio.run(discord_bot.apply_commit(config, ["merge", "--ff-only", "x"], "0" * 40, say, True)) is True
+
+
+async def _git_plain(args):
+    return "abc1234\n" if args[0] == "rev-parse" else ""

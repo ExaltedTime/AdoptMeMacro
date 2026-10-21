@@ -442,6 +442,19 @@ def acknowledge_command(stem: str, text: str) -> None:
         logger.warning(f"Could not write the acknowledgement of the command {stem}")
 
 
+def finish_command(stem: str, text: str) -> None:
+    """Tell the bot how the action of the command in <stem>.json ended (<stem>.done: the status the buttons show, or why it was given up); the bot says so in
+    the channel. Nothing for a command with no name (one that did not come from a file)."""
+    if not stem:
+        return
+    try:
+        os.makedirs(cfg.COMMANDS_DIR, exist_ok=True)
+        with open(os.path.join(cfg.COMMANDS_DIR, stem + ".done"), "w", encoding="utf-8") as f:
+            f.write(text)
+    except OSError:
+        logger.warning(f"Could not write the end of the command {stem}")
+
+
 def discard_commands() -> None:
     """Remove every command waiting (left from before the macro started), answering each as dropped."""
     try:
@@ -454,8 +467,8 @@ def discard_commands() -> None:
             acknowledge_command(name[:-len(".json")], "dropped: it was left from before the macro started")
 
 
-def read_command() -> Optional[dict[str, Any]]:
-    """The oldest command waiting in COMMANDS_DIR (a file written by the Discord bot: {"command": ..., "time": ...}), or None. The file is always removed
+def read_command_with_id() -> tuple[str, Optional[dict[str, Any]]]:
+    """(the command's name - the file's, without .json - and) the oldest command waiting in COMMANDS_DIR (a file written by the Discord bot: {"command": ..., "time": ...}), or None. The file is always removed
     once read, and the bot is told in an acknowledgement file whether the command was taken; a command that isn't one of COMMANDS, or is older than
     COMMAND_MAX_AGE seconds (left over from before the macro started, say), is none - and a warning says why, so that a bot host whose clock is off does
     not have every command ignored without a trace. A `set` command must also name a switch that exists (`kind` "need" and a NEED_NAMES name, or "option"
@@ -464,9 +477,9 @@ def read_command() -> Optional[dict[str, Any]]:
     try:
         names = sorted(name for name in os.listdir(cfg.COMMANDS_DIR) if name.endswith(".json"))
     except OSError:
-        return None
+        return "", None
     if not names:
-        return None
+        return "", None
     path = os.path.join(cfg.COMMANDS_DIR, names[0])
     stem = names[0][:-len(".json")]
 
@@ -478,7 +491,7 @@ def read_command() -> Optional[dict[str, Any]]:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except FileNotFoundError:
-        return None
+        return stem, None
     except (OSError, ValueError) as error:
         data = None
         dropped(f"the command file could not be read ({error})")
@@ -487,25 +500,25 @@ def read_command() -> Optional[dict[str, Any]]:
     except OSError:
         pass
     if data is None:
-        return None
+        return stem, None
     if not isinstance(data, dict) or data.get("command") not in cfg.COMMANDS:
         dropped(f"not a command the macro knows ({str(data)[:80]})")
-        return None
+        return stem, None
     sent = data.get("time")
     if not isinstance(sent, (int, float)):
         dropped(f"{data['command']} has no time")
-        return None
+        return stem, None
     age = time.time() - sent
     if abs(age) > cfg.COMMAND_MAX_AGE:
         dropped(f"{data['command']} is {age:.0f} s old (more than COMMAND_MAX_AGE; if the PCs' clocks differ, set them right)")
-        return None
+        return stem, None
     if data["command"] == "set":
         switches = {"need": cfg.NEED_NAMES, "option": (*cfg.OPTION_SWITCHES, cfg.SHOW_DEBUG_LINES_OPTION)}.get(str(data.get("kind")), ())
         if data.get("name") not in switches or not isinstance(data.get("value"), bool):
             dropped(f"set {data.get('kind')} {data.get('name')} is not a switch the macro has")
-            return None
+            return stem, None
     acknowledge_command(stem, "taken")
-    return data
+    return stem, data
 
 def next_run_number() -> int:
     """Return a fresh run number, persisted in RUN_COUNTER_PATH so numbers
@@ -5786,6 +5799,9 @@ class AdoptMeGUI:
         self.pending: list[str] = []             # actions asked for from outside (OUTSIDE_ACTIONS), in order, waiting for what runs to end
         self.pending_chain = False               # drain_pending() is scheduled
         self.pending_waits = 0                   # looks so far for a loop that was told to stop to end
+        self.pending_stems: list[str] = []       # the names of those commands' files (finish_command() tells the bot how each ended), one for each in `pending`
+        self.running_stem = ""                   # the name of the command whose action runs now
+        self.resume_loop = False                 # a loop that was running was stopped for an action that is followed by the loop again (RESUME_LOOP_AFTER)
         self.running_loop = False                # what run_async() runs is the loop
         self.blackout = Blackout(self.root)
         self.watch_stop_hotkey()
@@ -5813,7 +5829,7 @@ class AdoptMeGUI:
         """Do the oldest command waiting in COMMANDS_DIR, if any (Tk's thread): `start` the loop, `stop` it (the cooperative stop, same as [STOP]), `exit`
         (stop, release every key and the mouse, and close the window - what the X button does) `set` a switch (set_switch()), `rejoin`, `setup`, `trade_hub` or `leave_trade_hub` (act_from_outside()), or `refresh_debug`. Looks again
         COMMAND_POLL_MS later - scheduled before the command is done, and a command that raises is logged and does not stop the polling."""
-        data = read_command()
+        stem, data = read_command_with_id()
         command = data["command"] if data else None
         if command == "exit":
             logger.info("Command from outside: exit")
@@ -5824,12 +5840,12 @@ class AdoptMeGUI:
             return
         logger.info(f"Command from outside: {command}")
         try:
-            self.do_command(command, data)
+            self.do_command(command, data, stem)
         except Exception:
             logger.exception(f"The command from outside ({command}) failed")
 
-    def do_command(self, command: str, data: Optional[dict[str, Any]]) -> None:
-        """What poll_commands() does for one command (not `exit`)."""
+    def do_command(self, command: str, data: Optional[dict[str, Any]], stem: str = "") -> None:
+        """What poll_commands() does for one command (not `exit`); `stem` is its file's name, for the action that ends later (finish_command())."""
         if command == "start":
             self.start_loop_from_outside()
         elif command == "stop":
@@ -5838,15 +5854,19 @@ class AdoptMeGUI:
             self.stop()
         elif command == "set" and data:
             self.set_switch(data["kind"], data["name"], data["value"])
+        elif command == "sloop":
+            self.act_from_outside("setup", stem, resume=True)                       # Setup, and then the loop, whether or not one was running
         elif command in OUTSIDE_ACTIONS:
-            self.act_from_outside(command)
+            self.act_from_outside(command, stem)
         elif command == "refresh_debug":
             self.refresh_debug_from_outside()
 
-    def act_from_outside(self, command: str) -> None:
+    def act_from_outside(self, command: str, stem: str = "", resume: bool = False) -> None:
         """Queue what the button of the same name does (OUTSIDE_ACTIONS: `rejoin` is Leave & rejoin, `setup` is Setup, and the Trading Hub trips). Actions are
         done one after the other, in the order asked for (drain_pending()); a `stop` command stops what is running now and leaves the queue alone."""
         self.pending.append(command)
+        self.pending_stems.append(stem)
+        self.resume_loop = self.resume_loop or resume
         if not self.pending_chain:
             self.pending_chain, self.pending_waits = True, 0
             self.drain_pending()
@@ -5860,16 +5880,21 @@ class AdoptMeGUI:
         if self.is_running:
             if self.running_loop:
                 if self.pending_waits == 0:
+                    self.resume_loop = self.resume_loop or self.pending[0] in cfg.RESUME_LOOP_AFTER
                     self.stop()
                 self.pending_waits += 1
                 if self.pending_waits * cfg.REJOIN_STOP_POLL_MS >= cfg.REJOIN_STOP_WAIT_MS:
                     logger.warning(f"{self.pending.pop(0)} asked for, but the running loop did not stop")
+                    finish_command(self.pending_stems.pop(0), "given up: the running loop did not stop")
                     self.pending_waits = 0
+                    self.resume_loop = False
         else:
             self.pending_waits = 0
             command = self.pending.pop(0)
+            stem = self.pending_stems.pop(0)
             log_run_event(f"{command} asked for from outside (the Discord bot)")
             self.run_async(OUTSIDE_ACTIONS[command])
+            self.running_stem = stem if self.is_running else ""
         self.root.after(cfg.REJOIN_STOP_POLL_MS, self.drain_pending)
 
     def refresh_debug_from_outside(self) -> None:
@@ -6171,8 +6196,17 @@ class AdoptMeGUI:
 
     def _finish_running(self, status_text: str) -> None:
         """What a finished run_async() worker leaves to Tk's thread: nothing runs any more, and the buttons and the status say so."""
+        was_loop = self.running_loop
         self.is_running = False
         self._set_running_ui(False, status_text)
+        if self.running_stem:
+            finish_command(self.running_stem, status_text.strip("[]").lower())
+            self.running_stem = ""
+        if self.resume_loop and not was_loop and not self.pending:                  # the action that stopped the loop has ended (and no other waits): the loop goes on
+            self.resume_loop = False
+            if status_text == "[DONE]":
+                logger.info("The action is done - the loop that was running starts again")
+                self.start_loop_from_outside()
 
     def _set_running_ui(self, running: bool, status_text: Optional[str] = None) -> None:
         """Single place that toggles button state + status text. Called both

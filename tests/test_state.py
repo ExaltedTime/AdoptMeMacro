@@ -477,6 +477,7 @@ def test_a_button_action_cut_short_by_a_rejoin_is_done_not_a_crash(macro):
     raises TaskInterrupted, which the worker must not report as a crash."""
     gui = object.__new__(macro.AdoptMeGUI)
     gui.is_running = False
+    gui.pending, gui.pending_stems, gui.running_stem, gui.resume_loop = [], [], "", False
     statuses = []
     gui._set_running_ui = lambda running, status_text=None: statuses.append((running, status_text))
     gui.root = type("Root", (), {"after": lambda self, ms, fn: fn()})()
@@ -502,6 +503,7 @@ def test_a_log_that_cannot_be_written_cannot_leave_the_ui_disabled(macro, monkey
     first, the logging guarded) - and must not leave an exception behind in the thread either."""
     gui = object.__new__(macro.AdoptMeGUI)
     gui.is_running = False
+    gui.pending, gui.pending_stems, gui.running_stem, gui.resume_loop = [], [], "", False
     statuses = []
     gui._set_running_ui = lambda running, status_text=None: statuses.append((running, status_text))
     gui.root = type("Root", (), {"after": lambda self, ms, fn: fn()})()
@@ -1416,7 +1418,7 @@ def test_the_run_logs_and_charts_of_an_older_layout_are_moved_into_the_runs_fold
     assert not (old / "logs" / "runs").exists() and not (old / "images" / "reports").exists() and not (old / "reports").exists()
 
 
-# --- commands from outside (the Discord bot): read_command(), poll_commands() ---
+# --- commands from outside (the Discord bot): read_command_with_id(), poll_commands() ---
 
 def write_raw_command(macro, text):
     """A command file with `text` in it, named after the time so that the oldest is read first (the bot's names do that too)."""
@@ -1442,10 +1444,10 @@ def answer(macro, name):
 
 def test_a_fresh_command_is_read_once_and_the_file_is_removed(macro, monkeypatch, tmp_path):
     monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
-    assert macro.read_command() is None                                       # (no file)
-    for command in ("start", "stop", "exit", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory"):
+    assert macro.read_command_with_id()[1] is None                                       # (no file)
+    for command in ("start", "stop", "exit", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop"):
         name = write_command(macro, command)
-        assert macro.read_command()["command"] == command and commands_waiting(macro) == []
+        assert macro.read_command_with_id()[1]["command"] == command and commands_waiting(macro) == []
         assert answer(macro, name) == "taken"
 
 
@@ -1458,7 +1460,7 @@ def test_a_command_that_is_old_unknown_or_unreadable_is_dropped_with_a_warning_b
                   lambda: write_raw_command(macro, "[\"exit\"]")):
         name = write()
         caplog.clear()
-        assert macro.read_command() is None and commands_waiting(macro) == []
+        assert macro.read_command_with_id()[1] is None and commands_waiting(macro) == []
         assert answer(macro, name).startswith("dropped: ")                      # (the bot is told, not left waiting)
         assert "Command from outside dropped" in caplog.text                  # (said, not silently ignored: a host with the wrong time gets every command dropped)
 
@@ -1467,8 +1469,8 @@ def test_commands_sent_close_together_are_read_one_at_a_time_oldest_first(macro,
     monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
     for command in ("rejoin", "start", "stop"):
         write_command(macro, command)
-    assert [macro.read_command()["command"] for _ in range(3)] == ["rejoin", "start", "stop"]
-    assert macro.read_command() is None
+    assert [macro.read_command_with_id()[1]["command"] for _ in range(3)] == ["rejoin", "start", "stop"]
+    assert macro.read_command_with_id()[1] is None
 
 
 def test_commands_left_from_before_the_macro_started_are_all_dropped_and_answered(macro, monkeypatch, tmp_path):
@@ -1490,6 +1492,7 @@ def remote_gui(macro, monkeypatch, tmp_path, running=False):
     gui = object.__new__(macro.AdoptMeGUI)
     gui.root, gui.is_running, gui.calls = FakeRoot(), running, []
     gui.pending, gui.pending_chain, gui.pending_waits, gui.running_loop = [], False, 0, running
+    gui.pending_stems, gui.running_stem, gui.resume_loop = [], "", False
     gui.run_async = lambda func: gui.calls.append(("run_async", func.__name__))
     gui.stop = lambda: gui.calls.append(("stop",))
     gui.close = lambda: gui.calls.append(("close",))
@@ -1626,11 +1629,11 @@ def test_a_set_command_is_only_read_for_a_switch_that_exists_with_a_true_or_fals
     good = [dict(kind="need", name="hungry", value=False), dict(kind="option", name="play_stitches_spotlight", value=True), dict(kind="option", name="show_debug_lines", value=False)]
     for details in good:
         write_command(macro, "set", **details)
-        assert macro.read_command() == {"command": "set", "time": pytest.approx(time.time(), abs=5), **details}
+        assert macro.read_command_with_id()[1] == {"command": "set", "time": pytest.approx(time.time(), abs=5), **details}
     for details in (dict(kind="need", name="play_ghost_gallery", value=True), dict(kind="option", name="hungry", value=True), dict(kind="need", name="hungry", value="off"),
                     dict(kind="need", name="hungry"), dict(kind="other", name="hungry", value=True), dict(kind="option", name="private_server_link", value=True), {}):
         write_command(macro, "set", **details)
-        assert macro.read_command() is None, details
+        assert macro.read_command_with_id()[1] is None, details
 
 
 def test_a_set_command_changes_the_switch_and_its_checkbox(macro, monkeypatch, tmp_path):
@@ -1815,6 +1818,110 @@ def test_closing_asks_for_the_stop_before_it_closes_the_capture_and_waits_for_th
     assert order == ["capture stopped (stop already asked: True)", "status", "worker joined (True)", "released", "blackout away", "destroyed"]
 
 
+# --- the end of an outside action, and the loop that goes on after Setup ---
+
+def ending_gui(macro, monkeypatch, tmp_path, was_loop=False):
+    gui = remote_gui(macro, monkeypatch, tmp_path, running=True)
+    gui.running_loop = was_loop
+    gui._set_running_ui = lambda running, status=None: None
+    gui.start_loop_from_outside = lambda: gui.calls.append(("start_loop",))
+    return gui
+
+
+def done_text(macro, stem):
+    path = os.path.join(macro.cfg.COMMANDS_DIR, stem + ".done")
+    return open(path, encoding="utf-8").read() if os.path.exists(path) else None
+
+
+def test_a_command_is_read_with_its_name_and_the_end_of_its_action_is_written_for_the_bot(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
+    name = write_command(macro, "setup")
+    stem, data = macro.read_command_with_id()
+    assert stem == name and data["command"] == "setup"
+    macro.finish_command(stem, "done")
+    assert done_text(macro, stem) == "done"
+    macro.finish_command("", "done")                                                      # (a command with no name: nothing is written)
+    assert sorted(os.listdir(macro.cfg.COMMANDS_DIR)) == [stem + ".ack", stem + ".done"]
+    assert macro.read_command_with_id() == ("", None)
+
+
+def test_the_end_of_an_action_asked_for_from_outside_is_written_with_the_status_the_buttons_show(macro, monkeypatch, tmp_path):
+    expected = {"[DONE]": "done", "[STOPPED]": "stopped", "[STOPPED: Roblox not focused]": "stopped: roblox not focused", "[ERROR]": "error"}
+    for i, (status, text) in enumerate(expected.items()):
+        gui = ending_gui(macro, monkeypatch, tmp_path)
+        gui.running_stem = f"command-{i}"
+        gui._finish_running(status)
+        assert done_text(macro, f"command-{i}") == text and gui.running_stem == ""
+    written = sorted(os.listdir(macro.cfg.COMMANDS_DIR))
+    ending_gui(macro, monkeypatch, tmp_path)._finish_running("[DONE]")                    # (an action of the window's own buttons: nothing is written)
+    assert sorted(os.listdir(macro.cfg.COMMANDS_DIR)) == written
+
+
+def test_an_action_that_is_given_up_because_the_loop_would_not_stop_says_so(macro, monkeypatch, tmp_path):
+    gui = remote_gui(macro, monkeypatch, tmp_path, running=True)
+    gui.act_from_outside("rejoin", "stuck")
+    for _ in range(macro.cfg.REJOIN_STOP_WAIT_MS // macro.cfg.REJOIN_STOP_POLL_MS):
+        gui.drain_pending()
+    assert gui.pending == [] and done_text(macro, "stuck").startswith("given up") and gui.resume_loop is False
+
+
+def test_a_loop_that_was_running_starts_again_when_the_setup_that_stopped_it_is_done(macro, monkeypatch, tmp_path):
+    gui = remote_gui(macro, monkeypatch, tmp_path, running=True)                           # the loop runs
+    gui._set_running_ui = lambda running, status=None: None
+    gui.start_loop_from_outside = lambda: gui.calls.append(("start_loop",))
+    gui.act_from_outside("setup", "s1")
+    assert gui.calls == [("stop",)] and gui.resume_loop is True
+    gui._finish_running("[STOPPED]")                                                       # the loop ends: nothing is started yet
+    assert ("start_loop",) not in gui.calls
+    gui.is_running, gui.running_loop = False, False
+    gui.drain_pending()
+    assert gui.calls[-1] == ("run_async", "setup_game")
+    gui.running_stem, gui.running_loop = "s1", False                                       # (the action runs)
+    gui._finish_running("[DONE]")
+    assert gui.calls[-1] == ("start_loop",) and gui.resume_loop is False and done_text(macro, "s1") == "done"
+
+
+def test_the_loop_does_not_start_again_after_a_setup_that_was_stopped_failed_or_is_not_the_last_asked_for(macro, monkeypatch, tmp_path):
+    for status in ("[STOPPED]", "[ERROR]", "[STOPPED: Roblox not focused]"):
+        gui = ending_gui(macro, monkeypatch, tmp_path)
+        gui.resume_loop = True
+        gui._finish_running(status)
+        assert ("start_loop",) not in gui.calls and gui.resume_loop is False               # (a person who pressed STOP wants it stopped)
+    gui = ending_gui(macro, monkeypatch, tmp_path)
+    gui.resume_loop, gui.pending = True, ["rejoin"]                                        # another action waits: the loop goes on after the last
+    gui._finish_running("[DONE]")
+    assert ("start_loop",) not in gui.calls and gui.resume_loop is True
+    gui.pending = []
+    gui._finish_running("[DONE]")
+    assert gui.calls[-1] == ("start_loop",)
+
+
+def test_sloop_runs_setup_and_then_the_loop_whether_or_not_one_was_running(macro, monkeypatch, tmp_path):
+    idle = remote_gui(macro, monkeypatch, tmp_path)                                         # nothing runs
+    idle._set_running_ui = lambda running, status=None: None
+    idle.start_loop_from_outside = lambda: idle.calls.append(("start_loop",))
+    idle.do_command("sloop", {"command": "sloop"}, "s1")
+    assert idle.calls == [("run_async", "setup_game")] and idle.resume_loop is True
+    idle.running_stem, idle.running_loop, idle.is_running = "s1", False, True
+    idle._finish_running("[DONE]")
+    assert idle.calls[-1] == ("start_loop",) and done_text(macro, "s1") == "done"             # Setup done: the loop
+    running = remote_gui(macro, monkeypatch, tmp_path, running=True)                        # a loop runs: stopped first, as for Setup
+    running.do_command("sloop", {"command": "sloop"}, "s2")
+    assert running.calls == [("stop",)] and running.resume_loop is True and running.pending == ["setup"]
+    stopped = ending_gui(macro, monkeypatch, tmp_path)                                      # (and a Setup that was stopped does not go on to the loop)
+    stopped.resume_loop = True
+    stopped._finish_running("[STOPPED]")
+    assert ("start_loop",) not in stopped.calls
+
+
+def test_only_the_actions_in_resume_loop_after_bring_the_loop_back(macro, monkeypatch, tmp_path):
+    assert macro.cfg.RESUME_LOOP_AFTER == ("setup",)
+    for command, resumes in (("setup", True), ("rejoin", False), ("trade_hub", False)):
+        gui = remote_gui(macro, monkeypatch, tmp_path, running=True)
+        gui.act_from_outside(command)
+        assert gui.resume_loop is resumes, command
+
+
 class FakeBlackout:
     def __init__(self, shown=False):
         self.shown, self.toggles, self.hides, self.raised = shown, 0, 0, 0
@@ -1990,6 +2097,7 @@ def test_the_flag_that_nothing_runs_goes_down_on_tks_thread_together_with_the_bu
     gui = object.__new__(macro.AdoptMeGUI)
     gui.is_running, gui.root = False, types.SimpleNamespace(after=lambda ms, f: queued.append(f))
     gui.pending, gui.pending_chain, gui.pending_waits, gui.running_loop = [], False, 0, False
+    gui.pending_stems, gui.running_stem, gui.resume_loop = [], "", False
     gui._set_running_ui = lambda running, status=None: buttons.append((running, status))
     gui.run_async(lambda: None)
     gui.worker.join(10)

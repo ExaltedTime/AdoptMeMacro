@@ -635,7 +635,7 @@ def write_command(folder: str, command: str, now: float, **details: Any) -> str:
     if command not in cfg.COMMANDS:
         raise ValueError(f"not a command the macro knows: {command!r}")
     os.makedirs(folder, exist_ok=True)
-    for old in glob.glob(os.path.join(folder, "*.ack")):                  # (answers nobody came for)
+    for old in glob.glob(os.path.join(folder, "*.ack")) + glob.glob(os.path.join(folder, "*.done")):                  # (answers nobody came for)
         if now - os.path.getmtime(old) > cfg.BOT_ACK_KEEP:
             with contextlib.suppress(OSError):
                 os.remove(old)
@@ -647,9 +647,10 @@ def write_command(folder: str, command: str, now: float, **details: Any) -> str:
     return name
 
 
-def take_ack(folder: str, name: str) -> Optional[str]:
-    """What the macro answered about the command `name` ("taken" or "dropped: why"), removing the answer; None if it has not answered."""
-    path = os.path.join(folder, name + ".ack")
+def take_ack(folder: str, name: str, suffix: str = "ack") -> Optional[str]:
+    """What the macro answered about the command `name` ("taken" or "dropped: why"; with suffix "done", how its action ended), removing the answer; None if
+    it has not answered."""
+    path = os.path.join(folder, f"{name}.{suffix}")
     try:
         with open(path, encoding="utf-8") as f:
             text = f.read().strip()
@@ -688,7 +689,7 @@ def in_batches(items: list[str], size: int) -> list[list[str]]:
 
 def clear_commands(folder: str) -> None:
     """Remove the commands nobody read (after the macro was killed, say) and their answers."""
-    for path in glob.glob(os.path.join(folder, "*.json")) + glob.glob(os.path.join(folder, "*.ack")):
+    for path in glob.glob(os.path.join(folder, "*.json")) + glob.glob(os.path.join(folder, "*.ack")) + glob.glob(os.path.join(folder, "*.done")):
         with contextlib.suppress(OSError):
             os.remove(path)
 

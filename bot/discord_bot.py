@@ -140,7 +140,7 @@ def launch_macro(config: bot_lib.Config, loop: bool = True) -> int:
     error output is appended to debug/logs/macro_stderr.log. Returns its process id."""
     folder = config.repo_dir or ROOT
     os.makedirs(cfg.LOGS_DIR, exist_ok=True)                           # (a Refresh debug, or a fresh checkout, leaves no folder to write the error output into)
-    with open(os.path.join(cfg.LOGS_DIR, "macro_stderr.log"), "ab") as errors:
+    with open(cfg.MACRO_STDERR_PATH, "ab") as errors:
         process = subprocess.Popen([config.python or sys.executable, os.path.join(folder, "main.py"), *(["--loop"] if loop else [])], cwd=folder,
                                    stdout=subprocess.DEVNULL, stderr=errors,
                                    creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))     # (Ctrl+C in the bot's console is not sent to the macro too)
@@ -306,6 +306,31 @@ def output_tail(path: str, count: int = 12) -> str:
     return bot_lib.tail_lines(path, count) or "(nothing)"
 
 
+async def start_again(config: bot_lib.Config, loop_was_running: bool, say) -> bool:
+    """Start the macro as it was - with its loop only if `loop_was_running`, else with just its window - and say how it went; False, with the end of its error
+    output said, when it does not look started."""
+    result = await start_macro(config) if loop_was_running else await open_macro(config)
+    await say(result)
+    if ("Its loop is running." not in result) if loop_was_running else (not result.startswith("Started the macro (")):
+        errors = output_tail(cfg.MACRO_STDERR_PATH)
+        await say(f"The macro does not look started. The end of its error output:\n```\n{errors}\n```")
+        return False
+    return True
+
+
+async def restart_all(config: bot_lib.Config, say, loop_was_running: bool) -> None:
+    """/restart: the macro stopped as /exit does it and started again as it was (as /update does, with no change of code), if it was running, and the bot to
+    start again itself once the macro is back (RESTART_BOT: main() starts the same command again once the client has closed)."""
+    global RESTART_BOT
+    if await running_pids():
+        await say(await stop_macro(config))
+        await start_again(config, loop_was_running, say)
+    else:
+        await say("The macro was not running, so it was not started (/loop).")
+    await say("The bot restarts now.")
+    RESTART_BOT = True
+
+
 async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say, loop_was_running: bool = True, moved=None) -> None:
     """The steps both /update and /rollback share, once the plan is made: stop the macro, move the repository (`move`: the git arguments), install
     the packages if requirements.txt changed, start the macro again if it was running (with its loop only if `loop_was_running`: a window that was open with
@@ -328,11 +353,8 @@ async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say, l
             await say(f"pip failed (exit {code}) - the macro was not started. Use /rollback.\n```\n{output[-1200:]}\n```")
             return
     if was_running:
-        result = await start_macro(config) if loop_was_running else await open_macro(config)
-        await say(result)
-        if ("Its loop is running." not in result) if loop_was_running else (not result.startswith("Started the macro (")):
-            errors = output_tail(os.path.join(cfg.LOGS_DIR, "macro_stderr.log"))
-            await say(f"The macro does not look started. The end of its error output:\n```\n{errors}\n```\nUse /rollback to go back to {bot_lib.short(old)}.")
+        if not await start_again(config, loop_was_running, say):
+            await say(f"Use /rollback to go back to {bot_lib.short(old)}.")
     else:
         await say("The macro was not running, so it was not started (/loop).")
     if bot_lib.needs_bot_restart(changed):
@@ -650,6 +672,32 @@ def build(config: bot_lib.Config) -> discord.Client:
     @command("update", "Pull the latest main, restart the macro (and the bot if its code changed)")
     async def update(interaction: discord.Interaction) -> None:
         await change_code(interaction, rollback=False)
+
+    @command("restart", "Restart the macro and the bot, as /update does (no change of code)")
+    async def restart(interaction: discord.Interaction) -> None:
+        global UPDATING
+        await interaction.response.defer(thinking=True)
+        if update_lock.locked():
+            await say(interaction, "An update, rollback or restart is already going on.")
+            return
+        async with update_lock:
+            try:
+                state = client.bot_state  # type: ignore[attr-defined]
+                pids = await running_pids()
+                loop_running = bool(pids) and not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path()))
+                if pids:
+                    state.desired_state = "running" if loop_running else "open"      # (what the macro is, so that what comes back is the same)
+                    bot_lib.save_state(bot_lib.state_path(), state)
+                UPDATING = True
+                await restart_all(config, lambda text: say(interaction, text), loop_running)
+            except Exception:
+                log.exception("/restart failed")
+                with contextlib.suppress(Exception):
+                    await say(interaction, "**The restart failed** - see the bot's log. The macro may be stopped (/status).")
+            finally:
+                UPDATING = False
+        if RESTART_BOT:
+            await client.close()
 
     @command("rollback", "Go back to the commit before the last /update and restart the macro")
     async def rollback(interaction: discord.Interaction) -> None:

@@ -343,3 +343,61 @@ def test_the_rollback_target_is_kept_until_the_repository_has_moved(tmp_path, mo
     monkeypatch.setattr(discord_bot, "git", move_works)
     asyncio.run(discord_bot.apply_commit(config, ["merge", "--ff-only", "x"], "0" * 40, say, True, lambda: moved.append(1)))
     assert moved == [1]
+
+
+@pytest.fixture
+def macro_calls(monkeypatch, tmp_path):
+    """Everything restart_all() asks of the macro, recorded: what is stopped and started, and what is said."""
+    calls, said = [], []
+
+    async def stop(config):
+        calls.append("stop")
+        return "The macro stopped."
+
+    async def start(config):
+        calls.append("loop")
+        return "Started the macro. Its loop is running."
+
+    async def open_(config):
+        calls.append("window")
+        return "Started the macro (its window is up, no loop going - /loop starts the loop)."
+    monkeypatch.setattr(discord_bot, "stop_macro", stop)
+    monkeypatch.setattr(discord_bot, "start_macro", start)
+    monkeypatch.setattr(discord_bot, "open_macro", open_)
+    monkeypatch.setattr(discord_bot, "RESTART_BOT", False)
+
+    async def say(text):
+        said.append(text)
+    return types.SimpleNamespace(calls=calls, said=said, say=say, config=bot_lib.load_config(_config(tmp_path)))
+
+
+def run_restart(macro_calls, monkeypatch, running, loop_was_running):
+    async def pids():
+        return [5] if running else []
+    monkeypatch.setattr(discord_bot, "running_pids", pids)
+    asyncio.run(discord_bot.restart_all(macro_calls.config, macro_calls.say, loop_was_running))
+
+
+def test_a_restart_stops_the_macro_starts_it_as_it_was_and_has_the_bot_start_again(macro_calls, monkeypatch):
+    run_restart(macro_calls, monkeypatch, running=True, loop_was_running=True)
+    assert macro_calls.calls == ["stop", "loop"] and discord_bot.RESTART_BOT is True
+    assert macro_calls.said[-1] == "The bot restarts now."
+    macro_calls.calls.clear()
+    run_restart(macro_calls, monkeypatch, running=True, loop_was_running=False)           # a window with no loop comes back with no loop
+    assert macro_calls.calls == ["stop", "window"]
+
+
+def test_a_restart_with_no_macro_running_starts_none_and_still_restarts_the_bot(macro_calls, monkeypatch):
+    run_restart(macro_calls, monkeypatch, running=False, loop_was_running=True)
+    assert macro_calls.calls == [] and discord_bot.RESTART_BOT is True
+    assert any("was not running" in text for text in macro_calls.said)
+
+
+def test_a_macro_that_does_not_look_started_is_said_with_its_error_output(macro_calls, monkeypatch, tmp_path):
+    async def start(config):
+        return "Started the macro. No sign of its loop yet - see /status and /log."
+    monkeypatch.setattr(discord_bot, "start_macro", start)
+    monkeypatch.setattr(discord_bot.cfg, "MACRO_STDERR_PATH", str(tmp_path / "macro_stderr.log"))
+    (tmp_path / "macro_stderr.log").write_text("Traceback: boom\n")
+    run_restart(macro_calls, monkeypatch, running=True, loop_was_running=True)
+    assert any("does not look started" in text and "boom" in text for text in macro_calls.said) and discord_bot.RESTART_BOT is True        # (the bot restarts anyway)

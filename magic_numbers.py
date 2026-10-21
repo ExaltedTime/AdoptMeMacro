@@ -192,6 +192,7 @@ DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
 # what belongs to one run (its log lines, run<N>.txt, and its chart, run<N>.png) and recordings/ for the run videos - plus
 # the game config, which stays in debug/ itself so "Refresh debug" (which empties everything else) leaves it alone.
 LOGS_DIR = os.path.join(DEBUG_DIR, "logs")
+MACRO_STDERR_PATH = os.path.join(LOGS_DIR, "macro_stderr.log")    # the error output of a macro the Discord bot started (the bot opens it for the process, which keeps it open)
 RUNS_DIR = os.path.join(DEBUG_DIR, "runs")                    # run<N>.txt (this run's lines of the log on their own, see log_run_event()) and run<N>.png (its chart, see the RUN REPORT section of main.py)
 for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)

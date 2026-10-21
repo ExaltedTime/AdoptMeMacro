@@ -158,7 +158,7 @@ def test_the_tour_takes_a_picture_scrolls_and_stops_when_a_step_moves_nothing(ma
     assert sorted(os.listdir(tour.folder)) == ["001.png", "002.png", "003.png", "done.json"]
     assert done_marker(tour) == {"pictures": 3, "ended": "the end of the list"}
     kinds = [event[0] for event in tour.log]
-    assert tour.log[:4] == [("press", cfg.KEYS["backpack"]), ("tab", cfg.INVENTORY_PETS_TAB_POS), ("click", cfg.INVENTORY_PETS_TAB_POS), ("move", *cfg.INVENTORY_SCROLL_POS)]     # the tab clicked again expands it
+    assert tour.log[:4] == [("press", cfg.KEYS["backpack"]), ("tab", cfg.INVENTORY_PETS_TAB_POS), ("click", cfg.INVENTORY_EXPAND_POS), ("move", *cfg.INVENTORY_SCROLL_POS)]     # the expand button, not the selected tab again
     assert kinds.count("scroll") == 3 and tour.log[-1] == ("close", "the inventory") and ("scroll", cfg.INVENTORY_SCROLL_CLICKS) in tour.log
     import cv2
     left, top, right, bottom = cfg.INVENTORY_PANEL_BOX

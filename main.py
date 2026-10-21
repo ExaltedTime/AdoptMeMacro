@@ -1635,7 +1635,7 @@ def same_picture(a: Image, b: Image) -> bool:
     return a.shape == b.shape and float(np.abs(a.astype(np.int16) - b.astype(np.int16)).mean()) < cfg.INVENTORY_SAME_LEVEL
 
 def inventory_tour() -> bool:
-    """Open the backpack, select its pets tab, click the tab again to expand the backpack (checked with detect_backpack_expanded()) and scroll down it a step at a
+    """Open the backpack, select its pets tab, click the expand button (INVENTORY_EXPAND_POS, checked with detect_backpack_expanded()) and scroll down it a step at a
     time (INVENTORY_SCROLL_CLICKS notches of the wheel, over INVENTORY_SCROLL_POS),
     saving a picture of the panel (INVENTORY_PANEL_BOX) at each step in INVENTORY_DIR - emptied first - until a step moves nothing (the end of the list) or there
     are INVENTORY_MAX_PICTURES. The backpack is closed again. INVENTORY_DONE_PATH says how many pictures and why it ended, however it ended (the bot waits for it).
@@ -1656,7 +1656,7 @@ def inventory_tour() -> bool:
                 return False
             select_backpack_tab(cfg.INVENTORY_PETS_TAB_POS)
             wait_interruptible(cfg.UI_SETTLE)
-            hover_click(*cfg.INVENTORY_PETS_TAB_POS)                       # the selected tab clicked again: the backpack expands
+            hover_click(*cfg.INVENTORY_EXPAND_POS)                         # the orange button next to the settings one: the backpack expands
             wait_interruptible(cfg.INVENTORY_EXPAND_SETTLE)
             if not detect_backpack_expanded(grab_screen()):
                 ended = "the backpack did not expand"
@@ -1903,8 +1903,8 @@ def is_backpack_tab_selected(pos: Point) -> bool:
     return bool(np.count_nonzero(mask) >= cfg.TAB_SELECTED_MIN_PIXELS)
 
 def select_backpack_tab(pos: Point) -> None:
-    """Click the backpack category tab at `pos` unless it's already selected:
-    clicking a selected tab expands the backpack."""
+    """Click the backpack category tab at `pos` unless it's already selected (a click on a selected tab does nothing; what expands the backpack is the
+    orange button next to the settings one, INVENTORY_EXPAND_POS)."""
     if is_backpack_tab_selected(pos):
         logger.debug("Tab already selected, not clicking it")
         return

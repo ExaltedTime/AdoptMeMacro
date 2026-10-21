@@ -714,13 +714,15 @@ BACKPACK_NORMAL_MIN_PIXELS = 800
 BACKPACK_NORMAL_WHITE_BOX = (850, 690, 1190, 920)
 BACKPACK_NORMAL_WHITE_LEVEL = 240
 BACKPACK_NORMAL_MIN_WHITE_FRACTION = 0.2
-# The inventory tour (inventory_tour(), the bot's /inventory): the backpack's pets tab, in the EXPANDED backpack (the selected tab clicked once more), scrolled
+# The inventory tour (inventory_tour(), the bot's /inventory): the backpack's pets tab, in the EXPANDED backpack (opened with the orange button left of the
+# settings one in the normal backpack's header; clicking the selected tab again does nothing), scrolled
 # a step at a time with a picture of its panel after each. Not yet tried in the game: the tab is the one the teleport needs click; the expanded backpack's panel and
 # the place to scroll over are estimates from the header bar above (BACKPACK_HEADER_BOX) and are to be set from the first pictures.
 INVENTORY_DIR = os.path.join(DEBUG_DIR, "inventory")            # the pictures (001.png, 002.png ...), emptied at the start of each tour
 INVENTORY_DONE_PATH = os.path.join(INVENTORY_DIR, "done.json")  # written when the tour ends, however it ends: {"pictures": N, "ended": why}
 INVENTORY_PETS_TAB_POS = (817, 713)
-INVENTORY_EXPAND_SETTLE = 1.0                                   # seconds after the tab is clicked again, for the backpack to expand
+INVENTORY_EXPAND_POS = (938, 642)                               # the orange button left of the settings one, in the normal backpack's header (measured on tests/popups/backpack_open.png)
+INVENTORY_EXPAND_SETTLE = 1.0                                   # seconds after it is clicked, for the backpack to expand
 INVENTORY_PANEL_BOX = (1090, 36, 1840, 1050)                    # (left, top, right, bottom) of each picture: the expanded backpack, below and including its header bar
 INVENTORY_SCROLL_POS = (1465, 560)                              # the mouse is over the pets here while the wheel turns
 INVENTORY_SCROLL_CLICKS = 300                                   # notches of the wheel per step

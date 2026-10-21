@@ -545,6 +545,29 @@ def test_refresh_debug_carries_on_past_a_locked_entry(macro, monkeypatch, tmp_pa
     assert (debug / "failures").is_dir() and (debug / "logs").is_dir() and (debug / ".config").exists()
 
 
+def test_refresh_debug_empties_the_error_output_of_a_macro_the_bot_started_instead_of_deleting_it(macro, monkeypatch, tmp_path):
+    debug = tmp_path / "debug"
+    (debug / "logs" / "old_run").mkdir(parents=True)
+    (debug / "logs" / "old_run" / "a.txt").write_text("a")
+    (debug / "logs" / "output.log").write_text("lines")
+    stderr = debug / "logs" / "macro_stderr.log"
+    stderr.write_text("Traceback: from an earlier run\n")
+    for name, value in (("DEBUG_DIR", str(debug)), ("LOGS_DIR", str(debug / "logs")), ("MACRO_STDERR_PATH", str(stderr)), ("GAME_CONFIG_PATH", str(debug / ".config")),
+                        ("FAILURE_DIR", str(debug / "failures")), ("RUNS_DIR", str(debug / "runs"))):
+        monkeypatch.setattr(macro.cfg, name, value)
+    real_remove = macro.os.remove
+
+    def remove(path, *args, **kwargs):
+        if str(path) == str(stderr):
+            raise PermissionError("the process has it open")             # Windows: a file that is open cannot be deleted
+        real_remove(path, *args, **kwargs)
+    monkeypatch.setattr(macro.os, "remove", remove)
+    assert macro.refresh_debug() == 1
+    assert sorted(os.listdir(debug / "logs")) == ["macro_stderr.log"] and stderr.read_text() == ""          # emptied, still there for the process
+    macro.refresh_debug()
+    assert stderr.exists() and stderr.read_text() == ""                                                    # (and again, with nothing in the folder but it)
+
+
 def test_the_stop_hotkey_stops_even_if_the_log_cannot_be_written(macro, monkeypatch):
     gui = object.__new__(macro.AdoptMeGUI)
     gui.is_running = True

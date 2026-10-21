@@ -1527,7 +1527,7 @@ says that), no capitals for emphasis, no exclamation marks, no blank lines. `pri
 Everything below is in `debug/` (git-ignored) so a run that broke while you
 were away can be read back afterwards. The folder has `failures/` (`FAILURE_DIR`), `logs/` (`LOGS_DIR`: every text and json file - `output.log`, `run_log.txt` (all runs, the whole log),
 `run_counter.txt`, `status.json`), **`runs/`** (`RUNS_DIR`: what belongs to one run - its own log, `run<N>.txt`, and its chart, `run<N>.png`, side by side, and the GAME OVER! cards of the minigames in `runs/results/`) `recordings/` for the
-videos, `captures/` and `minigame_captures/` for the input captures (see [Input capture](#input-capture)), the commands the Discord bot leaves (`commands/`, with the macro's answers) and the macro's error output when the bot started it (`logs/macro_stderr.log`), and the game config (`.config`) in `debug/` itself. An older layout is
+videos, `captures/` and `minigame_captures/` for the input captures (see [Input capture](#input-capture)), the commands the Discord bot leaves (`commands/`, with the macro's answers) and the macro's error output when the bot started it (`MACRO_STDERR_PATH`, `logs/macro_stderr.log`; **Refresh debug** empties it instead of deleting it, since the macro keeps it open and Windows will not delete an open file - `empty_logs_folder()`), and the game config (`.config`) in `debug/` itself. An older layout is
 moved into place at startup (`migrate_debug_layout()`, which also moves the old `logs/runs/` and `reports/` files into `runs/`, `images/failures/` up to `failures/`, and deletes the `debug_*.png` views and the `images/` folder). The Debug tab's
 Options subtab's **Refresh debug** button (`refresh_debug()`, after a confirmation, not while a
 run is going) empties all of it except `.config`; run numbers start from 1
@@ -1636,6 +1636,7 @@ the commands. It is started by hand, next to the macro: `python bot/discord_bot.
 | `/leave_trade_hub` | the macro leaves the Trading Hub for a regular server (`leave_trade_hub()`: GO HOME, REGULAR SERVER); its loop is stopped, as for `/trade_hub` |
 | `/refresh_debug` | the macro empties its debug folder (the game config stays), as the Refresh debug button does without asking; refused while its loop runs (the status says `stopped` when it does not: `loop_idle()`) |
 | `/update` | pulls `update_remote`/`update_branch` (main) and restarts the macro - and the bot, if its own code changed - see [Update and rollback](#update-and-rollback) |
+| `/restart` | stops the macro as `/exit` does and starts it again as it was (with its loop only if the loop was going), then restarts the bot itself, as `/update` does but with no change of code; one at a time with `/update` and `/rollback`; a macro that was not running is not started |
 | `/rollback` | goes back to the commit the PC was on before the last `/update`, and restarts the macro the same way |
 | `/need <need> <on>` | switches a need on or off, as the Debug tab's checkbox does (the macro must be running: the command goes through a command file); says what the game config shows a moment later |
 | `/option <option> <on>` | the other switches: `side_quest`, `resume_on_focus_loss`, `record_next_run`, `play_<minigame>` and `show_debug_lines` (the output's debug lines, which is only a checkbox and so is not confirmed) |
@@ -1682,6 +1683,8 @@ The commands that act on the macro (`/start`, `/loop`, `/stop`, `/exit`, `/rejoi
 5. **The bot restarts itself** when its own code changed - a file under `bot/`, `magic_numbers.py` (which it reads) or `requirements.txt` (`needs_bot_restart()`) - because Python does not reload a running program: first `import bot.discord_bot` is tried in the new code (`BOT_IMPORT_TIMEOUT`), and if that fails the bot stays on the old code and offers `/rollback`; otherwise it posts that, closes the Discord connection, and `main()` starts the same command again (`os.execv`; on Windows a new console window, since `execv` there leaves the terminal confused). The macro-side files alone (`main.py`, the references) need no bot restart.
 
 `/rollback` goes back to `previous_commit` with `git reset --hard`, with the same refusals (local changes to tracked files; no earlier commit; a commit that is no longer in this copy), then steps 2 to 5. It undoes one `/update`; a later `/update` pulls `main` again. The tests run both against real throwaway repositories: a clean update, an untracked file, a changed tracked file, ahead, diverged, a bad branch, and the way back.
+
+`/restart` is the same without the git: the macro is stopped as `/exit` does it and started again as it was (`start_again()`: with its loop only if the loop was going, else its window alone), a macro that was not running is not started, and the bot then restarts itself (`restart_all()`, `RESTART_BOT`), the new bot finding the macro running. It takes the same lock as `/update` and `/rollback` and pauses the crash check the same way (`UPDATING`).
 
 Nothing starts by itself with the PC: the bot is only ever started by hand, and the only time it starts itself is this restart after an update.
 

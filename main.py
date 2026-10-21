@@ -403,6 +403,9 @@ def refresh_debug() -> int:
         path = os.path.join(cfg.DEBUG_DIR, name)
         if path == cfg.GAME_CONFIG_PATH:
             continue
+        if path == cfg.LOGS_DIR:
+            removed += empty_logs_folder()
+            continue
         try:
             shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
             removed += 1
@@ -411,6 +414,24 @@ def refresh_debug() -> int:
     for directory in (cfg.LOGS_DIR, cfg.RUNS_DIR, cfg.FAILURE_DIR):
         os.makedirs(directory, exist_ok=True)
     return removed
+
+def empty_logs_folder() -> int:
+    """Empty the logs folder (1 if it was emptied, 0 if something is left). macro_stderr.log is emptied, not deleted: the bot started this macro with its error
+    output going to that file, which the process keeps open, and Windows will not delete a file that is open."""
+    clean = True
+    for name in os.listdir(cfg.LOGS_DIR):
+        path = os.path.join(cfg.LOGS_DIR, name)
+        try:
+            if path == cfg.MACRO_STDERR_PATH:
+                open(path, "w").close()
+            elif os.path.isdir(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+        except OSError as error:
+            clean = False
+            logger.warning(f"Couldn't delete logs/{name}: {error}")
+    return int(clean)
 
 def acknowledge_command(stem: str, text: str) -> None:
     """Tell the bot what became of the command in <stem>.json: "taken", or "dropped: <why>" (the bot waits for this before it says it asked)."""

@@ -321,3 +321,34 @@ def test_sloop_leaves_a_minigame_before_setup_and_a_minigame_that_cannot_be_left
     with pytest.raises(RuntimeError, match="could not leave the minigame"):
         macro.exit_minigame_and_setup()
     assert order == ["exit"]
+
+
+def test_an_exit_dialog_that_is_still_counting_outside_a_minigame_is_stayed_on_and_nothing_else_with_such_buttons_is(macro, monkeypatch):
+    clicks = []
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: clicks.append((x, y)))
+    monkeypatch.setattr(macro.time, "sleep", lambda s: None)
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    monkeypatch.setattr(macro, "in_minigame", lambda img: False)
+    counting, ready = exit_screen(macro, "red", "grey"), exit_screen(macro, "red", "green")
+    monkeypatch.setattr(macro, "grab_screen", lambda: counting)
+    assert macro.dismiss_stray_windows() == "exit_dialog" and clicks == [macro.cfg.EXIT_STAY_POS]
+    clicks.clear()
+    monkeypatch.setattr(macro, "grab_screen", lambda: ready)                                                 # green: looks like the teleport's Yes / No, which is not ours to cancel
+    assert macro.dismiss_stray_windows() is None and clicks == []
+    monkeypatch.setattr(macro, "grab_screen", lambda: counting)
+    monkeypatch.setattr(macro, "in_minigame", lambda img: True)                                              # in a minigame: its own exit, not a stray window
+    assert macro.dismiss_stray_windows() is None and clicks == []
+    monkeypatch.setattr(macro, "in_minigame", lambda img: False)
+    macro.state.exit_dialog_wanted = True                                                                    # the macro is leaving on purpose
+    assert macro.dismiss_stray_windows() is None and clicks == []
+    macro.state.exit_dialog_wanted = False
+
+
+def test_leaving_a_minigame_on_purpose_keeps_the_stray_window_check_off_the_dialog_and_lets_go_after(macro, leaving, monkeypatch):
+    seen = []
+    monkeypatch.setattr(macro, "_exit_minigame", lambda: seen.append(macro.state.exit_dialog_wanted) or True)
+    assert macro.exit_minigame() is True and seen == [True] and macro.state.exit_dialog_wanted is False
+    monkeypatch.setattr(macro, "_exit_minigame", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError):
+        macro.exit_minigame()
+    assert macro.state.exit_dialog_wanted is False

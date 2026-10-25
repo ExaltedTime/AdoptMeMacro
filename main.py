@@ -87,15 +87,15 @@ def hotkey_down(key: str) -> bool:
     return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)  # type: ignore[attr-defined]  # Windows only
 
 def save_screenshot() -> str:
-    """What the macro sees of the Roblox window now (grab_screen(): its size scaled to the reference one) as SCREENSHOTS_DIR/screenshot_<date>_<time>.png, a
-    number added if there is one of that second already; the path."""
+    """The whole primary monitor now, at its own size (grab_full_screen(): nothing cut out or scaled, so what is read off it is read off the pixels the screen
+    has) as SCREENSHOTS_DIR/screenshot_<date>_<time>.png, a number added if there is one of that second already; the path."""
     os.makedirs(cfg.SCREENSHOTS_DIR, exist_ok=True)
     base = os.path.join(cfg.SCREENSHOTS_DIR, time.strftime("screenshot_%Y%m%d_%H%M%S"))
     path, n = base + ".png", 1
     while os.path.exists(path):
         n += 1
         path = f"{base}_{n}.png"
-    if not cv2.imwrite(path, grab_screen()):
+    if not cv2.imwrite(path, grab_full_screen()):
         raise OSError(f"could not write {path}")
     return path
 
@@ -362,6 +362,7 @@ class State:
     backpack_wanted: int = 0
     # True while a handler that wants the pet focused runs (see wanting_pet_focus()).
     pet_focus_wanted: bool = False
+    exit_dialog_wanted: bool = False       # exit_minigame() is going on: dismiss_stray_windows() leaves the "exit this game?" dialog alone
     # When the minigame popup checks last ran, and how many "quiet:" lines have
     # been logged for the current stretch with no need resolved.
     last_minigame_popup_check: float = 0.0
@@ -2752,11 +2753,28 @@ def wanting_pet_focus() -> Iterator[None]:
     finally:
         state.pet_focus_wanted = False
 
+@contextlib.contextmanager
+def wanting_exit_dialog() -> Iterator[None]:
+    """Within this block dismiss_stray_windows() does not stay (click Cancel) on the "exit this game?" dialog: the macro is leaving a minigame on purpose."""
+    state.exit_dialog_wanted = True
+    try:
+        yield
+    finally:
+        state.exit_dialog_wanted = False
+
 def dismiss_stray_windows() -> Optional[str]:
     """Close any window from STRAY_WINDOWS that is open (found by its title crop); returns
     its name or None. See docs/ARCHITECTURE.md#need-handlers.
     """
     img = grab_screen()
+    if not state.exit_dialog_wanted and detect_exit_dialog(img) == "counting" and not in_minigame(img):
+        # Only while its right button is still grey and counting down: once it is green the dialog looks like the game's other Yes / No ones (the teleport's), which
+        # are for the macro's own clicks to answer, and the buttons alone cannot tell them apart (see EXIT_*).
+        logger.debug("The exit dialog is up outside a minigame - staying")           # (opened by a click that was meant for something else)
+        log_run_event("stray window closed: exit dialog (stayed)")
+        hover_click(*cfg.EXIT_STAY_POS)
+        time.sleep(cfg.STRAY_CLOSE_SETTLE)
+        return "exit_dialog"
     for name, config in cfg.STRAY_WINDOWS.items():
         if not popup_visible(img, name):
             continue
@@ -2775,7 +2793,10 @@ def dismiss_stray_windows() -> Optional[str]:
 def hsv_fraction(img: Image, box: Box, ranges: Sequence[tuple[Color, Color]]) -> float:
     """The share (0-1) of `box` of `img` whose HSV colour (OpenCV's) is within any of the (low, high) `ranges`."""
     left, top, right, bottom = box
-    hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
+    region = img[top:bottom, left:right]
+    if region.size == 0:                                      # (a frame too small to have the box)
+        return 0.0
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
     mask = np.zeros(hsv.shape[:2], np.uint8)
     for low, high in ranges:
         mask |= cv2.inRange(hsv, np.array(low, np.uint8), np.array(high, np.uint8))
@@ -2797,6 +2818,10 @@ def in_minigame(img: Image) -> bool:
     return any(minigame_overlay_visible(img, name) for name in cfg.MINIGAME_LABELS)
 
 def exit_minigame() -> bool:
+    with wanting_exit_dialog():
+        return _exit_minigame()
+
+def _exit_minigame() -> bool:
     """Leave the minigame being played, if one is (in_minigame()): click the Exit Minigame button (EXIT_MINIGAME_POS) - unless the "exit this game?" dialog is up
     already - wait for the dialog, for its right button to turn from grey to green (EXIT_COUNTDOWN_WAIT), click it (EXIT_GAME_POS) and wait for the overlay to be gone
     (EXIT_LEAVE_WAIT). True if there was none to leave or it was left; False (logged) if a step did not happen."""
@@ -6084,7 +6109,7 @@ class AdoptMeGUI:
         return "blanked" if self.blackout.shown else ("not blanked" if want else "shown")
 
     def screenshot_by_hotkey(self) -> None:
-        """HOTKEYS["screenshot"] was pressed in Roblox: a picture of its window into SCREENSHOTS_DIR (Tk's thread)."""
+        """HOTKEYS["screenshot"] was pressed in Roblox: a picture of the whole screen into SCREENSHOTS_DIR (Tk's thread)."""
         try:
             logger.info(f"Screenshot saved: {save_screenshot()}")
         except Exception:
@@ -6436,7 +6461,7 @@ class AdoptMeGUI:
                        anchor=tk.W, cursor="hand2").pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
         tk.Label(parent, text=f"Press {cfg.HOTKEYS['capture'].upper()} anywhere to start / stop capturing screenshots and input",
                  font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
-        tk.Label(parent, text=f"Press {cfg.HOTKEYS['screenshot'].upper()} in Roblox to save a screenshot in debug/screenshots",
+        tk.Label(parent, text=f"Press {cfg.HOTKEYS['screenshot'].upper()} in Roblox to save a screenshot of the whole screen in debug/screenshots",
                  font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
         tk.Label(parent, text=f"Press {cfg.HOTKEYS['blackout'].upper()} in Roblox to blank / show the screen while the loop runs (the macro still sees it)",
                  font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)

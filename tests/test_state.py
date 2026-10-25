@@ -2173,7 +2173,8 @@ def test_a_screenshot_is_saved_in_the_debug_folder_under_its_time_and_a_second_i
     import numpy as np
     import cv2
     monkeypatch.setattr(macro.cfg, "SCREENSHOTS_DIR", str(tmp_path / "debug" / "screenshots"))
-    monkeypatch.setattr(macro, "grab_screen", lambda: np.full((20, 30, 3), 90, np.uint8))
+    monkeypatch.setattr(macro, "grab_full_screen", lambda: np.full((20, 30, 3), 90, np.uint8))
+    monkeypatch.setattr(macro, "grab_screen", lambda: (_ for _ in ()).throw(AssertionError("the Roblox window's picture is not what is saved")))
     monkeypatch.setattr(macro.time, "strftime", lambda fmt: "screenshot_20261025_120000")
     first, second = macro.save_screenshot(), macro.save_screenshot()
     assert os.path.basename(first) == "screenshot_20261025_120000.png" and os.path.basename(second) == "screenshot_20261025_120000_2.png"

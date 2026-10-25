@@ -105,6 +105,7 @@ EXIT_MINIGAME_POS = (100, 1040)
 EXIT_DIALOG_CANCEL_BOX = (782, 635, 956, 685)                   # the red button
 EXIT_DIALOG_RIGHT_BOX = (962, 635, 1136, 685)                   # grey while it counts down, then green
 EXIT_GAME_POS = (1048, 660)
+EXIT_STAY_POS = (869, 660)                                      # the red button at the left: Cancel, which stays (clicked on a dialog that is up outside a minigame)
 EXIT_DIALOG_MIN_FRACTION = 0.4                                  # of a box that is its button's colour (the button's text takes some of it)
 EXIT_RED_HSV = ((0, 150, 150), (8, 255, 255))                   # (low, high); red is also at the other end of the hue circle
 EXIT_RED_HSV_HIGH = ((172, 150, 150), (179, 255, 255))
@@ -824,7 +825,7 @@ HOTKEYS = {                        # the macro's own keys, each a letter or digi
     "stop": "p",                   # stops a running macro
     "capture": "m",                # starts or stops an input capture
     "blackout": "h",               # blanks the screen with a black window (and again, to take it away)
-    "screenshot": "ô",             # saves a picture of the Roblox window in SCREENSHOTS_DIR (not a letter of the alphabet: its key is looked up on the keyboard layout, see hotkey_vk())
+    "screenshot": "ô",             # saves a picture of the whole screen in SCREENSHOTS_DIR (not a letter of the alphabet: its key is looked up on the keyboard layout, see hotkey_vk())
 }
 MOVE_KEYS = tuple(KEYS[name] for name in ("forward", "left", "back", "right"))
 HELD_KEYS = tuple(dict.fromkeys([*KEYS.values(), *(key for keys in KEY_SEQUENCES.values() for key in keys)]))   # every key the macro can hold down: let go of when it ends, at a stop, or when it is killed

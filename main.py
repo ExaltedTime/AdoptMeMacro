@@ -2860,7 +2860,7 @@ def in_trading_hub(img: Image) -> bool:
     return popup_visible(img, "go_home")
 
 def leave_hub_if_in() -> bool:
-    """Leave the Trading Hub (leave_trade_hub()) if the player is in it and wait for it to be gone (HUB_LEAVE_WAIT). True if the player was not there or left; False (logged) if not."""
+    """Leave the Trading Hub (leave_trade_hub()) if the player is in it and wait for it to be gone (HUB_LEAVE_WAIT) and the regular server to load (HUB_LOAD_WAIT). True if the player was not there or left; False (logged) if not."""
     if not focus_roblox():
         return False
     if not in_trading_hub(grab_screen()):
@@ -2871,6 +2871,12 @@ def leave_hub_if_in() -> bool:
     while in_trading_hub(grab_screen()):
         if time.time() >= deadline:
             log_run_event("leave the Trading Hub: it is still there")
+            return False
+        wait_interruptible(cfg.EXIT_POLL)
+    deadline = time.time() + cfg.HUB_LOAD_WAIT                # the loading screen has no backpack button: the regular server is there once it is back
+    while not popup_visible(grab_screen(), "backpack_button"):
+        if time.time() >= deadline:
+            log_run_event("leave the Trading Hub: the regular server did not load")
             return False
         wait_interruptible(cfg.EXIT_POLL)
     return True

@@ -270,6 +270,7 @@ def test_real_screenshots_the_exit_dialog_is_found_in_both_states_the_exit_butto
     assert macro.detect_exit_dialog(button) is None and macro.detect_exit_dialog(hub) is None
     assert all(macro.in_minigame(frame) for frame in (counting, ready, button)) and not macro.in_minigame(hub)
     assert macro.in_trading_hub(hub) and macro.in_trading_hub(hub2)
+    assert macro.popup_visible(hub, "backpack_button") and macro.popup_visible(hub2, "backpack_button") and not macro.popup_visible(button, "backpack_button")
     assert not any(macro.in_trading_hub(frame) for frame in (counting, ready, button))
 
 
@@ -347,17 +348,24 @@ def test_sloop_leaves_the_hub_and_a_minigame_before_setup_and_one_that_cannot_be
     assert order == ["hub"]
 
 
-def test_the_trading_hub_is_left_by_its_button_and_waited_for_and_nothing_is_clicked_elsewhere(macro, leaving, monkeypatch):
+def test_the_trading_hub_is_left_by_its_button_and_waited_for_until_the_regular_server_has_loaded(macro, leaving, monkeypatch):
     hub, plain = real_frame("trading_hub_island"), exit_screen(macro, None, None)
+    world = plain.copy()                                                                                     # the normal UI: the backpack button
+    button = macro.load_templates(macro.cfg.STRAY_WINDOW_DIR)["backpack_button"]
+    left_, top_, *_ = macro.cfg.POPUP_TEMPLATES["backpack_button"]["box"]
+    world[top_ + 5:top_ + 5 + button.shape[0], left_ + 5:left_ + 5 + button.shape[1]] = button
     left = []
     monkeypatch.setattr(macro, "leave_trade_hub", lambda: left.append(True) or True)
     leaving.frames[:] = [plain]
     assert macro.leave_hub_if_in() is True and left == []                                                    # not in it
-    leaving.frames[:] = [hub, hub, plain]
+    leaving.frames[:] = [hub, hub, plain, plain, world]                                                      # the hub goes, a loading screen, then the world
     assert macro.leave_hub_if_in() is True and left == [True]
     left.clear()
     leaving.frames[:] = [hub]                                                                                # it stays
     assert macro.leave_hub_if_in() is False and leaving.log == ["leave the Trading Hub: it is still there"]
+    leaving.log.clear()
+    leaving.frames[:] = [hub, plain]                                                                         # loading for ever
+    assert macro.leave_hub_if_in() is False and leaving.log == ["leave the Trading Hub: the regular server did not load"]
     monkeypatch.setattr(macro, "leave_trade_hub", lambda: False)
     leaving.frames[:] = [hub]
     assert macro.leave_hub_if_in() is False

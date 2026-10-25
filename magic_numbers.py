@@ -113,7 +113,8 @@ EXIT_GREEN_HSV = ((45, 110, 130), (80, 255, 255))
 EXIT_GREY_HSV = ((0, 0, 40), (179, 60, 120))
 EXIT_DIALOG_WAIT = 4.0                                          # seconds the dialog is waited for after the button is clicked
 EXIT_COUNTDOWN_WAIT = 8.0                                       # and then the right button's countdown, until it is green
-HUB_LEAVE_WAIT = 20.0                                           # seconds the Trading Hub is waited to be gone after leaving it (the game loads a regular server)
+HUB_LEAVE_WAIT = 20.0                                           # seconds the Trading Hub is waited to be gone after leaving it...
+HUB_LOAD_WAIT = 90.0                                            # ...and then the regular server to have loaded (the backpack button back)
 EXIT_LEAVE_WAIT = 12.0                                          # and then the minigame's overlay to be gone
 EXIT_POLL = 0.25                                                # seconds between looks
 MINIGAME_FINISH_CLICK_TRIES = 3      # NICE! clicks before giving up on the finish screen closing
@@ -175,6 +176,8 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "exit_game":       {"box": (760, 445, 1160, 605), "threshold": 0.8},
     "exit_minigame":   {"box": (0, 1000, 220, 1078), "threshold": 0.8},
     "go_home":         {"box": (1280, 60, 1460, 140), "threshold": 0.8},
+    # The purple backpack button at the bottom centre: the game's normal UI, there in the world and the Trading Hub and not on a loading screen.
+    "backpack_button": {"box": (880, 950, 1040, 1075), "threshold": 0.8},
 }
 # The sick need's own "Ask Doctor Heart to heal your family?" Yes/No dialog (POPUP_TEMPLATES["sick_dialog"]) has the
 # same Yes green + No red as a minigame popup; it is the sick handler's to answer (SICK_FINAL_CLICK_POS is its Yes),

@@ -230,6 +230,23 @@ async def announce_when_done(client: discord.Client, config: bot_lib.Config, nam
     await tell_channel(client, config, f"{label} has not reported that it finished in {cfg.BOT_ACTION_WAIT:g} s - see /status.")
 
 
+async def wait_for_end(name: str, seconds: float) -> Optional[str]:
+    """How the action of the command `name` ended - what the macro wrote in its .done (finish_command()) - waiting up to `seconds` for it; None if it did not."""
+    deadline = time.time() + seconds
+    while True:
+        ended = bot_lib.take_ack(cfg.COMMANDS_DIR, name, "done")
+        if ended is not None or time.time() >= deadline:
+            return ended
+        await asyncio.sleep(cfg.BOT_COMMAND_ACK_POLL)
+
+
+def blank_text(ended: Optional[str]) -> str:
+    """What to say of the macro's answer to /blank."""
+    return {"blanked": "The screen is blank (the macro still sees the game).", "shown": "The screen is shown.",
+            "not blanked": "The screen was not blanked - see /log (its screenshots would have seen the black window, or the screen was too bright to test)."}.get(
+        ended or "", "The macro has not said whether the screen is blank - see /status.")
+
+
 async def start_window(config: bot_lib.Config) -> str:
     """Start the macro with its window up and no loop (`open_macro()`) and wait up to BOT_START_CONFIRM seconds for the window to be answering - its status
     written after the launch (the window writes it when it is up) - since a command left before that is not read. "" when it is, else what to say. The
@@ -691,6 +708,22 @@ def build(config: bot_lib.Config) -> discord.Client:
     async def sloop(interaction: discord.Interaction) -> None:
         if await ask_macro(interaction, "sloop", "Asked the macro to run Setup and then its loop.", label="Setup", then="Its loop starts now."):
             remember("running")
+
+    @command("blank", "Blank the screen with a black window, or show it again (starts the macro if it is not running)")
+    @app_commands.describe(on="True to blank the screen, False to show it; left out, it is switched")
+    async def blank(interaction: discord.Interaction, on: Optional[bool] = None) -> None:
+        await interaction.response.defer(thinking=True)
+        problem, started = await ensure_macro(config)
+        if problem:
+            await say(interaction, problem)
+            return
+        if started:
+            remember("open")
+        problem, name = await submit_command("blackout", **({} if on is None else {"value": on}))
+        if problem:
+            await say(interaction, problem)
+            return
+        await say(interaction, ("Started the macro first. " if started else "") + blank_text(await wait_for_end(name, cfg.BOT_BLANK_WAIT)))
 
     @command("trade_hub", "Have the macro travel to the Trading Hub (stops its loop first)")
     async def trade_hub(interaction: discord.Interaction) -> None:

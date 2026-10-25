@@ -2772,6 +2772,71 @@ def dismiss_stray_windows() -> Optional[str]:
         return name
     return None
 
+def hsv_fraction(img: Image, box: Box, ranges: Sequence[tuple[Color, Color]]) -> float:
+    """The share (0-1) of `box` of `img` whose HSV colour (OpenCV's) is within any of the (low, high) `ranges`."""
+    left, top, right, bottom = box
+    hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
+    mask = np.zeros(hsv.shape[:2], np.uint8)
+    for low, high in ranges:
+        mask |= cv2.inRange(hsv, np.array(low, np.uint8), np.array(high, np.uint8))
+    return float(np.count_nonzero(mask)) / max(1, mask.size)
+
+def detect_exit_dialog(img: Image) -> Optional[str]:
+    """"Do you want to exit this game?" as the colours of its buttons show it: a red Cancel with, at its right, a grey button (still counting down: "counting") or a green
+    one (Exit Game: "ready"); None if it is not there. Not by its text: see EXIT_*."""
+    if hsv_fraction(img, cfg.EXIT_DIALOG_CANCEL_BOX, (cfg.EXIT_RED_HSV, cfg.EXIT_RED_HSV_HIGH)) < cfg.EXIT_DIALOG_MIN_FRACTION:
+        return None
+    if hsv_fraction(img, cfg.EXIT_DIALOG_RIGHT_BOX, (cfg.EXIT_GREEN_HSV,)) >= cfg.EXIT_DIALOG_MIN_FRACTION:
+        return "ready"
+    if hsv_fraction(img, cfg.EXIT_DIALOG_RIGHT_BOX, (cfg.EXIT_GREY_HSV,)) >= cfg.EXIT_DIALOG_MIN_FRACTION:
+        return "counting"
+    return None
+
+def in_minigame(img: Image) -> bool:
+    """True if the overlay of one of the minigames the macro knows (MINIGAME_LABELS) is on screen."""
+    return any(minigame_overlay_visible(img, name) for name in cfg.MINIGAME_LABELS)
+
+def exit_minigame() -> bool:
+    """Leave the minigame being played, if one is (in_minigame()): click the Exit Minigame button (EXIT_MINIGAME_POS) - unless the "exit this game?" dialog is up
+    already - wait for the dialog, for its right button to turn from grey to green (EXIT_COUNTDOWN_WAIT), click it (EXIT_GAME_POS) and wait for the overlay to be gone
+    (EXIT_LEAVE_WAIT). True if there was none to leave or it was left; False (logged) if a step did not happen."""
+    if not focus_roblox():
+        return False
+    img = grab_screen()
+    if detect_exit_dialog(img) is None:
+        if not in_minigame(img):
+            return True
+        logger.info("In a minigame - exiting it")
+        hover_click(*cfg.EXIT_MINIGAME_POS)
+
+    def wait_for(condition: Callable[[Image], bool], seconds: float) -> bool:
+        deadline = time.time() + seconds
+        while True:
+            if condition(grab_screen()):
+                return True
+            if time.time() >= deadline:
+                return False
+            wait_interruptible(cfg.EXIT_POLL)
+    if not wait_for(lambda frame: detect_exit_dialog(frame) is not None, cfg.EXIT_DIALOG_WAIT):
+        log_run_event("exit minigame: the dialog did not come up")
+        return False
+    if not wait_for(lambda frame: detect_exit_dialog(frame) == "ready", cfg.EXIT_COUNTDOWN_WAIT):
+        log_run_event("exit minigame: the Exit Game button did not turn green")
+        return False
+    hover_click(*cfg.EXIT_GAME_POS)
+    if not wait_for(lambda frame: not in_minigame(frame), cfg.EXIT_LEAVE_WAIT):
+        log_run_event("exit minigame: the minigame is still there")
+        return False
+    log_run_event("minigame exited")
+    return True
+
+def exit_minigame_and_setup() -> bool:
+    """The action of /sloop before the loop: leave a minigame if one is being played, then run Setup. A minigame that cannot be left is an error (the status says
+    so and the loop does not start): Setup would click in the minigame."""
+    if not exit_minigame():
+        raise RuntimeError("could not leave the minigame")
+    return setup_game()
+
 def detect_minigame_finished(img: Image) -> bool:
     """True if the minigame finish screen is on screen in `img`: the red
     GAME OVER! banner and the green NICE! button, both by exact color (the
@@ -5690,7 +5755,7 @@ class DebugCapture(logging.Handler):
         self.text.insert(tk.END, line + "\n", level)
         self.at_line_start = True
 
-OUTSIDE_ACTIONS: dict[str, Callable[[], Any]] = {"rejoin": leave_and_rejoin, "setup": setup_game, "trade_hub": travel_to_trade_hub, "leave_trade_hub": leave_trade_hub, "inventory": inventory_tour}   # the commands that do what a button does (AdoptMeGUI.act_from_outside())
+OUTSIDE_ACTIONS: dict[str, Callable[[], Any]] = {"rejoin": leave_and_rejoin, "setup": setup_game, "trade_hub": travel_to_trade_hub, "leave_trade_hub": leave_trade_hub, "inventory": inventory_tour, "sloop": exit_minigame_and_setup}   # the commands that do what a button does (AdoptMeGUI.act_from_outside())
 
 def blackout_seen_by_capture(before: Image, after: Image) -> Optional[bool]:
     """Whether the macro's screenshots see the window of the blackout test: `before` is a screenshot without it, `after` one with it up, white. Seen if
@@ -5887,10 +5952,13 @@ class AdoptMeGUI:
             self.stop()
         elif command == "set" and data:
             self.set_switch(data["kind"], data["name"], data["value"])
+        elif command == "blackout":
+            value = data.get("value") if data else None
+            finish_command(stem, self.blackout_command(value if isinstance(value, bool) else None))
         elif command == "focus":
             focus_roblox()                                                          # the window to the front (no click): after an update the macro's own window may be
         elif command == "sloop":
-            self.act_from_outside("setup", stem, resume=True)                       # Setup, and then the loop, whether or not one was running
+            self.act_from_outside("sloop", stem, resume=True)                       # (leave a minigame and) Setup, and then the loop, whether or not one was running
         elif command in OUTSIDE_ACTIONS:
             self.act_from_outside(command, stem)
         elif command == "refresh_debug":
@@ -6000,6 +6068,20 @@ class AdoptMeGUI:
                             logger.exception(f"Watching the '{key}' hotkey failed (the watching goes on)")
                 time.sleep(cfg.STOP_HOTKEY_POLL_INTERVAL)
         threading.Thread(target=watch, daemon=True).start()
+
+    def blackout_command(self, value: Optional[bool]) -> str:
+        """The `blackout` command (Tk's thread): blank the screen (value True), show it (False) or switch it (None) - whatever the hotkey's checkbox says. What
+        the screen is afterwards, for the bot: "blanked", "shown" or "not blanked" (the reason is in the log)."""
+        want = (not self.blackout.shown) if value is None else value
+        try:
+            if want and not self.blackout.shown:
+                self.blackout.show()
+            elif not want:
+                self.blackout.hide()
+        except Exception:
+            logger.exception("Blanking the screen failed")
+            self.blackout.hide()
+        return "blanked" if self.blackout.shown else ("not blanked" if want else "shown")
 
     def screenshot_by_hotkey(self) -> None:
         """HOTKEYS["screenshot"] was pressed in Roblox: a picture of its window into SCREENSHOTS_DIR (Tk's thread)."""

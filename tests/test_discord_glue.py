@@ -633,3 +633,22 @@ def test_a_macro_that_is_running_is_left_alone_and_one_that_does_not_come_up_is_
     assert "did not come up in time" in problem and started is False and calls == ["open"]
     calls, config = window_macro(monkeypatch, tmp_path, opened="Started the macro, but its process is not there - see /log and macro_stderr.log.")
     assert asyncio.run(discord_bot.ensure_macro(config)) == ("Started the macro, but its process is not there - see /log and macro_stderr.log.", False)
+
+
+def test_the_macros_answer_to_blank_is_said_in_words(tmp_path, monkeypatch):
+    assert discord_bot.blank_text("blanked").startswith("The screen is blank") and discord_bot.blank_text("shown") == "The screen is shown."
+    assert "was not blanked" in discord_bot.blank_text("not blanked") and "has not said" in discord_bot.blank_text(None)
+    monkeypatch.setattr(discord_bot.cfg, "COMMANDS_DIR", str(tmp_path))
+    monkeypatch.setattr(discord_bot.cfg, "BOT_COMMAND_ACK_POLL", 0.01)
+
+    async def macro_answers():
+        await asyncio.sleep(0.05)
+        (tmp_path / "b1.done").write_text("blanked")
+
+    async def both():
+        task = asyncio.ensure_future(macro_answers())
+        result = await discord_bot.wait_for_end("b1", 1.0)
+        await task
+        return result
+    assert asyncio.run(both()) == "blanked" and not (tmp_path / "b1.done").exists()
+    assert asyncio.run(discord_bot.wait_for_end("never", 0.1)) is None

@@ -1901,13 +1901,13 @@ def test_sloop_runs_setup_and_then_the_loop_whether_or_not_one_was_running(macro
     idle._set_running_ui = lambda running, status=None: None
     idle.start_loop_from_outside = lambda: idle.calls.append(("start_loop",))
     idle.do_command("sloop", {"command": "sloop"}, "s1")
-    assert idle.calls == [("run_async", "setup_game")] and idle.resume_loop is True
+    assert idle.calls == [("run_async", "exit_minigame_and_setup")] and idle.resume_loop is True
     idle.running_stem, idle.running_loop, idle.is_running = "s1", False, True
     idle._finish_running("[DONE]")
     assert idle.calls[-1] == ("start_loop",) and done_text(macro, "s1") == "done"             # Setup done: the loop
     running = remote_gui(macro, monkeypatch, tmp_path, running=True)                        # a loop runs: stopped first, as for Setup
     running.do_command("sloop", {"command": "sloop"}, "s2")
-    assert running.calls == [("stop",)] and running.resume_loop is True and running.pending == ["setup"]
+    assert running.calls == [("stop",)] and running.resume_loop is True and running.pending == ["sloop"]
     stopped = ending_gui(macro, monkeypatch, tmp_path)                                      # (and a Setup that was stopped does not go on to the loop)
     stopped.resume_loop = True
     stopped._finish_running("[STOPPED]")
@@ -2178,3 +2178,46 @@ def test_the_screenshot_key_saves_a_picture_and_a_failure_to_save_is_logged_not_
     monkeypatch.setattr(macro, "save_screenshot", broken)
     gui.screenshot_by_hotkey()
     assert "Saving a screenshot failed" in caplog.text
+
+
+# --- the screen blanked by a command ---
+
+def blackout_gui_for_command(macro, shown=False, show_works=True):
+    gui = object.__new__(macro.AdoptMeGUI)
+
+    class Blackout:
+        def __init__(self):
+            self.shown, self.calls = shown, []
+
+        def show(self):
+            self.calls.append("show")
+            self.shown = show_works
+            return show_works
+
+        def hide(self):
+            self.calls.append("hide")
+            self.shown = False
+    gui.blackout = Blackout()
+    return gui
+
+
+def test_the_blackout_command_blanks_shows_or_switches_and_says_what_the_screen_is(macro):
+    gui = blackout_gui_for_command(macro)
+    assert gui.blackout_command(True) == "blanked" and gui.blackout.calls == ["show"]
+    assert gui.blackout_command(True) == "blanked" and gui.blackout.calls == ["show"]            # (already blank: nothing again)
+    assert gui.blackout_command(False) == "shown" and gui.blackout.calls == ["show", "hide"]
+    assert gui.blackout_command(None) == "blanked"                                                # switched: it was shown
+    assert gui.blackout_command(None) == "shown"                                                  # and back
+    refused = blackout_gui_for_command(macro, show_works=False)                                   # the test flash saw the window in a screenshot, say
+    assert refused.blackout_command(True) == "not blanked"
+
+
+def test_the_blackout_command_is_obeyed_whatever_the_hotkeys_checkbox_says_and_the_answer_is_left_for_the_bot(macro, monkeypatch, tmp_path):
+    gui = remote_gui(macro, monkeypatch, tmp_path)
+    gui.blackout_command = lambda value: gui.calls.append(("blackout", value)) or "blanked"
+    gui.config_flag_vars = {"blackout_hotkey_enabled": types.SimpleNamespace(get=lambda: False)}      # (the key is off: the command works anyway)
+    gui.do_command("blackout", {"command": "blackout", "value": True}, "b1")
+    gui.do_command("blackout", {"command": "blackout"}, "b2")
+    gui.do_command("blackout", {"command": "blackout", "value": "yes"}, "b3")                     # (not a switch: it switches)
+    assert gui.calls == [("blackout", True), ("blackout", None), ("blackout", None)]
+    assert [done_text(macro, name) for name in ("b1", "b2", "b3")] == ["blanked"] * 3

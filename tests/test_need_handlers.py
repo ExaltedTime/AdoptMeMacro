@@ -248,11 +248,29 @@ def exit_screen(macro, left="red", right="grey", overlay=True):
     import numpy as np
     img = np.full((macro.cfg.REFERENCE_HEIGHT, macro.cfg.REFERENCE_WIDTH, 3), 235, np.uint8)         # (a pale scene)
     colours = {"red": (60, 40, 216), "grey": (70, 65, 62), "green": (85, 198, 74)}                         # BGR
+    title = macro.load_templates(macro.cfg.STRAY_WINDOW_DIR)["exit_game"]
+    left_, top_, *_ = macro.cfg.POPUP_TEMPLATES["exit_game"]["box"]
+    img[top_ + 20:top_ + 20 + title.shape[0], left_ + 20:left_ + 20 + title.shape[1]] = title
     for box, name in ((macro.cfg.EXIT_DIALOG_CANCEL_BOX, left), (macro.cfg.EXIT_DIALOG_RIGHT_BOX, right)):
         if name:
             l, t, r, b = box
             img[t:b, l:r] = colours[name]
     return img
+
+
+def real_frame(name):
+    import cv2
+    return cv2.imread(os.path.join(os.path.dirname(__file__), "exit_hub", name + ".png"))
+
+
+def test_real_screenshots_the_exit_dialog_is_found_in_both_states_the_exit_button_marks_a_minigame_and_the_hub_is_told_from_the_rest(macro):
+    counting, ready = real_frame("exit_dialog_counting"), real_frame("exit_dialog_ready")
+    assert macro.detect_exit_dialog(counting) == "counting" and macro.detect_exit_dialog(ready) == "ready"
+    button, hub, hub2 = real_frame("exit_minigame_button"), real_frame("trading_hub_island"), real_frame("trading_hub_island_2")
+    assert macro.detect_exit_dialog(button) is None and macro.detect_exit_dialog(hub) is None
+    assert all(macro.in_minigame(frame) for frame in (counting, ready, button)) and not macro.in_minigame(hub)
+    assert macro.in_trading_hub(hub) and macro.in_trading_hub(hub2)
+    assert not any(macro.in_trading_hub(frame) for frame in (counting, ready, button))
 
 
 def test_the_exit_dialog_is_found_by_the_colours_of_its_buttons_and_says_whether_it_is_still_counting(macro):
@@ -311,19 +329,41 @@ def test_a_dialog_that_is_up_already_is_not_opened_again_and_a_step_that_does_no
     assert macro.exit_minigame() is False and leaving.log == [cfg.EXIT_GAME_POS, "exit minigame: the minigame is still there"]
 
 
-def test_sloop_leaves_a_minigame_before_setup_and_a_minigame_that_cannot_be_left_is_an_error_with_no_setup(macro, monkeypatch):
+def test_sloop_leaves_the_hub_and_a_minigame_before_setup_and_one_that_cannot_be_left_is_an_error_with_no_setup(macro, monkeypatch):
     order = []
+    monkeypatch.setattr(macro, "leave_hub_if_in", lambda: order.append("hub") or True)
     monkeypatch.setattr(macro, "exit_minigame", lambda: order.append("exit") or True)
     monkeypatch.setattr(macro, "setup_game", lambda: order.append("setup") or True)
-    assert macro.exit_minigame_and_setup() is True and order == ["exit", "setup"]
+    assert macro.exit_minigame_and_setup() is True and order == ["hub", "exit", "setup"]
     order.clear()
     monkeypatch.setattr(macro, "exit_minigame", lambda: order.append("exit") or False)
     with pytest.raises(RuntimeError, match="could not leave the minigame"):
         macro.exit_minigame_and_setup()
-    assert order == ["exit"]
+    assert order == ["hub", "exit"]
+    order.clear()
+    monkeypatch.setattr(macro, "leave_hub_if_in", lambda: order.append("hub") or False)
+    with pytest.raises(RuntimeError, match="could not leave the Trading Hub"):
+        macro.exit_minigame_and_setup()
+    assert order == ["hub"]
 
 
-def test_an_exit_dialog_that_is_still_counting_outside_a_minigame_is_stayed_on_and_nothing_else_with_such_buttons_is(macro, monkeypatch):
+def test_the_trading_hub_is_left_by_its_button_and_waited_for_and_nothing_is_clicked_elsewhere(macro, leaving, monkeypatch):
+    hub, plain = real_frame("trading_hub_island"), exit_screen(macro, None, None)
+    left = []
+    monkeypatch.setattr(macro, "leave_trade_hub", lambda: left.append(True) or True)
+    leaving.frames[:] = [plain]
+    assert macro.leave_hub_if_in() is True and left == []                                                    # not in it
+    leaving.frames[:] = [hub, hub, plain]
+    assert macro.leave_hub_if_in() is True and left == [True]
+    left.clear()
+    leaving.frames[:] = [hub]                                                                                # it stays
+    assert macro.leave_hub_if_in() is False and leaving.log == ["leave the Trading Hub: it is still there"]
+    monkeypatch.setattr(macro, "leave_trade_hub", lambda: False)
+    leaving.frames[:] = [hub]
+    assert macro.leave_hub_if_in() is False
+
+
+def test_an_exit_dialog_outside_a_minigame_is_stayed_on_in_either_state_and_nothing_else_with_such_buttons_is(macro, monkeypatch):
     clicks = []
     monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: clicks.append((x, y)))
     monkeypatch.setattr(macro.time, "sleep", lambda s: None)
@@ -333,7 +373,13 @@ def test_an_exit_dialog_that_is_still_counting_outside_a_minigame_is_stayed_on_a
     monkeypatch.setattr(macro, "grab_screen", lambda: counting)
     assert macro.dismiss_stray_windows() == "exit_dialog" and clicks == [macro.cfg.EXIT_STAY_POS]
     clicks.clear()
-    monkeypatch.setattr(macro, "grab_screen", lambda: ready)                                                 # green: looks like the teleport's Yes / No, which is not ours to cancel
+    monkeypatch.setattr(macro, "grab_screen", lambda: ready)
+    assert macro.dismiss_stray_windows() == "exit_dialog" and clicks == [macro.cfg.EXIT_STAY_POS]
+    clicks.clear()
+    untitled = exit_screen(macro, "red", "green")                                                            # the same buttons without the title (the teleport's Yes / No): not ours to cancel
+    left_, top_, right_, bottom_ = macro.cfg.POPUP_TEMPLATES["exit_game"]["box"]
+    untitled[top_:bottom_, left_:right_] = 235
+    monkeypatch.setattr(macro, "grab_screen", lambda: untitled)
     assert macro.dismiss_stray_windows() is None and clicks == []
     monkeypatch.setattr(macro, "grab_screen", lambda: counting)
     monkeypatch.setattr(macro, "in_minigame", lambda img: True)                                              # in a minigame: its own exit, not a stray window

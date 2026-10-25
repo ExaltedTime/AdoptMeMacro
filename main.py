@@ -2767,9 +2767,7 @@ def dismiss_stray_windows() -> Optional[str]:
     its name or None. See docs/ARCHITECTURE.md#need-handlers.
     """
     img = grab_screen()
-    if not state.exit_dialog_wanted and detect_exit_dialog(img) == "counting" and not in_minigame(img):
-        # Only while its right button is still grey and counting down: once it is green the dialog looks like the game's other Yes / No ones (the teleport's), which
-        # are for the macro's own clicks to answer, and the buttons alone cannot tell them apart (see EXIT_*).
+    if not state.exit_dialog_wanted and detect_exit_dialog(img) is not None and not in_minigame(img):
         logger.debug("The exit dialog is up outside a minigame - staying")           # (opened by a click that was meant for something else)
         log_run_event("stray window closed: exit dialog (stayed)")
         hover_click(*cfg.EXIT_STAY_POS)
@@ -2803,8 +2801,10 @@ def hsv_fraction(img: Image, box: Box, ranges: Sequence[tuple[Color, Color]]) ->
     return float(np.count_nonzero(mask)) / max(1, mask.size)
 
 def detect_exit_dialog(img: Image) -> Optional[str]:
-    """"Do you want to exit this game?" as the colours of its buttons show it: a red Cancel with, at its right, a grey button (still counting down: "counting") or a green
-    one (Exit Game: "ready"); None if it is not there. Not by its text: see EXIT_*."""
+    """"Do you want to exit this game?" - its title (POPUP_TEMPLATES["exit_game"]: the teleport's Yes / No dialogs have the same buttons) and a red Cancel with, at its
+    right, a grey button (still counting down: "counting") or a green one (Exit Game: "ready"); None if it is not there."""
+    if not popup_visible(img, "exit_game"):
+        return None
     if hsv_fraction(img, cfg.EXIT_DIALOG_CANCEL_BOX, (cfg.EXIT_RED_HSV, cfg.EXIT_RED_HSV_HIGH)) < cfg.EXIT_DIALOG_MIN_FRACTION:
         return None
     if hsv_fraction(img, cfg.EXIT_DIALOG_RIGHT_BOX, (cfg.EXIT_GREEN_HSV,)) >= cfg.EXIT_DIALOG_MIN_FRACTION:
@@ -2814,8 +2814,8 @@ def detect_exit_dialog(img: Image) -> Optional[str]:
     return None
 
 def in_minigame(img: Image) -> bool:
-    """True if the overlay of one of the minigames the macro knows (MINIGAME_LABELS) is on screen."""
-    return any(minigame_overlay_visible(img, name) for name in cfg.MINIGAME_LABELS)
+    """True if a minigame is being played: the red Exit Minigame button (every minigame has it) or the overlay of one the macro knows (MINIGAME_LABELS) is on screen."""
+    return popup_visible(img, "exit_minigame") or any(minigame_overlay_visible(img, name) for name in cfg.MINIGAME_LABELS)
 
 def exit_minigame() -> bool:
     with wanting_exit_dialog():
@@ -2855,9 +2855,31 @@ def _exit_minigame() -> bool:
     log_run_event("minigame exited")
     return True
 
+def in_trading_hub(img: Image) -> bool:
+    """True if the Trading Hub island is on screen: its GO HOME button's text."""
+    return popup_visible(img, "go_home")
+
+def leave_hub_if_in() -> bool:
+    """Leave the Trading Hub (leave_trade_hub()) if the player is in it and wait for it to be gone (HUB_LEAVE_WAIT). True if the player was not there or left; False (logged) if not."""
+    if not focus_roblox():
+        return False
+    if not in_trading_hub(grab_screen()):
+        return True
+    if not leave_trade_hub():
+        return False
+    deadline = time.time() + cfg.HUB_LEAVE_WAIT
+    while in_trading_hub(grab_screen()):
+        if time.time() >= deadline:
+            log_run_event("leave the Trading Hub: it is still there")
+            return False
+        wait_interruptible(cfg.EXIT_POLL)
+    return True
+
 def exit_minigame_and_setup() -> bool:
-    """The action of /sloop before the loop: leave a minigame if one is being played, then run Setup. A minigame that cannot be left is an error (the status says
-    so and the loop does not start): Setup would click in the minigame."""
+    """The action of /sloop before the loop: leave the Trading Hub if the player is in it and a minigame if one is being played, then run Setup. Neither that cannot be left
+    is an error (the status says so and the loop does not start): Setup would click in it."""
+    if not leave_hub_if_in():
+        raise RuntimeError("could not leave the Trading Hub")
     if not exit_minigame():
         raise RuntimeError("could not leave the minigame")
     return setup_game()

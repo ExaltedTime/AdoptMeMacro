@@ -97,10 +97,10 @@ MINIGAME_TELEPORT_CHANGE = 25       # mean grey-level difference (0-255, over th
 MINIGAME_MAX_DURATION = 600.0       # gives up (and logs a failure) if the minigame hasn't finished by then
 MINIGAME_ZOOM_OUT_DURATION = 3.0    # Hauntlet 2 and Ghost Gallery hold KEYS["zoom_out"] this long when they begin (Hauntlet 2 again where it can't find the doors, if HAUNTLET_SEARCH_TURNS allows)
 MINIGAME_FINISH_WAIT = 5.0          # after clicking NICE!, before carrying on
-# Leaving a minigame (exit_minigame(), the start of the bot's /sloop): the red Exit Minigame button at the bottom left (the house has an Exit Home one in the same
-# place, so it is only clicked where a minigame's overlay is on screen), then "Do you want to exit this game?" with a red Cancel and, at its right, a grey button
-# counting down that turns green as Exit Game. Positions from three screenshots of Hauntlet 2 at 1920x1080; the dialog is looked for by the colours of its two
-# buttons (HSV ranges, OpenCV's: hue 0-179), not by its text, so they are not as exact as the other detectors.
+# Leaving a minigame (exit_minigame(), the start of the bot's /sloop): the red Exit Minigame button at the bottom left (POPUP_TEMPLATES["exit_minigame"]; the house has an
+# Exit Home one in the same place), then "Do you want to exit this game?" (POPUP_TEMPLATES["exit_game"]) with a red Cancel and, at its right, a grey button counting down
+# that turns green as Exit Game. Positions and crops from three screenshots of a minigame at 1920x1080 (tests/exit_hub/); the state is told by the colours of the two
+# buttons (HSV ranges, OpenCV's: hue 0-179), which are wide.
 EXIT_MINIGAME_POS = (100, 1040)
 EXIT_DIALOG_CANCEL_BOX = (782, 635, 956, 685)                   # the red button
 EXIT_DIALOG_RIGHT_BOX = (962, 635, 1136, 685)                   # grey while it counts down, then green
@@ -113,6 +113,7 @@ EXIT_GREEN_HSV = ((45, 110, 130), (80, 255, 255))
 EXIT_GREY_HSV = ((0, 0, 40), (179, 60, 120))
 EXIT_DIALOG_WAIT = 4.0                                          # seconds the dialog is waited for after the button is clicked
 EXIT_COUNTDOWN_WAIT = 8.0                                       # and then the right button's countdown, until it is green
+HUB_LEAVE_WAIT = 20.0                                           # seconds the Trading Hub is waited to be gone after leaving it (the game loads a regular server)
 EXIT_LEAVE_WAIT = 12.0                                          # and then the minigame's overlay to be gone
 EXIT_POLL = 0.25                                                # seconds between looks
 MINIGAME_FINISH_CLICK_TRIES = 3      # NICE! clicks before giving up on the finish screen closing
@@ -168,6 +169,12 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     # The normal backpack's "BACKPACK" title, and the expanded one's BACK button.
     "backpack_normal": {"box": (700, 600, 1000, 690), "threshold": 0.8},
     "backpack_back":   {"box": (700, 80, 1000, 200), "threshold": 0.8},
+    # The exit dialog's "Do you want to exit this game?" title (the same with its right button grey or green; the teleport's Yes / No dialogs
+    # have the same buttons and another title), the red "Exit Minigame" button at the bottom left of every minigame, and the "GO HOME" text under
+    # the button at the top of the Trading Hub island (the crop is the text alone: what is around the button is the island).
+    "exit_game":       {"box": (760, 445, 1160, 605), "threshold": 0.8},
+    "exit_minigame":   {"box": (0, 1000, 220, 1078), "threshold": 0.8},
+    "go_home":         {"box": (1280, 60, 1460, 140), "threshold": 0.8},
 }
 # The sick need's own "Ask Doctor Heart to heal your family?" Yes/No dialog (POPUP_TEMPLATES["sick_dialog"]) has the
 # same Yes green + No red as a minigame popup; it is the sick handler's to answer (SICK_FINAL_CLICK_POS is its Yes),

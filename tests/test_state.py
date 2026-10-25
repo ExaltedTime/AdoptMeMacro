@@ -1901,13 +1901,13 @@ def test_sloop_runs_setup_and_then_the_loop_whether_or_not_one_was_running(macro
     idle._set_running_ui = lambda running, status=None: None
     idle.start_loop_from_outside = lambda: idle.calls.append(("start_loop",))
     idle.do_command("sloop", {"command": "sloop"}, "s1")
-    assert idle.calls == [("run_async", "setup_game")] and idle.resume_loop is True
+    assert idle.calls == [("run_async", "exit_minigame_and_setup")] and idle.resume_loop is True
     idle.running_stem, idle.running_loop, idle.is_running = "s1", False, True
     idle._finish_running("[DONE]")
     assert idle.calls[-1] == ("start_loop",) and done_text(macro, "s1") == "done"             # Setup done: the loop
     running = remote_gui(macro, monkeypatch, tmp_path, running=True)                        # a loop runs: stopped first, as for Setup
     running.do_command("sloop", {"command": "sloop"}, "s2")
-    assert running.calls == [("stop",)] and running.resume_loop is True and running.pending == ["setup"]
+    assert running.calls == [("stop",)] and running.resume_loop is True and running.pending == ["sloop"]
     stopped = ending_gui(macro, monkeypatch, tmp_path)                                      # (and a Setup that was stopped does not go on to the loop)
     stopped.resume_loop = True
     stopped._finish_running("[STOPPED]")
@@ -1946,13 +1946,30 @@ class FakeBlackout:
         self.raised += 1
 
 
-def blackout_gui(macro, monkeypatch, tmp_path, hotkey_on=True, shown=False):
+def blackout_gui(macro, monkeypatch, tmp_path, hotkey_on=True, shown=False, loop=True):
     monkeypatch.setattr(macro.cfg, "GAME_CONFIG_PATH", str(tmp_path / ".config"))
     gui = object.__new__(macro.AdoptMeGUI)
+    gui.is_running = gui.running_loop = loop
     gui.root = types.SimpleNamespace()
     gui.blackout = FakeBlackout(shown)
     gui.config_flag_vars = {"blackout_hotkey_enabled": types.SimpleNamespace(get=lambda: hotkey_on)}
     return gui
+
+
+def test_the_blackout_key_blanks_the_screen_only_while_the_loop_runs_but_always_shows_it_again(macro, monkeypatch, tmp_path):
+    idle = blackout_gui(macro, monkeypatch, tmp_path, loop=False)                          # nothing runs
+    idle.blackout_by_hotkey()
+    assert idle.blackout.toggles == 0 and not idle.blackout.shown
+    other = blackout_gui(macro, monkeypatch, tmp_path)                                     # an action runs (Setup, say), not the loop
+    other.running_loop = False
+    other.blackout_by_hotkey()
+    assert other.blackout.toggles == 0
+    running = blackout_gui(macro, monkeypatch, tmp_path)
+    running.blackout_by_hotkey()
+    assert running.blackout.shown and running.blackout.toggles == 1                         # the loop runs: blank
+    running.is_running = running.running_loop = False                                       # the loop ends with the screen blank
+    running.blackout_by_hotkey()
+    assert not running.blackout.shown and running.blackout.toggles == 2                     # (it can be shown again)
 
 
 def test_the_blackout_key_blanks_the_screen_only_while_its_checkbox_is_on(macro, monkeypatch, tmp_path):
@@ -2125,3 +2142,100 @@ def test_refresh_debug_from_outside_is_refused_while_a_capture_is_recording(macr
     monkeypatch.setattr(macro.state, "capture", None)
     gui.refresh_debug_from_outside()
     assert done == ["refreshed"]
+
+
+# --- the screenshot hotkey ---
+
+def fake_layout(macro, monkeypatch, scans, pressed=()):
+    """ctypes.windll with a keyboard layout: VkKeyScanW answers from `scans` (character -> its answer), and the keys in `pressed` are down."""
+    import ctypes
+    user32 = types.SimpleNamespace(VkKeyScanW=lambda char: scans.get(chr(char), -1), GetAsyncKeyState=lambda vk: 0x8000 if vk in pressed else 0)
+    monkeypatch.setattr(ctypes, "windll", types.SimpleNamespace(user32=user32), raising=False)
+
+
+def test_a_hotkey_is_its_letter_or_digit_or_the_key_the_layout_has_for_the_character(macro, monkeypatch):
+    fake_layout(macro, monkeypatch, {"\u00f4": 0x00DE, "\u00e9": 0x0132, "x": 0x0058})        # an ô on a key of its own (VK 0xDE), an é that needs Shift (high byte)
+    assert macro.hotkey_vk("p") == ord("P") and macro.hotkey_vk("7") == ord("7")            # (letters and digits are their own: the layout is not asked)
+    assert macro.hotkey_vk("\u00f4") == 0xDE
+    assert macro.hotkey_vk("\u00e9") is None and macro.hotkey_vk("\u00fc") is None         # needs Shift; not on the layout at all (-1)
+
+
+def test_a_hotkey_is_down_while_its_key_is_and_one_the_layout_lacks_is_never_down_and_said_once(macro, monkeypatch, caplog):
+    fake_layout(macro, monkeypatch, {"\u00f4": 0x00DE}, pressed={0xDE, ord("M")})
+    assert macro.hotkey_down("\u00f4") is True and macro.hotkey_down("m") is True and macro.hotkey_down("h") is False
+    fake_layout(macro, monkeypatch, {}, pressed={0xDE})                                        # another layout: no such key
+    macro._WARNED_HOTKEYS.discard("\u00f4")
+    assert macro.hotkey_down("\u00f4") is False and macro.hotkey_down("\u00f4") is False
+    assert caplog.text.count("is not a key of its own on this keyboard layout") == 1
+
+
+def test_a_screenshot_is_saved_in_the_debug_folder_under_its_time_and_a_second_in_the_same_second_gets_a_number(macro, monkeypatch, tmp_path):
+    import numpy as np
+    import cv2
+    monkeypatch.setattr(macro.cfg, "SCREENSHOTS_DIR", str(tmp_path / "debug" / "screenshots"))
+    monkeypatch.setattr(macro, "grab_full_screen", lambda: np.full((20, 30, 3), 90, np.uint8))
+    monkeypatch.setattr(macro, "grab_screen", lambda: (_ for _ in ()).throw(AssertionError("the Roblox window's picture is not what is saved")))
+    monkeypatch.setattr(macro.time, "strftime", lambda fmt: "screenshot_20261025_120000")
+    first, second = macro.save_screenshot(), macro.save_screenshot()
+    assert os.path.basename(first) == "screenshot_20261025_120000.png" and os.path.basename(second) == "screenshot_20261025_120000_2.png"
+    assert cv2.imread(first).shape == (20, 30, 3)
+    monkeypatch.setattr(macro.cv2, "imwrite", lambda path, img: False)
+    with pytest.raises(OSError):
+        macro.save_screenshot()
+
+
+def test_the_screenshot_key_saves_a_picture_and_a_failure_to_save_is_logged_not_raised(macro, monkeypatch, caplog):
+    saved = []
+    gui = object.__new__(macro.AdoptMeGUI)
+    monkeypatch.setattr(macro, "save_screenshot", lambda: saved.append(1) or "/x/screenshot.png")
+    gui.screenshot_by_hotkey()
+    assert saved == [1] and "Screenshot saved: /x/screenshot.png" in caplog.text
+
+    def broken():
+        raise OSError("disk full")
+    monkeypatch.setattr(macro, "save_screenshot", broken)
+    gui.screenshot_by_hotkey()
+    assert "Saving a screenshot failed" in caplog.text
+
+
+# --- the screen blanked by a command ---
+
+def blackout_gui_for_command(macro, shown=False, show_works=True):
+    gui = object.__new__(macro.AdoptMeGUI)
+
+    class Blackout:
+        def __init__(self):
+            self.shown, self.calls = shown, []
+
+        def show(self):
+            self.calls.append("show")
+            self.shown = show_works
+            return show_works
+
+        def hide(self):
+            self.calls.append("hide")
+            self.shown = False
+    gui.blackout = Blackout()
+    return gui
+
+
+def test_the_blackout_command_blanks_shows_or_switches_and_says_what_the_screen_is(macro):
+    gui = blackout_gui_for_command(macro)
+    assert gui.blackout_command(True) == "blanked" and gui.blackout.calls == ["show"]
+    assert gui.blackout_command(True) == "blanked" and gui.blackout.calls == ["show"]            # (already blank: nothing again)
+    assert gui.blackout_command(False) == "shown" and gui.blackout.calls == ["show", "hide"]
+    assert gui.blackout_command(None) == "blanked"                                                # switched: it was shown
+    assert gui.blackout_command(None) == "shown"                                                  # and back
+    refused = blackout_gui_for_command(macro, show_works=False)                                   # the test flash saw the window in a screenshot, say
+    assert refused.blackout_command(True) == "not blanked"
+
+
+def test_the_blackout_command_is_obeyed_whatever_the_hotkeys_checkbox_says_and_the_answer_is_left_for_the_bot(macro, monkeypatch, tmp_path):
+    gui = remote_gui(macro, monkeypatch, tmp_path)
+    gui.blackout_command = lambda value: gui.calls.append(("blackout", value)) or "blanked"
+    gui.config_flag_vars = {"blackout_hotkey_enabled": types.SimpleNamespace(get=lambda: False)}      # (the key is off: the command works anyway)
+    gui.do_command("blackout", {"command": "blackout", "value": True}, "b1")
+    gui.do_command("blackout", {"command": "blackout"}, "b2")
+    gui.do_command("blackout", {"command": "blackout", "value": "yes"}, "b3")                     # (not a switch: it switches)
+    assert gui.calls == [("blackout", True), ("blackout", None), ("blackout", None)]
+    assert [done_text(macro, name) for name in ("b1", "b2", "b3")] == ["blanked"] * 3

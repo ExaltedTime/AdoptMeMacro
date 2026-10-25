@@ -63,10 +63,41 @@ class FocusLost(Exception):
     """
     pass
 
+_WARNED_HOTKEYS: set[str] = set()
+
+def hotkey_vk(key: str) -> Optional[int]:
+    """The virtual-key code of the hotkey `key`: a letter or digit of the alphabet is its own, any other character (an accented one, say) is looked up on the
+    keyboard layout in use (VkKeyScanW). None when the layout has no key for it by itself - it is typed with Shift, AltGr or a dead key, or not at all."""
+    if key.isascii() and key.isalnum():
+        return ord(key.upper())
+    scan = ctypes.windll.user32.VkKeyScanW(ord(key)) & 0xFFFF  # type: ignore[attr-defined]  # Windows only
+    if scan == 0xFFFF or scan >> 8:                         # (no key, or one that needs a modifier)
+        return None
+    return scan & 0xFF
+
 def hotkey_down(key: str) -> bool:
-    """True while `key` (a single letter or digit) is held down, whichever
-    window has the focus (Windows)."""
-    return bool(ctypes.windll.user32.GetAsyncKeyState(ord(key.upper())) & 0x8000)  # type: ignore[attr-defined]  # Windows only
+    """True while `key` (a single letter or digit, or a character of its own key on the layout: hotkey_vk()) is held down, whichever window has the focus
+    (Windows). A key the layout does not have is never down (said once)."""
+    vk = hotkey_vk(key)
+    if vk is None:
+        if key not in _WARNED_HOTKEYS:
+            _WARNED_HOTKEYS.add(key)
+            logger.warning(f"The '{key}' hotkey is not a key of its own on this keyboard layout - it does nothing")
+        return False
+    return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)  # type: ignore[attr-defined]  # Windows only
+
+def save_screenshot() -> str:
+    """The whole primary monitor now, at its own size (grab_full_screen(): nothing cut out or scaled, so what is read off it is read off the pixels the screen
+    has) as SCREENSHOTS_DIR/screenshot_<date>_<time>.png, a number added if there is one of that second already; the path."""
+    os.makedirs(cfg.SCREENSHOTS_DIR, exist_ok=True)
+    base = os.path.join(cfg.SCREENSHOTS_DIR, time.strftime("screenshot_%Y%m%d_%H%M%S"))
+    path, n = base + ".png", 1
+    while os.path.exists(path):
+        n += 1
+        path = f"{base}_{n}.png"
+    if not cv2.imwrite(path, grab_full_screen()):
+        raise OSError(f"could not write {path}")
+    return path
 
 def hotkey_fires(down: bool, was_down: bool, only_while_running: bool, running: bool, only_in_roblox: bool) -> bool:
     """Whether a hotkey seen `down` (and not `was_down` at the last look) is to act: not while it is just being held, not when it is
@@ -331,6 +362,7 @@ class State:
     backpack_wanted: int = 0
     # True while a handler that wants the pet focused runs (see wanting_pet_focus()).
     pet_focus_wanted: bool = False
+    exit_dialog_wanted: bool = False       # exit_minigame() is going on: dismiss_stray_windows() leaves the "exit this game?" dialog alone
     # When the minigame popup checks last ran, and how many "quiet:" lines have
     # been logged for the current stretch with no need resolved.
     last_minigame_popup_check: float = 0.0
@@ -2721,11 +2753,26 @@ def wanting_pet_focus() -> Iterator[None]:
     finally:
         state.pet_focus_wanted = False
 
+@contextlib.contextmanager
+def wanting_exit_dialog() -> Iterator[None]:
+    """Within this block dismiss_stray_windows() does not stay (click Cancel) on the "exit this game?" dialog: the macro is leaving a minigame on purpose."""
+    state.exit_dialog_wanted = True
+    try:
+        yield
+    finally:
+        state.exit_dialog_wanted = False
+
 def dismiss_stray_windows() -> Optional[str]:
     """Close any window from STRAY_WINDOWS that is open (found by its title crop); returns
     its name or None. See docs/ARCHITECTURE.md#need-handlers.
     """
     img = grab_screen()
+    if not state.exit_dialog_wanted and detect_exit_dialog(img) is not None and not in_minigame(img):
+        logger.debug("The exit dialog is up outside a minigame - staying")           # (opened by a click that was meant for something else)
+        log_run_event("stray window closed: exit dialog (stayed)")
+        hover_click(*cfg.EXIT_STAY_POS)
+        time.sleep(cfg.STRAY_CLOSE_SETTLE)
+        return "exit_dialog"
     for name, config in cfg.STRAY_WINDOWS.items():
         if not popup_visible(img, name):
             continue
@@ -2740,6 +2787,102 @@ def dismiss_stray_windows() -> Optional[str]:
         time.sleep(cfg.STRAY_CLOSE_SETTLE)
         return name
     return None
+
+def hsv_fraction(img: Image, box: Box, ranges: Sequence[tuple[Color, Color]]) -> float:
+    """The share (0-1) of `box` of `img` whose HSV colour (OpenCV's) is within any of the (low, high) `ranges`."""
+    left, top, right, bottom = box
+    region = img[top:bottom, left:right]
+    if region.size == 0:                                      # (a frame too small to have the box)
+        return 0.0
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    mask = np.zeros(hsv.shape[:2], np.uint8)
+    for low, high in ranges:
+        mask |= cv2.inRange(hsv, np.array(low, np.uint8), np.array(high, np.uint8))
+    return float(np.count_nonzero(mask)) / max(1, mask.size)
+
+def detect_exit_dialog(img: Image) -> Optional[str]:
+    """"Do you want to exit this game?" - its title (POPUP_TEMPLATES["exit_game"]: the teleport's Yes / No dialogs have the same buttons) and a red Cancel with, at its
+    right, a grey button (still counting down: "counting") or a green one (Exit Game: "ready"); None if it is not there."""
+    if not popup_visible(img, "exit_game"):
+        return None
+    if hsv_fraction(img, cfg.EXIT_DIALOG_CANCEL_BOX, (cfg.EXIT_RED_HSV, cfg.EXIT_RED_HSV_HIGH)) < cfg.EXIT_DIALOG_MIN_FRACTION:
+        return None
+    if hsv_fraction(img, cfg.EXIT_DIALOG_RIGHT_BOX, (cfg.EXIT_GREEN_HSV,)) >= cfg.EXIT_DIALOG_MIN_FRACTION:
+        return "ready"
+    if hsv_fraction(img, cfg.EXIT_DIALOG_RIGHT_BOX, (cfg.EXIT_GREY_HSV,)) >= cfg.EXIT_DIALOG_MIN_FRACTION:
+        return "counting"
+    return None
+
+def in_minigame(img: Image) -> bool:
+    """True if a minigame is being played: the red Exit Minigame button (every minigame has it) or the overlay of one the macro knows (MINIGAME_LABELS) is on screen."""
+    return popup_visible(img, "exit_minigame") or any(minigame_overlay_visible(img, name) for name in cfg.MINIGAME_LABELS)
+
+def exit_minigame() -> bool:
+    with wanting_exit_dialog():
+        return _exit_minigame()
+
+def _exit_minigame() -> bool:
+    """Leave the minigame being played, if one is (in_minigame()): click the Exit Minigame button (EXIT_MINIGAME_POS) - unless the "exit this game?" dialog is up
+    already - wait for the dialog, for its right button to turn from grey to green (EXIT_COUNTDOWN_WAIT), click it (EXIT_GAME_POS) and wait for the overlay to be gone
+    (EXIT_LEAVE_WAIT). True if there was none to leave or it was left; False (logged) if a step did not happen."""
+    if not focus_roblox():
+        return False
+    img = grab_screen()
+    if detect_exit_dialog(img) is None:
+        if not in_minigame(img):
+            return True
+        logger.info("In a minigame - exiting it")
+        hover_click(*cfg.EXIT_MINIGAME_POS)
+
+    def wait_for(condition: Callable[[Image], bool], seconds: float) -> bool:
+        deadline = time.time() + seconds
+        while True:
+            if condition(grab_screen()):
+                return True
+            if time.time() >= deadline:
+                return False
+            wait_interruptible(cfg.EXIT_POLL)
+    if not wait_for(lambda frame: detect_exit_dialog(frame) is not None, cfg.EXIT_DIALOG_WAIT):
+        log_run_event("exit minigame: the dialog did not come up")
+        return False
+    if not wait_for(lambda frame: detect_exit_dialog(frame) == "ready", cfg.EXIT_COUNTDOWN_WAIT):
+        log_run_event("exit minigame: the Exit Game button did not turn green")
+        return False
+    hover_click(*cfg.EXIT_GAME_POS)
+    if not wait_for(lambda frame: not in_minigame(frame), cfg.EXIT_LEAVE_WAIT):
+        log_run_event("exit minigame: the minigame is still there")
+        return False
+    log_run_event("minigame exited")
+    return True
+
+def in_trading_hub(img: Image) -> bool:
+    """True if the Trading Hub island is on screen: its GO HOME button's text."""
+    return popup_visible(img, "go_home")
+
+def leave_hub_if_in() -> bool:
+    """Leave the Trading Hub (leave_trade_hub()) if the player is in it and wait for it to be gone (HUB_LEAVE_WAIT). True if the player was not there or left; False (logged) if not."""
+    if not focus_roblox():
+        return False
+    if not in_trading_hub(grab_screen()):
+        return True
+    if not leave_trade_hub():
+        return False
+    deadline = time.time() + cfg.HUB_LEAVE_WAIT
+    while in_trading_hub(grab_screen()):
+        if time.time() >= deadline:
+            log_run_event("leave the Trading Hub: it is still there")
+            return False
+        wait_interruptible(cfg.EXIT_POLL)
+    return True
+
+def exit_minigame_and_setup() -> bool:
+    """The action of /sloop before the loop: leave the Trading Hub if the player is in it and a minigame if one is being played, then run Setup. Neither that cannot be left
+    is an error (the status says so and the loop does not start): Setup would click in it."""
+    if not leave_hub_if_in():
+        raise RuntimeError("could not leave the Trading Hub")
+    if not exit_minigame():
+        raise RuntimeError("could not leave the minigame")
+    return setup_game()
 
 def detect_minigame_finished(img: Image) -> bool:
     """True if the minigame finish screen is on screen in `img`: the red
@@ -5659,7 +5802,7 @@ class DebugCapture(logging.Handler):
         self.text.insert(tk.END, line + "\n", level)
         self.at_line_start = True
 
-OUTSIDE_ACTIONS: dict[str, Callable[[], Any]] = {"rejoin": leave_and_rejoin, "setup": setup_game, "trade_hub": travel_to_trade_hub, "leave_trade_hub": leave_trade_hub, "inventory": inventory_tour}   # the commands that do what a button does (AdoptMeGUI.act_from_outside())
+OUTSIDE_ACTIONS: dict[str, Callable[[], Any]] = {"rejoin": leave_and_rejoin, "setup": setup_game, "trade_hub": travel_to_trade_hub, "leave_trade_hub": leave_trade_hub, "inventory": inventory_tour, "sloop": exit_minigame_and_setup}   # the commands that do what a button does (AdoptMeGUI.act_from_outside())
 
 def blackout_seen_by_capture(before: Image, after: Image) -> Optional[bool]:
     """Whether the macro's screenshots see the window of the blackout test: `before` is a screenshot without it, `after` one with it up, white. Seen if
@@ -5856,10 +5999,13 @@ class AdoptMeGUI:
             self.stop()
         elif command == "set" and data:
             self.set_switch(data["kind"], data["name"], data["value"])
+        elif command == "blackout":
+            value = data.get("value") if data else None
+            finish_command(stem, self.blackout_command(value if isinstance(value, bool) else None))
         elif command == "focus":
             focus_roblox()                                                          # the window to the front (no click): after an update the macro's own window may be
         elif command == "sloop":
-            self.act_from_outside("setup", stem, resume=True)                       # Setup, and then the loop, whether or not one was running
+            self.act_from_outside("sloop", stem, resume=True)                       # (leave a minigame and) Setup, and then the loop, whether or not one was running
         elif command in OUTSIDE_ACTIONS:
             self.act_from_outside(command, stem)
         elif command == "refresh_debug":
@@ -5948,7 +6094,8 @@ class AdoptMeGUI:
         stops an input capture (only while Roblox is focused). See docs/ARCHITECTURE.md#gui-internals."""
         hotkeys = [(cfg.HOTKEYS["stop"], self.stop_by_hotkey, True, False),
                    (cfg.HOTKEYS["capture"], self.capture_by_hotkey, False, True),
-                   (cfg.HOTKEYS["blackout"], self.blackout_by_hotkey, False, True)]   # (key, action, only while a run is going, only while Roblox is focused)
+                   (cfg.HOTKEYS["blackout"], self.blackout_by_hotkey, False, True),
+                   (cfg.HOTKEYS["screenshot"], self.screenshot_by_hotkey, False, True)]   # (key, action, only while a run is going, only while Roblox is focused)
 
         def watch():
             was_down = [False] * len(hotkeys)
@@ -5969,6 +6116,27 @@ class AdoptMeGUI:
                 time.sleep(cfg.STOP_HOTKEY_POLL_INTERVAL)
         threading.Thread(target=watch, daemon=True).start()
 
+    def blackout_command(self, value: Optional[bool]) -> str:
+        """The `blackout` command (Tk's thread): blank the screen (value True), show it (False) or switch it (None) - whatever the hotkey's checkbox says. What
+        the screen is afterwards, for the bot: "blanked", "shown" or "not blanked" (the reason is in the log)."""
+        want = (not self.blackout.shown) if value is None else value
+        try:
+            if want and not self.blackout.shown:
+                self.blackout.show()
+            elif not want:
+                self.blackout.hide()
+        except Exception:
+            logger.exception("Blanking the screen failed")
+            self.blackout.hide()
+        return "blanked" if self.blackout.shown else ("not blanked" if want else "shown")
+
+    def screenshot_by_hotkey(self) -> None:
+        """HOTKEYS["screenshot"] was pressed in Roblox: a picture of the whole screen into SCREENSHOTS_DIR (Tk's thread)."""
+        try:
+            logger.info(f"Screenshot saved: {save_screenshot()}")
+        except Exception:
+            logger.exception("Saving a screenshot failed")
+
     def capture_by_hotkey(self) -> None:
         """HOTKEYS["capture"] was pressed: start or stop the input capture (Tk's thread; the capture's own threads do the work)."""
         try:
@@ -5978,8 +6146,10 @@ class AdoptMeGUI:
 
     def blackout_by_hotkey(self) -> None:
         """HOTKEYS["blackout"] was pressed: blank the screen or show it again (Tk's thread), unless the Options subtab's checkbox has the key off (it is
-        then typed in the game)."""
+        then typed in the game). The screen is only blanked while the loop is running; one that is blank can always be shown again."""
         if not self.config_flag_vars["blackout_hotkey_enabled"].get():
+            return
+        if not self.blackout.shown and not (self.is_running and self.running_loop):
             return
         try:
             self.blackout.toggle()
@@ -6313,7 +6483,9 @@ class AdoptMeGUI:
                        anchor=tk.W, cursor="hand2").pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
         tk.Label(parent, text=f"Press {cfg.HOTKEYS['capture'].upper()} anywhere to start / stop capturing screenshots and input",
                  font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
-        tk.Label(parent, text=f"Press {cfg.HOTKEYS['blackout'].upper()} in Roblox to blank / show the screen (the macro still sees it)",
+        tk.Label(parent, text=f"Press {cfg.HOTKEYS['screenshot'].upper()} in Roblox to save a screenshot of the whole screen in debug/screenshots",
+                 font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
+        tk.Label(parent, text=f"Press {cfg.HOTKEYS['blackout'].upper()} in Roblox to blank / show the screen while the loop runs (the macro still sees it)",
                  font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
         tk.Button(parent, text="Refresh debug", command=self.refresh_debug_folder,
                   font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.accent, fg=self.fg, cursor="hand2"

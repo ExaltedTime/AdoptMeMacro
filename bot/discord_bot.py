@@ -230,6 +230,49 @@ async def announce_when_done(client: discord.Client, config: bot_lib.Config, nam
     await tell_channel(client, config, f"{label} has not reported that it finished in {cfg.BOT_ACTION_WAIT:g} s - see /status.")
 
 
+async def wait_for_end(name: str, seconds: float) -> Optional[str]:
+    """How the action of the command `name` ended - what the macro wrote in its .done (finish_command()) - waiting up to `seconds` for it; None if it did not."""
+    deadline = time.time() + seconds
+    while True:
+        ended = bot_lib.take_ack(cfg.COMMANDS_DIR, name, "done")
+        if ended is not None or time.time() >= deadline:
+            return ended
+        await asyncio.sleep(cfg.BOT_COMMAND_ACK_POLL)
+
+
+def blank_text(ended: Optional[str]) -> str:
+    """What to say of the macro's answer to /blank."""
+    return {"blanked": "The screen is blank (the macro still sees the game).", "shown": "The screen is shown.",
+            "not blanked": "The screen was not blanked - see /log (its screenshots would have seen the black window, or the screen was too bright to test)."}.get(
+        ended or "", "The macro has not said whether the screen is blank - see /status.")
+
+
+async def start_window(config: bot_lib.Config) -> str:
+    """Start the macro with its window up and no loop (`open_macro()`) and wait up to BOT_START_CONFIRM seconds for the window to be answering - its status
+    written after the launch (the window writes it when it is up) - since a command left before that is not read. "" when it is, else what to say. The
+    crash check does not look while this goes on (`launching()`)."""
+    since = datetime.now()
+    with launching():
+        result = await open_macro(config)
+        if not result.startswith("Started the macro ("):
+            return result
+        deadline = time.time() + cfg.BOT_START_CONFIRM
+        while time.time() < deadline:
+            if bot_lib.started_since(bot_lib.read_json(bot_lib.status_path()), since):
+                return ""
+            await asyncio.sleep(cfg.BOT_COMMAND_ACK_POLL)
+    return "The macro started, but its window did not come up in time - see /log and macro_stderr.log."
+
+
+async def ensure_macro(config: bot_lib.Config) -> tuple[str, bool]:
+    """A command that needs the macro does not say that it is not running: it starts it (start_window()). (What to say if that failed - else "" -, and whether
+    the macro was started now.)"""
+    if await running_pids():
+        return "", False
+    problem = await start_window(config)
+    return problem, not problem
+
+
 async def collect_inventory() -> tuple[str, list[str]]:
     """Ask the macro for its inventory tour (/inventory) and wait up to BOT_INVENTORY_WAIT seconds for it to end: what to say, and the pictures it took."""
     bot_lib.clear_inventory(cfg.INVENTORY_DIR)
@@ -636,14 +679,17 @@ def build(config: bot_lib.Config) -> discord.Client:
         """Leave the running macro `command_name` (its window does it) and say `said`; with `idle_only` not while its loop runs. With a `label` the channel is told
         when the action ends (announce_when_done()), and what `then` says after one that was done. True if the macro took the command."""
         await interaction.response.defer(thinking=True)
-        if not await running_pids():
-            await say(interaction, "The macro isn't running - /start it first (it is done by its window).")
+        problem, started = await ensure_macro(config)
+        if problem:
+            await say(interaction, problem)
             return False
+        if started:
+            remember("open")                                          # (the window the bot has just opened is expected to be there)
         if idle_only and not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path())):
             await say(interaction, "The macro's loop is running - /stop it first.")
             return False
         problem, name = await submit_command(command_name)
-        await say(interaction, problem or said)
+        await say(interaction, problem or (("Started the macro first. " if started else "") + said))
         if label and not problem:
             announce(name, label, then)
         return not problem
@@ -658,10 +704,26 @@ def build(config: bot_lib.Config) -> discord.Client:
         await ask_macro(interaction, "setup", "Asked the macro to run Setup." + (" Its loop starts again once Setup is done." if loop_running else ""),
                         label="Setup", then="Its loop starts again." if loop_running else "")
 
-    @command("sloop", "Have the macro run Setup and then its loop (stops its loop first if it runs)")
+    @command("sloop", "Have the macro run Setup and then its loop (starts the macro if it is not running)")
     async def sloop(interaction: discord.Interaction) -> None:
         if await ask_macro(interaction, "sloop", "Asked the macro to run Setup and then its loop.", label="Setup", then="Its loop starts now."):
             remember("running")
+
+    @command("blank", "Blank the screen with a black window, or show it again (starts the macro if it is not running)")
+    @app_commands.describe(on="True to blank the screen, False to show it; left out, it is switched")
+    async def blank(interaction: discord.Interaction, on: Optional[bool] = None) -> None:
+        await interaction.response.defer(thinking=True)
+        problem, started = await ensure_macro(config)
+        if problem:
+            await say(interaction, problem)
+            return
+        if started:
+            remember("open")
+        problem, name = await submit_command("blackout", **({} if on is None else {"value": on}))
+        if problem:
+            await say(interaction, problem)
+            return
+        await say(interaction, ("Started the macro first. " if started else "") + blank_text(await wait_for_end(name, cfg.BOT_BLANK_WAIT)))
 
     @command("trade_hub", "Have the macro travel to the Trading Hub (stops its loop first)")
     async def trade_hub(interaction: discord.Interaction) -> None:
@@ -671,9 +733,12 @@ def build(config: bot_lib.Config) -> discord.Client:
     @command("inventory", "Have the macro scroll down the backpack's pets tab and send pictures of it (stops its loop first)")
     async def inventory(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
-        if not await running_pids():
-            await say(interaction, "The macro isn't running - /start it first (it is done by its window).")
+        problem, started = await ensure_macro(config)
+        if problem:
+            await say(interaction, problem)
             return
+        if started:
+            remember("open")
         text, pictures = await collect_inventory()
         batches = bot_lib.in_batches(pictures, cfg.BOT_FILES_PER_MESSAGE)
         await say(interaction, text, files=[discord.File(path) for path in batches[0]] if batches else [])
@@ -692,9 +757,13 @@ def build(config: bot_lib.Config) -> discord.Client:
     async def change_switch(interaction: discord.Interaction, kind: str, name: str, value: bool) -> None:
         """Ask the running macro to change a switch (the command file) and say what the game config shows a moment later."""
         await interaction.response.defer(thinking=True)
-        if not await running_pids():
-            await say(interaction, "The macro isn't running - a switch can only be changed while its window is open (or by hand in the window).")
+        problem, started = await ensure_macro(config)
+        if problem:
+            await say(interaction, problem)
             return
+        if started:
+            remember("open")
+            await say(interaction, "Started the macro first.")
         problem = await send_command("set", **bot_lib.switch_command(kind, name, value))
         if problem:
             await say(interaction, problem)

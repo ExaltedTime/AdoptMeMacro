@@ -588,3 +588,67 @@ def test_after_an_update_that_started_the_macro_again_the_roblox_window_is_broug
 async def _started(macro_calls):
     macro_calls.calls.append("loop")
     return "Started the macro. Its loop is running."
+
+
+def window_macro(monkeypatch, tmp_path, opened="Started the macro (its window is up, no loop going - /loop starts the loop).", running=False):
+    """start_window()/ensure_macro() with the launching replaced: `status` is written by the test when the window is to be up."""
+    monkeypatch.setattr(bot_lib.cfg, "STATUS_PATH", str(tmp_path / "status.json"))
+    calls = []
+
+    async def open_macro(config):
+        calls.append("open")
+        return opened
+
+    async def pids():
+        return [3] if running else []
+    monkeypatch.setattr(discord_bot, "open_macro", open_macro)
+    monkeypatch.setattr(discord_bot, "running_pids", pids)
+    monkeypatch.setattr(discord_bot.cfg, "BOT_COMMAND_ACK_POLL", 0.01)
+    monkeypatch.setattr(discord_bot.cfg, "BOT_START_CONFIRM", 0.3)
+    return calls, bot_lib.load_config(_config(tmp_path))
+
+
+def test_a_command_that_needs_the_macro_starts_it_instead_of_saying_it_is_not_running(tmp_path, monkeypatch):
+    calls, config = window_macro(monkeypatch, tmp_path)
+    status = tmp_path / "status.json"
+
+    async def window_comes_up():
+        await asyncio.sleep(0.05)
+        status.write_text(json.dumps({"updated": datetime.now().strftime(bot_lib.TIME_FORMAT), "stopped": "x"}))      # the window writes it when it is up
+
+    async def both():
+        task = asyncio.ensure_future(window_comes_up())
+        result = await discord_bot.ensure_macro(config)
+        await task
+        return result
+    assert asyncio.run(both()) == ("", True) and calls == ["open"]
+    assert discord_bot.LAUNCHING == 0                                                      # (the crash check is looking again)
+
+
+def test_a_macro_that_is_running_is_left_alone_and_one_that_does_not_come_up_is_said(tmp_path, monkeypatch):
+    calls, config = window_macro(monkeypatch, tmp_path, running=True)
+    assert asyncio.run(discord_bot.ensure_macro(config)) == ("", False) and calls == []
+    calls, config = window_macro(monkeypatch, tmp_path)
+    problem, started = asyncio.run(discord_bot.ensure_macro(config))                       # no status is ever written
+    assert "did not come up in time" in problem and started is False and calls == ["open"]
+    calls, config = window_macro(monkeypatch, tmp_path, opened="Started the macro, but its process is not there - see /log and macro_stderr.log.")
+    assert asyncio.run(discord_bot.ensure_macro(config)) == ("Started the macro, but its process is not there - see /log and macro_stderr.log.", False)
+
+
+def test_the_macros_answer_to_blank_is_said_in_words(tmp_path, monkeypatch):
+    assert discord_bot.blank_text("blanked").startswith("The screen is blank") and discord_bot.blank_text("shown") == "The screen is shown."
+    assert "was not blanked" in discord_bot.blank_text("not blanked") and "has not said" in discord_bot.blank_text(None)
+    monkeypatch.setattr(discord_bot.cfg, "COMMANDS_DIR", str(tmp_path))
+    monkeypatch.setattr(discord_bot.cfg, "BOT_COMMAND_ACK_POLL", 0.01)
+
+    async def macro_answers():
+        await asyncio.sleep(0.05)
+        (tmp_path / "b1.done").write_text("blanked")
+
+    async def both():
+        task = asyncio.ensure_future(macro_answers())
+        result = await discord_bot.wait_for_end("b1", 1.0)
+        await task
+        return result
+    assert asyncio.run(both()) == "blanked" and not (tmp_path / "b1.done").exists()
+    assert asyncio.run(discord_bot.wait_for_end("never", 0.1)) is None

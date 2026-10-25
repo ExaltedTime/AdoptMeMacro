@@ -189,9 +189,9 @@ def test_a_click_always_gets_a_frame_even_when_nothing_changed(macro, capture, s
 
 
 def test_a_long_stretch_without_a_frame_forces_one(macro, capture, screen, monkeypatch):
-    monkeypatch.setattr(macro.cfg, "CAPTURE_FRAME_INTERVAL", 0.03)                    # (looks come far more often than the forced frames, whatever the tuning)
-    monkeypatch.setattr(macro.cfg, "CAPTURE_MAX_SKIP", 0.15)
-    recorder = run_capture(macro, capture, lambda r: r.frames >= 3)
+    monkeypatch.setattr(macro.cfg, "CAPTURE_FRAME_INTERVAL", 0.01)                    # (looks come far more often than the forced frames, whatever the tuning or the load)
+    monkeypatch.setattr(macro.cfg, "CAPTURE_MAX_SKIP", 0.3)
+    recorder = run_capture(macro, capture, lambda r: r.frames >= 3 and r.skipped >= 1)
     assert recorder.skipped >= 1                                       # some looks were skipped in between
 
 

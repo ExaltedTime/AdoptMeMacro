@@ -97,6 +97,25 @@ MINIGAME_TELEPORT_CHANGE = 25       # mean grey-level difference (0-255, over th
 MINIGAME_MAX_DURATION = 600.0       # gives up (and logs a failure) if the minigame hasn't finished by then
 MINIGAME_ZOOM_OUT_DURATION = 3.0    # Hauntlet 2 and Ghost Gallery hold KEYS["zoom_out"] this long when they begin (Hauntlet 2 again where it can't find the doors, if HAUNTLET_SEARCH_TURNS allows)
 MINIGAME_FINISH_WAIT = 5.0          # after clicking NICE!, before carrying on
+# Leaving a minigame (exit_minigame(), the start of the bot's /sloop): the red Exit Minigame button at the bottom left (POPUP_TEMPLATES["exit_minigame"]; the house has an
+# Exit Home one in the same place), then "Do you want to exit this game?" (POPUP_TEMPLATES["exit_game"]) with a red Cancel and, at its right, a grey button counting down
+# that turns green as Exit Game. Positions and crops from three screenshots of a minigame at 1920x1080 (tests/exit_hub/); the state is told by the colours of the two
+# buttons (HSV ranges, OpenCV's: hue 0-179), which are wide.
+EXIT_MINIGAME_POS = (100, 1040)
+EXIT_DIALOG_CANCEL_BOX = (782, 635, 956, 685)                   # the red button
+EXIT_DIALOG_RIGHT_BOX = (962, 635, 1136, 685)                   # grey while it counts down, then green
+EXIT_GAME_POS = (1048, 660)
+EXIT_STAY_POS = (869, 660)                                      # the red button at the left: Cancel, which stays (clicked on a dialog that is up outside a minigame)
+EXIT_DIALOG_MIN_FRACTION = 0.4                                  # of a box that is its button's colour (the button's text takes some of it)
+EXIT_RED_HSV = ((0, 150, 150), (8, 255, 255))                   # (low, high); red is also at the other end of the hue circle
+EXIT_RED_HSV_HIGH = ((172, 150, 150), (179, 255, 255))
+EXIT_GREEN_HSV = ((45, 110, 130), (80, 255, 255))
+EXIT_GREY_HSV = ((0, 0, 40), (179, 60, 120))
+EXIT_DIALOG_WAIT = 4.0                                          # seconds the dialog is waited for after the button is clicked
+EXIT_COUNTDOWN_WAIT = 8.0                                       # and then the right button's countdown, until it is green
+HUB_LEAVE_WAIT = 20.0                                           # seconds the Trading Hub is waited to be gone after leaving it (the game loads a regular server)
+EXIT_LEAVE_WAIT = 12.0                                          # and then the minigame's overlay to be gone
+EXIT_POLL = 0.25                                                # seconds between looks
 MINIGAME_FINISH_CLICK_TRIES = 3      # NICE! clicks before giving up on the finish screen closing
 MINIGAME_START_LOOK_INTERVAL = 0.5     # how often each minigame looks for its overlay while waiting for the game to begin
 MINIGAME_START_WAIT = 90.0          # each minigame waits for its overlay (the game has begun: the lobby's countdown to a round that starts at a fixed time) and act
@@ -150,6 +169,12 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     # The normal backpack's "BACKPACK" title, and the expanded one's BACK button.
     "backpack_normal": {"box": (700, 600, 1000, 690), "threshold": 0.8},
     "backpack_back":   {"box": (700, 80, 1000, 200), "threshold": 0.8},
+    # The exit dialog's "Do you want to exit this game?" title (the same with its right button grey or green; the teleport's Yes / No dialogs
+    # have the same buttons and another title), the red "Exit Minigame" button at the bottom left of every minigame, and the "GO HOME" text under
+    # the button at the top of the Trading Hub island (the crop is the text alone: what is around the button is the island).
+    "exit_game":       {"box": (760, 445, 1160, 605), "threshold": 0.8},
+    "exit_minigame":   {"box": (0, 1000, 220, 1078), "threshold": 0.8},
+    "go_home":         {"box": (1280, 60, 1460, 140), "threshold": 0.8},
 }
 # The sick need's own "Ask Doctor Heart to heal your family?" Yes/No dialog (POPUP_TEMPLATES["sick_dialog"]) has the
 # same Yes green + No red as a minigame popup; it is the sick handler's to answer (SICK_FINAL_CLICK_POS is its Yes),
@@ -192,13 +217,14 @@ DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
 # what belongs to one run (its log lines, run<N>.txt, and its chart, run<N>.png) and recordings/ for the run videos - plus
 # the game config, which stays in debug/ itself so "Refresh debug" (which empties everything else) leaves it alone.
 LOGS_DIR = os.path.join(DEBUG_DIR, "logs")
+SCREENSHOTS_DIR = os.path.join(DEBUG_DIR, "screenshots")      # the pictures of HOTKEYS["screenshot"], screenshot_<date>_<time>.png
 MACRO_STDERR_PATH = os.path.join(LOGS_DIR, "macro_stderr.log")    # the error output of a macro the Discord bot started (the bot opens it for the process, which keeps it open)
 RUNS_DIR = os.path.join(DEBUG_DIR, "runs")                    # run<N>.txt (this run's lines of the log on their own, see log_run_event()) and run<N>.png (its chart, see the RUN REPORT section of main.py)
 for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
 COMMANDS_DIR = os.path.join(DEBUG_DIR, "commands")          # the commands for the macro, one <time>-<id>.json file each, written by the Discord bot (see read_command_with_id()); the macro removes each once read and leaves a <time>-<id>.ack saying it was taken or why not
-COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, travel to / leave the Trading Hub, take pictures of the backpack's pets tab, or run Setup and then the loop (`sloop`), or bring the Roblox window to the front (`focus`)
+COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus", "blackout")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, travel to / leave the Trading Hub, take pictures of the backpack's pets tab, or run Setup and then the loop (`sloop`), bring the Roblox window to the front (`focus`), or blank / show the screen (`blackout`)
 NEED_NAMES = ("catch", "pet", "choose", "ride", "walk", "hungry", "thirsty", "dirty", "potty", "sleepy", "bored", "beach", "school", "cafe", "salon", "pizza", "camping", "sick")   # the Debug tab's need switches (the keys of main.py's NEED_HANDLER_CLASSES)
 OPTION_SWITCHES = {"side_quest": "side_quest_enabled", "resume_on_focus_loss": "resume_on_focus_loss", "record_next_run": "record_next_run",
                    **{f"play_{name}": f"{name}_enabled" for name in MINIGAME_LABELS}}   # the other switches a command may change: name -> the game config's key ("show_debug_lines" too, which is only in the window)
@@ -213,6 +239,7 @@ BOT_COMMAND_ACK_WAIT = 5.0                                  # seconds the bot wa
 BOT_COMMAND_ACK_POLL = 0.25                                 # seconds between the bot's looks for the macro's answer
 BOT_ACK_KEEP = 300                                          # seconds an answer of the macro that nobody read stays in the commands folder
 BOT_ACTION_WAIT = 3600.0                                    # seconds the bot waits for an action it asked for (Setup, a rejoin, a trip) to report that it ended, before it says it has not
+BOT_BLANK_WAIT = 15.0                                       # seconds the bot waits for the macro to say whether the screen was blanked (the test flash takes a moment)
 BOT_ACTION_POLL = 2.0                                       # seconds between its looks for that
 BOT_INVENTORY_WAIT = 300.0                                  # seconds the bot waits, after /inventory, for the macro to end its tour (INVENTORY_DONE_PATH)
 BOT_INVENTORY_POLL = 1.0                                    # seconds between its looks for that
@@ -801,10 +828,11 @@ KEY_SEQUENCES = {                  # keys pressed one after the other, each held
     "respawn": ("esc", "r", "enter"),
     "leave_game": ("esc", "l", "enter"),
 }
-HOTKEYS = {                        # the macro's own keys, each a letter or digit, read in any window (the last two only while Roblox is focused)
+HOTKEYS = {                        # the macro's own keys, each a letter or digit (or a character that is a key of its own on the keyboard layout), read in any window (the last three only while Roblox is focused)
     "stop": "p",                   # stops a running macro
     "capture": "m",                # starts or stops an input capture
     "blackout": "h",               # blanks the screen with a black window (and again, to take it away)
+    "screenshot": "ô",             # saves a picture of the whole screen in SCREENSHOTS_DIR (not a letter of the alphabet: its key is looked up on the keyboard layout, see hotkey_vk())
 }
 MOVE_KEYS = tuple(KEYS[name] for name in ("forward", "left", "back", "right"))
 HELD_KEYS = tuple(dict.fromkeys([*KEYS.values(), *(key for keys in KEY_SEQUENCES.values() for key in keys)]))   # every key the macro can hold down: let go of when it ends, at a stop, or when it is killed

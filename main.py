@@ -63,10 +63,41 @@ class FocusLost(Exception):
     """
     pass
 
+_WARNED_HOTKEYS: set[str] = set()
+
+def hotkey_vk(key: str) -> Optional[int]:
+    """The virtual-key code of the hotkey `key`: a letter or digit of the alphabet is its own, any other character (an accented one, say) is looked up on the
+    keyboard layout in use (VkKeyScanW). None when the layout has no key for it by itself - it is typed with Shift, AltGr or a dead key, or not at all."""
+    if key.isascii() and key.isalnum():
+        return ord(key.upper())
+    scan = ctypes.windll.user32.VkKeyScanW(ord(key)) & 0xFFFF  # type: ignore[attr-defined]  # Windows only
+    if scan == 0xFFFF or scan >> 8:                         # (no key, or one that needs a modifier)
+        return None
+    return scan & 0xFF
+
 def hotkey_down(key: str) -> bool:
-    """True while `key` (a single letter or digit) is held down, whichever
-    window has the focus (Windows)."""
-    return bool(ctypes.windll.user32.GetAsyncKeyState(ord(key.upper())) & 0x8000)  # type: ignore[attr-defined]  # Windows only
+    """True while `key` (a single letter or digit, or a character of its own key on the layout: hotkey_vk()) is held down, whichever window has the focus
+    (Windows). A key the layout does not have is never down (said once)."""
+    vk = hotkey_vk(key)
+    if vk is None:
+        if key not in _WARNED_HOTKEYS:
+            _WARNED_HOTKEYS.add(key)
+            logger.warning(f"The '{key}' hotkey is not a key of its own on this keyboard layout - it does nothing")
+        return False
+    return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)  # type: ignore[attr-defined]  # Windows only
+
+def save_screenshot() -> str:
+    """What the macro sees of the Roblox window now (grab_screen(): its size scaled to the reference one) as SCREENSHOTS_DIR/screenshot_<date>_<time>.png, a
+    number added if there is one of that second already; the path."""
+    os.makedirs(cfg.SCREENSHOTS_DIR, exist_ok=True)
+    base = os.path.join(cfg.SCREENSHOTS_DIR, time.strftime("screenshot_%Y%m%d_%H%M%S"))
+    path, n = base + ".png", 1
+    while os.path.exists(path):
+        n += 1
+        path = f"{base}_{n}.png"
+    if not cv2.imwrite(path, grab_screen()):
+        raise OSError(f"could not write {path}")
+    return path
 
 def hotkey_fires(down: bool, was_down: bool, only_while_running: bool, running: bool, only_in_roblox: bool) -> bool:
     """Whether a hotkey seen `down` (and not `was_down` at the last look) is to act: not while it is just being held, not when it is
@@ -5948,7 +5979,8 @@ class AdoptMeGUI:
         stops an input capture (only while Roblox is focused). See docs/ARCHITECTURE.md#gui-internals."""
         hotkeys = [(cfg.HOTKEYS["stop"], self.stop_by_hotkey, True, False),
                    (cfg.HOTKEYS["capture"], self.capture_by_hotkey, False, True),
-                   (cfg.HOTKEYS["blackout"], self.blackout_by_hotkey, False, True)]   # (key, action, only while a run is going, only while Roblox is focused)
+                   (cfg.HOTKEYS["blackout"], self.blackout_by_hotkey, False, True),
+                   (cfg.HOTKEYS["screenshot"], self.screenshot_by_hotkey, False, True)]   # (key, action, only while a run is going, only while Roblox is focused)
 
         def watch():
             was_down = [False] * len(hotkeys)
@@ -5968,6 +6000,13 @@ class AdoptMeGUI:
                             logger.exception(f"Watching the '{key}' hotkey failed (the watching goes on)")
                 time.sleep(cfg.STOP_HOTKEY_POLL_INTERVAL)
         threading.Thread(target=watch, daemon=True).start()
+
+    def screenshot_by_hotkey(self) -> None:
+        """HOTKEYS["screenshot"] was pressed in Roblox: a picture of its window into SCREENSHOTS_DIR (Tk's thread)."""
+        try:
+            logger.info(f"Screenshot saved: {save_screenshot()}")
+        except Exception:
+            logger.exception("Saving a screenshot failed")
 
     def capture_by_hotkey(self) -> None:
         """HOTKEYS["capture"] was pressed: start or stop the input capture (Tk's thread; the capture's own threads do the work)."""
@@ -6312,6 +6351,8 @@ class AdoptMeGUI:
                        selectcolor=self.bg, activebackground=self.bg, activeforeground=self.fg,
                        anchor=tk.W, cursor="hand2").pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
         tk.Label(parent, text=f"Press {cfg.HOTKEYS['capture'].upper()} anywhere to start / stop capturing screenshots and input",
+                 font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
+        tk.Label(parent, text=f"Press {cfg.HOTKEYS['screenshot'].upper()} in Roblox to save a screenshot in debug/screenshots",
                  font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
         tk.Label(parent, text=f"Press {cfg.HOTKEYS['blackout'].upper()} in Roblox to blank / show the screen (the macro still sees it)",
                  font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)

@@ -2125,3 +2125,56 @@ def test_refresh_debug_from_outside_is_refused_while_a_capture_is_recording(macr
     monkeypatch.setattr(macro.state, "capture", None)
     gui.refresh_debug_from_outside()
     assert done == ["refreshed"]
+
+
+# --- the screenshot hotkey ---
+
+def fake_layout(macro, monkeypatch, scans, pressed=()):
+    """ctypes.windll with a keyboard layout: VkKeyScanW answers from `scans` (character -> its answer), and the keys in `pressed` are down."""
+    import ctypes
+    user32 = types.SimpleNamespace(VkKeyScanW=lambda char: scans.get(chr(char), -1), GetAsyncKeyState=lambda vk: 0x8000 if vk in pressed else 0)
+    monkeypatch.setattr(ctypes, "windll", types.SimpleNamespace(user32=user32), raising=False)
+
+
+def test_a_hotkey_is_its_letter_or_digit_or_the_key_the_layout_has_for_the_character(macro, monkeypatch):
+    fake_layout(macro, monkeypatch, {"\u00f4": 0x00DE, "\u00e9": 0x0132, "x": 0x0058})        # an ô on a key of its own (VK 0xDE), an é that needs Shift (high byte)
+    assert macro.hotkey_vk("p") == ord("P") and macro.hotkey_vk("7") == ord("7")            # (letters and digits are their own: the layout is not asked)
+    assert macro.hotkey_vk("\u00f4") == 0xDE
+    assert macro.hotkey_vk("\u00e9") is None and macro.hotkey_vk("\u00fc") is None         # needs Shift; not on the layout at all (-1)
+
+
+def test_a_hotkey_is_down_while_its_key_is_and_one_the_layout_lacks_is_never_down_and_said_once(macro, monkeypatch, caplog):
+    fake_layout(macro, monkeypatch, {"\u00f4": 0x00DE}, pressed={0xDE, ord("M")})
+    assert macro.hotkey_down("\u00f4") is True and macro.hotkey_down("m") is True and macro.hotkey_down("h") is False
+    fake_layout(macro, monkeypatch, {}, pressed={0xDE})                                        # another layout: no such key
+    macro._WARNED_HOTKEYS.discard("\u00f4")
+    assert macro.hotkey_down("\u00f4") is False and macro.hotkey_down("\u00f4") is False
+    assert caplog.text.count("is not a key of its own on this keyboard layout") == 1
+
+
+def test_a_screenshot_is_saved_in_the_debug_folder_under_its_time_and_a_second_in_the_same_second_gets_a_number(macro, monkeypatch, tmp_path):
+    import numpy as np
+    import cv2
+    monkeypatch.setattr(macro.cfg, "SCREENSHOTS_DIR", str(tmp_path / "debug" / "screenshots"))
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.full((20, 30, 3), 90, np.uint8))
+    monkeypatch.setattr(macro.time, "strftime", lambda fmt: "screenshot_20261025_120000")
+    first, second = macro.save_screenshot(), macro.save_screenshot()
+    assert os.path.basename(first) == "screenshot_20261025_120000.png" and os.path.basename(second) == "screenshot_20261025_120000_2.png"
+    assert cv2.imread(first).shape == (20, 30, 3)
+    monkeypatch.setattr(macro.cv2, "imwrite", lambda path, img: False)
+    with pytest.raises(OSError):
+        macro.save_screenshot()
+
+
+def test_the_screenshot_key_saves_a_picture_and_a_failure_to_save_is_logged_not_raised(macro, monkeypatch, caplog):
+    saved = []
+    gui = object.__new__(macro.AdoptMeGUI)
+    monkeypatch.setattr(macro, "save_screenshot", lambda: saved.append(1) or "/x/screenshot.png")
+    gui.screenshot_by_hotkey()
+    assert saved == [1] and "Screenshot saved: /x/screenshot.png" in caplog.text
+
+    def broken():
+        raise OSError("disk full")
+    monkeypatch.setattr(macro, "save_screenshot", broken)
+    gui.screenshot_by_hotkey()
+    assert "Saving a screenshot failed" in caplog.text

@@ -192,6 +192,7 @@ DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
 # what belongs to one run (its log lines, run<N>.txt, and its chart, run<N>.png) and recordings/ for the run videos - plus
 # the game config, which stays in debug/ itself so "Refresh debug" (which empties everything else) leaves it alone.
 LOGS_DIR = os.path.join(DEBUG_DIR, "logs")
+SCREENSHOTS_DIR = os.path.join(DEBUG_DIR, "screenshots")      # the pictures of HOTKEYS["screenshot"], screenshot_<date>_<time>.png
 MACRO_STDERR_PATH = os.path.join(LOGS_DIR, "macro_stderr.log")    # the error output of a macro the Discord bot started (the bot opens it for the process, which keeps it open)
 RUNS_DIR = os.path.join(DEBUG_DIR, "runs")                    # run<N>.txt (this run's lines of the log on their own, see log_run_event()) and run<N>.png (its chart, see the RUN REPORT section of main.py)
 for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
@@ -801,10 +802,11 @@ KEY_SEQUENCES = {                  # keys pressed one after the other, each held
     "respawn": ("esc", "r", "enter"),
     "leave_game": ("esc", "l", "enter"),
 }
-HOTKEYS = {                        # the macro's own keys, each a letter or digit, read in any window (the last two only while Roblox is focused)
+HOTKEYS = {                        # the macro's own keys, each a letter or digit (or a character that is a key of its own on the keyboard layout), read in any window (the last three only while Roblox is focused)
     "stop": "p",                   # stops a running macro
     "capture": "m",                # starts or stops an input capture
     "blackout": "h",               # blanks the screen with a black window (and again, to take it away)
+    "screenshot": "ô",             # saves a picture of the Roblox window in SCREENSHOTS_DIR (not a letter of the alphabet: its key is looked up on the keyboard layout, see hotkey_vk())
 }
 MOVE_KEYS = tuple(KEYS[name] for name in ("forward", "left", "back", "right"))
 HELD_KEYS = tuple(dict.fromkeys([*KEYS.values(), *(key for keys in KEY_SEQUENCES.values() for key in keys)]))   # every key the macro can hold down: let go of when it ends, at a stop, or when it is killed

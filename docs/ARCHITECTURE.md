@@ -1212,7 +1212,7 @@ It is only turned on after a test (`Blackout.show()`): the window is first shown
 `BLACKOUT_SEEN_RISE` grey levels brighter the screenshots see the window and it is taken away again with a warning, and a screen already brighter than
 `BLACKOUT_TOO_BRIGHT` cannot be tested (`blackout_seen_by_capture()` is None) and is refused the same way (try again from a darker view). A Windows that refuses
 the capture exclusion gets the same warning. Only then is the window made black. The test shows as a brief white flash. It does not dim the backlight, and the
-window goes with the process (`close()` takes it away first). Typing the hotkey in Roblox is the only way to toggle it, while the Options subtab's checkbox has it on (`blackout_hotkey_enabled`); the cursor is hidden over it.
+window goes with the process (`close()` takes it away first). The hotkey blanks the screen only while the loop is running (`blackout_by_hotkey()`: not when nothing runs or an action such as Setup does), and shows a blank screen again at any time; it works at all only while the Options subtab's checkbox has it on (`blackout_hotkey_enabled`), and the `/blank` command does not ask either; the cursor is hidden over it.
 The control window is blanked with the rest of the screen: while the screen is blank the black window is put back at the top of the always-on-top windows every
 `BLACKOUT_RAISE_INTERVAL_MS` (`Blackout.keep_on_top()`, `SetWindowPos` with `HWND_TOPMOST` and no activation, the handles passed as pointer-sized values), and at once when the control window is brought back after a minigame (`bring_to_front()`), because the control window coming back up from the
 taskbar lands above it and Windows decides when, so a single raise is either too soon or too late.

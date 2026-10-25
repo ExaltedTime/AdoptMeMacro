@@ -1946,13 +1946,30 @@ class FakeBlackout:
         self.raised += 1
 
 
-def blackout_gui(macro, monkeypatch, tmp_path, hotkey_on=True, shown=False):
+def blackout_gui(macro, monkeypatch, tmp_path, hotkey_on=True, shown=False, loop=True):
     monkeypatch.setattr(macro.cfg, "GAME_CONFIG_PATH", str(tmp_path / ".config"))
     gui = object.__new__(macro.AdoptMeGUI)
+    gui.is_running = gui.running_loop = loop
     gui.root = types.SimpleNamespace()
     gui.blackout = FakeBlackout(shown)
     gui.config_flag_vars = {"blackout_hotkey_enabled": types.SimpleNamespace(get=lambda: hotkey_on)}
     return gui
+
+
+def test_the_blackout_key_blanks_the_screen_only_while_the_loop_runs_but_always_shows_it_again(macro, monkeypatch, tmp_path):
+    idle = blackout_gui(macro, monkeypatch, tmp_path, loop=False)                          # nothing runs
+    idle.blackout_by_hotkey()
+    assert idle.blackout.toggles == 0 and not idle.blackout.shown
+    other = blackout_gui(macro, monkeypatch, tmp_path)                                     # an action runs (Setup, say), not the loop
+    other.running_loop = False
+    other.blackout_by_hotkey()
+    assert other.blackout.toggles == 0
+    running = blackout_gui(macro, monkeypatch, tmp_path)
+    running.blackout_by_hotkey()
+    assert running.blackout.shown and running.blackout.toggles == 1                         # the loop runs: blank
+    running.is_running = running.running_loop = False                                       # the loop ends with the screen blank
+    running.blackout_by_hotkey()
+    assert not running.blackout.shown and running.blackout.toggles == 2                     # (it can be shown again)
 
 
 def test_the_blackout_key_blanks_the_screen_only_while_its_checkbox_is_on(macro, monkeypatch, tmp_path):

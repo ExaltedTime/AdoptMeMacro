@@ -22,7 +22,7 @@ import logging.handlers
 import itertools
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field, fields
-from typing import Collection, Any, Callable, ContextManager, Iterable, Iterator, Optional, Sequence, Union
+from typing import Collection, Any, Callable, ContextManager, Iterable, Iterator, Optional, Sequence, TypeAlias, Union
 from abc import ABC, abstractmethod
 from functools import lru_cache, partial
 import tkinter as tk
@@ -35,7 +35,7 @@ import pyautogui
 import pydirectinput
 import pygetwindow as gw
 
-Image = np.ndarray                  # a BGR screenshot or crop (what grab_screen() returns)
+Image: TypeAlias = np.ndarray                  # a BGR screenshot or crop (what grab_screen() returns)
 Point = tuple[int, int]             # (x, y) in the reference space
 Box = tuple[int, int, int, int]     # (left, top, right, bottom) - or (left, top, width, height) for roblox_rect()
 Color = tuple[int, int, int]        # (R, G, B)

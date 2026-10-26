@@ -702,8 +702,8 @@ def switch_command(kind: str, name: str, value: bool) -> dict[str, Any]:
     return {"kind": kind, "name": name, "value": bool(value)}
 
 
-# The game config's defaults for the switches (main.py's _read_game_config(): side quest on, the rest off), for a config that doesn't have them yet.
-OPTION_DEFAULTS = {"side_quest_enabled": True}
+# The game config's defaults for the switches (main.py's _read_game_config(): side quest, the private server and the blackout key on, the rest off), for a config that doesn't have them yet.
+OPTION_DEFAULTS = {"side_quest_enabled": True, "use_private_server": True, "blackout_hotkey_enabled": True}
 
 
 def switch_states(config: Optional[dict[str, Any]]) -> dict[str, bool]:

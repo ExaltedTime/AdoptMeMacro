@@ -675,7 +675,7 @@ def build(config: bot_lib.Config) -> discord.Client:
         background.append(task)
         task.add_done_callback(task_ended)
 
-    async def ask_macro(interaction: discord.Interaction, command_name: str, said: str, idle_only: bool = False, label: str = "", then: str = "") -> bool:
+    async def ask_macro(interaction: discord.Interaction, command_name: str, said: str, idle_only: bool = False, label: str = "", then: str = "", **details: Any) -> bool:
         """Leave the running macro `command_name` (its window does it) and say `said`; with `idle_only` not while its loop runs. With a `label` the channel is told
         when the action ends (announce_when_done()), and what `then` says after one that was done. True if the macro took the command."""
         await interaction.response.defer(thinking=True)
@@ -688,7 +688,7 @@ def build(config: bot_lib.Config) -> discord.Client:
         if idle_only and not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path())):
             await say(interaction, "The macro's loop is running - /stop it first.")
             return False
-        problem, name = await submit_command(command_name)
+        problem, name = await submit_command(command_name, **details)
         await say(interaction, problem or (("Started the macro first. " if started else "") + said))
         if label and not problem:
             announce(name, label, then)
@@ -889,6 +889,26 @@ def build(config: bot_lib.Config) -> discord.Client:
         await interaction.response.defer(thinking=True)
         text = bot_lib.options_text(bot_lib.switch_states(bot_lib.read_json(cfg.GAME_CONFIG_PATH)))
         await say(interaction, f"```\n{text}\n```")
+
+    test_choices = [app_commands.Choice(name=name, value=name) for name in (*cfg.NEED_NAMES, cfg.TEST_ALL_TELEPORTS)]
+
+    @command("test", "Run one need handler, or every teleport one (the Debug tab's Test buttons; stops the loop)")
+    @app_commands.choices(handler=test_choices)
+    async def test_command(interaction: discord.Interaction, handler: app_commands.Choice[str]) -> None:
+        await ask_macro(interaction, "test", f"Asked the macro to test {handler.value}. Its loop is stopped; /loop it again afterwards.", label=f"The {handler.value} test", handler=handler.value)
+
+    @command("reset_config", "Reset the game config: totals, timers and switches (the private server link is kept)")
+    @app_commands.describe(sure="Must be True: this cannot be undone")
+    async def reset_config_command(interaction: discord.Interaction, sure: bool) -> None:
+        if not sure:
+            await interaction.response.send_message("Nothing was reset: say sure: True to reset the config.")
+            return
+        await ask_macro(interaction, "reset_config", "Asked the macro to reset the config.", idle_only=True, label="The reset")
+
+    @command("server_link", "Save the private server link a rejoin goes to (the channel shows what you type)")
+    @app_commands.describe(link="The private server's link")
+    async def server_link(interaction: discord.Interaction, link: str) -> None:
+        await ask_macro(interaction, "server_link", "Asked the macro to save the private server link.", label="Saving the link", link=link)
 
     pull_folders = [app_commands.Choice(name=name, value=name) for name in cfg.PULL_SOURCES]
 

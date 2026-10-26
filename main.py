@@ -505,7 +505,7 @@ def read_command_with_id() -> tuple[str, Optional[dict[str, Any]]]:
     COMMAND_MAX_AGE seconds (left over from before the macro started, say), is none - and a warning says why, so that a bot host whose clock is off does
     not have every command ignored without a trace. A `set` command must also name a switch that exists (`kind` "need" and a NEED_NAMES name, or "option"
     and an OPTION_SWITCHES name or SHOW_DEBUG_LINES_OPTION) and give it a true or false `value`. One command is read per call, the oldest first, so two sent
-    close together are both done, in order. Never raises. See docs/ARCHITECTURE.md#remote-control."""
+    close together are both done, in order. A `test` names a need handler (DEBUG_HANDLERS) or TEST_ALL_TELEPORTS, and a `server_link` gives a `link` that parse_server_link() knows. Never raises. See docs/ARCHITECTURE.md#remote-control."""
     try:
         names = sorted(name for name in os.listdir(cfg.COMMANDS_DIR) if name.endswith(".json"))
     except OSError:
@@ -549,6 +549,12 @@ def read_command_with_id() -> tuple[str, Optional[dict[str, Any]]]:
         if data.get("name") not in switches or not isinstance(data.get("value"), bool):
             dropped(f"set {data.get('kind')} {data.get('name')} is not a switch the macro has")
             return stem, None
+    if data["command"] == "test" and data.get("handler") not in (*DEBUG_HANDLERS, cfg.TEST_ALL_TELEPORTS):
+        dropped(f"test {data.get('handler')} is not a handler the macro has")
+        return stem, None
+    if data["command"] == "server_link" and (not isinstance(data.get("link"), str) or parse_server_link(data["link"].strip()) is None):
+        dropped("that is not a private server link")                                  # (the link itself is a join key: not said)
+        return stem, None
     acknowledge_command(stem, "taken")
     return stem, data
 
@@ -5721,6 +5727,20 @@ def write_run_report(run: Union[int, str]) -> Optional[str]:
         keep_newest_files(cfg.RUNS_DIR, cfg.MAX_REPORTS, ".png")
     return path
 
+def test_need_handler(name: str, handler_cls: Optional[Callable[[], NeedHandler]] = None) -> None:
+    """Run the need handler `name` on its own, outside the normal need-detection flow (the Debug tab's Test button, the `test` command), so it can be tried even
+    when it is not in ENABLED_NEEDS; TEST_ALL_TELEPORTS runs every teleport handler in turn instead."""
+    if name == cfg.TEST_ALL_TELEPORTS:
+        run_all_need_handlers()
+        return
+    logger.info(f"[TEST] Running {name} handler...")
+    try:
+        with task_unscrew():
+            (handler_cls or DEBUG_HANDLERS[name])().handle()
+    except TaskInterrupted as interruption:
+        logger.info(f"[TEST] {name} interrupted by {interruption.reason}")
+    logger.info(f"[TEST] {name.capitalize()} handler complete")
+
 def run_all_need_handlers(handlers: Optional[dict[str, Callable[[], NeedHandler]]] = None) -> dict[str, str]:
     """Run need handlers once each (the Debug tab's "test every teleport handler": TELEPORT_HANDLERS, or any given), respawning after
     each, minigame popups declined. Returns {need: "done" | "failed" | "interrupted by ..."}.
@@ -5808,7 +5828,8 @@ class DebugCapture(logging.Handler):
         self.text.insert(tk.END, line + "\n", level)
         self.at_line_start = True
 
-OUTSIDE_ACTIONS: dict[str, Callable[[], Any]] = {"rejoin": leave_and_rejoin, "setup": setup_game, "trade_hub": travel_to_trade_hub, "leave_trade_hub": leave_trade_hub, "inventory": inventory_tour, "sloop": exit_minigame_and_setup}   # the commands that do what a button does (AdoptMeGUI.act_from_outside())
+OUTSIDE_ACTIONS: dict[str, Callable[[], Any]] = {"rejoin": leave_and_rejoin, "setup": setup_game, "trade_hub": travel_to_trade_hub, "leave_trade_hub": leave_trade_hub, "inventory": inventory_tour, "sloop": exit_minigame_and_setup,
+                                          **{f"test:{name}": partial(test_need_handler, name) for name in (*DEBUG_HANDLERS, cfg.TEST_ALL_TELEPORTS)}}   # the commands that do what a button does (AdoptMeGUI.act_from_outside())
 
 def blackout_seen_by_capture(before: Image, after: Image) -> Optional[bool]:
     """Whether the macro's screenshots see the window of the blackout test: `before` is a screenshot without it, `after` one with it up, white. Seen if
@@ -6012,6 +6033,14 @@ class AdoptMeGUI:
             focus_roblox()                                                          # the window to the front (no click): after an update the macro's own window may be
         elif command == "sloop":
             self.act_from_outside("sloop", stem, resume=True)                       # (leave a minigame and) Setup, and then the loop, whether or not one was running
+        elif command == "test" and data:
+            self.act_from_outside(f"test:{data['handler']}", stem)                   # (what the Test button of that handler does; the loop is stopped first and not resumed)
+        elif command == "reset_config":
+            finish_command(stem, self.reset_config_from_outside())
+        elif command == "server_link" and data:
+            self.server_link_var.set(data["link"].strip())
+            self.save_server_link()
+            finish_command(stem, "done")
         elif command in OUTSIDE_ACTIONS:
             self.act_from_outside(command, stem)
         elif command == "refresh_debug":
@@ -6052,6 +6081,15 @@ class AdoptMeGUI:
             self.run_async(OUTSIDE_ACTIONS[command])
             self.running_stem = stem if self.is_running else ""
         self.root.after(cfg.REJOIN_STOP_POLL_MS, self.drain_pending)
+
+    def reset_config_from_outside(self) -> str:
+        """Reset the config as the Reset Config button does, without asking; not while something is running (it would go on with the old switches and totals). The
+        text is how it ended, for the bot."""
+        if self.is_running:
+            logger.warning("Reset config asked for, but the macro is running - stop it first")
+            return "given up: the macro is running"
+        self.reset_config()
+        return "done"
 
     def refresh_debug_from_outside(self) -> None:
         """Empty the debug folder as the Refresh debug button does, without asking; not while something is running, which is writing there."""
@@ -6514,15 +6552,7 @@ class AdoptMeGUI:
     def test_handler(self, name: str, handler_cls: Callable[[], NeedHandler]) -> None:
         """Run one need handler on its own, outside the normal need-detection
         flow, so it can be tried even when it isn't in ENABLED_NEEDS."""
-        def test():
-            logger.info(f"[TEST] Running {name} handler...")
-            try:
-                with task_unscrew():
-                    handler_cls().handle()
-            except TaskInterrupted as interruption:
-                logger.info(f"[TEST] {name} interrupted by {interruption.reason}")
-            logger.info(f"[TEST] {name.capitalize()} handler complete")
-        self.run_async(test)
+        self.run_async(lambda: test_need_handler(name, handler_cls))
 
     def stop(self) -> None:
         """Set STOP_EVENT; the cleanup happens in run_async()'s worker once the running function

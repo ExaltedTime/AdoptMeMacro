@@ -653,6 +653,7 @@ def test_a_set_command_carries_its_switch_and_only_for_one_that_exists(tmp_path)
 def test_the_switches_are_read_from_the_game_config_with_the_defaults_for_what_is_missing():
     on_by_default = bot_lib.cfg.ENABLED_NEEDS
     states = bot_lib.switch_states(None)
+    assert states["option:use_private_server"] is True and states["option:blackout_hotkey"] is True and states["option:record_next_run"] is False       # (on unless the config says otherwise)
     assert states["option:side_quest"] is True and states["option:play_hauntlet_2"] is False and states["need:hungry"] is ("hungry" in on_by_default)
     assert set(states) == {f"need:{n}" for n in bot_lib.cfg.NEED_NAMES} | {f"option:{n}" for n in bot_lib.cfg.OPTION_SWITCHES}
     states = bot_lib.switch_states({"needs_enabled": {"hungry": False, "beach": True}, "side_quest_enabled": False, "ghost_gallery_enabled": True})

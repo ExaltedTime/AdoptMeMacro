@@ -195,6 +195,14 @@ def test_the_hotkeys_are_not_acted_on_while_the_macro_types_its_own_letters(macr
     assert macro.state.typing is False                                                       # (a stop while typing does not leave the hotkeys off)
 
 
+def test_a_phone_that_shows_the_listings_at_once_has_no_menu_to_wait_for(macro, game):
+    """Run on the latest version, in a capture: from the house TRADE LISTINGS opened "TRADING HUB  LISTING 1/2" itself; the macro waited 4 s for the menu, made no more clicks and ended."""
+    cfg = macro.cfg
+    game.moves[("phone", cfg.TRADES_PHONE_LISTINGS_POS)] = "listing_1"
+    assert macro.open_trade_listings() is True and game.state == "listing_1"
+    assert game.clicks == [cfg.TRADE_HUB_USE_POS, cfg.TRADES_PHONE_LISTINGS_POS]              # (no VIEW MY LISTINGS click: that menu was not there)
+
+
 def test_a_listing_is_shown_by_the_arrow_and_one_that_is_not_there_is_said(macro, game):
     game.state = "listing_1"
     assert macro.select_listing(2) is True and game.state == "listing_2"

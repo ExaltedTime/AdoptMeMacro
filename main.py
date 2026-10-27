@@ -1947,10 +1947,10 @@ def open_trade_listings() -> bool:
         screen = "phone"
     if screen == "phone":
         hover_click(*cfg.TRADES_PHONE_LISTINGS_POS)
-        if not wait_trade_screen("menu"):
+        if not wait_trade_screen("menu", "listings"):                        # (from the house a player with listings gets them at once: the menu was waited for 4 s and the tour ended, in a capture)
             log_run_event("trade listings: the Trading Hub menu did not come up")
             return False
-        screen = "menu"
+        screen = trade_screen(grab_screen())
     if screen == "menu":
         hover_click(*cfg.TRADES_MENU_VIEW_POS)
         if not wait_trade_screen("listings"):

@@ -363,6 +363,7 @@ class State:
     # True while a handler that wants the pet focused runs (see wanting_pet_focus()).
     pet_focus_wanted: bool = False
     exit_dialog_wanted: bool = False       # exit_minigame() is going on: dismiss_stray_windows() leaves the "exit this game?" dialog alone
+    typing: bool = False                   # type_keys() is typing into a text box: the hotkeys (a letter each) are not acted on meanwhile
     # When the minigame popup checks last ran, and how many "quiet:" lines have
     # been logged for the current stretch with no need resolved.
     last_minigame_popup_check: float = 0.0
@@ -1584,28 +1585,34 @@ def _setup_steps() -> bool:
     logger.debug("Locking house...")
     hover_click(*cfg.SETUP_LOCK_HOUSE_POS)
 
-    logger.debug("Opening backpack...")
-    pydirectinput.press(cfg.KEYS["backpack"])
-    wait_interruptible(cfg.UI_SETTLE)
-    logger.debug("Opening settings...")
-    hover_click(*cfg.SETUP_BACKPACK_SETTINGS_POS)
-    wait_interruptible(cfg.UI_SETTLE)
-    logger.debug("Opening sort menu...")
-    hover_click(*cfg.SETUP_SORT_MENU_POS)
-    wait_interruptible(cfg.UI_SETTLE)
-    logger.debug("Selecting favorites...")
-    hover_click(*cfg.SETUP_FAVORITES_POS)
-    wait_interruptible(cfg.UI_SETTLE)
-    logger.debug("Confirming...")
-    hover_click(*cfg.SETUP_CONFIRM_POS)
-    wait_interruptible(cfg.UI_SETTLE)
-    logger.debug("Closing backpack...")
-    close_backpack("setup")
+    set_backpack_filter()
 
     disable_trades()
 
     logger.info("Setup complete")
     return True
+
+def set_backpack_filter() -> None:
+    """Filter the backpack to favorites: open it, its settings, the sort menu, Favorites and Confirm, and close it. Setup does it, and so does a ride that did not clear its need
+    (when Setup did not run, the first vehicle was a car, not the helicopter)."""
+    with backpack_on_purpose():
+        logger.debug("Opening backpack...")
+        pydirectinput.press(cfg.KEYS["backpack"])
+        wait_interruptible(cfg.UI_SETTLE)
+        logger.debug("Opening settings...")
+        hover_click(*cfg.SETUP_BACKPACK_SETTINGS_POS)
+        wait_interruptible(cfg.UI_SETTLE)
+        logger.debug("Opening sort menu...")
+        hover_click(*cfg.SETUP_SORT_MENU_POS)
+        wait_interruptible(cfg.UI_SETTLE)
+        logger.debug("Selecting favorites...")
+        hover_click(*cfg.SETUP_FAVORITES_POS)
+        wait_interruptible(cfg.UI_SETTLE)
+        logger.debug("Confirming...")
+        hover_click(*cfg.SETUP_CONFIRM_POS)
+        wait_interruptible(cfg.UI_SETTLE)
+        logger.debug("Closing backpack...")
+        close_backpack("setup")
 
 def send_macro_window_to_back() -> None:
     """Drop the macro's own window behind everything (it's normally
@@ -1796,17 +1803,41 @@ def wait_trade_screen(*screens: str) -> bool:
         wait_interruptible(cfg.TRADES_POLL)
 
 def equip_trade_phone() -> bool:
-    """Open the backpack, the Toys tab, the Trading Hub Phone and Equip, and close the backpack again with its key (the phone is then in the hotbar). The positions are those of
-    a backpack with the favourites filter on (TRADES_PHONE_SLOT_POS)."""
+    """Open the backpack, the Toys tab, type TRADES_SEARCH_TEXT in its search box, click the first item (the phone: the Special row's order changed with the favourites filter, and the
+    slot of the badge was taken for it) and Equip, clear the search (a filter left in it would show the other features' backpack items wrong) and close the backpack with its key (the
+    phone is then in the hotbar)."""
     with backpack_on_purpose():
         logger.debug("Opening backpack...")
         pydirectinput.press(cfg.KEYS["backpack"])
         wait_interruptible(cfg.UI_SETTLE)
-        if not click_steps([("Toys tab", cfg.TRADE_HUB_TOYS_TAB_POS), ("Trading Hub Phone", cfg.TRADES_PHONE_SLOT_POS), ("Equip", cfg.TRADES_PHONE_EQUIP_POS)]):
+        if not click_steps([("Toys tab", cfg.TRADE_HUB_TOYS_TAB_POS), ("Search box", cfg.TRADES_SEARCH_POS)]):
             return False
+        type_text(cfg.TRADES_SEARCH_TEXT)
+        wait_interruptible(cfg.UI_SETTLE)
+        if not click_steps([("The first item", cfg.TRADE_HUB_PHONE_POS), ("Equip", cfg.TRADE_HUB_EQUIP_POS), ("Search box", cfg.TRADES_SEARCH_POS)]):
+            return False
+        type_keys(["backspace"] * len(cfg.TRADES_SEARCH_TEXT))
+        hover_click(*cfg.TRADES_UNFOCUS_POS)                              # (out of the box: the backpack key would be typed into it)
+        wait_interruptible(cfg.UI_SETTLE)
         close_backpack("the Trading Hub Phone")
     wait_interruptible(cfg.UI_SETTLE)
     return popup_visible(grab_screen(), "trade_phone_hotbar")
+
+def type_keys(keys: Sequence[str]) -> None:
+    """Press `keys` one after the other, TYPE_KEY_DELAY apart, into whatever text box has the focus. The macro's own hotkeys are not acted on meanwhile (state.typing): the stop
+    key is a letter, and "phone" has it."""
+    state.typing = True
+    try:
+        for key in keys:
+            check_running()
+            pydirectinput.press(key)
+            time.sleep(cfg.TYPE_KEY_DELAY)
+    finally:
+        state.typing = False
+
+def type_text(text: str) -> None:
+    """type_keys() of the letters of `text`."""
+    type_keys(list(text))
 
 def open_trade_listings() -> bool:
     """Get to MY LISTINGS: from wherever the phone is (a screen further in is gone back from), else equip the phone if it is not in the hotbar, use it with a click in the world, and
@@ -2453,6 +2484,26 @@ class PetNeedHandler(SequenceNeedHandler):
     def around(self) -> ContextManager[Any]:
         return wanting_pet_focus()
 
+def find_choose_disc(img: Image) -> Optional[Point]:
+    """Where the choose button is by its look when its exact colour (CHOOSE_BUTTON_COLOR) is not on screen: a disc that shades from purple to magenta (CHOOSE_DISC_HSV), the
+    biggest roundish blob of that hue (CHOOSE_DISC_AREA, CHOOSE_DISC_ROUNDNESS) - not its white outline, which is not always there, nor the "?" in it, which can change: both
+    only make a hole or an edge in the disc. Its middle (x, y), or None."""
+    mask = cv2.inRange(cv2.cvtColor(img, cv2.COLOR_BGR2HSV), cfg.CHOOSE_DISC_HSV[0], cfg.CHOOSE_DISC_HSV[1])
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((cfg.CHOOSE_DISC_CLOSE, cfg.CHOOSE_DISC_CLOSE), np.uint8))
+    count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    best: Optional[tuple[int, Point]] = None
+    for i in range(1, count):
+        width, height, area = stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT], int(stats[i, cv2.CC_STAT_AREA])
+        if not cfg.CHOOSE_DISC_AREA[0] <= area <= cfg.CHOOSE_DISC_AREA[1]:
+            continue
+        if not 1 / cfg.CHOOSE_DISC_SQUARENESS <= width / height <= cfg.CHOOSE_DISC_SQUARENESS:
+            continue
+        if area < cfg.CHOOSE_DISC_ROUNDNESS * np.pi * (max(width, height) / 2) ** 2:             # (a disc fills this much of its circle, with the "?" cut out of it)
+            continue
+        if best is None or area > best[0]:
+            best = (area, (int(stats[i, cv2.CC_STAT_LEFT] + width // 2), int(stats[i, cv2.CC_STAT_TOP] + height // 2)))
+    return best[1] if best is not None else None
+
 class ChooseNeedHandler(NeedHandler):
     """The 'choose' need: focus the pet, move slowly to the button of one exact colour,
     click it, then click mid-screen. Doesn't wait for the icon. See docs/ARCHITECTURE.md#need-handlers.
@@ -2465,7 +2516,10 @@ class ChooseNeedHandler(NeedHandler):
 
         logger.debug("Focusing pet...")
         with wanting_pet_focus():
-            return self._choose()
+            done = self._choose()
+        if not done:
+            dismiss_stray_windows()                          # (a choose that failed left the pet in focus, where the next need's walk goes nowhere: backed out of now)
+        return done
 
     def _choose(self) -> bool:
         if not focus_pet():
@@ -2476,8 +2530,13 @@ class ChooseNeedHandler(NeedHandler):
         img = grab_screen()
         match = find_exact_color(img, cfg.CHOOSE_BUTTON_COLOR)
         if match is None:
-            logger.warning(f"No pixel matching {cfg.CHOOSE_BUTTON_COLOR} found on screen")
-            return False
+            logger.warning(f"No pixel matching {cfg.CHOOSE_BUTTON_COLOR} found on screen - looking for the purple disc")
+            match = find_choose_disc(img)
+            if match is None:
+                logger.warning("No purple disc found either")
+                return False
+            logger.info(f"The choose button was found as a purple disc at {match}")
+            log_run_event("choose: the button was found by its shape and hue, not its exact colour")
         logger.debug(f"Found at {match}, moving there slowly...")
         hover_click(*match, duration=cfg.CHOOSE_SLOW_MOVE_DURATION)
         wait_interruptible(cfg.UI_SETTLE)
@@ -2501,6 +2560,18 @@ class RideNeedHandler(SequenceNeedHandler):
         ("say", "Holding the helicopter key for {RIDE_R_HOLD_DURATION}s..."), ("hold", "helicopter", "RIDE_R_HOLD_DURATION"),   # briefly before starting to move
         ("walk", ("forward", "back"), "NEED_GONE_MAX_WAIT", "ride"),                                                    # back and forth (not left and right) while riding
     )
+
+    def handle(self) -> bool:
+        """The ride, and if it did not clear its need (or could not be done), the backpack filter set again and the ride once more: with Setup not run the backpack's first vehicle is
+        a car, not the helicopter the keys are for."""
+        state.need_cleared = True
+        if super().handle() and state.need_cleared:
+            return True
+        logger.info("The ride did not clear the need - setting the backpack filter, then trying once more")
+        log_run_event("ride: the need was not cleared - the backpack filter is set again and the ride tried once more")
+        set_backpack_filter()
+        state.need_cleared = True
+        return super().handle()
 
 def teleport_to(category_pos: Point) -> None:
     """Open the backpack, teleport via the category tab, walk back to clear the landing
@@ -6482,7 +6553,7 @@ class AdoptMeGUI:
                 for i, (key, action, only_while_running, only_in_roblox) in enumerate(hotkeys):
                     try:
                         down = hotkey_down(key)
-                        if hotkey_fires(down, was_down[i], only_while_running, self.is_running, only_in_roblox):
+                        if not state.typing and hotkey_fires(down, was_down[i], only_while_running, self.is_running, only_in_roblox):         # (not while the macro types a word: its own letters)
                             self.root.after(0, action)
                         was_down[i] = down
                     except (RuntimeError, tk.TclError):

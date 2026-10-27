@@ -740,6 +740,15 @@ FOCUS_PET_MENU_WAIT = 4.0            # wait after the clicks, for the pet's menu
 # since it's just a plain circle with no distinguishing icon. Given as (R, G, B).
 CHOOSE_BUTTON_COLOR = (181, 6, 254)
 CHOOSE_SLOW_MOVE_DURATION = 1.0  # deliberate, slow mouse travel to the found button
+# The choose button when no pixel is CHOOSE_BUTTON_COLOR (twice in run 34 it was in plain sight: a purple-to-magenta disc with a "?" and, not always, a white outline, under the
+# focused pet): the biggest roundish blob of this hue (OpenCV's HSV: purple 141, magenta 154; the pink BACK button is 167, the backpack's purple is 130 and paler), at least
+# CHOOSE_DISC_ROUNDNESS of its enclosing circle (the "?" is cut out of it), of CHOOSE_DISC_AREA px (about 180 px across), within CHOOSE_DISC_SQUARENESS of square. The ranges are
+# read off a picture of the failure, not measured on the pixels: it was not kept.
+CHOOSE_DISC_HSV = ((136, 180, 170), (158, 255, 255))
+CHOOSE_DISC_AREA = (6000, 45000)
+CHOOSE_DISC_SQUARENESS = 1.3
+CHOOSE_DISC_ROUNDNESS = 0.55
+CHOOSE_DISC_CLOSE = 5                                          # px: the closing that joins the disc round the "?" and its outline
 
 # The paycheck popup's CASH OUT button, matched by exact color the same way
 # as CHOOSE_BUTTON_COLOR above.
@@ -785,8 +794,10 @@ TRADES_DECLINED_PATH = os.path.join(TRADES_DIR, "declined.png")  # the offer tha
 TRADES_DECLINE_DONE_PATH = os.path.join(TRADES_DIR, "decline.json")   # written when a decline ends: {"listing": n, "offer": n, "declined": true or false, "why": ...}
 TRADES_LISTINGS = (1, 2)                                        # the listings looked at (the game allows two)
 TRADES_MAX_OFFERS = 30                                          # the most offers of a listing /decline can be asked for
-TRADES_PHONE_SLOT_POS = (972, 755)                              # the Trading Hub Phone in the backpack's Toys tab (the second of the Special row with the favourites filter Setup turns on; found by searching later)
-TRADES_PHONE_EQUIP_POS = (1053, 850)                            # its Equip button
+TRADES_SEARCH_POS = (1070, 642)                                 # the backpack's search box ("Enter Search...")
+TRADES_SEARCH_TEXT = "phone"                                    # typed in it in the Toys tab: the phone is then the first item (TRADE_HUB_PHONE_POS), where the slot-by-slot search had the badge there
+TRADES_UNFOCUS_POS = (745, 681)                                 # a click here (the tab's name) takes the focus out of the search box, so that the backpack key is not typed into it
+TYPE_KEY_DELAY = 0.08                                           # seconds after each key of type_keys()
 TRADES_PHONE_LISTINGS_POS = (870, 430)                          # the phone's TRADE LISTINGS
 TRADES_MENU_VIEW_POS = (855, 650)                               # the menu's VIEW MY LISTINGS
 TRADES_NEXT_POS = (1290, 530)                                   # the arrow at the right of the listing (with two listings, it goes from one to the other)

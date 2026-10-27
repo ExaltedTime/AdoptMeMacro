@@ -88,6 +88,90 @@ def test_ride_steps_back_mounts_walks_on_equips_a_vehicle_and_rides_to_and_fro(m
         ("walk", (cfg.KEYS["forward"], cfg.KEYS["back"]), cfg.NEED_GONE_MAX_WAIT, "ride")]
 
 
+def test_a_ride_that_did_not_clear_its_need_sets_the_backpack_filter_and_rides_once_more(macro, events, monkeypatch):
+    """With Setup not run the first vehicle was a car, not the helicopter: the filter is set again (what Setup does with the backpack) and the ride tried once more, once."""
+    rides = []
+    monkeypatch.setattr(macro, "set_backpack_filter", lambda: events.append(("filter",)))
+    monkeypatch.setattr(macro, "walk_alternating", lambda pair, total, step=0, need_name=None: (rides.append(1), setattr(macro.state, "need_cleared", len(rides) > 1)))
+    assert macro.RideNeedHandler().handle() is True
+    assert len(rides) == 2 and events.count(("filter",)) == 1
+    assert events.index(("filter",)) > events.index(("equip_vehicle",)) and events.count(("equip_vehicle",)) == 2           # (the filter between the two rides)
+    events.clear()
+    rides.clear()
+    monkeypatch.setattr(macro, "walk_alternating", lambda pair, total, step=0, need_name=None: (rides.append(1), setattr(macro.state, "need_cleared", False)))
+    assert macro.RideNeedHandler().handle() is True and len(rides) == 2 and events.count(("filter",)) == 1                  # (still not: not a third time)
+    events.clear()
+    monkeypatch.setattr(macro, "walk_alternating", lambda pair, total, step=0, need_name=None: setattr(macro.state, "need_cleared", True))
+    assert macro.RideNeedHandler().handle() is True and ("filter",) not in events                                            # (cleared: no filter)
+
+
+def test_the_filter_is_set_by_the_clicks_setup_makes_and_setup_does_it_too(macro, events, monkeypatch):
+    cfg = macro.cfg
+    monkeypatch.setattr(macro, "backpack_on_purpose", contextlib_null)
+    macro.set_backpack_filter()
+    clicks = [e[1] for e in events if e[0] == "click"]
+    assert clicks == [cfg.SETUP_BACKPACK_SETTINGS_POS, cfg.SETUP_SORT_MENU_POS, cfg.SETUP_FAVORITES_POS, cfg.SETUP_CONFIRM_POS]
+    assert [e for e in events if e[0] == "press"] == [("press", cfg.KEYS["backpack"])] and events[-1] == ("close", "setup")
+
+
+def contextlib_null():
+    import contextlib
+    return contextlib.nullcontext()
+
+
+def disc_screen(macro, outline=True, glyph=True, exact=False):
+    """A 1920x1080 frame with the choose button as the game draws it (a disc shading from purple to magenta, a white "?" in it, sometimes a white outline) and what is not it:
+    the pink BACK button, a small purple badge, a wide purple bar and the backpack's paler purple."""
+    import cv2
+    import numpy as np
+    img = np.full((1080, 1920, 3), 30, np.uint8)
+    disc = np.zeros((180, 180, 3), np.uint8)
+    for row in range(180):                                                                       # (the shading: purple (170, 30, 254) at the top to magenta (230, 20, 200) at the bottom, as RGB)
+        t = row / 179
+        disc[row, :] = (round(254 - 54 * t), round(30 - 10 * t), round(170 + 60 * t))            # BGR
+    mask = np.zeros((180, 180), np.uint8)
+    cv2.circle(mask, (90, 90), 88, 255, -1)
+    region = img[645:825, 550:730]
+    region[mask > 0] = disc[mask > 0]
+    if glyph:
+        cv2.putText(img, "?", (606, 780), cv2.FONT_HERSHEY_SIMPLEX, 3.5, (255, 255, 255), 14, cv2.LINE_AA)
+    if outline:
+        cv2.circle(img, (640, 735), 90, (255, 255, 255), 4)
+    img[80:150, 445:645] = (120, 41, 237)                                                       # BACK: pink (BGR), wide
+    cv2.circle(img, (628, 132), 18, (254, 90, 140), -1)                                          # the E badge: small, purple
+    img[300:340, 1000:1500] = (254, 40, 150)                                                     # a wide purple bar
+    if exact:
+        img[700:704, 700:704] = tuple(reversed(macro.cfg.CHOOSE_BUTTON_COLOR))
+    return img
+
+
+def test_the_choose_button_is_found_as_a_disc_when_its_exact_colour_is_not_there_outline_or_not_with_the_question_mark_or_not(macro):
+    for outline in (True, False):
+        for glyph in (True, False):
+            found = macro.find_choose_disc(disc_screen(macro, outline=outline, glyph=glyph))
+            assert found is not None and abs(found[0] - 640) <= 6 and abs(found[1] - 735) <= 6, (outline, glyph, found)
+    import numpy as np
+    assert macro.find_choose_disc(np.full((1080, 1920, 3), 30, np.uint8)) is None
+
+
+def test_the_choose_handler_clicks_the_disc_when_no_pixel_has_the_exact_colour_and_the_exact_colour_first_when_one_has(macro, events, monkeypatch):
+    cfg = macro.cfg
+    monkeypatch.setattr(macro, "focus_pet", lambda *a: True)
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: events.append(("backed out",)))
+    monkeypatch.setattr(macro, "grab_screen", lambda: disc_screen(macro))
+    assert macro.ChooseNeedHandler().handle() is True
+    clicks = [e[1] for e in events if e[0] == "click"]
+    assert abs(clicks[0][0] - 640) <= 6 and abs(clicks[0][1] - 735) <= 6 and clicks[1] == (cfg.REFERENCE_CENTER_X, cfg.REFERENCE_CENTER_Y)
+    events.clear()
+    monkeypatch.setattr(macro, "grab_screen", lambda: disc_screen(macro, exact=True))
+    assert macro.ChooseNeedHandler().handle() is True
+    assert [e[1] for e in events if e[0] == "click"][0] == (701, 701)                              # the exact colour's pixels, not the disc
+    events.clear()
+    import numpy as np
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.full((1080, 1920, 3), 30, np.uint8))
+    assert macro.ChooseNeedHandler().handle() is False and ("backed out",) in events                  # neither: and the pet focus it left is backed out of
+
+
 def named_in(steps):
     """(action, argument) of every step of a table, the steps inside a step too."""
     for action, *arguments in steps:

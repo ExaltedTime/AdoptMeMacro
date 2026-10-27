@@ -125,6 +125,43 @@ def test_the_boards_of_offers_is_known_in_a_real_screenshot_and_closed_before_th
     assert macro.open_trade_listings() is False and game.log == ["trade listings: the board of offers could not be closed"]
 
 
+def test_the_phone_is_found_by_typing_its_name_in_the_toys_search_clicking_the_first_item_and_the_search_is_cleared_before_the_backpack_is_closed(macro, game, monkeypatch):
+    cfg = macro.cfg
+    events = []
+    monkeypatch.undo()                                                                       # (the fixture's stand-ins are the game's; this one needs its own)
+    clock = types.SimpleNamespace(now=1000.0)
+    monkeypatch.setattr(macro, "time", types.SimpleNamespace(**{**vars(macro.time), "time": lambda: clock.now, "sleep": lambda s: events.append(("sleep", s))}))
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "check_running", lambda: None)
+    monkeypatch.setattr(macro.pydirectinput, "press", lambda key, **k: events.append(("press", key, macro.state.typing)), raising=False)
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: events.append(("click", (x, y))))
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "close_backpack", lambda step: events.append(("close", step)))
+    monkeypatch.setattr(macro, "grab_screen", lambda: frame("menu"))                          # (a frame with the phone's icon in the hotbar)
+    assert macro.equip_trade_phone() is True
+    clicks = [e[1] for e in events if e[0] == "click"]
+    presses = [e[1] for e in events if e[0] == "press"]
+    assert presses == [cfg.KEYS["backpack"], *"phone", *["backspace"] * len("phone")]
+    assert clicks == [cfg.TRADE_HUB_TOYS_TAB_POS, cfg.TRADES_SEARCH_POS, cfg.TRADE_HUB_PHONE_POS, cfg.TRADE_HUB_EQUIP_POS, cfg.TRADES_SEARCH_POS, cfg.TRADES_UNFOCUS_POS]
+    assert events[-1] == ("close", "the Trading Hub Phone") and macro.state.typing is False
+    typed = {e[1]: e[2] for e in events if e[0] == "press"}
+    assert all(typed[key] is True for key in "phone") and typed[cfg.KEYS["backpack"]] is False        # (the hotkeys are left alone while it types: "phone" has the stop key)
+
+
+def test_the_hotkeys_are_not_acted_on_while_the_macro_types_its_own_letters(macro, monkeypatch):
+    seen = []
+    monkeypatch.setattr(macro, "check_running", lambda: seen.append(macro.state.typing))
+    monkeypatch.setattr(macro.pydirectinput, "press", lambda key, **k: None, raising=False)
+    monkeypatch.setattr(macro.time, "sleep", lambda s: None)
+    macro.type_text("phone")
+    assert seen == [True] * 5 and macro.state.typing is False
+    def stop(): raise macro.StopRequested()
+    monkeypatch.setattr(macro, "check_running", stop)
+    with pytest.raises(macro.StopRequested):
+        macro.type_text("phone")
+    assert macro.state.typing is False                                                       # (a stop while typing does not leave the hotkeys off)
+
+
 def test_a_listing_is_shown_by_the_arrow_and_one_that_is_not_there_is_said(macro, game):
     game.state = "listing_1"
     assert macro.select_listing(2) is True and game.state == "listing_2"

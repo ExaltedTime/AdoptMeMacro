@@ -746,6 +746,11 @@ BACKPACK_NORMAL_COLOR = (150, 92, 255)
 BACKPACK_NORMAL_TOLERANCE = 12
 BACKPACK_NORMAL_PANEL_BOX = (712, 640, 1210, 930)
 BACKPACK_NORMAL_MIN_PIXELS = 800
+# The frame is at the panel's two sides: at least BACKPACK_NORMAL_MIN_SIDE_PIXELS of that purple in each of the BACKPACK_NORMAL_SIDE_WIDTH columns at the left and at
+# the right of the panel box. The big "Friend" pill in the middle of the screen (shown with the cafe's name banner) is the same purple and white, and has
+# 1040 purple pixels in the box and a quarter of the white box white: it was taken for the backpack ("still open after pressing the key twice") and stopped a run.
+BACKPACK_NORMAL_SIDE_WIDTH = 80
+BACKPACK_NORMAL_MIN_SIDE_PIXELS = 100
 BACKPACK_NORMAL_WHITE_BOX = (850, 690, 1190, 920)
 BACKPACK_NORMAL_WHITE_LEVEL = 240
 BACKPACK_NORMAL_MIN_WHITE_FRACTION = 0.2

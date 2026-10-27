@@ -454,6 +454,20 @@ def test_the_disconnected_dialog_ends_a_minigame_watch_and_its_clean_screens_do_
     assert watch.disconnected and watch.problem == "disconnected from the game"
 
 
+def test_the_big_friend_pill_under_the_cafe_banner_is_no_backpack_but_a_purple_frame_with_a_white_grid_is(macro):
+    cfg = macro.cfg
+    assert not macro.detect_backpack_open(screenshot("cafe_banner_friend_pill"))            # (it was: "backpack still open after pressing the backpack key twice")
+    drawn = blank()
+    left, top, right, bottom = cfg.BACKPACK_NORMAL_PANEL_BOX
+    drawn[top:bottom, left:right] = tuple(reversed(cfg.BACKPACK_NORMAL_COLOR))     # the frame's colour all over the panel...
+    wl, wt, wr, wb = cfg.BACKPACK_NORMAL_WHITE_BOX
+    drawn[wt:wb, wl:wr] = 255                                                                # ...and the item grid's white in the middle of it
+    assert macro.detect_backpack_normal(drawn)
+    blob = drawn.copy()
+    blob[top:bottom, left:left + cfg.BACKPACK_NORMAL_SIDE_WIDTH] = 255                      # no frame at the left: only a blob of purple
+    assert not macro.detect_backpack_normal(blob)
+
+
 def test_an_open_backpack_is_seen_in_a_real_screenshot(macro):
     assert macro.detect_backpack_open(screenshot("backpack_open"))
     for name in ("teleport_nursery", "teleport_dealership", "cant_spawn_vehicle"):          # (these have the backpack's expanded grid behind them: the dialog is over it)

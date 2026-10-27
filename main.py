@@ -2480,13 +2480,17 @@ def detect_backpack_expanded(img: Image) -> bool:
     return color_fraction(img, cfg.BACKPACK_HEADER_BOX, cfg.BACKPACK_HEADER_COLOR, cfg.BACKPACK_HEADER_TOLERANCE) >= cfg.BACKPACK_HEADER_MIN_FRACTION
 
 def detect_backpack_normal(img: Image) -> bool:
-    """True if the normal backpack is open: its purple frame plus the white item grid, or its
+    """True if the normal backpack is open: its purple frame (at both sides of the panel) plus the white item grid, or its
     title crop. See docs/ARCHITECTURE.md#need-handlers.
     """
     if popup_visible(img, "backpack_normal"):
         return True
     if color_pixels(img, cfg.BACKPACK_NORMAL_PANEL_BOX, cfg.BACKPACK_NORMAL_COLOR, cfg.BACKPACK_NORMAL_TOLERANCE) < cfg.BACKPACK_NORMAL_MIN_PIXELS:
         return False
+    panel_left, panel_top, panel_right, panel_bottom = cfg.BACKPACK_NORMAL_PANEL_BOX
+    for side in ((panel_left, panel_top, panel_left + cfg.BACKPACK_NORMAL_SIDE_WIDTH, panel_bottom), (panel_right - cfg.BACKPACK_NORMAL_SIDE_WIDTH, panel_top, panel_right, panel_bottom)):
+        if color_pixels(img, side, cfg.BACKPACK_NORMAL_COLOR, cfg.BACKPACK_NORMAL_TOLERANCE) < cfg.BACKPACK_NORMAL_MIN_SIDE_PIXELS:
+            return False                                            # (a purple blob in the middle, not a frame)
     left, top, right, bottom = cfg.BACKPACK_NORMAL_WHITE_BOX
     grid = img[top:bottom, left:right]
     white = np.count_nonzero(grid.min(axis=2) >= cfg.BACKPACK_NORMAL_WHITE_LEVEL)

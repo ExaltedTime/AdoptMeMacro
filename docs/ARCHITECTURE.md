@@ -621,7 +621,12 @@ small panel at the bottom of the screen that handlers open for a few seconds -
 is recognised by its purple frame (`BACKPACK_NORMAL_COLOR`, at least
 `BACKPACK_NORMAL_MIN_PIXELS` within `BACKPACK_NORMAL_PANEL_BOX`) together with
 the white of its item grid (`BACKPACK_NORMAL_WHITE_*`); the frame alone or the
-white alone isn't enough, since the white is also any bright scenery. It is also
+white alone isn't enough, since the white is also any bright scenery. The frame
+is also looked for at the two sides of the panel (at least
+`BACKPACK_NORMAL_MIN_SIDE_PIXELS` in each of the `BACKPACK_NORMAL_SIDE_WIDTH`
+columns at its left and right): the big "Friend" pill shown in the middle of the
+screen with the cafe's name banner has the same purple and white, and was taken
+for the backpack (`tests/popups/cafe_banner_friend_pill.png`). It is also
 recognised by a crop of its "BACKPACK" title (`ref/popups/backpack_normal.png`,
 `POPUP_TEMPLATES["backpack_normal"]`), because the color check, tuned on one screenshot,
 missed another (more crops of it can be added to `ref/popups/`). `detect_backpack_open()` is either. `close_backpack_if_open()` presses

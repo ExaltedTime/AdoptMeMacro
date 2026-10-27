@@ -403,6 +403,41 @@ def test_an_offer_down_the_list_is_found_by_its_place_scrolling_to_it_and_one_th
     assert macro.decline_offer(1, 5) is False and decline_result(macro)["why"].startswith("that offer is not in the list any more") and game.clicks == [cfg.TRADES_CLOSE_POS]
 
 
+def test_every_offer_of_a_listing_is_declined_one_after_the_other_until_none_is_left(macro, game, monkeypatch):
+    cfg = macro.cfg
+    offers = frame("offers")
+    monkeypatch.setattr(macro, "open_trade_listings", lambda: True)
+    monkeypatch.setattr(macro, "open_offers", lambda n: True)
+    left = [3]
+    monkeypatch.setattr(macro, "grab_still", lambda: offers if left[0] else np.zeros_like(offers))
+    monkeypatch.setattr(macro, "visible_offers", lambda img: [] if not left[0] else [453, 589])
+    declined = []
+
+    def decline_row(y, result):
+        declined.append(y)
+        left[0] -= 1
+        return True
+    monkeypatch.setattr(macro, "decline_row", decline_row)
+    assert macro.decline_all(2) is True
+    assert declined == [453] * 3 and decline_result(macro) == {"listing": 2, "offer": "*", "declined": True, "count": 3, "why": ""}
+    assert macro.decline_all(2) is False and decline_result(macro)["why"] == "there are no offers in that listing"      # (nothing left)
+    left[0] = 99                                                                                # (a list that never ends is stopped)
+    declined.clear()
+    assert macro.decline_all(1) is False and len(declined) == cfg.TRADES_MAX_OFFERS and "there may be more" in decline_result(macro)["why"]
+    left[0] = 2
+    monkeypatch.setattr(macro, "decline_row", lambda y, result: result.update(why="the offer did not open") or False)
+    assert macro.decline_all(1) is False and decline_result(macro)["why"] == "the offer did not open" and decline_result(macro)["count"] == 0
+
+
+def test_the_next_offer_is_waited_for_at_the_top_while_the_one_declined_still_shows_without_accept(macro, game, monkeypatch):
+    looks = iter([[589], [589], [453, 589]])                                                    # (the declined row has no ACCEPT: the second is first in sight until it is gone)
+    monkeypatch.setattr(macro, "grab_still", lambda: macro.wait_interruptible(1))                # (a look takes time)
+    monkeypatch.setattr(macro, "visible_offers", lambda img: next(looks))
+    assert macro.wait_list_settled(453) == [453, 589]
+    monkeypatch.setattr(macro, "visible_offers", lambda img: [589])                             # (never gone)
+    assert macro.wait_list_settled(453) is None
+
+
 def test_nothing_is_confirmed_unless_the_dialog_is_seen_and_a_dialog_that_stays_is_said(macro, game, monkeypatch):
     cfg = macro.cfg
     y = decline_game(macro, game, monkeypatch)
@@ -424,11 +459,13 @@ def test_the_trade_commands_are_read_for_a_listing_and_an_offer_the_macro_has_an
     cfg = macro.cfg
     write_command(macro, "decline", listing=2, offer=3)
     assert macro.read_command_with_id()[1]["offer"] == 3
+    write_command(macro, "decline", listing=1, offer="*")
+    assert macro.read_command_with_id()[1]["offer"] == "*"
     for details in (dict(listing=3, offer=1), dict(listing=1, offer=0), dict(listing=1, offer=cfg.TRADES_MAX_OFFERS + 1), dict(listing=1, offer="1"), dict(listing=1, offer=True),
                     dict(listing="1", offer=1), dict(offer=1), {}):
         write_command(macro, "decline", **details)
         assert macro.read_command_with_id()[1] is None, details
-    assert {name for name in macro.OUTSIDE_ACTIONS if name.startswith("decline:")} == {f"decline:{l}:{n}" for l in cfg.TRADES_LISTINGS for n in range(1, cfg.TRADES_MAX_OFFERS + 1)}
+    assert {name for name in macro.OUTSIDE_ACTIONS if name.startswith("decline:")} == {f"decline:{l}:{n}" for l in cfg.TRADES_LISTINGS for n in range(1, cfg.TRADES_MAX_OFFERS + 1)} | {f"decline:{l}:*" for l in cfg.TRADES_LISTINGS}
     gui = remote_gui(macro, monkeypatch, tmp_path, running=True)
     gui.do_command("decline", {"command": "decline", "listing": 2, "offer": 3}, "d1")
     assert gui.calls == [("stop",)] and gui.pending == ["decline:2:3"] and gui.resume_loop is False

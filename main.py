@@ -26,7 +26,7 @@ from typing import Collection, Any, Callable, ContextManager, Iterable, Iterator
 from abc import ABC, abstractmethod
 from functools import lru_cache, partial
 import tkinter as tk
-from tkinter import messagebox, scrolledtext, ttk
+from tkinter import messagebox, scrolledtext, simpledialog, ttk
 
 import numpy as np
 import cv2
@@ -418,37 +418,6 @@ state = State()
 # LOGGING
 # ============================================================================
 
-def migrate_debug_layout() -> None:
-    """Move what an older version left in debug/ into the logs/ and failures/ subfolders (see LOGS_DIR / FAILURE_DIR), if it isn't
-    there already, and drop the images/ folder it had (the debug_*.png views are not made any more). Never raises."""
-    moves = [(os.path.join(cfg.DEBUG_DIR, name), os.path.join(cfg.LOGS_DIR, name))
-             for name in ("run_log.txt", "run_counter.txt", "output.log", "output.log.old", "status.json")]
-    old_images = os.path.join(cfg.DEBUG_DIR, "images")
-    moves += [(os.path.join(old_images, "failures"), cfg.FAILURE_DIR)]
-    try:
-        for source, target in moves:
-            if os.path.exists(source) and not os.path.exists(target):
-                os.replace(source, target)
-        for old_folder in (os.path.join(cfg.LOGS_DIR, "runs"), os.path.join(old_images, "reports"), os.path.join(cfg.DEBUG_DIR, "reports")):       # run logs and run charts: now together in RUNS_DIR
-            if os.path.isdir(old_folder):
-                os.makedirs(cfg.RUNS_DIR, exist_ok=True)
-                for name in os.listdir(old_folder):
-                    if not os.path.exists(os.path.join(cfg.RUNS_DIR, name)):
-                        os.replace(os.path.join(old_folder, name), os.path.join(cfg.RUNS_DIR, name))
-                if not os.listdir(old_folder):
-                    os.rmdir(old_folder)
-        for folder in (cfg.DEBUG_DIR, old_images):
-            if os.path.isdir(folder):
-                for name in os.listdir(folder):
-                    if name.startswith("debug_") and name.endswith(".png"):
-                        os.remove(os.path.join(folder, name))
-        if os.path.isdir(old_images) and not os.listdir(old_images):
-            os.rmdir(old_images)
-    except OSError as error:
-        logger.warning(f"Couldn't move the old debug files: {error}")
-
-migrate_debug_layout()
-
 def refresh_debug() -> int:
     """Empty the debug folder except the game config and recreate its subfolders (run
     numbers start from 1 again). Returns the number of entries removed.
@@ -530,7 +499,7 @@ def read_command_with_id() -> tuple[str, Optional[dict[str, Any]]]:
     COMMAND_MAX_AGE seconds (left over from before the macro started, say), is none - and a warning says why, so that a bot host whose clock is off does
     not have every command ignored without a trace. A `set` command must also name a switch that exists (`kind` "need" and a NEED_NAMES name, or "option"
     and an OPTION_SWITCHES name or SHOW_DEBUG_LINES_OPTION) and give it a true or false `value`. One command is read per call, the oldest first, so two sent
-    close together are both done, in order. A `decline` names a `listing` of TRADES_LISTINGS and an `offer` of 1 to TRADES_MAX_OFFERS. A `test` names a need handler (DEBUG_HANDLERS) or TEST_ALL_TELEPORTS, and a `server_link` gives a `link` that parse_server_link() knows. Never raises. See docs/ARCHITECTURE.md#remote-control."""
+    close together are both done, in order. A `decline` names a `listing` of TRADES_LISTINGS and an `offer` of 1 to TRADES_MAX_OFFERS or TRADES_ALL_OFFERS. A `test` names a need handler (DEBUG_HANDLERS) or TEST_ALL_TELEPORTS, and a `server_link` gives a `link` that parse_server_link() knows. Never raises. See docs/ARCHITECTURE.md#remote-control."""
     try:
         names = sorted(name for name in os.listdir(cfg.COMMANDS_DIR) if name.endswith(".json"))
     except OSError:
@@ -580,8 +549,8 @@ def read_command_with_id() -> tuple[str, Optional[dict[str, Any]]]:
     if data["command"] == "capture" and "value" in data and not isinstance(data["value"], bool):
         dropped("capture is asked for with a true or false value, or none")
         return stem, None
-    if data["command"] == "decline" and (data.get("listing") not in cfg.TRADES_LISTINGS or not isinstance(data.get("offer"), int) or isinstance(data.get("offer"), bool)
-                                         or not 1 <= data["offer"] <= cfg.TRADES_MAX_OFFERS):
+    if data["command"] == "decline" and (data.get("listing") not in cfg.TRADES_LISTINGS or not (data.get("offer") == cfg.TRADES_ALL_OFFERS or (
+            isinstance(data.get("offer"), int) and not isinstance(data.get("offer"), bool) and 1 <= data["offer"] <= cfg.TRADES_MAX_OFFERS))):
         dropped(f"decline listing {data.get('listing')} offer {data.get('offer')} is not an offer the macro can be asked for")
         return stem, None
     if data["command"] == "server_link" and (not isinstance(data.get("link"), str) or parse_server_link(data["link"].strip()) is None):
@@ -1027,18 +996,44 @@ def find_matching_need(icon_variants: list[Image]) -> tuple[Optional[str], float
         return best_match, best_score
     return None, best_score
 
-def identify_icons(found_icons: list[tuple[int, int, int]], full_img: Image) -> Iterator[tuple[Optional[str], float]]:
-    """Match each detected icon against the saved needs. Yields (need_name_or_None, score) per icon, checking check_running() between icons."""
-    for cx, cy, _ in found_icons:
+def prompt_rename_need(icon_img: Image, idx: int) -> str:
+    """Save a new need icon and ask for its name (dialog or console); a cancelled dialog saves
+    it as unnamed_<idx>. See docs/ARCHITECTURE.md#process_needs-step-by-step.
+    """
+    logger.info("New need detected")
+    temp_path = os.path.join(cfg.NEEDS_DIR, f"temp_{idx}.png")
+    cv2.imwrite(temp_path, preprocess_icon(icon_img))
+
+    prompt = "Need name (hungry/thirsty/dirty/potty/sleepy/catch/walk/other):"
+    if state.macro_window is not None:
+        answer = state.macro_window.run_on_ui_thread(
+            lambda: simpledialog.askstring("New need", prompt, parent=state.macro_window.root), timeout=None)
+        focus_roblox_click()   # the dialog took the focus
+    else:
+        print(f"{prompt} ", end="", flush=True)                           # (a question to the person at the terminal, not a log line)
+        answer = input()
+    need_name = (answer or "").strip().lower() or f"unnamed_{idx}"
+
+    os.rename(temp_path, os.path.join(cfg.NEEDS_DIR, f"{need_name}.png"))
+    logger.info(f"Saved: {need_name}")
+    return need_name
+
+def identify_icons(found_icons: list[tuple[int, int, int]], full_img: Image) -> Iterator[tuple[int, Image, Optional[str], float]]:
+    """Match each detected icon against the saved needs. Yields
+    (index, icon_image, need_name_or_None, score) per icon, checking
+    check_running() between icons."""
+    for idx, (cx, cy, _) in enumerate(found_icons):
         check_running()
-        yield find_matching_need(icon_variants(full_img, cx, cy))
+        icon_img = extract_icon(full_img, cx, cy, cfg.ICON_CROP_RADIUS)
+        need_name, score = find_matching_need(icon_variants(full_img, cx, cy))
+        yield idx, icon_img, need_name, score
 
 def scan_needs(fresh: bool = False) -> list[Optional[str]]:
     """One-shot snapshot: every need name currently detected on screen. `fresh`
     makes the circle search run even if the strip looks unchanged (see
     detect_need_icons())."""
     found_icons, full_img = detect_need_icons(fresh=fresh)
-    return [name for name, _ in identify_icons(found_icons, full_img)]
+    return [name for _, _, name, _ in identify_icons(found_icons, full_img)]
 
 def _need_cleared(need_name: str) -> bool:
     """True if `need_name` is missing on two checks in a row (the second a fresh search) - the
@@ -2205,23 +2200,71 @@ def decline_offer(listing: int, number: int) -> bool:
             result["why"] = "that offer is not in the list any more (it changed since /trades: /trades again)"
             close_trade_phone()
             return False
-        hover_click(cfg.TRADES_ROW_CLICK_X, y + cfg.TRADES_ROW_CLICK_DY)
-        if not wait_trade_screen("detail"):
-            result["why"] = "the offer did not open"
-            return False
-        cv2.imwrite(cfg.TRADES_DECLINED_PATH, grab_screen()[cfg.TRADES_PANEL_BOX[1]:cfg.TRADES_PANEL_BOX[3], cfg.TRADES_PANEL_BOX[0]:cfg.TRADES_PANEL_BOX[2]])
-        hover_click(*cfg.TRADES_DETAIL_DECLINE_POS)
-        if not wait_trade_screen("dialog"):
-            result["why"] = "the \"Are you sure?\" dialog did not come up (nothing was declined)"
-            return False
-        hover_click(*cfg.TRADES_DECLINE_YES_POS)
-        wait_interruptible(cfg.UI_SETTLE)
-        if trade_screen(grab_screen()) == "dialog":
-            result["why"] = "the dialog is still up after Yes"
+        if not decline_row(y, result):
             return False
         result["declined"], result["why"] = True, ""
         log_run_event(f"trade listings: declined offer {number} of listing {listing}")
         return True
+    finally:
+        bring_macro_window_to_front()
+        write_json_file(cfg.TRADES_DECLINE_DONE_PATH, result)
+
+def decline_row(y: int, result: dict[str, Any]) -> bool:
+    """Decline the offer whose row has its ACCEPT button's middle at `y` of the list on screen: open it (an offer on its own), keep its picture (TRADES_DECLINED_PATH), press DECLINE
+    and Yes - each only once the screen it is on is seen. False, with `result["why"]` saying where it ended, if one was not."""
+    hover_click(cfg.TRADES_ROW_CLICK_X, y + cfg.TRADES_ROW_CLICK_DY)
+    if not wait_trade_screen("detail"):
+        result["why"] = "the offer did not open"
+        return False
+    cv2.imwrite(cfg.TRADES_DECLINED_PATH, panel_of(grab_screen()))
+    hover_click(*cfg.TRADES_DETAIL_DECLINE_POS)
+    if not wait_trade_screen("dialog"):
+        result["why"] = "the \"Are you sure?\" dialog did not come up (nothing was declined)"
+        return False
+    hover_click(*cfg.TRADES_DECLINE_YES_POS)
+    wait_interruptible(cfg.UI_SETTLE)
+    if trade_screen(grab_screen()) == "dialog":
+        result["why"] = "the dialog is still up after Yes"
+        return False
+    return True
+
+def wait_list_settled(top: int) -> Optional[list[int]]:
+    """After a decline: the rows (visible_offers()) of the list once it has stopped moving and its first row is at `top` again or none is left - the offer being declined is shown for a while
+    with no ACCEPT button, and the row under it is the first in sight until it is gone. None if that did not happen in TRADES_DECLINE_MAX_WAIT seconds."""
+    deadline = time.time() + cfg.TRADES_DECLINE_MAX_WAIT
+    while True:
+        ys = visible_offers(grab_still())
+        if not ys or ys[0] <= top + cfg.TRADES_TOP_TOLERANCE:
+            return ys
+        if time.time() >= deadline:
+            return None
+
+def decline_all(listing: int) -> bool:
+    """The bot's /decline with `*`: decline every offer of listing `listing`, the first in sight each time (decline_row()) until none is left, at most TRADES_MAX_OFFERS. TRADES_DECLINE_DONE_PATH
+    says how many were declined and how it ended, however it does. True if the list was emptied."""
+    result: dict[str, Any] = {"listing": listing, "offer": "*", "declined": False, "count": 0, "why": "stopped"}
+    send_macro_window_to_back()
+    try:
+        if not open_trade_listings() or not open_offers(listing):
+            result["why"] = "the offers of that listing could not be opened (see the log)"
+            return False
+        ys = visible_offers(grab_still())
+        top = ys[0] if ys else 0
+        while ys:
+            if result["count"] >= cfg.TRADES_MAX_OFFERS:
+                result["why"] = f"stopped after {cfg.TRADES_MAX_OFFERS} offers (there may be more)"
+                return False
+            if not decline_row(ys[0], result):
+                return False
+            result["count"] += 1
+            settled = wait_list_settled(top)
+            if settled is None:
+                result["why"] = "the list did not settle after a decline"
+                return False
+            ys = settled
+        result["declined"], result["why"] = result["count"] > 0, "" if result["count"] else "there are no offers in that listing"
+        log_run_event(f"trade listings: declined {result['count']} offers of listing {listing}")
+        return result["declined"]
     finally:
         bring_macro_window_to_front()
         write_json_file(cfg.TRADES_DECLINE_DONE_PATH, result)
@@ -2916,7 +2959,18 @@ def process_needs() -> bool:
         note_idle_check()
         return False
 
-    matched_needs = [(name, score) for name, score in identify_icons(found_icons, full_img) if name]      # (an icon that matches none is skipped)
+    matched_needs = []
+    for idx, icon_img, need_name, score in identify_icons(found_icons, full_img):
+        if not need_name:
+            if cfg.SAVE_NEW_NEEDS:
+                logger.info(f"New need (best score: {score:.4f})")
+                # prompt_rename_need() already saves the reference icon into
+                # NEEDS_DIR - that .png file is the only record needed for this
+                # need to be recognized next time, so there's nothing further to
+                # persist here.
+                prompt_rename_need(icon_img, idx)
+            continue
+        matched_needs.append((need_name, score))
 
     names = [name for name, _ in matched_needs]
     if names:
@@ -6398,7 +6452,8 @@ class DebugCapture(logging.Handler):
 OUTSIDE_ACTIONS: dict[str, Callable[[], Any]] = {"rejoin": leave_and_rejoin, "setup": setup_game, "trade_hub": travel_to_trade_hub, "leave_trade_hub": leave_trade_hub, "inventory": inventory_tour, "sloop": exit_minigame_and_setup,
                                           "trades": trades_tour, "recenter": recenter,
                                           **{f"test:{name}": partial(test_need_handler, name) for name in (*DEBUG_HANDLERS, cfg.TEST_ALL_TELEPORTS)},
-                                          **{f"decline:{listing}:{number}": partial(decline_offer, listing, number) for listing in cfg.TRADES_LISTINGS for number in range(1, cfg.TRADES_MAX_OFFERS + 1)}}   # the commands that do what a button does (AdoptMeGUI.act_from_outside())
+                                          **{f"decline:{listing}:{number}": partial(decline_offer, listing, number) for listing in cfg.TRADES_LISTINGS for number in range(1, cfg.TRADES_MAX_OFFERS + 1)},
+                                          **{f"decline:{listing}:{cfg.TRADES_ALL_OFFERS}": partial(decline_all, listing) for listing in cfg.TRADES_LISTINGS}}   # the commands that do what a button does (AdoptMeGUI.act_from_outside())
 
 def blackout_seen_by_capture(before: Image, after: Image) -> Optional[bool]:
     """Whether the macro's screenshots see the window of the blackout test: `before` is a screenshot without it, `after` one with it up, white. Seen if

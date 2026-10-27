@@ -315,6 +315,9 @@ def test_the_trade_pictures_are_listed_in_order_without_the_rows_cleared_without
     assert bot_lib.trades_text({"listings": {}, "problem": "the trade listings could not be opened"}) == "The trade listings were not looked at: the trade listings could not be opened."
     assert bot_lib.decline_text({"listing": 2, "offer": 1, "declined": True, "why": ""}).startswith("Declined offer 1 of listing 2")
     assert bot_lib.decline_text({"listing": 2, "offer": 1, "declined": False, "why": "the offer did not open"}) == "Did not decline offer 1 of listing 2: the offer did not open."
+    assert bot_lib.decline_text({"listing": 1, "offer": "*", "declined": True, "count": 4, "why": ""}) == "Declined 4 offer(s) of listing 1."
+    assert bot_lib.decline_text({"listing": 1, "offer": "*", "declined": False, "count": 2, "why": "the offer did not open"}) == "Declined 2 offer(s) of listing 1; it stopped: the offer did not open."
+    assert [bot_lib.parse_offer(text) for text in ("3", " 12 ", "*", "0", "31", "x", "-1", "**", "")] == [3, 12, "*", None, None, None, None, None, None]
 
 
 def test_the_pictures_of_an_inventory_tour_are_listed_in_order_cleared_and_sent_ten_at_a_time(tmp_path):

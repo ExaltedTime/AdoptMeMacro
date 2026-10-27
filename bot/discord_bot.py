@@ -384,8 +384,8 @@ async def collect_trades() -> tuple[str, list[str]]:
     return bot_lib.trades_text(done) + " Its loop is stopped; /loop it again when you want it back.", bot_lib.trade_pictures(cfg.TRADES_DIR)
 
 
-async def decline_offer(listing: int, offer: int) -> tuple[str, list[str]]:
-    """Ask the macro to decline offer `offer` of listing `listing` (/decline) and wait up to BOT_TRADES_WAIT seconds for it to end: what to say, and the picture of the offer if it was declined."""
+async def decline_offer(listing: int, offer: int | str) -> tuple[str, list[str]]:
+    """Ask the macro to decline offer `offer` (a number, or `*` for all of them) of listing `listing` (/decline) and wait up to BOT_TRADES_WAIT seconds for it to end: what to say, and the picture of the offer if it was declined."""
     bot_lib.clear_trades(cfg.TRADES_DIR)
     problem = await send_command("decline", listing=listing, offer=offer)
     if problem:
@@ -397,7 +397,7 @@ async def decline_offer(listing: int, offer: int) -> tuple[str, list[str]]:
         done = bot_lib.read_json(cfg.TRADES_DECLINE_DONE_PATH)
     if done is None:
         return f"The macro has not ended the decline in {cfg.BOT_TRADES_WAIT:g} s (its loop may not have stopped) - see /status.", []
-    return bot_lib.decline_text(done), [cfg.TRADES_DECLINED_PATH] if os.path.exists(cfg.TRADES_DECLINED_PATH) else []
+    return bot_lib.decline_text(done), [cfg.TRADES_DECLINED_PATH] if offer != cfg.TRADES_ALL_OFFERS and os.path.exists(cfg.TRADES_DECLINED_PATH) else []
 
 
 async def stop_macro(config: bot_lib.Config) -> str:
@@ -906,10 +906,14 @@ def build(config: bot_lib.Config) -> discord.Client:
         for batch in batches[1:]:
             await say(interaction, files=[discord.File(path) for path in batch])
 
-    @command("decline", "Decline an offer on a listing by the number /trades showed (stops the macro's loop)")
-    @app_commands.describe(listing="1 or 2", offer="The offer's number on the pictures of /trades", debug=DEBUG_HELP)
+    @command("decline", "Decline an offer by its /trades number, or * for all of a listing (stops the loop)")
+    @app_commands.describe(listing="1 or 2", offer="The offer's number on the pictures of /trades, or * for every offer of the listing", debug=DEBUG_HELP)
     @app_commands.choices(listing=[app_commands.Choice(name=str(number), value=number) for number in cfg.TRADES_LISTINGS])
-    async def decline(interaction: discord.Interaction, listing: app_commands.Choice[int], offer: app_commands.Range[int, 1, cfg.TRADES_MAX_OFFERS], debug: bool = False) -> None:
+    async def decline(interaction: discord.Interaction, listing: app_commands.Choice[int], offer: str, debug: bool = False) -> None:
+        number = bot_lib.parse_offer(offer)
+        if number is None:
+            await interaction.response.send_message(f"The offer is a number from 1 to {cfg.TRADES_MAX_OFFERS}, or {cfg.TRADES_ALL_OFFERS} for all of them.", ephemeral=True)
+            return
         await interaction.response.defer(thinking=True)
         problem, started = await ensure_macro(config)
         if problem:
@@ -921,7 +925,7 @@ def build(config: bot_lib.Config) -> discord.Client:
         if session is not None:
             await session.start()
         try:
-            text, pictures = await decline_offer(listing.value, offer)
+            text, pictures = await decline_offer(listing.value, number)
         finally:
             if session is not None:
                 await session.end()

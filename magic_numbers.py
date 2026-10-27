@@ -232,7 +232,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MINIGAME_TEMPLATE_DIR = os.path.join(SCRIPT_DIR, "ref", "halloween")
 STRAY_WINDOW_DIR = os.path.join(SCRIPT_DIR, "ref", "popups")
 MINIGAME_OVERLAY_DIR = os.path.join(SCRIPT_DIR, "ref", "overlays")
-NEEDS_DIR = os.path.join(SCRIPT_DIR, "ref", "needs")      # the saved need icons
+NEEDS_DIR = os.path.join(SCRIPT_DIR, "ref", "needs")      # the learned need icons - the one folder in ref/ the macro also writes to (see prompt_rename_need())
 HAUNTLET_DIGIT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "digits")   # 0.png ... 9.png: the digits of the ROOM panel, see read_hauntlet_room()
 HAUNTLET_ITEM_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "items")      # a folder per item (phone/, key/, ...) of pictures of its slot; see read_hauntlet_items()
 HAUNTLET_COUNT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "counts")    # x/, 1/, 2/: the glyphs of an item's "x2" badge
@@ -681,6 +681,9 @@ REFERENCE_WIDTH, REFERENCE_HEIGHT = 1920, 1080
 REFERENCE_CENTER_X, REFERENCE_CENTER_Y = REFERENCE_WIDTH // 2, REFERENCE_HEIGHT // 2
 ROBLOX_RECT_TTL = 1.0   # seconds the Roblox window's position and size are remembered between lookups
 
+# Behavior flags
+SAVE_NEW_NEEDS = False
+
 # Timing (seconds)
 RESPAWN_KEY_DURATION = 0.05    # how long each respawn key is held
 RECENTER_CLOSE_TRIES = 4           # /recenter: windows closed one after the other (a stray window can have another behind it), at most this many
@@ -809,6 +812,9 @@ TRADES_DONE_PATH = os.path.join(TRADES_DIR, "done.json")        # written when a
 TRADES_DECLINED_PATH = os.path.join(TRADES_DIR, "declined.png")  # the offer that was declined, as it showed on its own
 TRADES_DECLINE_DONE_PATH = os.path.join(TRADES_DIR, "decline.json")   # written when a decline ends: {"listing": n, "offer": n, "declined": true or false, "why": ...}
 TRADES_LISTINGS = (1, 2)                                        # the listings looked at (the game allows two)
+TRADES_ALL_OFFERS = "*"                                        # /decline's offer for every offer of the listing
+TRADES_DECLINE_MAX_WAIT = 8.0                                   # seconds a list is waited for after a decline, to have the next offer at its top (the offer declined shows for a while with no ACCEPT)
+TRADES_TOP_TOLERANCE = 12                                       # px a first row may be below where the list's first row was and still be at the top
 TRADES_MAX_OFFERS = 30                                          # the most offers of a listing /decline can be asked for
 TRADES_SEARCH_POS = (1070, 642)                                 # the backpack's search box ("Enter Search...")
 TRADES_SEARCH_TEXT = "phone"                                    # typed in it in the Toys tab: the phone is then the first item (TRADE_HUB_PHONE_POS), where the slot-by-slot search had the badge there

@@ -238,9 +238,10 @@ def one_need(macro, monkeypatch):
     """process_needs() with a single 'hungry' icon on a dark screen and a handler that succeeds."""
     import numpy as np
     screen = np.zeros((1080, 1920, 3), np.uint8)
+    monkeypatch.setattr(macro.cfg, "SAVE_NEW_NEEDS", False)                  # (True would ask for a name for an unknown icon)
     monkeypatch.setattr(macro, "focus_roblox_click", lambda: True)
     monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([(100, 50, 30)], screen))
-    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([("hungry", 0.9)]))
+    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(0, screen[:10, :10], "hungry", 0.9)]))
     monkeypatch.setattr(macro, "respawn_character", lambda: None)
     monkeypatch.setattr(macro, "check_focus", lambda: None)
 
@@ -701,7 +702,7 @@ def test_every_check_reaches_the_log_even_when_it_finds_nothing(macro, one_need,
 
 
 def test_idle_checks_that_found_icons_nothing_matched_are_counted_too(macro, one_need, monkeypatch):
-    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(None, 0.5)]))
+    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(0, img[:10, :10], None, 0.5)]))
     macro.state.run_number = 4
     for _ in range(4):
         macro.process_needs()
@@ -1042,7 +1043,7 @@ def test_a_failed_sick_is_logged_as_a_failure_by_process_needs(macro, sick_run, 
     screen = np.zeros((1080, 1920, 3), np.uint8)
     monkeypatch.setattr(macro, "focus_roblox_click", lambda: True)
     monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([(100, 50, 30)], screen))
-    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([("sick", 0.9)]))
+    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(0, screen[:10, :10], "sick", 0.9)]))
     monkeypatch.setattr(macro, "check_focus", lambda: None)
     monkeypatch.setattr(macro, "save_failure_report", lambda reason: None)
     assert macro.process_needs() is False
@@ -1139,7 +1140,7 @@ def test_a_change_in_what_is_on_screen_is_logged_again(macro, one_need, monkeypa
     macro.state.run_number = 4
     macro.process_needs()
     macro.process_needs()
-    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([("thirsty", 0.9)]))
+    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(0, one_need[:10, :10], "thirsty", 0.9)]))
     macro.process_needs()
     log = open(macro.cfg.RUN_LOG_PATH).read()
     assert log.index("detected: hungry") < log.index("same checks: 1 over") < log.index("detected: thirsty")
@@ -1395,26 +1396,6 @@ def test_the_end_wait_is_marked_while_a_need_is_waited_for_and_a_held_popup_is_n
     monkeypatch.setattr(macro, "detect_paycheck", lambda: checked.append(1) or True)
     monkeypatch.setattr(macro.cfg, "HALLOWEEN", True)
     assert macro.unscrew(in_task=True) is None and checked == []                         # the paycheck check, which clicks, is skipped
-
-
-def test_the_run_logs_and_charts_of_an_older_layout_are_moved_into_the_runs_folder(macro, tmp_path, monkeypatch):
-    cfg = macro.cfg
-    for name, folder in (("run1.txt", "logs/runs"), ("run1.png", "images/reports"), ("run2.png", "reports")):
-        path = tmp_path / "old" / folder / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("x")
-    old = tmp_path / "old"
-    for name, folder in (("debug_needs.png", "images"), ("debug_buttons.png", ""), ("1/screen.png", "images/failures")):
-        path = tmp_path / "old" / folder / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("x")
-    for name, value in (("DEBUG_DIR", old), ("LOGS_DIR", old / "logs"), ("FAILURE_DIR", old / "failures"), ("RUNS_DIR", old / "runs")):
-        monkeypatch.setattr(cfg, name, str(value))
-    macro.migrate_debug_layout()
-    assert (old / "failures" / "1" / "screen.png").exists() and not (old / "images").exists()          # the failures moved up; the debug images are gone
-    assert not (old / "debug_buttons.png").exists()
-    assert sorted(os.listdir(old / "runs")) == ["run1.png", "run1.txt", "run2.png"]
-    assert not (old / "logs" / "runs").exists() and not (old / "images" / "reports").exists() and not (old / "reports").exists()
 
 
 # --- commands from outside (the Discord bot): read_command_with_id(), poll_commands() ---

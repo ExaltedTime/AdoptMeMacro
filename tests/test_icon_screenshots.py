@@ -32,5 +32,5 @@ def test_every_icon_on_the_bar_is_recognised_and_nothing_else_is(macro, monkeypa
     monkeypatch.setattr(macro, "check_running", lambda: None)
     macro._NEED_STRIP_CACHE.update(strip=None, found=[], reuses=0)
     found, image = macro.detect_need_icons(fresh=True)
-    recognised = [name for name, _ in macro.identify_icons(found, image) if name]
+    recognised = [name for _, _, name, _ in macro.identify_icons(found, image) if name]
     assert recognised == expected.split()

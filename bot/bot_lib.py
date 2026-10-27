@@ -712,8 +712,21 @@ def trades_text(done: dict[str, Any]) -> str:
     return "\n".join(lines or ["No listings were looked at."]) + ("\n/decline <listing> <offer> declines an offer by the number on the pictures." if any(f.get("offers") for f in done.get("listings", {}).values()) else "")
 
 
+def parse_offer(text: str) -> Optional[int | str]:
+    """/decline's offer: a number from 1 to TRADES_MAX_OFFERS, or TRADES_ALL_OFFERS as it is; None if it is neither."""
+    text = text.strip()
+    if text == cfg.TRADES_ALL_OFFERS:
+        return text
+    return int(text) if text.isdigit() and 1 <= int(text) <= cfg.TRADES_MAX_OFFERS else None
+
+
 def decline_text(done: dict[str, Any]) -> str:
     """What the /decline message says."""
+    if done.get("offer") == cfg.TRADES_ALL_OFFERS:
+        declined = f"{done.get('count', 0)} offer(s) of listing {done.get('listing')}"
+        if done.get("declined"):
+            return f"Declined {declined}."
+        return f"Declined {declined}; it stopped: {done.get('why') or 'it did not end'}."
     where = f"offer {done.get('offer')} of listing {done.get('listing')}"
     if done.get("declined"):
         return f"Declined {where} (the offer as it was is in the picture)."

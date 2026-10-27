@@ -109,6 +109,22 @@ def test_the_phone_is_opened_from_the_world_equipping_it_only_when_it_is_not_in_
     assert macro.open_trade_listings() is False and game.log == ["trade listings: the phone did not come up"]
 
 
+def test_the_boards_of_offers_is_known_in_a_real_screenshot_and_closed_before_the_phone_is_used(macro, game):
+    """The pink board of the Trading Hub's offers came up and /trades could not go on: it is closed first, by its X (a stray window of the loop too, STRAY_WINDOWS)."""
+    cfg = macro.cfg
+    board = cv2.imread(os.path.join(os.path.dirname(__file__), "popups", "trade_board.png"))
+    assert macro.trade_screen(board) == "board"
+    assert all(macro.trade_screen(frame(name)) != "board" for name in ("phone", "menu", "listing_1", "listing_2", "offers", "detail", "dialog", "declining"))
+    game.frames["board"] = board
+    game.moves[("board", cfg.STRAY_WINDOWS["trade_board"]["close_pos"])] = "world"
+    game.state = "board"
+    assert macro.open_trade_listings() is True and game.state == "listing_1"
+    assert game.clicks[0] == cfg.STRAY_WINDOWS["trade_board"]["close_pos"] and game.clicks[1] == cfg.TRADE_HUB_USE_POS
+    game.state, game.clicks[:], game.log[:] = "board", [], []
+    game.moves[("board", cfg.STRAY_WINDOWS["trade_board"]["close_pos"])] = "board"                    # it does not close
+    assert macro.open_trade_listings() is False and game.log == ["trade listings: the board of offers could not be closed"]
+
+
 def test_a_listing_is_shown_by_the_arrow_and_one_that_is_not_there_is_said(macro, game):
     game.state = "listing_1"
     assert macro.select_listing(2) is True and game.state == "listing_2"

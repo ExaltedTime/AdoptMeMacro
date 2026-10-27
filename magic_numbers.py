@@ -133,6 +133,9 @@ MINIGAME_START_WAIT = 90.0          # each minigame waits for its overlay (the g
 STRAY_WINDOW_MATCH_THRESHOLD = 0.8
 STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     "trading_hub": {"box": (580, 290, 1020, 400), "close_pos": (1278, 339)},
+    # The Trading Hub's board of offers ("TRADING HUB" with a magnifier on a pink board: the offers made on the player's listings, "OFFER DECLINED" with a Thanks! button, Listing #1 and #2
+    # with Modify and Remove): it came up over the world and /trades could not go on (trade_screen() knows it as "board" and closes it).
+    "trade_board": {"box": (590, 300, 880, 390), "close_pos": (1282, 339)},
     "star_rewards": {"box": (640, 385, 1060, 475), "close_pos": (1209, 441)},      # the calendar view (the star icon opens it): closed by its red X
     # The Task Board (opened by a notification such as "Trading Hub: Your listing got an offer!", on its Alerts tab): its red X closes it. Only closed, for now.
     "task_board": {"box": (540, 300, 1000, 430), "close_pos": (1318, 369)},

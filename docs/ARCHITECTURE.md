@@ -536,6 +536,7 @@ the camera on the pet with a BACK button; `close_pos` is that button). Only
 other case - including mid-task, e.g. a throw click that focused the pet.
 
 `profile` is the player's own profile page (`ref/popups/profile.png`, the toolbar of Stickers / Preview / paint / save; `close_pos` is its red X), which a stray click on the character or the character menu's Profile opens.
+`trade_board` is the Trading Hub's board of offers (`ref/popups/trade_board.png`, the "TRADING HUB" title with a magnifier on a pink board, over the offers made on the player's listings; `close_pos` is its red X; the real screenshot is `tests/popups/trade_board.png`): it came up over the world and stopped `/trades`. `trade_screen()` knows it as `"board"` and `open_trade_listings()` closes it first, whatever is asked, since the phone cannot be used under it; nothing wants it open yet, so there is no switch like the pet focus's.
 
 `cant_spawn_vehicle` is the "You can't spawn a vehicle here." popup
 (`ref/popups/cant_spawn_vehicle.png`; `close_pos` is its Okay button). It is

@@ -1777,10 +1777,10 @@ def inventory_tour() -> bool:
 # --- the trade listings: the offers on them, and declining one ---
 
 def trade_screen(img: Image) -> Optional[str]:
-    """Which screen of the Trading Hub Phone is up in `img`: "dialog" (Are you sure you want to decline?), "detail" (an offer on its own, with its DECLINE button), "offers" (the list),
+    """Which screen of the Trading Hub Phone is up in `img`: "dialog" (Are you sure you want to decline?), "board" (the Trading Hub's board of offers: not the phone's, but in the way), "detail" (an offer on its own, with its DECLINE button), "offers" (the list),
     "listings" (MY LISTINGS), "menu" (the TRADING HUB menu), "phone" (the phone's own) - or None. Each is a crop of POPUP_TEMPLATES; the earlier ones are looked for first, since the
     later ones are also there (dimmed) under them."""
-    for name, screen in (("decline_dialog", "dialog"), ("decline_button", "detail"), ("offers_title", "offers"), ("my_listings", "listings"), ("trade_menu", "menu"), ("trade_phone_home", "phone")):
+    for name, screen in (("decline_dialog", "dialog"), ("trade_board", "board"), ("decline_button", "detail"), ("offers_title", "offers"), ("my_listings", "listings"), ("trade_menu", "menu"), ("trade_phone_home", "phone")):
         if popup_visible(img, name):
             return screen
     return None
@@ -1814,6 +1814,13 @@ def open_trade_listings() -> bool:
     if not focus_roblox():
         return False
     screen = trade_screen(grab_screen())
+    if screen == "board":
+        hover_click(*cfg.STRAY_WINDOWS["trade_board"]["close_pos"])        # the board of offers is closed, whatever is asked: the phone cannot be used under it
+        wait_interruptible(cfg.UI_SETTLE)
+        screen = trade_screen(grab_screen())
+        if screen == "board":
+            log_run_event("trade listings: the board of offers could not be closed")
+            return False
     if screen == "dialog":
         hover_click(*cfg.EXIT_STAY_POS)                                  # (Cancel: the same place as the exit dialog's)
         wait_interruptible(cfg.UI_SETTLE)

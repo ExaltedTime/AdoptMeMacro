@@ -210,7 +210,13 @@ prefers the window titled exactly "Roblox", so a browser tab that mentions it
 isn't picked) and clips it to the monitor, which trims the few pixels of
 invisible border a maximized window reports. The whole monitor is used when
 there's no usable window (not running, minimized). It's remembered for
-`ROBLOX_RECT_TTL` seconds, and `focus_roblox()` forgets it. On a 1920x1080
+`ROBLOX_RECT_TTL` seconds, and `focus_roblox()` forgets it. When Windows refuses
+`activate()` (pygetwindow raises `PyGetWindowException`, often with "error code 0:
+completed successfully": the bot's console had just opened over Roblox and `/inventory`
+crashed on it), `force_foreground()` taps `KEYS["foreground_tap"]` (Alt) and activates
+again, then minimizes and restores the window (`FOCUS_FORCE_TRIES` ways), and
+`focus_roblox()` is False, logged, when none of them brings Roblox to the front - it does
+not raise. On a 1920x1080
 screen with Roblox maximized the rectangle is the whole screen, so nothing is
 cropped or scaled; on another resolution or a smaller window everything
 scales. Distances measured in pixels (icon radii, the `MINIGAME_POPUP_NO_MAX_*`

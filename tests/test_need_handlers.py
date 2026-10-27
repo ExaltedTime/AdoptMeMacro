@@ -88,6 +88,139 @@ def test_ride_steps_back_mounts_walks_on_equips_a_vehicle_and_rides_to_and_fro(m
         ("walk", (cfg.KEYS["forward"], cfg.KEYS["back"]), cfg.NEED_GONE_MAX_WAIT, "ride")]
 
 
+def pet_bar_frame():
+    import cv2
+    return cv2.imread(os.path.join(os.path.dirname(__file__), "popups", "pet_with_bar_not_moving.png"))
+
+
+def test_a_pet_that_stands_still_is_found_by_its_name_bar_in_a_real_frame_and_nothing_else_is(macro):
+    import numpy as np
+    x, y = macro.find_pet_bar(pet_bar_frame())
+    assert abs(x - 1218) <= 4 and abs(y - 693) <= 6                                          # the join of the bar's purple and white, 3.5 bar heights under it: on the pet's body (1040-1260, 620-830)
+    assert macro.find_pet_bar(np.full((1080, 1920, 3), 30, np.uint8)) is None
+    drawn = np.full((1080, 1920, 3), 30, np.uint8)
+    drawn[522:560, 1117:1218] = (255, 107, 154)                                                # the purple part alone, nothing white at its right: not a bar
+    assert macro.find_pet_bar(drawn) is None
+    drawn[522:560, 1218:1303] = 255
+    assert macro.find_pet_bar(drawn) == (1218, 693)
+    drawn[522:560, 1117:1218] = (255, 107, 154)
+    tall = drawn.copy()
+    tall[400:500, 1117:1218] = (255, 107, 154)                                                 # a square of the same purple (the backpack button is round and as tall as wide): not a bar
+    assert macro.find_pet_bar(tall) == (1218, 693)
+
+
+def test_focus_pet_clicks_under_the_name_bar_when_nothing_moves_and_when_what_moved_was_not_the_pet(macro, monkeypatch):
+    events = []                                                                              # (not the events fixture: it replaces focus_pet itself)
+    frame = pet_bar_frame()
+    focused = []
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "check_running", lambda: None)
+    monkeypatch.setattr(macro, "grab_screen", lambda: frame)
+    monkeypatch.setattr(macro, "detect_pet_focus", lambda img: bool(focused))
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: (events.append(("click", (x, y))), focused.append(1)))
+    monkeypatch.setattr(macro, "macro_window_reference_rect", lambda: None)
+    monkeypatch.setattr(macro, "moving_blobs", lambda a, b, ignore=(): ([], frame[:, :, 0] * 0, 0))
+    assert macro.focus_pet() is True
+    clicks = [e[1] for e in events if e[0] == "click"]
+    assert len(clicks) == 1 and abs(clicks[0][0] - 1218) <= 4 and abs(clicks[0][1] - 693) <= 6
+    events.clear()
+    focused.clear()
+    monkeypatch.setattr(macro, "detect_pet_focus", lambda img: len(focused) > 1)                # (the click on what moved did not focus it; the bar's did)
+    monkeypatch.setattr(macro, "moving_blobs", lambda a, b, ignore=(): ([(10, 10, 20, 20, 400)], frame[:, :, 0] * 0, 0))
+    assert macro.focus_pet() is True
+    clicks = [e[1] for e in events if e[0] == "click"]
+    assert clicks[0] == (20, 20) and abs(clicks[1][0] - 1218) <= 4 and len(clicks) == 2
+    events.clear()
+    focused.clear()
+    monkeypatch.setattr(macro, "grab_screen", lambda: __import__("numpy").full((1080, 1920, 3), 30, __import__("numpy").uint8))
+    monkeypatch.setattr(macro, "moving_blobs", lambda a, b, ignore=(): ([], frame[:, :, 0] * 0, 0))
+    assert macro.focus_pet() is False and not [e for e in events if e[0] == "click"]          # no bar: as before, nothing found
+
+
+def test_a_ride_that_did_not_clear_its_need_sets_the_backpack_filter_and_rides_once_more(macro, events, monkeypatch):
+    """With Setup not run the first vehicle was a car, not the helicopter: the filter is set again (what Setup does with the backpack) and the ride tried once more, once."""
+    rides = []
+    monkeypatch.setattr(macro, "set_backpack_filter", lambda: events.append(("filter",)))
+    monkeypatch.setattr(macro, "walk_alternating", lambda pair, total, step=0, need_name=None: (rides.append(1), setattr(macro.state, "need_cleared", len(rides) > 1)))
+    assert macro.RideNeedHandler().handle() is True
+    assert len(rides) == 2 and events.count(("filter",)) == 1
+    assert events.index(("filter",)) > events.index(("equip_vehicle",)) and events.count(("equip_vehicle",)) == 2           # (the filter between the two rides)
+    events.clear()
+    rides.clear()
+    monkeypatch.setattr(macro, "walk_alternating", lambda pair, total, step=0, need_name=None: (rides.append(1), setattr(macro.state, "need_cleared", False)))
+    assert macro.RideNeedHandler().handle() is True and len(rides) == 2 and events.count(("filter",)) == 1                  # (still not: not a third time)
+    events.clear()
+    monkeypatch.setattr(macro, "walk_alternating", lambda pair, total, step=0, need_name=None: setattr(macro.state, "need_cleared", True))
+    assert macro.RideNeedHandler().handle() is True and ("filter",) not in events                                            # (cleared: no filter)
+
+
+def test_the_filter_is_set_by_the_clicks_setup_makes_and_setup_does_it_too(macro, events, monkeypatch):
+    cfg = macro.cfg
+    monkeypatch.setattr(macro, "backpack_on_purpose", contextlib_null)
+    macro.set_backpack_filter()
+    clicks = [e[1] for e in events if e[0] == "click"]
+    assert clicks == [cfg.SETUP_BACKPACK_SETTINGS_POS, cfg.SETUP_SORT_MENU_POS, cfg.SETUP_FAVORITES_POS, cfg.SETUP_CONFIRM_POS]
+    assert [e for e in events if e[0] == "press"] == [("press", cfg.KEYS["backpack"])] and events[-1] == ("close", "setup")
+
+
+def contextlib_null():
+    import contextlib
+    return contextlib.nullcontext()
+
+
+def disc_screen(macro, outline=True, glyph=True, exact=False):
+    """A 1920x1080 frame with the choose button as the game draws it (a disc shading from purple to magenta, a white "?" in it, sometimes a white outline) and what is not it:
+    the pink BACK button, a small purple badge, a wide purple bar and the backpack's paler purple."""
+    import cv2
+    import numpy as np
+    img = np.full((1080, 1920, 3), 30, np.uint8)
+    disc = np.zeros((180, 180, 3), np.uint8)
+    for row in range(180):                                                                       # (the shading: purple (170, 30, 254) at the top to magenta (230, 20, 200) at the bottom, as RGB)
+        t = row / 179
+        disc[row, :] = (round(254 - 54 * t), round(30 - 10 * t), round(170 + 60 * t))            # BGR
+    mask = np.zeros((180, 180), np.uint8)
+    cv2.circle(mask, (90, 90), 88, 255, -1)
+    region = img[645:825, 550:730]
+    region[mask > 0] = disc[mask > 0]
+    if glyph:
+        cv2.putText(img, "?", (606, 780), cv2.FONT_HERSHEY_SIMPLEX, 3.5, (255, 255, 255), 14, cv2.LINE_AA)
+    if outline:
+        cv2.circle(img, (640, 735), 90, (255, 255, 255), 4)
+    img[80:150, 445:645] = (120, 41, 237)                                                       # BACK: pink (BGR), wide
+    cv2.circle(img, (628, 132), 18, (254, 90, 140), -1)                                          # the E badge: small, purple
+    img[300:340, 1000:1500] = (254, 40, 150)                                                     # a wide purple bar
+    if exact:
+        img[700:704, 700:704] = tuple(reversed(macro.cfg.CHOOSE_BUTTON_COLOR))
+    return img
+
+
+def test_the_choose_button_is_found_as_a_disc_when_its_exact_colour_is_not_there_outline_or_not_with_the_question_mark_or_not(macro):
+    for outline in (True, False):
+        for glyph in (True, False):
+            found = macro.find_choose_disc(disc_screen(macro, outline=outline, glyph=glyph))
+            assert found is not None and abs(found[0] - 640) <= 6 and abs(found[1] - 735) <= 6, (outline, glyph, found)
+    import numpy as np
+    assert macro.find_choose_disc(np.full((1080, 1920, 3), 30, np.uint8)) is None
+
+
+def test_the_choose_handler_clicks_the_disc_when_no_pixel_has_the_exact_colour_and_the_exact_colour_first_when_one_has(macro, events, monkeypatch):
+    cfg = macro.cfg
+    monkeypatch.setattr(macro, "focus_pet", lambda *a: True)
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: events.append(("backed out",)))
+    monkeypatch.setattr(macro, "grab_screen", lambda: disc_screen(macro))
+    assert macro.ChooseNeedHandler().handle() is True
+    clicks = [e[1] for e in events if e[0] == "click"]
+    assert abs(clicks[0][0] - 640) <= 6 and abs(clicks[0][1] - 735) <= 6 and clicks[1] == (cfg.REFERENCE_CENTER_X, cfg.REFERENCE_CENTER_Y)
+    events.clear()
+    monkeypatch.setattr(macro, "grab_screen", lambda: disc_screen(macro, exact=True))
+    assert macro.ChooseNeedHandler().handle() is True
+    assert [e[1] for e in events if e[0] == "click"][0] == (701, 701)                              # the exact colour's pixels, not the disc
+    events.clear()
+    import numpy as np
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.full((1080, 1920, 3), 30, np.uint8))
+    assert macro.ChooseNeedHandler().handle() is False and ("backed out",) in events                  # neither: and the pet focus it left is backed out of
+
+
 def named_in(steps):
     """(action, argument) of every step of a table, the steps inside a step too."""
     for action, *arguments in steps:
@@ -152,18 +285,67 @@ def done_marker(tour):
 
 def test_the_tour_takes_a_picture_scrolls_and_stops_when_a_step_moves_nothing(macro, tour):
     cfg = macro.cfg
-    tour.screens.extend([tour.screen(level) for level in (50, 50, 50, 120, 200, 200)])      # (the first two are the looks at the backpack opening and expanding)
+    tour.screens.extend([tour.screen(level) for level in (50, 50, 50, 50, 120, 200, 200)])  # (the first two are the looks at the backpack opening and expanding, the fourth the look after the first notch)
     (tour.folder).mkdir(parents=True)
     (tour.folder / "007.png").write_text("from an earlier tour")
     assert macro.inventory_tour() is True
     assert sorted(os.listdir(tour.folder)) == ["001.png", "002.png", "003.png", "done.json"]
     assert done_marker(tour) == {"pictures": 3, "ended": "the end of the list"}
-    kinds = [event[0] for event in tour.log]
     assert tour.log[:4] == [("press", cfg.KEYS["backpack"]), ("tab", cfg.INVENTORY_PETS_TAB_POS), ("click", cfg.INVENTORY_EXPAND_POS), ("move", cfg.INVENTORY_SCROLL_POS)]     # the expand button, not the selected tab again
-    assert kinds.count("scroll") == 3 and tour.log[-1] == ("close", "the inventory") and ("scroll", cfg.INVENTORY_SCROLL_CLICKS) in tour.log
+    scrolls = [event[1] for event in tour.log if event[0] == "scroll"]
+    assert scrolls == [cfg.INVENTORY_PROBE_CLICKS, cfg.INVENTORY_SCROLL_CLICKS - cfg.INVENTORY_PROBE_CLICKS, cfg.INVENTORY_SCROLL_CLICKS, cfg.INVENTORY_SCROLL_CLICKS]     # (a first notch that could not be measured: the usual step, less that notch)
+    assert tour.log[-1] == ("close", "the inventory")
     import cv2
     left, top, right, bottom = cfg.INVENTORY_PANEL_BOX
     assert cv2.imread(str(tour.folder / "001.png")).shape[:2] == (bottom - top, right - left)               # each picture is the panel
+
+
+def textured(macro, height=1080, width=830, seed=1):
+    """A tall made-up list: noise, so that every band of it is found once."""
+    import numpy as np
+    return np.random.default_rng(seed).integers(0, 255, (height * 4, width, 3), dtype=np.uint8)
+
+
+def test_how_far_the_list_moved_is_found_by_where_a_band_of_the_picture_went(macro):
+    import numpy as np
+    tall = textured(macro)
+    first, after = tall[0:1080], tall[37:37 + 1080]                                           # the list moved up by 37 px
+    assert macro.scroll_shift(first, after) == 37
+    covered = after.copy()
+    covered[:, :260] = 0                                                                     # a tooltip over the strip at the left: the one at the right still finds it
+    assert macro.scroll_shift(first, covered) == 37
+    both = after.copy()
+    both[:, :260] = 0
+    both[:, 570:] = 0
+    assert macro.scroll_shift(first, both) is None                                           # (neither strip: not found)
+    assert macro.scroll_shift(first, first) is None                                          # did not move
+    assert macro.scroll_shift(np.full((1080, 830, 3), 90, np.uint8), np.full((1080, 830, 3), 90, np.uint8)) is None      # nothing to find in a flat picture
+    assert macro.scroll_shift(first, after[:500]) is None
+
+
+def test_the_step_is_as_many_notches_as_move_the_list_the_wanted_distance_after_measuring_the_first_notch(macro, tour, monkeypatch):
+    cfg = macro.cfg
+    tall = textured(macro)
+    position = {"y": 0}
+    per_notch = 45
+    monkeypatch.setattr(macro, "scroll_down", lambda clicks: (tour.log.append(("scroll", clicks)), position.update(y=min(position["y"] + clicks * per_notch, len(tall) - 1080))))
+    monkeypatch.setattr(macro, "panel_picture", lambda img: tall[position["y"]:position["y"] + 1080])
+    tour.screens.append(tour.screen(0))                                                      # (what the looks at the backpack opening and expanding see; the pictures are the list's)
+    (tour.folder).mkdir(parents=True)
+    assert macro.inventory_tour() is True
+    scrolls = [event[1] for event in tour.log if event[0] == "scroll"]
+    wanted = round(cfg.INVENTORY_STEP_PIXELS / per_notch)
+    assert scrolls[:3] == [cfg.INVENTORY_PROBE_CLICKS, wanted - cfg.INVENTORY_PROBE_CLICKS, wanted]                    # the first notch, the rest of the first step, then whole steps
+    assert done_marker(tour)["ended"] == "the end of the list"
+    pictures = [cv2_read(tour.folder / name) for name in sorted(os.listdir(tour.folder)) if name.endswith(".png")]
+    import numpy as np
+    step = wanted * per_notch
+    assert len(pictures) > 3 and step < 1080 and np.array_equal(pictures[0][step:], pictures[1][:1080 - step])          # each picture's bottom is the next one's top: nothing is skipped
+
+
+def cv2_read(path):
+    import cv2
+    return cv2.imread(str(path))
 
 
 def test_the_tour_ends_at_the_most_pictures_asked_for_when_the_list_goes_on(macro, tour, monkeypatch):

@@ -363,6 +363,7 @@ class State:
     # True while a handler that wants the pet focused runs (see wanting_pet_focus()).
     pet_focus_wanted: bool = False
     exit_dialog_wanted: bool = False       # exit_minigame() is going on: dismiss_stray_windows() leaves the "exit this game?" dialog alone
+    typing: bool = False                   # type_keys() is typing into a text box: the hotkeys (a letter each) are not acted on meanwhile
     # When the minigame popup checks last ran, and how many "quiet:" lines have
     # been logged for the current stretch with no need resolved.
     last_minigame_popup_check: float = 0.0
@@ -1584,28 +1585,34 @@ def _setup_steps() -> bool:
     logger.debug("Locking house...")
     hover_click(*cfg.SETUP_LOCK_HOUSE_POS)
 
-    logger.debug("Opening backpack...")
-    pydirectinput.press(cfg.KEYS["backpack"])
-    wait_interruptible(cfg.UI_SETTLE)
-    logger.debug("Opening settings...")
-    hover_click(*cfg.SETUP_BACKPACK_SETTINGS_POS)
-    wait_interruptible(cfg.UI_SETTLE)
-    logger.debug("Opening sort menu...")
-    hover_click(*cfg.SETUP_SORT_MENU_POS)
-    wait_interruptible(cfg.UI_SETTLE)
-    logger.debug("Selecting favorites...")
-    hover_click(*cfg.SETUP_FAVORITES_POS)
-    wait_interruptible(cfg.UI_SETTLE)
-    logger.debug("Confirming...")
-    hover_click(*cfg.SETUP_CONFIRM_POS)
-    wait_interruptible(cfg.UI_SETTLE)
-    logger.debug("Closing backpack...")
-    close_backpack("setup")
+    set_backpack_filter()
 
     disable_trades()
 
     logger.info("Setup complete")
     return True
+
+def set_backpack_filter() -> None:
+    """Filter the backpack to favorites: open it, its settings, the sort menu, Favorites and Confirm, and close it. Setup does it, and so does a ride that did not clear its need
+    (when Setup did not run, the first vehicle was a car, not the helicopter)."""
+    with backpack_on_purpose():
+        logger.debug("Opening backpack...")
+        pydirectinput.press(cfg.KEYS["backpack"])
+        wait_interruptible(cfg.UI_SETTLE)
+        logger.debug("Opening settings...")
+        hover_click(*cfg.SETUP_BACKPACK_SETTINGS_POS)
+        wait_interruptible(cfg.UI_SETTLE)
+        logger.debug("Opening sort menu...")
+        hover_click(*cfg.SETUP_SORT_MENU_POS)
+        wait_interruptible(cfg.UI_SETTLE)
+        logger.debug("Selecting favorites...")
+        hover_click(*cfg.SETUP_FAVORITES_POS)
+        wait_interruptible(cfg.UI_SETTLE)
+        logger.debug("Confirming...")
+        hover_click(*cfg.SETUP_CONFIRM_POS)
+        wait_interruptible(cfg.UI_SETTLE)
+        logger.debug("Closing backpack...")
+        close_backpack("setup")
 
 def send_macro_window_to_back() -> None:
     """Drop the macro's own window behind everything (it's normally
@@ -1693,9 +1700,26 @@ def same_picture(a: Image, b: Image, level: Optional[float] = None) -> bool:
     """Whether two pictures of the panel show the same thing: their mean grey levels differ by less than `level` (INVENTORY_SAME_LEVEL)."""
     return a.shape == b.shape and float(np.abs(a.astype(np.int16) - b.astype(np.int16)).mean()) < (cfg.INVENTORY_SAME_LEVEL if level is None else level)
 
+def scroll_shift(before: Image, after: Image) -> Optional[int]:
+    """How many pixels the list moved up between two pictures of the panel: the band of `before` at INVENTORY_SHIFT_BAND is looked for in `after` (in the strip at the left and the strip at
+    the right of the panel, the better match counts), at least INVENTORY_SHIFT_MATCH good; its place in `after` is how far the list moved. None if it did not move, or the band was not found."""
+    if before.shape != after.shape:
+        return None
+    height, width = before.shape[:2]
+    top, bottom = int(height * cfg.INVENTORY_SHIFT_BAND[0]), int(height * cfg.INVENTORY_SHIFT_BAND[1])
+    best: Optional[tuple[float, int]] = None
+    for left, right in ((0, width // 4), (width * 3 // 4, width)):
+        band = before[top:bottom, left:right]
+        if float(band.std()) < cfg.INVENTORY_SHIFT_MIN_SPREAD:
+            continue
+        _, score, _, (_, y) = cv2.minMaxLoc(cv2.matchTemplate(after[:, left:right], band, cv2.TM_CCOEFF_NORMED))
+        if score >= cfg.INVENTORY_SHIFT_MATCH and (best is None or score > best[0]):
+            best = (float(score), top - y)
+    return best[1] if best is not None and best[1] > 0 else None
+
 def inventory_tour() -> bool:
     """Open the backpack, select its pets tab, click the expand button (INVENTORY_EXPAND_POS, checked with detect_backpack_expanded()) and scroll down it a step at a
-    time (INVENTORY_SCROLL_CLICKS notches of the wheel, over INVENTORY_SCROLL_POS),
+    time over INVENTORY_SCROLL_POS (a step is as many notches of the wheel as move the list INVENTORY_STEP_PIXELS, measured on the first step: scroll_shift()),
     saving a picture of the panel (INVENTORY_PANEL_BOX) at each step in INVENTORY_DIR - emptied first - until a step moves nothing (the end of the list) or there
     are INVENTORY_MAX_PICTURES. The backpack is closed again. INVENTORY_DONE_PATH says how many pictures and why it ended, however it ended (the bot waits for it).
     True if the tour was made, even if scrolling moved nothing at all (then there is one picture)."""
@@ -1723,7 +1747,7 @@ def inventory_tour() -> bool:
                 close_backpack("the inventory")
                 return False
             hover_move(*cfg.INVENTORY_SCROLL_POS)                          # (with the nudge that makes Roblox see the pointer over the list: a plain move did not, and the wheel turned nothing)
-            previous = None
+            previous, clicks, measured = None, cfg.INVENTORY_SCROLL_CLICKS, False
             while True:
                 picture = panel_picture(grab_screen())
                 if previous is not None and same_picture(previous, picture):
@@ -1735,8 +1759,20 @@ def inventory_tour() -> bool:
                 pictures += 1
                 cv2.imwrite(os.path.join(cfg.INVENTORY_DIR, f"{pictures:03d}.png"), picture)
                 previous = picture
-                scroll_down(cfg.INVENTORY_SCROLL_CLICKS)
-                wait_interruptible(cfg.INVENTORY_SCROLL_SETTLE)
+                if measured:
+                    scroll_down(clicks)
+                else:                                                      # the first step: a notch or so, and the pictures say how far a notch goes
+                    probe = min(cfg.INVENTORY_PROBE_CLICKS, clicks)
+                    scroll_down(probe)
+                    wait_interruptible(cfg.INVENTORY_SCROLL_SETTLE)
+                    shift = scroll_shift(picture, panel_picture(grab_screen()))
+                    measured = True
+                    if shift is not None:
+                        clicks = max(1, round(cfg.INVENTORY_STEP_PIXELS * probe / shift))
+                        logger.debug(f"The list moves {shift / probe:.0f} px a notch: {clicks} notches a step")
+                    else:
+                        logger.debug(f"How far a notch goes could not be measured: {clicks} notches a step")
+                    scroll_down(max(0, clicks - probe))
             close_backpack("the inventory")
     finally:
         bring_macro_window_to_front()
@@ -1748,10 +1784,10 @@ def inventory_tour() -> bool:
 # --- the trade listings: the offers on them, and declining one ---
 
 def trade_screen(img: Image) -> Optional[str]:
-    """Which screen of the Trading Hub Phone is up in `img`: "dialog" (Are you sure you want to decline?), "detail" (an offer on its own, with its DECLINE button), "offers" (the list),
+    """Which screen of the Trading Hub Phone is up in `img`: "dialog" (Are you sure you want to decline?), "board" (the Trading Hub's board of offers: not the phone's, but in the way), "detail" (an offer on its own, with its DECLINE button), "offers" (the list),
     "listings" (MY LISTINGS), "menu" (the TRADING HUB menu), "phone" (the phone's own) - or None. Each is a crop of POPUP_TEMPLATES; the earlier ones are looked for first, since the
     later ones are also there (dimmed) under them."""
-    for name, screen in (("decline_dialog", "dialog"), ("decline_button", "detail"), ("offers_title", "offers"), ("my_listings", "listings"), ("trade_menu", "menu"), ("trade_phone_home", "phone")):
+    for name, screen in (("decline_dialog", "dialog"), ("trade_board", "board"), ("decline_button", "detail"), ("offers_title", "offers"), ("my_listings", "listings"), ("trade_menu", "menu"), ("trade_phone_home", "phone")):
         if popup_visible(img, name):
             return screen
     return None
@@ -1767,17 +1803,41 @@ def wait_trade_screen(*screens: str) -> bool:
         wait_interruptible(cfg.TRADES_POLL)
 
 def equip_trade_phone() -> bool:
-    """Open the backpack, the Toys tab, the Trading Hub Phone and Equip, and close the backpack again with its key (the phone is then in the hotbar). The positions are those of
-    a backpack with the favourites filter on (TRADES_PHONE_SLOT_POS)."""
+    """Open the backpack, the Toys tab, type TRADES_SEARCH_TEXT in its search box, click the first item (the phone: the Special row's order changed with the favourites filter, and the
+    slot of the badge was taken for it) and Equip, clear the search (a filter left in it would show the other features' backpack items wrong) and close the backpack with its key (the
+    phone is then in the hotbar)."""
     with backpack_on_purpose():
         logger.debug("Opening backpack...")
         pydirectinput.press(cfg.KEYS["backpack"])
         wait_interruptible(cfg.UI_SETTLE)
-        if not click_steps([("Toys tab", cfg.TRADE_HUB_TOYS_TAB_POS), ("Trading Hub Phone", cfg.TRADES_PHONE_SLOT_POS), ("Equip", cfg.TRADES_PHONE_EQUIP_POS)]):
+        if not click_steps([("Toys tab", cfg.TRADE_HUB_TOYS_TAB_POS), ("Search box", cfg.TRADES_SEARCH_POS)]):
             return False
+        type_text(cfg.TRADES_SEARCH_TEXT)
+        wait_interruptible(cfg.UI_SETTLE)
+        if not click_steps([("The first item", cfg.TRADE_HUB_PHONE_POS), ("Equip", cfg.TRADE_HUB_EQUIP_POS), ("Search box", cfg.TRADES_SEARCH_POS)]):
+            return False
+        type_keys(["backspace"] * len(cfg.TRADES_SEARCH_TEXT))
+        hover_click(*cfg.TRADES_UNFOCUS_POS)                              # (out of the box: the backpack key would be typed into it)
+        wait_interruptible(cfg.UI_SETTLE)
         close_backpack("the Trading Hub Phone")
     wait_interruptible(cfg.UI_SETTLE)
     return popup_visible(grab_screen(), "trade_phone_hotbar")
+
+def type_keys(keys: Sequence[str]) -> None:
+    """Press `keys` one after the other, TYPE_KEY_DELAY apart, into whatever text box has the focus. The macro's own hotkeys are not acted on meanwhile (state.typing): the stop
+    key is a letter, and "phone" has it."""
+    state.typing = True
+    try:
+        for key in keys:
+            check_running()
+            pydirectinput.press(key)
+            time.sleep(cfg.TYPE_KEY_DELAY)
+    finally:
+        state.typing = False
+
+def type_text(text: str) -> None:
+    """type_keys() of the letters of `text`."""
+    type_keys(list(text))
 
 def open_trade_listings() -> bool:
     """Get to MY LISTINGS: from wherever the phone is (a screen further in is gone back from), else equip the phone if it is not in the hotbar, use it with a click in the world, and
@@ -1785,6 +1845,13 @@ def open_trade_listings() -> bool:
     if not focus_roblox():
         return False
     screen = trade_screen(grab_screen())
+    if screen == "board":
+        hover_click(*cfg.STRAY_WINDOWS["trade_board"]["close_pos"])        # the board of offers is closed, whatever is asked: the phone cannot be used under it
+        wait_interruptible(cfg.UI_SETTLE)
+        screen = trade_screen(grab_screen())
+        if screen == "board":
+            log_run_event("trade listings: the board of offers could not be closed")
+            return False
     if screen == "dialog":
         hover_click(*cfg.EXIT_STAY_POS)                                  # (Cancel: the same place as the exit dialog's)
         wait_interruptible(cfg.UI_SETTLE)
@@ -2212,8 +2279,8 @@ def focus_pet(click_duration: float = cfg.CLICK_MOVE_DURATION) -> bool:
     for i, (x, y, w, h, area) in enumerate(blobs, 1):
         logger.debug(f"Focus_pet:   #{i} center ({x + w // 2}, {y + h // 2}), {w}x{h}, area {area}")
     if not blobs:
-        logger.debug("Focus_pet: nothing moved, pet not found")
-        return False
+        logger.debug("Focus_pet: nothing moved, pet not found - looking for its name bar")
+        return focus_pet_by_bar(img_b, click_duration)
     for i, (x, y, w, h, _) in enumerate(blobs, 1):
         logger.debug(f"Focus_pet: clicking #{i} at ({x + w // 2}, {y + h // 2})...")
         hover_click(x + w // 2, y + h // 2, duration=click_duration)
@@ -2223,7 +2290,40 @@ def focus_pet(click_duration: float = cfg.CLICK_MOVE_DURATION) -> bool:
             break
     else:
         wait_interruptible(cfg.FOCUS_PET_MENU_WAIT)
+        if not detect_pet_focus(grab_screen()):                          # none of what moved was the pet: its name bar, if it shows
+            focus_pet_by_bar(grab_screen(), click_duration)
     return True
+
+def find_pet_bar(img: Image) -> Optional[Point]:
+    """Where to click the pet by the name bar over it, for a pet that stands still (nothing moves for focus_pet() to find): the purple part of the bar by its hue (PET_BAR_HSV), a wide
+    short blob (PET_BAR_ASPECT, PET_BAR_AREA) with white at its right (PET_BAR_WHITE_*), whatever its words and outline - the pet is PET_BAR_BELOW bar heights under its bottom
+    edge, at the join of the purple and the white. The biggest such bar's (x, y), or None."""
+    mask = cv2.inRange(cv2.cvtColor(img, cv2.COLOR_BGR2HSV), cfg.PET_BAR_HSV[0], cfg.PET_BAR_HSV[1])
+    count, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    best: Optional[tuple[int, Point]] = None
+    for i in range(1, count):
+        x, y, w, h, area = (int(v) for v in stats[i])
+        if not cfg.PET_BAR_AREA[0] <= area <= cfg.PET_BAR_AREA[1] or not cfg.PET_BAR_ASPECT[0] <= w / h <= cfg.PET_BAR_ASPECT[1]:
+            continue
+        beside = img[y:y + h, x + w:x + w + int(w * 0.9)]
+        if beside.size == 0 or float((beside.min(axis=2) >= cfg.PET_BAR_WHITE_LEVEL).mean()) < cfg.PET_BAR_WHITE_FRACTION:
+            continue
+        if best is None or area > best[0]:
+            best = (area, (x + w, int(y + h + cfg.PET_BAR_BELOW * h)))
+    return best[1] if best is not None else None
+
+def focus_pet_by_bar(img: Image, click_duration: float = cfg.CLICK_MOVE_DURATION) -> bool:
+    """Click the pet by the name bar over it (find_pet_bar()) and say whether that focused it (detect_pet_focus())."""
+    point = find_pet_bar(img)
+    if point is None:
+        logger.debug("Focus_pet: no name bar either")
+        return False
+    logger.debug(f"Focus_pet: clicking under the name bar at {point}...")
+    hover_click(*point, duration=click_duration)
+    wait_interruptible(cfg.FOCUS_PET_CLICK_SETTLE)
+    focused = detect_pet_focus(grab_screen())
+    log_run_event(f"pet: found by its name bar, {'focused' if focused else 'not focused'}")
+    return focused
 
 def is_backpack_tab_selected(pos: Point) -> bool:
     """True if the backpack category tab at `pos` is already selected (orange)."""
@@ -2417,6 +2517,26 @@ class PetNeedHandler(SequenceNeedHandler):
     def around(self) -> ContextManager[Any]:
         return wanting_pet_focus()
 
+def find_choose_disc(img: Image) -> Optional[Point]:
+    """Where the choose button is by its look when its exact colour (CHOOSE_BUTTON_COLOR) is not on screen: a disc that shades from purple to magenta (CHOOSE_DISC_HSV), the
+    biggest roundish blob of that hue (CHOOSE_DISC_AREA, CHOOSE_DISC_ROUNDNESS) - not its white outline, which is not always there, nor the "?" in it, which can change: both
+    only make a hole or an edge in the disc. Its middle (x, y), or None."""
+    mask = cv2.inRange(cv2.cvtColor(img, cv2.COLOR_BGR2HSV), cfg.CHOOSE_DISC_HSV[0], cfg.CHOOSE_DISC_HSV[1])
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((cfg.CHOOSE_DISC_CLOSE, cfg.CHOOSE_DISC_CLOSE), np.uint8))
+    count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    best: Optional[tuple[int, Point]] = None
+    for i in range(1, count):
+        width, height, area = stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT], int(stats[i, cv2.CC_STAT_AREA])
+        if not cfg.CHOOSE_DISC_AREA[0] <= area <= cfg.CHOOSE_DISC_AREA[1]:
+            continue
+        if not 1 / cfg.CHOOSE_DISC_SQUARENESS <= width / height <= cfg.CHOOSE_DISC_SQUARENESS:
+            continue
+        if area < cfg.CHOOSE_DISC_ROUNDNESS * np.pi * (max(width, height) / 2) ** 2:             # (a disc fills this much of its circle, with the "?" cut out of it)
+            continue
+        if best is None or area > best[0]:
+            best = (area, (int(stats[i, cv2.CC_STAT_LEFT] + width // 2), int(stats[i, cv2.CC_STAT_TOP] + height // 2)))
+    return best[1] if best is not None else None
+
 class ChooseNeedHandler(NeedHandler):
     """The 'choose' need: focus the pet, move slowly to the button of one exact colour,
     click it, then click mid-screen. Doesn't wait for the icon. See docs/ARCHITECTURE.md#need-handlers.
@@ -2429,7 +2549,10 @@ class ChooseNeedHandler(NeedHandler):
 
         logger.debug("Focusing pet...")
         with wanting_pet_focus():
-            return self._choose()
+            done = self._choose()
+        if not done:
+            dismiss_stray_windows()                          # (a choose that failed left the pet in focus, where the next need's walk goes nowhere: backed out of now)
+        return done
 
     def _choose(self) -> bool:
         if not focus_pet():
@@ -2440,8 +2563,13 @@ class ChooseNeedHandler(NeedHandler):
         img = grab_screen()
         match = find_exact_color(img, cfg.CHOOSE_BUTTON_COLOR)
         if match is None:
-            logger.warning(f"No pixel matching {cfg.CHOOSE_BUTTON_COLOR} found on screen")
-            return False
+            logger.warning(f"No pixel matching {cfg.CHOOSE_BUTTON_COLOR} found on screen - looking for the purple disc")
+            match = find_choose_disc(img)
+            if match is None:
+                logger.warning("No purple disc found either")
+                return False
+            logger.info(f"The choose button was found as a purple disc at {match}")
+            log_run_event("choose: the button was found by its shape and hue, not its exact colour")
         logger.debug(f"Found at {match}, moving there slowly...")
         hover_click(*match, duration=cfg.CHOOSE_SLOW_MOVE_DURATION)
         wait_interruptible(cfg.UI_SETTLE)
@@ -2465,6 +2593,18 @@ class RideNeedHandler(SequenceNeedHandler):
         ("say", "Holding the helicopter key for {RIDE_R_HOLD_DURATION}s..."), ("hold", "helicopter", "RIDE_R_HOLD_DURATION"),   # briefly before starting to move
         ("walk", ("forward", "back"), "NEED_GONE_MAX_WAIT", "ride"),                                                    # back and forth (not left and right) while riding
     )
+
+    def handle(self) -> bool:
+        """The ride, and if it did not clear its need (or could not be done), the backpack filter set again and the ride once more: with Setup not run the backpack's first vehicle is
+        a car, not the helicopter the keys are for."""
+        state.need_cleared = True
+        if super().handle() and state.need_cleared:
+            return True
+        logger.info("The ride did not clear the need - setting the backpack filter, then trying once more")
+        log_run_event("ride: the need was not cleared - the backpack filter is set again and the ride tried once more")
+        set_backpack_filter()
+        state.need_cleared = True
+        return super().handle()
 
 def teleport_to(category_pos: Point) -> None:
     """Open the backpack, teleport via the category tab, walk back to clear the landing
@@ -6446,7 +6586,7 @@ class AdoptMeGUI:
                 for i, (key, action, only_while_running, only_in_roblox) in enumerate(hotkeys):
                     try:
                         down = hotkey_down(key)
-                        if hotkey_fires(down, was_down[i], only_while_running, self.is_running, only_in_roblox):
+                        if not state.typing and hotkey_fires(down, was_down[i], only_while_running, self.is_running, only_in_roblox):         # (not while the macro types a word: its own letters)
                             self.root.after(0, action)
                         was_down[i] = down
                     except (RuntimeError, tk.TclError):

@@ -622,7 +622,14 @@ def test_after_an_update_that_started_the_macro_again_the_roblox_window_is_broug
     monkeypatch.setattr(discord_bot, "send_command", send)
     monkeypatch.setattr(discord_bot, "git", git_plain)
     monkeypatch.setattr(discord_bot, "running_pids", running)
+    window_waits = []
+
+    async def window_up(since):
+        window_waits.append(since)
+        return ""
+    monkeypatch.setattr(discord_bot, "wait_for_window", window_up)
     assert asyncio.run(discord_bot.apply_commit(macro_calls.config, ["merge"], "0" * 40, macro_calls.say, True)) is True
+    assert len(window_waits) == 1                                                          # (focus is sent only once the window is up: before, the macro drops it)
     assert macro_calls.calls == ["stop", "loop"] and sent == ["focus"]                    # (after the macro was started again)
 
     async def not_started(config):

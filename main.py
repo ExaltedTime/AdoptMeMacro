@@ -1509,14 +1509,16 @@ def close_open_windows() -> int:
     return closed
 
 def recenter() -> bool:
-    """The bot's /recenter: close what is open (close_open_windows()), respawn the character (it is back where it spawns), and close what the respawn left. True once done."""
+    """The bot's /recenter: leave the minigame if one is being played (exit_minigame()), close what is open (close_open_windows()), respawn the character (it is back where it spawns),
+    and close what the respawn left. False (logged) if a minigame could not be left - the rest is done all the same."""
     if not focus_roblox():
         return False
+    left = exit_minigame()
     closed = close_open_windows()
     respawn_character()
     closed += close_open_windows()
-    log_run_event(f"recenter: {closed} window(s) closed, respawned")
-    return True
+    log_run_event(f"recenter: {closed} window(s) closed, respawned" + ("" if left else " (the minigame could not be left)"))
+    return left
 
 def hold_key(key: str, duration: float) -> None:
     """Hold `key` down for `duration` seconds (interruptibly). Always

@@ -405,6 +405,7 @@ def test_recenter_closes_the_trade_phone_and_the_stray_windows_respawns_and_clos
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
     monkeypatch.setattr(macro, "grab_screen", lambda: None)
     monkeypatch.setattr(macro, "trade_screen", lambda img: screens.pop(0) if screens else None)
+    monkeypatch.setattr(macro, "exit_minigame", lambda: log.append("minigame left") or True)
     monkeypatch.setattr(macro, "close_trade_phone", lambda: log.append("phone closed"))
     monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: log.append(("click", (x, y))))
     monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
@@ -412,7 +413,10 @@ def test_recenter_closes_the_trade_phone_and_the_stray_windows_respawns_and_clos
     monkeypatch.setattr(macro, "respawn_character", lambda: (log.append("respawned"), strays.pop(0)))
     monkeypatch.setattr(macro, "log_run_event", lambda text: log.append(text))
     assert macro.recenter() is True
-    assert log == ["phone closed", "respawned", "recenter: 2 window(s) closed, respawned"]            # (the phone first, the stray window; after the respawn nothing is left)
+    assert log == ["minigame left", "phone closed", "respawned", "recenter: 2 window(s) closed, respawned"]            # (the phone first, the stray window; after the respawn nothing is left)
     screens[:] = ["board"]
     log.clear()
     assert macro.close_open_windows() == 1 and log == [("click", cfg.STRAY_WINDOWS["trade_board"]["close_pos"])]
+    monkeypatch.setattr(macro, "exit_minigame", lambda: False)                                      # (a minigame that cannot be left: the respawn is done all the same, and it says so)
+    screens[:] = []
+    assert macro.recenter() is False and log[-1] == "recenter: 0 window(s) closed, respawned (the minigame could not be left)"

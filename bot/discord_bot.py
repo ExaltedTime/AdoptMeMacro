@@ -328,11 +328,17 @@ async def start_window(config: bot_lib.Config) -> str:
         result = await open_macro(config)
         if not result.startswith("Started the macro ("):
             return result
-        deadline = time.time() + cfg.BOT_START_CONFIRM
-        while time.time() < deadline:
-            if bot_lib.started_since(bot_lib.read_json(bot_lib.status_path()), since):
-                return ""
-            await asyncio.sleep(cfg.BOT_COMMAND_ACK_POLL)
+        return await wait_for_window(since)
+
+
+async def wait_for_window(since: datetime) -> str:
+    """Wait up to BOT_START_CONFIRM seconds for the macro's window to write its status (at or after `since`): it reads commands from then on, and drops those left before.
+    "" when it did, else what to say."""
+    deadline = time.time() + cfg.BOT_START_CONFIRM
+    while time.time() < deadline:
+        if bot_lib.started_since(bot_lib.read_json(bot_lib.status_path()), since):
+            return ""
+        await asyncio.sleep(cfg.BOT_COMMAND_ACK_POLL)
     return "The macro started, but its window did not come up in time - see /log and macro_stderr.log."
 
 
@@ -565,8 +571,12 @@ async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say, l
             await say(f"pip failed (exit {code}) - the macro was not started. Use /rollback.\n```\n{output[-1200:]}\n```")
             return False
     if was_running:
+        since = datetime.now()
         if await start_again(config, loop_was_running, say):
-            problem = await send_command("focus")                       # the macro's own window is up again: the game is brought back to the front
+            with launching():
+                problem = await wait_for_window(since)                    # (a command written before the window is up is dropped: that was the "focus" of an update)
+            if not problem:
+                problem = await send_command("focus")                   # the macro's own window is up again: the game is brought back to the front
             if problem:
                 await say(f"The Roblox window could not be brought to the front: {problem}")
         else:

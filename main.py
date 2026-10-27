@@ -2011,7 +2011,7 @@ def open_offers(number: int) -> bool:
         return False
     hover_click(*cfg.TRADES_OFFERS_POS)
     if not wait_trade_screen("offers"):
-        log_run_event(f"trade listings: the offers of listing {number} did not come up")
+        log_failure(f"trade listings: the offers of listing {number} did not come up (screen: {trade_screen(grab_screen())})")       # (with the screenshot: what is on screen then is what to look at)
         return False
     hover_move(*cfg.TRADES_SCROLL_POS)
     return True
@@ -2087,6 +2087,7 @@ def trades_tour() -> bool:
     try:
         if not open_trade_listings():
             result["problem"] = "the trade listings could not be opened (see the log)"
+            log_failure(f"trade listings: could not be opened (screen: {trade_screen(grab_screen())})")
             return False
         for listing in cfg.TRADES_LISTINGS:
             if open_offers(listing):

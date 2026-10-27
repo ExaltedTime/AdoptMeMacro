@@ -684,7 +684,6 @@ ROBLOX_RECT_TTL = 1.0   # seconds the Roblox window's position and size are reme
 # Behavior flags
 FOCUS_WINDOW_ON_ACTION = True  # click the Roblox window to focus it before acting
 SAVE_NEW_NEEDS = False
-MATCH_ONLY_LEFT_HALF = True    # compare only the left half of each icon (a badge sits at its top right)
 
 # Timing (seconds)
 RESPAWN_KEY_DURATION = 0.05    # how long each respawn key is held
@@ -837,14 +836,14 @@ TRADES_ACCEPT_BOX = (640, 395, 840, 735)                        # where the gree
 TRADES_ACCEPT_HSV = ((45, 110, 130), (80, 255, 255))            # their colour (OpenCV's HSV)
 TRADES_ACCEPT_SIZE = ((150, 230), (22, 55))                     # (width, height) range in px of one
 TRADES_ROW_BOX = (640, -52, 1262, 78)                           # a row, from an ACCEPT button's middle: (left, top, right, bottom), top and bottom as offsets
-TRADES_ROW_MATCH = 0.93                                         # TM_CCOEFF_NORMED score of a row found again
+TRADES_ROW_MATCH = 0.93                                         # TM_CCOEFF_NORMED score of a row that is the one that was photographed (/decline checks it)
+TRADES_ROW_PITCH = 136                                          # px from one offer row to the next: a step of the wheel is shorter, and the rows are told apart by their place in the list
 TRADES_PANEL_BOX = (570, 270, 1350, 780)                        # the phone's screen, the picture of each step
 TRADES_SCROLL_POS = (1274, 560)                                 # the mouse is on the list's scroll bar here while the wheel turns (over a row, the description of the item under it covers the rows)
-TRADES_SCROLL_CLICKS = 1                                        # notches of the wheel per step of a tour (halved, down to one, when a step lost the rows seen before)
-TRADES_FIND_CLICKS = 1                                          # per step when looking for an offer to decline
-TRADES_SCROLL_SETTLE = 0.5                                      # seconds after a step, before the picture
-TRADES_SAME_LEVEL = 1.0                                         # a list whose mean grey level differs from the last picture's by less than this did not move: its end
-TRADES_MAX_STEPS = 40                                           # steps of one listing's tour at the most
+TRADES_SCROLL_CLICKS = 1                                        # notches of the wheel per step of a tour: one is about 95 px in the game, under the TRADES_ROW_PITCH of a row, so that no offer is skipped
+TRADES_SCROLL_MAX_WAIT = 3.0                                    # seconds the list is waited for to stop gliding after a step (grab_still()), before the picture
+TRADES_SAME_LEVEL = 1.0                                         # two pictures of the panel whose mean difference is under this are the same: the list does not move any more (and at a step, it is at its end)
+TRADES_MAX_STEPS = 60                                           # steps of one listing's tour at the most
 TRADES_SCREEN_WAIT = 4.0                                        # seconds a screen of the phone is waited for after the click that opens it
 TRADES_POLL = 0.25
 BOT_TRADES_WAIT = 300.0                                         # seconds the bot waits, after /trades or /decline, for the macro to end (TRADES_DONE_PATH, TRADES_DECLINE_DONE_PATH)

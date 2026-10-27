@@ -913,11 +913,10 @@ def icon_disc_mask(width: int, height: int, radius_fraction: float) -> Image:
     return (xx - cx) ** 2 + (yy - cy) ** 2 <= (radius_fraction * width / 2) ** 2
 
 @lru_cache(maxsize=None)
-def icon_match_mask(size: tuple[int, int], radius_fraction: float, left_half: bool) -> Image:
-    """The part of a signature (see icon_signature()) that is compared: the disc inside the icon's ring, and only
-    its left half when `left_half`."""
+def icon_match_mask(size: tuple[int, int], radius_fraction: float) -> Image:
+    """The part of a signature (see icon_signature()) that is compared: the left half of the disc inside the icon's ring (a badge sits at the icon's top right)."""
     mask = icon_disc_mask(size[0], size[1], radius_fraction)
-    return mask[:, :mask.shape[1] // 2] if left_half else mask
+    return mask[:, :mask.shape[1] // 2]
 
 def icon_signature(icon_img: Image) -> Image:
     """Comparable form of an icon: outside-the-ring pixels blacked out, preprocessed,
@@ -926,14 +925,12 @@ def icon_signature(icon_img: Image) -> Image:
     height, width = icon_img.shape[:2]
     icon_img = np.where(icon_disc_mask(width, height, cfg.ICON_MATCH_RADIUS_FRACTION)[:, :, None], icon_img, 0).astype(icon_img.dtype)
     proc = cv2.resize(preprocess_icon(icon_img), cfg.ICON_COMPARE_SIZE).astype(np.float32) / cfg.PIXEL_MAX
-    if cfg.MATCH_ONLY_LEFT_HALF:
-        proc = proc[:, :proc.shape[1] // 2]
-    return proc
+    return proc[:, :proc.shape[1] // 2]
 
 def compare_signatures(sig1: Image, sig2: Image) -> float:
     """Return a 0-1 similarity score (1 = identical) between two signatures: one minus the mean squared difference
     over the part inside the icon's ring (icon_match_mask())."""
-    mask = icon_match_mask(cfg.ICON_COMPARE_SIZE, cfg.ICON_MATCH_RADIUS_FRACTION, cfg.MATCH_ONLY_LEFT_HALF)
+    mask = icon_match_mask(cfg.ICON_COMPARE_SIZE, cfg.ICON_MATCH_RADIUS_FRACTION)
     return 1.0 - float(np.sum(((sig1 - sig2) ** 2) * mask) / np.count_nonzero(mask))
 
 # ============================================================================
@@ -1776,19 +1773,15 @@ def travel_to_trade_hub() -> bool:
     log_run_event("travelling to the Trading Hub")
     return True
 
-def scroll_down(clicks: int, direction: int = -1) -> None:
-    """Turn the mouse wheel `clicks` notches down (WHEEL_NOTCH units each; `direction` 1: up), over wherever the mouse is, INVENTORY_SCROLL_CHUNK at a time with INVENTORY_SCROLL_PAUSE
+def scroll_down(clicks: int) -> None:
+    """Turn the mouse wheel `clicks` notches down (WHEEL_NOTCH units each), over wherever the mouse is, INVENTORY_SCROLL_CHUNK at a time with INVENTORY_SCROLL_PAUSE
     between: a game may take one huge turn of the wheel for a small one."""
     while clicks > 0:
         check_running()
         step = min(clicks, cfg.INVENTORY_SCROLL_CHUNK)
-        pyautogui.scroll(direction * step * cfg.WHEEL_NOTCH)         # (Windows takes the wheel in 120ths of a notch: 10 would hardly move a list)
+        pyautogui.scroll(-step * cfg.WHEEL_NOTCH)         # (Windows takes the wheel in 120ths of a notch: 10 would hardly move a list)
         clicks -= step
         time.sleep(cfg.INVENTORY_SCROLL_PAUSE)
-
-def scroll_up(clicks: int) -> None:
-    """scroll_down() the other way."""
-    scroll_down(clicks, 1)
 
 def panel_picture(img: Image) -> Image:
     left, top, right, bottom = cfg.INVENTORY_PANEL_BOX
@@ -2074,14 +2067,49 @@ def offer_row(img: Image, y: int) -> Image:
     left, top, right, bottom = cfg.TRADES_ROW_BOX
     return img[y + top:y + bottom, left:right]
 
-def find_offer_row(img: Image, row: Image) -> Optional[int]:
-    """The y of the ACCEPT button's middle of the offer row in `img` that is the picture `row` (at least TRADES_ROW_MATCH), or None."""
-    left, top, right, bottom = cfg.TRADES_ROW_BOX
-    box = (left, cfg.TRADES_ACCEPT_BOX[1], right, cfg.TRADES_ACCEPT_BOX[3])
-    score, centre = find_template(img, row, box)
-    if centre is None or score < cfg.TRADES_ROW_MATCH:
-        return None
-    return centre[1] - row.shape[0] // 2 - top
+def row_is(img: Image, y: int, saved: Image) -> bool:
+    """Whether the offer row of `img` whose ACCEPT button's middle is at `y` looks like the picture `saved` (at least TRADES_ROW_MATCH)."""
+    row = offer_row(img, y)
+    return row.shape == saved.shape and float(cv2.matchTemplate(row, saved, cv2.TM_CCOEFF_NORMED)[0][0]) >= cfg.TRADES_ROW_MATCH
+
+class OfferList:
+    """Which offer is which in the offers list as it is scrolled, by where it is in the list - never by how it looks, since offers that look alike (the same eggs on both sides) were
+    taken for each other. The rows are TRADES_ROW_PITCH apart, so how far a step moved the list is told, to within a row, by where the first row of the picture before is among the
+    rows of the picture after (a step is shorter than a row). look() takes each picture in turn; an offer's number is its row counted from the first row seen (the top of the list)."""
+    def __init__(self) -> None:
+        self.ys: Optional[list[int]] = None          # the rows of the last picture
+        self.origin: Optional[int] = None            # where the first row was, in the first picture
+        self.offset = 0                              # how far the list has been moved
+        self.lost = False                            # a step that no row could be followed over
+
+    def look(self, img: Image) -> list[tuple[int, int]]:
+        """(number, y) of each row that is whole in `img`, top to bottom."""
+        ys = visible_offers(img)
+        if self.ys is not None:
+            if self.ys and ys:
+                self.offset += (self.ys[0] - ys[0]) % cfg.TRADES_ROW_PITCH
+            else:
+                self.lost = True
+        self.ys = ys
+        if self.origin is None and ys:
+            self.origin = ys[0]
+        return [(round((self.offset + y - self.origin) / cfg.TRADES_ROW_PITCH) + 1, y) for y in ys] if self.origin is not None else []
+
+def panel_of(img: Image) -> Image:
+    left, top, right, bottom = cfg.TRADES_PANEL_BOX
+    return img[top:bottom, left:right]
+
+def grab_still() -> Image:
+    """grab_screen() once the phone's panel has stopped moving (two looks TRADES_POLL apart alike), after TRADES_SCROLL_MAX_WAIT seconds at the latest: the list glides for a moment after
+    a turn of the wheel, and a picture of it then is of a place it is not at."""
+    deadline = time.time() + cfg.TRADES_SCROLL_MAX_WAIT
+    img = grab_screen()
+    while True:
+        wait_interruptible(cfg.TRADES_POLL)
+        again = grab_screen()
+        if same_picture(panel_of(img), panel_of(again), cfg.TRADES_SAME_LEVEL) or time.time() >= deadline:
+            return again
+        img = again
 
 def open_offers(number: int) -> bool:
     """From MY LISTINGS, show listing `number` and press its OFFERS: False (logged) if the listing is not there or no list of offers came up (a listing with none)."""
@@ -2103,45 +2131,33 @@ def draw_offer_number(picture: Image, y: int, number: int) -> None:
         cv2.putText(picture, f"#{number}", at, cv2.FONT_HERSHEY_SIMPLEX, 1.3, colour, width, cv2.LINE_AA)
 
 def offers_tour(listing: int) -> dict[str, Any]:
-    """On the offers list of listing `listing`: scroll it a step at a time (TRADES_SCROLL_CLICKS notches, fewer when a step lost the rows seen before), number the offers in the order
-    they are first seen (a row is known again by its picture), and keep a picture of the panel (TRADES_DIR/L<listing>_<n>.png) at each step that showed one not seen before, with the
-    pictures of the rows (TRADES_ROWS_DIR) that /decline looks for. Ends at the end of the list (a step that moves nothing) or at TRADES_MAX_STEPS. Returns how it went."""
-    rows: list[Image] = []
-    pictures, previous, clicks, ended, gap = 0, None, cfg.TRADES_SCROLL_CLICKS, "the end of the list", False
-    for step in range(cfg.TRADES_MAX_STEPS):
-        img = grab_screen()
-        panel_left, panel_top, panel_right, panel_bottom = cfg.TRADES_PANEL_BOX
-        panel = img[panel_top:panel_bottom, panel_left:panel_right].copy()
-        ys = visible_offers(img)
-        known = [find_offer_row(img, row) is not None for row in rows]
-        if rows and ys and not any(known) and previous is not None:       # none of the rows seen before is in sight: the step was too long
-            if clicks > 1:
-                scroll_up(clicks)
-                clicks = max(1, clicks // 2)
-                wait_interruptible(cfg.TRADES_SCROLL_SETTLE)
-                continue
-            gap = True
+    """On the offers list of listing `listing`: scroll it a step at a time (TRADES_SCROLL_CLICKS notches, a step that is shorter than an offer, so that none is skipped), number the
+    offers by where they are in the list (OfferList), and keep a picture of the panel (TRADES_DIR/L<listing>_<n>.png) at each step that showed one not seen before, with the pictures of the
+    rows (TRADES_ROWS_DIR) that /decline checks. Ends at the end of the list (a step that moves nothing) or at TRADES_MAX_STEPS. Returns how it went."""
+    seen: set[int] = set()
+    offers, pictures, ended = OfferList(), 0, "the end of the list"
+    previous = None
+    for _ in range(cfg.TRADES_MAX_STEPS):
+        img = grab_still()
+        panel = panel_of(img)
+        if previous is not None and same_picture(previous, panel, cfg.TRADES_SAME_LEVEL):
+            break
+        previous = panel.copy()
         fresh = False
-        for y in ys:
-            row = offer_row(img, y)
-            number = next((i + 1 for i, saved in enumerate(rows) if find_offer_row(img, saved) == y), None)
-            if number is None:
-                rows.append(row.copy())
-                number = len(rows)
+        marked = panel.copy()
+        for number, y in offers.look(img):
+            if number not in seen:
+                seen.add(number)
                 fresh = True
-                cv2.imwrite(os.path.join(cfg.TRADES_ROWS_DIR, f"L{listing}_{number:02d}.png"), row)
-            draw_offer_number(panel, y, number)
+                cv2.imwrite(os.path.join(cfg.TRADES_ROWS_DIR, f"L{listing}_{number:02d}.png"), offer_row(img, y))
+            draw_offer_number(marked, y, number)
         if fresh:
             pictures += 1
-            cv2.imwrite(os.path.join(cfg.TRADES_DIR, f"L{listing}_{pictures:02d}.png"), panel)
-        if previous is not None and same_picture(previous, img[panel_top:panel_bottom, panel_left:panel_right], cfg.TRADES_SAME_LEVEL):
-            break
-        previous = img[panel_top:panel_bottom, panel_left:panel_right].copy()
-        scroll_down(clicks)
-        wait_interruptible(cfg.TRADES_SCROLL_SETTLE)
+            cv2.imwrite(os.path.join(cfg.TRADES_DIR, f"L{listing}_{pictures:02d}.png"), marked)
+        scroll_down(cfg.TRADES_SCROLL_CLICKS)
     else:
         ended = f"{cfg.TRADES_MAX_STEPS} steps made"
-    return {"offers": len(rows), "pictures": pictures, "ended": ended + (" (some offers may have been skipped)" if gap else "")}
+    return {"offers": len(seen), "pictures": pictures, "ended": ended + (" (the place in the list was lost at a step: some offers may be numbered wrong)" if offers.lost else "")}
 
 def close_trade_phone() -> None:
     """The red X of the screen that is up (any of them but the offer on its own, which goes back first): the phone is away."""
@@ -2186,8 +2202,8 @@ def trades_tour() -> bool:
     return True
 
 def decline_offer(listing: int, number: int) -> bool:
-    """The bot's /decline: decline offer `number` of listing `listing` as /trades numbered it. The offer is found by its row's picture from that tour (TRADES_ROWS_DIR), scrolling the
-    list a step at a time (TRADES_FIND_CLICKS notches) - one that is not there any more (it was declined, taken back, or the list is not the one that was photographed) is not
+    """The bot's /decline: decline offer `number` of listing `listing` as /trades numbered it. The offer is found by its place in the list (OfferList), scrolling a step at a time
+    (TRADES_SCROLL_CLICKS notches), and must look like its picture from that tour (TRADES_ROWS_DIR) - one that does not (it was declined, taken back, or the list is not the one that was photographed) is not
     touched: then nothing is clicked and the answer says so. The row is opened (an offer on its own), its DECLINE clicked, and Yes in "Are you sure?" - each only when the
     screen it is on is seen. The offer as it was is kept (TRADES_DECLINED_PATH). TRADES_DECLINE_DONE_PATH says how it ended, however it does. True if declined."""
     result: dict[str, Any] = {"listing": listing, "offer": number, "declined": False, "why": "stopped"}
@@ -2200,18 +2216,19 @@ def decline_offer(listing: int, number: int) -> bool:
         if not open_trade_listings() or not open_offers(listing):
             result["why"] = "the offers of that listing could not be opened (see the log)"
             return False
-        y, previous = None, None
+        y, previous, offers = None, None, OfferList()
         for _ in range(cfg.TRADES_MAX_STEPS):
-            img = grab_screen()
-            y = find_offer_row(img, row)
-            if y is not None:
-                break
-            panel = img[cfg.TRADES_PANEL_BOX[1]:cfg.TRADES_PANEL_BOX[3], cfg.TRADES_PANEL_BOX[0]:cfg.TRADES_PANEL_BOX[2]]
+            img = grab_still()
+            panel = panel_of(img)
             if previous is not None and same_picture(previous, panel, cfg.TRADES_SAME_LEVEL):
                 break
             previous = panel.copy()
-            scroll_down(cfg.TRADES_FIND_CLICKS)
-            wait_interruptible(cfg.TRADES_SCROLL_SETTLE)
+            y = next((at for found, at in offers.look(img) if found == number), None)
+            if y is not None:
+                break
+            scroll_down(cfg.TRADES_SCROLL_CLICKS)
+        if y is not None and not row_is(img, y, row):
+            y = None                                                     # (the offer at that place is not the one that was photographed: the list changed)
         if y is None:
             result["why"] = "that offer is not in the list any more (it changed since /trades: /trades again)"
             close_trade_phone()

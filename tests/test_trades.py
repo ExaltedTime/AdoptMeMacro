@@ -15,18 +15,38 @@ def frame(name):
     return cv2.imread(os.path.join(HERE, name + ".png"))
 
 
-def scrolled(img, rows=1, with_new_row=True):
-    """`img` (the offers list) with its list moved up by `rows` rows (136 px each): the second row is where the first was, and below it a third one that was not there (the first row's picture
-    with its "Them" cells painted over, so that it is another offer)."""
-    out = img.copy()
-    top, bottom, left, right = 395, 735, 630, 1275
-    shift = 136 * rows
-    out[top:bottom - shift, left:right] = img[top + shift:bottom, left:right]
-    if with_new_row:
-        new = img[399:535, left:right].copy()
-        new[20:120, 440:620] = (40, 90, 200)
-        out[bottom - shift:bottom, left:right] = new[:shift]
+NOTCH = 95                                                                                     # (px one notch of the wheel moves the list, from the pictures of a run)
+LEFT, RIGHT = 640, 1262
+
+
+def list_frame(offers, offset, rows):
+    """The real offers frame with its list moved up by `offset` px: `rows` offers that look exactly alike (the first row of the frame, again and again: what taken for each other by their pictures
+    was the bug), 136 px apart."""
+    block = offers[399:535, LEFT:RIGHT]
+    out = offers.copy()
+    content = np.vstack([block] * rows + [np.zeros((336, RIGHT - LEFT, 3), np.uint8)])          # (and nothing under the last)
+    out[399:735, LEFT:RIGHT] = content[offset:offset + 336]
     return out
+
+
+def scrolling_list(macro, game, rows, glide=True):
+    """The game's offers list as `rows` alike offers that a step of the wheel moves NOTCH px (not past the last), and that glides: the first look after a step shows it 40 px short of where it stops."""
+    offers = frame("offers")
+    state = types.SimpleNamespace(offset=0, gliding=False)
+    last = max(0, rows * 136 - 336)
+
+    def grab():
+        shown = state.offset - 40 if state.gliding and state.offset >= 40 else state.offset
+        state.gliding = False
+        return list_frame(offers, shown, rows)
+
+    def scroll(clicks):
+        game.scrolls.append(("down", clicks))
+        state.offset = min(last, state.offset + NOTCH * clicks)
+        state.gliding = glide
+    macro.grab_screen = grab
+    macro.scroll_down = scroll
+    return state
 
 
 @pytest.fixture
@@ -53,7 +73,7 @@ def game(macro, monkeypatch, tmp_path):
     monkeypatch.setattr(macro, "grab_screen", lambda: world.frames[world.state])
     monkeypatch.setattr(macro, "hover_click", click)
     monkeypatch.setattr(macro, "hover_move", lambda x, y, duration=0: world.clicks.append(("move", x, y)))
-    monkeypatch.setattr(macro, "scroll_down", lambda clicks, direction=-1: world.scrolls.append(("up" if direction > 0 else "down", clicks)))
+    monkeypatch.setattr(macro, "scroll_down", lambda clicks: world.scrolls.append(("down", clicks)))
     monkeypatch.setattr(macro, "send_macro_window_to_back", lambda: None)
     monkeypatch.setattr(macro, "bring_macro_window_to_front", lambda: None)
     monkeypatch.setattr(macro, "log_run_event", lambda text: world.log.append(text))
@@ -85,16 +105,14 @@ def test_the_listings_are_known_outside_the_trading_hub_too_where_their_title_is
     assert macro.trade_screen(frame("menu")) == "menu" and macro.listing_shown(frame("menu")) is None          # (the menu has the same title and no numbers)
 
 
-def test_the_rows_whole_in_the_list_are_found_by_their_accept_buttons_and_known_again_by_their_pictures(macro):
+def test_the_rows_whole_in_the_list_are_found_by_their_accept_buttons_and_a_row_is_told_from_its_picture(macro):
     offers = frame("offers")
     assert macro.visible_offers(offers) == pytest.approx([453, 589], abs=3)                  # (the third row is cut off by the list's bottom)
     assert macro.visible_offers(frame("declining")) == pytest.approx([589], abs=3)           # (the one being declined has no ACCEPT)
     assert macro.visible_offers(frame("detail")) == [] and macro.visible_offers(np.zeros((1080, 1920, 3), np.uint8)) == []
     first, second = (macro.offer_row(offers, y) for y in macro.visible_offers(offers))
-    assert macro.find_offer_row(offers, first) == pytest.approx(453, abs=3) and macro.find_offer_row(offers, second) == pytest.approx(589, abs=3)
-    moved = scrolled(offers)
-    assert macro.find_offer_row(moved, second) == pytest.approx(453, abs=3)                  # the second row after a step; the first is out of sight
-    assert macro.find_offer_row(moved, first) is None
+    assert macro.row_is(offers, 453, first) and macro.row_is(offers, 589, second) and not macro.row_is(offers, 589, first)       # (the second row is not the first, though the same kind of row)
+    assert macro.row_is(offers, 453, first[:-1]) is False                                    # (a picture of another size is no match)
 
 
 def test_the_phone_is_opened_from_the_world_equipping_it_only_when_it_is_not_in_the_hotbar_and_from_a_screen_further_in_it_is_gone_back_from(macro, game):
@@ -273,36 +291,38 @@ def test_a_listing_is_shown_by_the_arrow_and_one_that_is_not_there_is_said(macro
     assert macro.select_listing(2) is False
 
 
-def test_the_tour_numbers_the_offers_in_the_order_they_are_seen_keeps_a_picture_of_each_step_that_showed_a_new_one_and_ends_when_the_list_does_not_move(macro, game):
-    offers = frame("offers")
-    sequence = [offers, scrolled(offers), scrolled(offers)]                                  # the third look is the same as the second: the end of the list
-    looks = iter(sequence)
-    last = []
-    def grab():
-        last[:] = [next(looks, last[0] if last else sequence[-1])]
-        return last[0]
-    macro.grab_screen = grab
+def test_the_tour_numbers_the_offers_by_their_place_in_the_list_not_by_how_they_look_keeps_a_picture_of_each_step_that_showed_a_new_one_and_ends_when_the_list_does_not_move(macro, game):
+    scrolling_list(macro, game, rows=6)                                                      # (six offers that look the same, the list gliding after each step)
     os.makedirs(macro.cfg.TRADES_ROWS_DIR)
     result = macro.offers_tour(1)
-    assert result == {"offers": 3, "pictures": 2, "ended": "the end of the list"}
-    assert sorted(os.listdir(macro.cfg.TRADES_DIR)) == ["L1_01.png", "L1_02.png", "rows"]
-    assert sorted(os.listdir(macro.cfg.TRADES_ROWS_DIR)) == ["L1_01.png", "L1_02.png", "L1_03.png"]
-    assert game.scrolls == [("down", macro.cfg.TRADES_SCROLL_CLICKS)] * 2                      # (not after the last look: the list had not moved)
-    second = cv2.imread(os.path.join(macro.cfg.TRADES_DIR, "L1_02.png"))
-    assert second.shape[:2] == (macro.cfg.TRADES_PANEL_BOX[3] - macro.cfg.TRADES_PANEL_BOX[1], macro.cfg.TRADES_PANEL_BOX[2] - macro.cfg.TRADES_PANEL_BOX[0])
+    assert result["offers"] == 6 and result["ended"] == "the end of the list"
+    assert sorted(os.listdir(macro.cfg.TRADES_ROWS_DIR)) == [f"L1_{n:02d}.png" for n in range(1, 7)]       # (each number once, though the rows are alike)
+    assert result["pictures"] == len([f for f in os.listdir(macro.cfg.TRADES_DIR) if f != "rows"]) and 3 <= result["pictures"] <= 6
+    assert set(game.scrolls) == {("down", macro.cfg.TRADES_SCROLL_CLICKS)} and NOTCH * macro.cfg.TRADES_SCROLL_CLICKS < macro.cfg.TRADES_ROW_PITCH
+    panel = cv2.imread(os.path.join(macro.cfg.TRADES_DIR, "L1_01.png"))
+    assert panel.shape[:2] == (macro.cfg.TRADES_PANEL_BOX[3] - macro.cfg.TRADES_PANEL_BOX[1], macro.cfg.TRADES_PANEL_BOX[2] - macro.cfg.TRADES_PANEL_BOX[0])
 
 
-def test_a_step_that_lost_every_row_seen_before_is_taken_back_and_made_shorter(macro, game, monkeypatch):
-    monkeypatch.setattr(macro.cfg, "TRADES_SCROLL_CLICKS", 3)                                  # (a longer step than the one used, to see it halved)
-    offers = frame("offers")
-    lost = scrolled(offers, with_new_row=True)
-    lost[395:735, 640:1262] = np.roll(lost[395:735, 640:1262], 7, axis=1)                    # (nothing in it is a row seen before, though rows are in sight)
-    sequence = iter([offers, lost, scrolled(offers), scrolled(offers)])                        # (after the step back, one notch shows the second row and a new one)
-    macro.grab_screen = lambda: next(sequence, scrolled(offers))
+def test_a_picture_is_taken_only_once_the_list_has_stopped_gliding(macro, game):
+    state = scrolling_list(macro, game, rows=6)
+    macro.scroll_down(1)                                                                     # (a step: the first look shows the list 40 px short)
+    img = macro.grab_still()
+    assert (img == list_frame(frame("offers"), NOTCH, 6)).all() and state.offset == NOTCH
+
+
+def test_a_list_of_one_offer_is_numbered_one_and_ends_at_once(macro, game):
+    scrolling_list(macro, game, rows=1)
     os.makedirs(macro.cfg.TRADES_ROWS_DIR)
-    result = macro.offers_tour(2)
-    assert game.scrolls[:3] == [("down", 3), ("up", 3), ("down", 1)]                         # too long: back, and one notch next
-    assert result["offers"] == 3 and "skipped" not in result["ended"]
+    assert macro.offers_tour(2) == {"offers": 1, "pictures": 1, "ended": "the end of the list"}
+
+
+def test_a_step_that_no_row_can_be_followed_over_is_said(macro, game):
+    scrolling_list(macro, game, rows=6)
+    os.makedirs(macro.cfg.TRADES_ROWS_DIR)
+    real = macro.visible_offers
+    looks = []
+    macro.visible_offers = lambda img: [] if len(looks.append(1) or looks) == 2 else real(img)      # (the second picture shows no whole row)
+    assert "place in the list was lost" in macro.offers_tour(1)["ended"]
 
 
 def test_the_trades_tour_looks_at_both_listings_puts_the_phone_away_and_says_what_it_found(macro, game, monkeypatch):
@@ -362,7 +382,25 @@ def test_an_offer_that_is_not_in_the_list_or_has_no_picture_is_not_touched(macro
     assert macro.decline_offer(2, 1) is False
     assert decline_result(macro)["why"].startswith("that offer is not in the list any more")
     assert game.clicks == [cfg.TRADES_CLOSE_POS]                                              # nothing but the phone put away: no row, no DECLINE
-    assert game.scrolls and all(kind == "down" and clicks == cfg.TRADES_FIND_CLICKS for kind, clicks in game.scrolls)    # (it looked down the list first)
+
+
+def test_an_offer_down_the_list_is_found_by_its_place_scrolling_to_it_and_one_that_looks_other_is_not_touched(macro, game, monkeypatch):
+    cfg = macro.cfg
+    state = scrolling_list(macro, game, rows=8)
+    offers = frame("offers")
+    os.makedirs(cfg.TRADES_ROWS_DIR, exist_ok=True)
+    row = macro.offer_row(offers, macro.visible_offers(offers)[0])
+    cv2.imwrite(os.path.join(cfg.TRADES_ROWS_DIR, "L1_05.png"), row)
+    monkeypatch.setattr(macro, "open_trade_listings", lambda: True)
+    monkeypatch.setattr(macro, "open_offers", lambda n: True)
+    game.state = "offers"
+    assert macro.decline_offer(1, 5) is False and game.scrolls                                # (the list is not the game's phone any more: the row click opens nothing)
+    y = 453 + 4 * 136 - state.offset                                                            # (the fifth row, where it was seen when the list stopped)
+    assert (cfg.TRADES_ROW_CLICK_X, y + cfg.TRADES_ROW_CLICK_DY) == game.clicks[0] or abs(game.clicks[0][1] - (y + cfg.TRADES_ROW_CLICK_DY)) <= 3
+    cv2.imwrite(os.path.join(cfg.TRADES_ROWS_DIR, "L1_05.png"), np.random.default_rng(1).integers(0, 255, row.shape, dtype=np.uint8))            # (a picture of another offer: what is there now is not it)
+    game.clicks.clear()
+    state.offset = 0                                                                            # (the list is opened at its top again)
+    assert macro.decline_offer(1, 5) is False and decline_result(macro)["why"].startswith("that offer is not in the list any more") and game.clicks == [cfg.TRADES_CLOSE_POS]
 
 
 def test_nothing_is_confirmed_unless_the_dialog_is_seen_and_a_dialog_that_stays_is_said(macro, game, monkeypatch):

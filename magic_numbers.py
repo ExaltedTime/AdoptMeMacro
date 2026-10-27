@@ -740,6 +740,16 @@ FOCUS_PET_MENU_WAIT = 4.0            # wait after the clicks, for the pet's menu
 # since it's just a plain circle with no distinguishing icon. Given as (R, G, B).
 CHOOSE_BUTTON_COLOR = (181, 6, 254)
 CHOOSE_SLOW_MOVE_DURATION = 1.0  # deliberate, slow mouse travel to the found button
+# The pet's name bar ("Friend" on purple, a heart and the number on white, a gold outline that is not always there; its words change) shows over a pet that is standing still, where
+# focus_pet()'s search by movement finds nothing: the purple part of it is found by hue (HSV, OpenCV's: 129 / 148 / 255 and 131 / 181 / 255 on a real frame), a wide short blob
+# (PET_BAR_ASPECT) of PET_BAR_AREA px that has white right of it (at least PET_BAR_WHITE_FRACTION of that strip at least PET_BAR_WHITE_LEVEL in every channel), and the pet is
+# PET_BAR_BELOW bar heights under its bottom edge, at the join of the purple and the white (measured on a frame: bar 101 px of purple by 38, the pet's body about 4 heights below).
+PET_BAR_HSV = ((122, 110, 200), (136, 215, 255))
+PET_BAR_AREA = (500, 20000)
+PET_BAR_ASPECT = (1.8, 4.0)
+PET_BAR_WHITE_LEVEL = 225
+PET_BAR_WHITE_FRACTION = 0.3
+PET_BAR_BELOW = 3.5
 # The choose button when no pixel is CHOOSE_BUTTON_COLOR (twice in run 34 it was in plain sight: a purple-to-magenta disc with a "?" and, not always, a white outline, under the
 # focused pet): the biggest roundish blob of this hue (OpenCV's HSV: purple 141, magenta 154; the pink BACK button is 167, the backpack's purple is 130 and paler), at least
 # CHOOSE_DISC_ROUNDNESS of its enclosing circle (the "?" is cut out of it), of CHOOSE_DISC_AREA px (about 180 px across), within CHOOSE_DISC_SQUARENESS of square. The ranges are

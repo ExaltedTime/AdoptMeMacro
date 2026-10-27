@@ -88,6 +88,55 @@ def test_ride_steps_back_mounts_walks_on_equips_a_vehicle_and_rides_to_and_fro(m
         ("walk", (cfg.KEYS["forward"], cfg.KEYS["back"]), cfg.NEED_GONE_MAX_WAIT, "ride")]
 
 
+def pet_bar_frame():
+    import cv2
+    return cv2.imread(os.path.join(os.path.dirname(__file__), "popups", "pet_with_bar_not_moving.png"))
+
+
+def test_a_pet_that_stands_still_is_found_by_its_name_bar_in_a_real_frame_and_nothing_else_is(macro):
+    import numpy as np
+    x, y = macro.find_pet_bar(pet_bar_frame())
+    assert abs(x - 1218) <= 4 and abs(y - 693) <= 6                                          # the join of the bar's purple and white, 3.5 bar heights under it: on the pet's body (1040-1260, 620-830)
+    assert macro.find_pet_bar(np.full((1080, 1920, 3), 30, np.uint8)) is None
+    drawn = np.full((1080, 1920, 3), 30, np.uint8)
+    drawn[522:560, 1117:1218] = (255, 107, 154)                                                # the purple part alone, nothing white at its right: not a bar
+    assert macro.find_pet_bar(drawn) is None
+    drawn[522:560, 1218:1303] = 255
+    assert macro.find_pet_bar(drawn) == (1218, 693)
+    drawn[522:560, 1117:1218] = (255, 107, 154)
+    tall = drawn.copy()
+    tall[400:500, 1117:1218] = (255, 107, 154)                                                 # a square of the same purple (the backpack button is round and as tall as wide): not a bar
+    assert macro.find_pet_bar(tall) == (1218, 693)
+
+
+def test_focus_pet_clicks_under_the_name_bar_when_nothing_moves_and_when_what_moved_was_not_the_pet(macro, monkeypatch):
+    events = []                                                                              # (not the events fixture: it replaces focus_pet itself)
+    frame = pet_bar_frame()
+    focused = []
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "check_running", lambda: None)
+    monkeypatch.setattr(macro, "grab_screen", lambda: frame)
+    monkeypatch.setattr(macro, "detect_pet_focus", lambda img: bool(focused))
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: (events.append(("click", (x, y))), focused.append(1)))
+    monkeypatch.setattr(macro, "macro_window_reference_rect", lambda: None)
+    monkeypatch.setattr(macro, "moving_blobs", lambda a, b, ignore=(): ([], frame[:, :, 0] * 0, 0))
+    assert macro.focus_pet() is True
+    clicks = [e[1] for e in events if e[0] == "click"]
+    assert len(clicks) == 1 and abs(clicks[0][0] - 1218) <= 4 and abs(clicks[0][1] - 693) <= 6
+    events.clear()
+    focused.clear()
+    monkeypatch.setattr(macro, "detect_pet_focus", lambda img: len(focused) > 1)                # (the click on what moved did not focus it; the bar's did)
+    monkeypatch.setattr(macro, "moving_blobs", lambda a, b, ignore=(): ([(10, 10, 20, 20, 400)], frame[:, :, 0] * 0, 0))
+    assert macro.focus_pet() is True
+    clicks = [e[1] for e in events if e[0] == "click"]
+    assert clicks[0] == (20, 20) and abs(clicks[1][0] - 1218) <= 4 and len(clicks) == 2
+    events.clear()
+    focused.clear()
+    monkeypatch.setattr(macro, "grab_screen", lambda: __import__("numpy").full((1080, 1920, 3), 30, __import__("numpy").uint8))
+    monkeypatch.setattr(macro, "moving_blobs", lambda a, b, ignore=(): ([], frame[:, :, 0] * 0, 0))
+    assert macro.focus_pet() is False and not [e for e in events if e[0] == "click"]          # no bar: as before, nothing found
+
+
 def test_a_ride_that_did_not_clear_its_need_sets_the_backpack_filter_and_rides_once_more(macro, events, monkeypatch):
     """With Setup not run the first vehicle was a car, not the helicopter: the filter is set again (what Setup does with the backpack) and the ride tried once more, once."""
     rides = []

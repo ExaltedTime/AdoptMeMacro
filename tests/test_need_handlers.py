@@ -132,6 +132,7 @@ def tour(macro, monkeypatch, tmp_path):
     monkeypatch.setattr(macro, "detect_backpack_expanded", lambda img: True)
     monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: log.append(("click", (x, y))))
     monkeypatch.setattr(macro, "select_backpack_tab", lambda pos: log.append(("tab", pos)))
+    monkeypatch.setattr(macro, "hover_move", lambda x, y, duration=0: log.append(("move", (x, y))))
     monkeypatch.setattr(macro, "close_backpack", lambda step: log.append(("close", step)))
     monkeypatch.setattr(macro, "scroll_down", lambda clicks: log.append(("scroll", clicks)))
     monkeypatch.setattr(macro, "to_screen", lambda x, y: (x, y))
@@ -158,7 +159,7 @@ def test_the_tour_takes_a_picture_scrolls_and_stops_when_a_step_moves_nothing(ma
     assert sorted(os.listdir(tour.folder)) == ["001.png", "002.png", "003.png", "done.json"]
     assert done_marker(tour) == {"pictures": 3, "ended": "the end of the list"}
     kinds = [event[0] for event in tour.log]
-    assert tour.log[:4] == [("press", cfg.KEYS["backpack"]), ("tab", cfg.INVENTORY_PETS_TAB_POS), ("click", cfg.INVENTORY_EXPAND_POS), ("move", *cfg.INVENTORY_SCROLL_POS)]     # the expand button, not the selected tab again
+    assert tour.log[:4] == [("press", cfg.KEYS["backpack"]), ("tab", cfg.INVENTORY_PETS_TAB_POS), ("click", cfg.INVENTORY_EXPAND_POS), ("move", cfg.INVENTORY_SCROLL_POS)]     # the expand button, not the selected tab again
     assert kinds.count("scroll") == 3 and tour.log[-1] == ("close", "the inventory") and ("scroll", cfg.INVENTORY_SCROLL_CLICKS) in tour.log
     import cv2
     left, top, right, bottom = cfg.INVENTORY_PANEL_BOX

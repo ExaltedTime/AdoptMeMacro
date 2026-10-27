@@ -1714,7 +1714,7 @@ def inventory_tour() -> bool:
                 ended = "the backpack did not expand"
                 close_backpack("the inventory")
                 return False
-            pydirectinput.moveTo(*to_screen(*cfg.INVENTORY_SCROLL_POS))
+            hover_move(*cfg.INVENTORY_SCROLL_POS)                          # (with the nudge that makes Roblox see the pointer over the list: a plain move did not, and the wheel turned nothing)
             previous = None
             while True:
                 picture = panel_picture(grab_screen())
@@ -3301,7 +3301,9 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
         tries, last_key = 0, None
         locked_until, was_inside = 0.0, False
         steer_at = started + cfg.HAUNTLET_STEER_EVERY
-        while time.time() < started + cfg.HAUNTLET_WALK_MAX:
+        walk_until = started + cfg.HAUNTLET_WALK_MAX
+        inside = False
+        while time.time() < walk_until:
             img = minigame_look(watch)
             if detect_minigame_finished(img):
                 return True
@@ -3319,6 +3321,7 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
             inside = player_in_circle(img, find_door_circles(img))
             if inside and not was_inside:                                       # just stepped in: the door is picked and the player is held for a moment
                 locked_until = now + cfg.HAUNTLET_LOCK_WAIT
+                walk_until = max(walk_until, now + cfg.HAUNTLET_CIRCLE_WAIT)            # (and the room only changes some seconds later: not a walk that got nowhere)
                 if run.picked is None and target_index is not None:
                     run.picked = target_index
                     logger.debug(f"Hauntlet 2: in the circle of door {target_index + 1} - picked")
@@ -3343,7 +3346,7 @@ def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, w
             else:
                 still_since = None
             last_view = view
-            if still_since is not None and now - still_since >= cfg.HAUNTLET_STILL_AFTER:
+            if still_since is not None and now - still_since >= cfg.HAUNTLET_STILL_AFTER and not inside:        # (standing in the door's circle is what is wanted: no jumping out of it)
                 last_key = hauntlet_unstick(img, target_index, tries, last_key)
                 tries += 1
                 still_since, last_view = None, None
@@ -4973,7 +4976,8 @@ def find_door_tvs(img: Image) -> list[tuple[int, int]]:
     middle TV can be off the top of the screen or behind the room panel: two TVs far enough apart to be the outer ones
     (HAUNTLET_TV_PAIR_GAP) and centred on the screen (the player stands in front of the middle door) give the middle one
     halfway between. Two neighbours high up (in the row of the room panel) with the third where the panel is give the third
-    there: the panel hides its glow."""
+    there: the panel hides its glow. Two neighbours with the room for the third only off the screen's left or right edge give the third there (the
+    camera looks along a wall, the player against it: the doors run off the screen)."""
     low, high = cfg.HAUNTLET_TV_GLOW
     mask = cv2.inRange(img, (low[2], low[1], low[0]), (high[2], high[1], high[0]))   # BGR
     left, top, right, bottom = cfg.HAUNTLET_TV_HUD_BOX
@@ -5002,6 +5006,14 @@ def find_door_tvs(img: Image) -> list[tuple[int, int]]:
         for order in ((first, second, (second[0] + gap, second[1])), ((first[0] - gap, first[1]), first, second)):
             if hud_left <= order[0][0] <= hud_right or hud_left <= order[2][0] <= hud_right:
                 return [(int(x), int(y)) for x, y in order]
+    for first, second in zip(found, found[1:]):                                  # two neighbours, the third off the screen (the camera looks along a wall)
+        gap = second[0] - first[0]
+        if abs(first[1] - second[1]) > cfg.HAUNTLET_TV_ROW_TOLERANCE or not cfg.HAUNTLET_TV_SPACING[0] <= gap <= cfg.HAUNTLET_TV_SPACING[1]:
+            continue
+        if first[0] - gap < 0:
+            return [(int(first[0] - gap), int(first[1])), (int(first[0]), int(first[1])), (int(second[0]), int(second[1]))]
+        if second[0] + gap >= cfg.REFERENCE_WIDTH:
+            return [(int(first[0]), int(first[1])), (int(second[0]), int(second[1])), (int(second[0] + gap), int(second[1]))]
     return []
 
 def hauntlet_shadow_eyes(door: Image) -> bool:
@@ -5027,7 +5039,7 @@ def hauntlet_door_kind(img: Image, x: int, y: int, scale: float) -> Optional[str
     is the picture's size against the one the boxes were measured at. None if the door is off the screen."""
     def region(box: tuple[int, int, int, int]) -> Image:
         left, top, right, bottom = box
-        return img[max(0, int(y + top * scale)):int(y + bottom * scale), max(0, int(x + left * scale)):int(x + right * scale)]
+        return img[max(0, int(y + top * scale)):max(0, int(y + bottom * scale)), max(0, int(x + left * scale)):max(0, int(x + right * scale))]       # (not a negative stop, which counts from the far edge)
     light = region(cfg.HAUNTLET_LOCK_LIGHT_BOX).astype(int)
     if light.size:
         red = ((light[..., 2] >= cfg.HAUNTLET_LOCK_LIGHT_RED) & (light[..., 1] <= cfg.HAUNTLET_LOCK_LIGHT_OTHER) & (light[..., 0] <= cfg.HAUNTLET_LOCK_LIGHT_OTHER)).astype(np.uint8)

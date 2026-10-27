@@ -590,6 +590,7 @@ HAUNTLET_CIRCLE_MIN_AREA = 600
 HAUNTLET_CIRCLE_FILL = 0.5                   # a ring fills less than this of its box
 HAUNTLET_CIRCLE_BAND = (150, 900)            # rows of the screen the circles are looked for in (not the panel above, nor the item bar)
 HAUNTLET_IN_CIRCLE = 0.35                    # the player is in the circle it hides when it stands this close to where it would be (in circle spacings)
+HAUNTLET_CIRCLE_WAIT = 25.0                  # a walk that has stepped into a door's circle goes on this long for the room to change: it did 9-13 s after the step in real runs (the walk's HAUNTLET_WALK_MAX ended first, "got nowhere", and the player was jumped out of the circle)
 HAUNTLET_LOCK_WAIT = 3.0                     # after stepping into a circle the player can't move for a few moments: no unsticking for this long
 HAUNTLET_SHADOW_BOX = (-110, 20, 110, 200)   # where a shadow door's eyes are looked for, relative to its TV (scaled like the other boxes)
 HAUNTLET_SHADOW_WHITE = 225                  # the glowing eyes: all channels at least this...
@@ -748,9 +749,10 @@ BACKPACK_NORMAL_PANEL_BOX = (712, 640, 1210, 930)
 BACKPACK_NORMAL_MIN_PIXELS = 800
 # The frame is at the panel's two sides: at least BACKPACK_NORMAL_MIN_SIDE_PIXELS of that purple in each of the BACKPACK_NORMAL_SIDE_WIDTH columns at the left and at
 # the right of the panel box. The big "Friend" pill in the middle of the screen (shown with the cafe's name banner) is the same purple and white, and has
-# 1040 purple pixels in the box and a quarter of the white box white: it was taken for the backpack ("still open after pressing the key twice") and stopped a run.
+# 1040 purple pixels in the box and a quarter of the white box white: it was taken for the backpack ("still open after pressing the key twice") and stopped a run. It has 5 at
+# its left; the real panel of tests/popups/backpack_open.png has 70 and 31.
 BACKPACK_NORMAL_SIDE_WIDTH = 80
-BACKPACK_NORMAL_MIN_SIDE_PIXELS = 100
+BACKPACK_NORMAL_MIN_SIDE_PIXELS = 20
 BACKPACK_NORMAL_WHITE_BOX = (850, 690, 1190, 920)
 BACKPACK_NORMAL_WHITE_LEVEL = 240
 BACKPACK_NORMAL_MIN_WHITE_FRACTION = 0.2

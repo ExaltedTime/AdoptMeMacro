@@ -1772,6 +1772,7 @@ def inventory_tour() -> bool:
                 ended = "the backpack did not expand"
                 close_backpack("the inventory")
                 return False
+            wait_interruptible(cfg.INVENTORY_LOAD_WAIT)                    # (the items of an expanded backpack load a while after it opens: the first picture had blank cells)
             hover_move(*cfg.INVENTORY_SCROLL_POS)                          # (with the nudge that makes Roblox see the pointer over the list: a plain move did not, and the wheel turned nothing)
             previous, clicks, measured = None, cfg.INVENTORY_SCROLL_CLICKS, False
             while True:

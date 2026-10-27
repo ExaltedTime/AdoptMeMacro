@@ -1655,6 +1655,46 @@ def test_a_set_command_changes_the_switch_and_its_checkbox(macro, monkeypatch, t
     assert gui.show_debug_var.value is False                                              # (a switch with no checkbox of its own, like the stitches one, is only persisted)
 
 
+LINK = "https://www.roblox.com/games/920587237?privateServerLinkCode=" + "a1" * 16
+
+
+def test_a_test_command_names_a_handler_and_a_server_link_command_a_link_the_macro_knows(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
+    for details in (dict(handler="hungry"), dict(handler=macro.cfg.TEST_ALL_TELEPORTS)):
+        write_command(macro, "test", **details)
+        assert macro.read_command_with_id()[1]["handler"] == details["handler"]
+    write_command(macro, "server_link", link=LINK)
+    assert macro.read_command_with_id()[1]["link"] == LINK
+    for command, details in (("test", dict(handler="nothing")), ("test", {}), ("server_link", dict(link="https://example.com")), ("server_link", {}), ("server_link", dict(link=5))):
+        write_command(macro, command, **details)
+        assert macro.read_command_with_id()[1] is None, (command, details)
+
+
+def test_a_test_command_queues_what_the_test_button_does_and_every_handler_has_one(macro, monkeypatch, tmp_path):
+    assert {name for name in macro.OUTSIDE_ACTIONS if name.startswith("test:")} == {f"test:{name}" for name in (*macro.cfg.NEED_NAMES, macro.cfg.TEST_ALL_TELEPORTS)}
+    gui = remote_gui(macro, monkeypatch, tmp_path, running=True)                            # a loop runs: stopped first, and not resumed
+    gui.do_command("test", {"command": "test", "handler": "hungry"}, "t1")
+    assert gui.calls == [("stop",)] and gui.pending == ["test:hungry"] and gui.resume_loop is False
+    action = macro.OUTSIDE_ACTIONS["test:hungry"]
+    assert action.func is macro.test_need_handler and action.args == ("hungry",)
+
+
+def test_the_reset_config_command_resets_unless_something_runs_and_the_server_link_command_saves_the_link(macro, monkeypatch, tmp_path):
+    gui = remote_gui(macro, monkeypatch, tmp_path)
+    resets, saved = [], []
+    gui.reset_config = lambda: resets.append(1)
+    gui.do_command("reset_config", {"command": "reset_config"}, "r1")
+    assert resets == [1] and done_text(macro, "r1") == "done"
+    gui.is_running = True
+    gui.do_command("reset_config", {"command": "reset_config"}, "r2")
+    assert resets == [1] and done_text(macro, "r2") == "given up: the macro is running"
+    class Var:
+        def set(self, value): saved.append(value)
+    gui.server_link_var, gui.save_server_link = Var(), lambda: saved.append("saved")
+    gui.do_command("server_link", {"command": "server_link", "link": f"  {LINK} "}, "l1")
+    assert saved == [LINK, "saved"] and done_text(macro, "l1") == "done"
+
+
 def test_the_need_names_a_command_may_switch_are_the_handlers_there_are(macro):
     assert set(macro.cfg.NEED_NAMES) == set(macro.NEED_HANDLER_CLASSES) and len(macro.cfg.NEED_NAMES) == len(set(macro.cfg.NEED_NAMES))
 

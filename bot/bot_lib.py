@@ -682,6 +682,37 @@ def clear_inventory(folder: str) -> None:
             os.remove(path)
 
 
+def trade_pictures(folder: str) -> list[str]:
+    """The pictures of a /trades tour in `folder` (L1_01.png, L1_02.png ... L2_01.png ...), in order; not the pictures of the rows it keeps for /decline."""
+    return sorted(glob.glob(os.path.join(folder, "L[0-9]_[0-9][0-9].png")))
+
+
+def trades_text(done: dict[str, Any]) -> str:
+    """What the /trades message says: what the tour found on each listing, or what went wrong."""
+    if done.get("problem"):
+        return f"The trade listings were not looked at: {done['problem']}."
+    lines = []
+    for listing, found in sorted(done.get("listings", {}).items()):
+        offers, pictures = found.get("offers", 0), found.get("pictures", 0)
+        lines.append(f"Listing {listing}: {offers} offer{'s' if offers != 1 else ''}" + (f", {pictures} picture{'s' if pictures != 1 else ''}" if pictures else "") + f" ({found.get('ended', 'ended')}).")
+    return "\n".join(lines or ["No listings were looked at."]) + ("\n/decline <listing> <offer> declines an offer by the number on the pictures." if any(f.get("offers") for f in done.get("listings", {}).values()) else "")
+
+
+def decline_text(done: dict[str, Any]) -> str:
+    """What the /decline message says."""
+    where = f"offer {done.get('offer')} of listing {done.get('listing')}"
+    if done.get("declined"):
+        return f"Declined {where} (the offer as it was is in the picture)."
+    return f"Did not decline {where}: {done.get('why') or 'it did not end'}."
+
+
+def clear_trades(folder: str) -> None:
+    """Remove the pictures and the end markers of an earlier /trades tour or /decline (not the pictures of the rows, which /decline needs until the next tour)."""
+    for path in [*trade_pictures(folder), *(os.path.join(folder, name) for name in ("done.json", "decline.json", "declined.png"))]:
+        with contextlib.suppress(OSError):
+            os.remove(path)
+
+
 def in_batches(items: list[str], size: int) -> list[list[str]]:
     """`items` in lists of at most `size`, in order."""
     return [items[i:i + size] for i in range(0, len(items), size)]
@@ -702,8 +733,8 @@ def switch_command(kind: str, name: str, value: bool) -> dict[str, Any]:
     return {"kind": kind, "name": name, "value": bool(value)}
 
 
-# The game config's defaults for the switches (main.py's _read_game_config(): side quest on, the rest off), for a config that doesn't have them yet.
-OPTION_DEFAULTS = {"side_quest_enabled": True}
+# The game config's defaults for the switches (main.py's _read_game_config(): side quest, the private server and the blackout key on, the rest off), for a config that doesn't have them yet.
+OPTION_DEFAULTS = {"side_quest_enabled": True, "use_private_server": True, "blackout_hotkey_enabled": True}
 
 
 def switch_states(config: Optional[dict[str, Any]]) -> dict[str, bool]:

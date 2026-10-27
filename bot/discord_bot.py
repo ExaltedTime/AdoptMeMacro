@@ -290,6 +290,38 @@ async def collect_inventory() -> tuple[str, list[str]]:
     return f"{len(pictures)} picture{'s' if len(pictures) != 1 else ''} of the pets tab ({done.get('ended', 'ended')}). Its loop is stopped; /loop it again when you want it back.", pictures
 
 
+async def collect_trades() -> tuple[str, list[str]]:
+    """Ask the macro for its look at the trade listings (/trades) and wait up to BOT_TRADES_WAIT seconds for it to end: what to say, and the pictures it took."""
+    bot_lib.clear_trades(cfg.TRADES_DIR)
+    problem = await send_command("trades")
+    if problem:
+        return problem, []
+    deadline = time.time() + cfg.BOT_TRADES_WAIT
+    done = None
+    while done is None and time.time() < deadline:
+        await asyncio.sleep(cfg.BOT_TRADES_POLL)
+        done = bot_lib.read_json(cfg.TRADES_DONE_PATH)
+    if done is None:
+        return f"The macro has not ended its look at the trade listings in {cfg.BOT_TRADES_WAIT:g} s (its loop may not have stopped) - see /status.", []
+    return bot_lib.trades_text(done) + " Its loop is stopped; /loop it again when you want it back.", bot_lib.trade_pictures(cfg.TRADES_DIR)
+
+
+async def decline_offer(listing: int, offer: int) -> tuple[str, list[str]]:
+    """Ask the macro to decline offer `offer` of listing `listing` (/decline) and wait up to BOT_TRADES_WAIT seconds for it to end: what to say, and the picture of the offer if it was declined."""
+    bot_lib.clear_trades(cfg.TRADES_DIR)
+    problem = await send_command("decline", listing=listing, offer=offer)
+    if problem:
+        return problem, []
+    deadline = time.time() + cfg.BOT_TRADES_WAIT
+    done = None
+    while done is None and time.time() < deadline:
+        await asyncio.sleep(cfg.BOT_TRADES_POLL)
+        done = bot_lib.read_json(cfg.TRADES_DECLINE_DONE_PATH)
+    if done is None:
+        return f"The macro has not ended the decline in {cfg.BOT_TRADES_WAIT:g} s (its loop may not have stopped) - see /status.", []
+    return bot_lib.decline_text(done), [cfg.TRADES_DECLINED_PATH] if os.path.exists(cfg.TRADES_DECLINED_PATH) else []
+
+
 async def stop_macro(config: bot_lib.Config) -> str:
     """Ask the macro to exit (its cooperative stop: the loop ends, every key and the mouse are released, the window closes) and wait up to
     stop_timeout_seconds for its process to end; if it hasn't, kill it and release the inputs from here. Returns what happened, as a sentence.
@@ -675,7 +707,7 @@ def build(config: bot_lib.Config) -> discord.Client:
         background.append(task)
         task.add_done_callback(task_ended)
 
-    async def ask_macro(interaction: discord.Interaction, command_name: str, said: str, idle_only: bool = False, label: str = "", then: str = "") -> bool:
+    async def ask_macro(interaction: discord.Interaction, command_name: str, said: str, idle_only: bool = False, label: str = "", then: str = "", **details: Any) -> bool:
         """Leave the running macro `command_name` (its window does it) and say `said`; with `idle_only` not while its loop runs. With a `label` the channel is told
         when the action ends (announce_when_done()), and what `then` says after one that was done. True if the macro took the command."""
         await interaction.response.defer(thinking=True)
@@ -688,7 +720,7 @@ def build(config: bot_lib.Config) -> discord.Client:
         if idle_only and not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path())):
             await say(interaction, "The macro's loop is running - /stop it first.")
             return False
-        problem, name = await submit_command(command_name)
+        problem, name = await submit_command(command_name, **details)
         await say(interaction, problem or (("Started the macro first. " if started else "") + said))
         if label and not problem:
             announce(name, label, then)
@@ -744,6 +776,35 @@ def build(config: bot_lib.Config) -> discord.Client:
         await say(interaction, text, files=[discord.File(path) for path in batches[0]] if batches else [])
         for batch in batches[1:]:
             await say(interaction, files=[discord.File(path) for path in batch])
+
+    @command("trades", "Send pictures of the offers on your two trade listings (opens the phone; stops the loop)")
+    async def trades(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        problem, started = await ensure_macro(config)
+        if problem:
+            await say(interaction, problem)
+            return
+        if started:
+            remember("open")
+        text, pictures = await collect_trades()
+        batches = bot_lib.in_batches(pictures, cfg.BOT_FILES_PER_MESSAGE)
+        await say(interaction, text, files=[discord.File(path) for path in batches[0]] if batches else [])
+        for batch in batches[1:]:
+            await say(interaction, files=[discord.File(path) for path in batch])
+
+    @command("decline", "Decline an offer on a listing by the number /trades showed (stops the macro's loop)")
+    @app_commands.describe(listing="1 or 2", offer="The offer's number on the pictures of /trades")
+    @app_commands.choices(listing=[app_commands.Choice(name=str(number), value=number) for number in cfg.TRADES_LISTINGS])
+    async def decline(interaction: discord.Interaction, listing: app_commands.Choice[int], offer: app_commands.Range[int, 1, cfg.TRADES_MAX_OFFERS]) -> None:
+        await interaction.response.defer(thinking=True)
+        problem, started = await ensure_macro(config)
+        if problem:
+            await say(interaction, problem)
+            return
+        if started:
+            remember("open")
+        text, pictures = await decline_offer(listing.value, offer)
+        await say(interaction, text + " Its loop is stopped; /loop it again when you want it back.", files=[discord.File(path) for path in pictures])
 
     @command("leave_trade_hub", "Have the macro leave the Trading Hub for a regular server")
     async def leave_trade_hub(interaction: discord.Interaction) -> None:
@@ -889,6 +950,26 @@ def build(config: bot_lib.Config) -> discord.Client:
         await interaction.response.defer(thinking=True)
         text = bot_lib.options_text(bot_lib.switch_states(bot_lib.read_json(cfg.GAME_CONFIG_PATH)))
         await say(interaction, f"```\n{text}\n```")
+
+    test_choices = [app_commands.Choice(name=name, value=name) for name in (*cfg.NEED_NAMES, cfg.TEST_ALL_TELEPORTS)]
+
+    @command("test", "Run one need handler, or every teleport one (the Debug tab's Test buttons; stops the loop)")
+    @app_commands.choices(handler=test_choices)
+    async def test_command(interaction: discord.Interaction, handler: app_commands.Choice[str]) -> None:
+        await ask_macro(interaction, "test", f"Asked the macro to test {handler.value}. Its loop is stopped; /loop it again afterwards.", label=f"The {handler.value} test", handler=handler.value)
+
+    @command("reset_config", "Reset the game config: totals, timers and switches (the private server link is kept)")
+    @app_commands.describe(sure="Must be True: this cannot be undone")
+    async def reset_config_command(interaction: discord.Interaction, sure: bool) -> None:
+        if not sure:
+            await interaction.response.send_message("Nothing was reset: say sure: True to reset the config.")
+            return
+        await ask_macro(interaction, "reset_config", "Asked the macro to reset the config.", idle_only=True, label="The reset")
+
+    @command("server_link", "Save the private server link a rejoin goes to (the channel shows what you type)")
+    @app_commands.describe(link="The private server's link")
+    async def server_link(interaction: discord.Interaction, link: str) -> None:
+        await ask_macro(interaction, "server_link", "Asked the macro to save the private server link.", label="Saving the link", link=link)
 
     pull_folders = [app_commands.Choice(name=name, value=name) for name in cfg.PULL_SOURCES]
 

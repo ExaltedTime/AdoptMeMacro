@@ -98,6 +98,25 @@ def test_the_outer_two_tvs_give_the_middle_one_when_the_camera_is_close(macro):
     assert len(macro.find_hauntlet_doors(screen)) == 3
 
 
+@pytest.mark.parametrize("name", ["room3_third_tv_off_the_left_edge_a", "room3_third_tv_off_the_left_edge_b"])
+def test_two_neighbouring_tvs_give_the_third_when_it_is_off_the_edge_of_the_screen(macro, name):
+    """Real frames of room 3 of two macro-played runs: the player stands against the right wall and the camera looks along it, so the left door's TV is
+    left of the screen. The row was not found for 5 s and "no doors found in room 3" was logged both times."""
+    screen = cv2.imread(os.path.join(HERE, "doors", f"{name}.png"))
+    tvs = macro.find_door_tvs(screen)
+    assert [x for x, _ in tvs] == pytest.approx([-205, 267, 740], abs=25)
+    doors = macro.find_hauntlet_doors(screen)
+    assert doors[0].kind is None and doors[1].kind == "boarded"                   # (the door that is off the screen is not read from what is at the other end of the picture)
+    mirrored = cv2.flip(screen, 1)                                                # the same room the other way round: the third is off the right edge
+    assert [x for x, _ in macro.find_door_tvs(mirrored)] == pytest.approx([1920 - 740, 1920 - 267, 1920 + 205], abs=25)
+
+
+def test_two_neighbouring_tvs_with_room_for_the_third_on_the_screen_are_no_row(macro):
+    screen = np.zeros((1080, 1920, 3), np.uint8)
+    blob(screen, 700, 400), blob(screen, 1100, 400)                                    # a third would be at 300 or 1500: both on the screen
+    assert macro.find_door_tvs(screen) == []
+
+
 def test_two_tvs_are_the_outer_ones_only_when_far_apart_and_centred(macro):
     screen = np.zeros((1080, 1920, 3), np.uint8)
     blob(screen, 570, 300), blob(screen, 1350, 300)                                   # 780 apart, centred
@@ -123,7 +142,7 @@ def test_two_neighbouring_tvs_high_up_give_the_third_behind_the_room_panel(macro
     screen = np.zeros((1080, 1920, 3), np.uint8)
     blob(screen, 1320, 127), blob(screen, 1670, 127)                                  # the middle and right ones: the first is behind the panel
     assert [x for x, _ in macro.find_door_tvs(screen)] == pytest.approx([970, 1320, 1670], abs=1)
-    for first, second, y in ((272, 622, 300), (300, 800, 127), (40, 300, 127)):     # too low, too far apart, the third not behind the panel
+    for first, second, y in ((500, 850, 300), (300, 800, 127), (700, 1000, 127)):   # too low, too far apart, the third not behind the panel (nor off the screen)
         screen = np.zeros((1080, 1920, 3), np.uint8)
         blob(screen, first, y), blob(screen, second, y)
         assert macro.find_door_tvs(screen) == [], (first, second, y)
@@ -701,6 +720,29 @@ def test_a_walk_that_gets_nowhere_is_followed_by_one_that_steps_back_first(macro
     assert keys.count(("down", "w")) == keys.count(("up", "w")) == 1 and run.stuck == 2        # ...and holds forward all the while
 
 
+def test_a_player_standing_in_its_doors_circle_waits_for_the_room_to_change_past_the_walks_end_and_does_not_jump_out(macro, world, monkeypatch):
+    """Real runs: the room changed 9-13 s after the player stepped into the circle; the walk ended at HAUNTLET_WALK_MAX as one that got nowhere, and the
+    unsticking had jumped the player (still, as it should be) out of it."""
+    cfg = macro.cfg
+    monkeypatch.setattr(cfg, "HAUNTLET_WALK_MAX", 6.0)
+    monkeypatch.setattr(cfg, "HAUNTLET_AIM_STEPS", 0)
+    monkeypatch.setattr(macro, "player_in_circle", lambda img, circles: True)
+    run = macro.HauntletRun()
+    run.room = 5
+    looks = int(10 / cfg.HAUNTLET_LOOK_INTERVAL)                                    # 10 s in the circle, longer than the walk's 6
+    world.screens = [frame(macro, room=5)] * looks + [frame(macro, room=6)]
+    start = world.clock.now
+    macro.hauntlet_walk(None, 0.0, run, watch_of(macro), target_index=1)
+    assert world.clock.now - start > cfg.HAUNTLET_WALK_MAX and run.stuck == 0                  # (it arrived)
+    assert not [k for k in world.keys if k[1] in (cfg.KEYS["left"], cfg.KEYS["right"])] and not [k for k in world.keys if k[0] == "press"]
+    monkeypatch.setattr(cfg, "HAUNTLET_CIRCLE_WAIT", 8.0)
+    run = macro.HauntletRun()
+    run.room = 5
+    world.screens = [frame(macro, room=5)]                                          # the room never changes: the wait ends, and the walk got nowhere
+    macro.hauntlet_walk(None, 0.0, run, watch_of(macro), target_index=1)
+    assert run.stuck == 1
+
+
 def test_a_player_caught_on_something_steps_sideways_towards_its_door_and_jumps(macro, world, monkeypatch):
     cfg = macro.cfg
     monkeypatch.setattr(cfg, "HAUNTLET_WALK_MAX", (cfg.HAUNTLET_STILL_AFTER + cfg.HAUNTLET_UNSTICK_MAX) * 3)       # (three unsticks, the longest)
@@ -830,17 +872,16 @@ def test_the_strafe_goes_to_the_circle_in_front_of_the_door_not_to_its_tv(macro)
     assert key == cfg.KEYS["right"] and seconds == pytest.approx((1293 - 960) / 362 * cfg.HAUNTLET_STRAFE_DURATION, rel=0.03)
 
 
-def test_a_player_in_a_circle_is_held_so_it_is_not_unstuck_and_the_door_stays_picked_for_the_retry(macro, world, monkeypatch):
+def test_a_player_in_a_circle_is_not_unstuck_and_the_door_stays_picked_for_the_retry(macro, world, monkeypatch):
     cfg = macro.cfg
     monkeypatch.setattr(cfg, "HAUNTLET_WALK_MAX", cfg.HAUNTLET_LOCK_WAIT + cfg.HAUNTLET_STILL_AFTER * 4)
     run = macro.HauntletRun()
     run.room = 5
     world.screens = [circles_screen("middle_hidden")]                                       # standing in the middle circle, not moving
-    start = world.clock.now
     macro.hauntlet_walk(None, 0.0, run, watch_of(macro), target_index=1)
     sideways = [at for kind, key, at in world.keys if kind == "down" and key in (cfg.KEYS["left"], cfg.KEYS["right"])]
     assert run.picked == 1                                                                   # the door is picked
-    assert sideways and sideways[0] - start >= cfg.HAUNTLET_LOCK_WAIT                         # no step sideways while it is held
+    assert not sideways                                                                       # no step sideways: not while it is held, nor after (it stands in the circle)
     doors = macro.find_hauntlet_doors(frame(macro, "plain-plain-plain__yellow_walls"))
     used = []
     monkeypatch.setattr(macro, "hauntlet_use_item", lambda name, watch: used.append(name))

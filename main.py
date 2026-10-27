@@ -155,10 +155,36 @@ def focus_roblox() -> bool:
         return False
     if w.isMinimized:
         w.restore()
-    w.activate()
+    try:
+        w.activate()
+    except gw.PyGetWindowException as error:        # Windows would not hand the focus over (its error code is often 0: "completed successfully"): another program has the foreground, say the bot's console that has just opened
+        logger.warning(f"Roblox could not be brought to the front ({error}) - trying another way")
+        if not force_foreground(w):
+            logger.warning("Roblox could not be brought to the front")
+            return False
     _ROBLOX_RECT = None  # it may have just moved or changed size
     time.sleep(cfg.FOCUS_DELAY)
     return True
+
+def force_foreground(window: Any) -> bool:
+    """Take the foreground for `window` when activate() was refused: a tap of the Alt key (a program that was just given the keys may then ask for the foreground), activate() again, and
+    if that is refused too minimize and restore the window, which brings it to the front. True if Roblox is the focused window after any of them."""
+    for attempt in range(cfg.FOCUS_FORCE_TRIES):
+        try:
+            if attempt == 0:
+                key_down(cfg.KEYS["foreground_tap"])
+                key_up(cfg.KEYS["foreground_tap"])
+                window.activate()
+            else:
+                window.minimize()
+                time.sleep(cfg.FOCUS_DELAY)
+                window.restore()
+        except gw.PyGetWindowException:
+            pass
+        time.sleep(cfg.FOCUS_DELAY)
+        if is_roblox_focused():
+            return True
+    return False
 
 def is_roblox_focused() -> bool:
     """Return True if a window with 'roblox' in its title is currently the

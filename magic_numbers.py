@@ -807,7 +807,8 @@ TRADES_MAX_OFFERS = 30                                          # the most offer
 TRADES_SEARCH_POS = (1070, 642)                                 # the backpack's search box ("Enter Search...")
 TRADES_SEARCH_TEXT = "phone"                                    # typed in it in the Toys tab: the phone is then the first item (TRADE_HUB_PHONE_POS), where the slot-by-slot search had the badge there
 TRADES_UNFOCUS_POS = (745, 681)                                 # a click here (the tab's name) takes the focus out of the search box, so that the backpack key is not typed into it
-TYPE_KEY_DELAY = 0.08                                           # seconds after each key of type_keys()
+FOCUS_FORCE_TRIES = 2                                           # when Windows refuses activate(): force_foreground()'s ways (an Alt tap and activate again, then minimize and restore)
+TYPE_KEY_DELAY = 0.08                                          # seconds after each key of type_keys()
 TRADES_PHONE_LISTINGS_POS = (870, 430)                          # the phone's TRADE LISTINGS
 TRADES_MENU_VIEW_POS = (855, 650)                               # the menu's VIEW MY LISTINGS
 TRADES_NEXT_POS = (1290, 530)                                   # the arrow at the right of the listing (with two listings, it goes from one to the other)
@@ -914,6 +915,7 @@ KEYS = {
     "helicopter": "r",             # held to fly the equipped helicopter (also held briefly by ride)
     "camera_left": "left",         # the arrow keys turn the camera (Stitches' Spotlight turns it to keep the middle of the ring in view)
     "camera_right": "right",
+    "foreground_tap": "alt",       # tapped when Windows refuses to bring Roblox to the front: a program that was just given the keys may then ask for the foreground (force_foreground())
 }
 KEY_SEQUENCES = {                  # keys pressed one after the other, each held KEY_STEP_GAP-ish (RESPAWN_KEY_DURATION, REJOIN_LEAVE_KEY_GAP)
     "respawn": ("esc", "r", "enter"),

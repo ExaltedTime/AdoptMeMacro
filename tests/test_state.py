@@ -1954,6 +1954,42 @@ def test_sloop_runs_setup_and_then_the_loop_whether_or_not_one_was_running(macro
     assert ("start_loop",) not in stopped.calls
 
 
+class Refused(Exception):
+    """pygetwindow's PyGetWindowException: Windows would not give the foreground ("Error code from Windows: 0 - The operation completed successfully.")."""
+
+
+def focus_window(macro, monkeypatch, refuses, focused_after):
+    """A Roblox window whose activate() is refused `refuses` times (and the focused window afterwards: `focused_after` says after which try Roblox is it)."""
+    calls = []
+    window = types.SimpleNamespace(isMinimized=False)
+    def activate():
+        calls.append("activate")
+        if calls.count("activate") <= refuses:
+            raise Refused("Error code from Windows: 0 - The operation completed successfully.")
+    window.activate = activate
+    window.minimize = lambda: calls.append("minimize")
+    window.restore = lambda: calls.append("restore")
+    monkeypatch.setattr(macro.gw, "PyGetWindowException", Refused, raising=False)
+    monkeypatch.setattr(macro, "roblox_window", lambda: window)
+    monkeypatch.setattr(macro.time, "sleep", lambda s: None)
+    monkeypatch.setattr(macro.pydirectinput, "keyDown", lambda key, **k: calls.append(("down", key)), raising=False)
+    monkeypatch.setattr(macro.pydirectinput, "keyUp", lambda key, **k: calls.append(("up", key)), raising=False)
+    monkeypatch.setattr(macro, "is_roblox_focused", lambda: focused_after(calls))
+    return calls
+
+
+def test_a_focus_that_windows_refuses_is_taken_another_way_and_never_crashes_the_macro(macro, monkeypatch):
+    """/inventory crashed with PyGetWindowException (error code 0): the bot's console had just opened over Roblox."""
+    calls = focus_window(macro, monkeypatch, 0, lambda calls: True)
+    assert macro.focus_roblox() is True and calls == ["activate"]                            # (taken at once: nothing else tried)
+    calls = focus_window(macro, monkeypatch, 1, lambda calls: "activate" in calls[3:])
+    assert macro.focus_roblox() is True and calls == ["activate", ("down", "alt"), ("up", "alt"), "activate"]      # refused: an Alt tap, and again
+    calls = focus_window(macro, monkeypatch, 5, lambda calls: "restore" in calls)
+    assert macro.focus_roblox() is True and calls[-2:] == ["minimize", "restore"]            # refused again: minimized and restored
+    calls = focus_window(macro, monkeypatch, 5, lambda calls: False)
+    assert macro.focus_roblox() is False                                                     # (not got by any: said, not raised)
+
+
 def test_the_focus_command_brings_the_roblox_window_to_the_front_without_stopping_a_loop(macro, monkeypatch, tmp_path):
     focused = []
     monkeypatch.setattr(macro, "focus_roblox", lambda: focused.append(1) or True)

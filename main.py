@@ -579,6 +579,9 @@ def read_command_with_id() -> tuple[str, Optional[dict[str, Any]]]:
     if data["command"] == "test" and data.get("handler") not in (*DEBUG_HANDLERS, cfg.TEST_ALL_TELEPORTS):
         dropped(f"test {data.get('handler')} is not a handler the macro has")
         return stem, None
+    if data["command"] == "capture" and "value" in data and not isinstance(data["value"], bool):
+        dropped("capture is asked for with a true or false value, or none")
+        return stem, None
     if data["command"] == "decline" and (data.get("listing") not in cfg.TRADES_LISTINGS or not isinstance(data.get("offer"), int) or isinstance(data.get("offer"), bool)
                                          or not 1 <= data["offer"] <= cfg.TRADES_MAX_OFFERS):
         dropped(f"decline listing {data.get('listing')} offer {data.get('offer')} is not an offer the macro can be asked for")
@@ -1947,10 +1950,10 @@ def open_trade_listings() -> bool:
         screen = "phone"
     if screen == "phone":
         hover_click(*cfg.TRADES_PHONE_LISTINGS_POS)
-        if not wait_trade_screen("menu"):
+        if not wait_trade_screen("menu", "listings"):                        # (from the house a player with listings gets them at once: the menu was waited for 4 s and the tour ended, in a capture)
             log_run_event("trade listings: the Trading Hub menu did not come up")
             return False
-        screen = "menu"
+        screen = trade_screen(grab_screen())
     if screen == "menu":
         hover_click(*cfg.TRADES_MENU_VIEW_POS)
         if not wait_trade_screen("listings"):
@@ -2011,7 +2014,7 @@ def open_offers(number: int) -> bool:
         return False
     hover_click(*cfg.TRADES_OFFERS_POS)
     if not wait_trade_screen("offers"):
-        log_run_event(f"trade listings: the offers of listing {number} did not come up")
+        log_failure(f"trade listings: the offers of listing {number} did not come up (screen: {trade_screen(grab_screen())})")       # (with the screenshot: what is on screen then is what to look at)
         return False
     hover_move(*cfg.TRADES_SCROLL_POS)
     return True
@@ -2087,6 +2090,7 @@ def trades_tour() -> bool:
     try:
         if not open_trade_listings():
             result["problem"] = "the trade listings could not be opened (see the log)"
+            log_failure(f"trade listings: could not be opened (screen: {trade_screen(grab_screen())})")
             return False
         for listing in cfg.TRADES_LISTINGS:
             if open_offers(listing):
@@ -6541,7 +6545,8 @@ class AdoptMeGUI:
             value = data.get("value") if data else None
             finish_command(stem, self.blackout_command(value if isinstance(value, bool) else None))
         elif command == "capture":
-            finish_command(stem, self.capture_command())
+            value = data.get("value") if data else None
+            finish_command(stem, self.capture_command(value if isinstance(value, bool) else None))
         elif command == "focus":
             focus_roblox()                                                          # the window to the front (no click): after an update the macro's own window may be
         elif command == "sloop":
@@ -6703,9 +6708,15 @@ class AdoptMeGUI:
         except OSError as error:
             logger.warning(f"Input capture: {error}")
 
-    def capture_command(self) -> str:
+    def capture_command(self, value: Optional[bool] = None) -> str:
         """The `capture` command (Tk's thread): what the capture hotkey does - start a capture, or stop the one that is running - while a command of the bot goes on, to see what it
-        does. What happened, for the bot: "started", "stopped" or "failed: why"."""
+        does; with `value` True only a start (a capture that is running already is left: "running"), False only a stop ("none running" if there is none). What happened, for the bot:
+        "started", "stopped", "running", "none running" or "failed: why"."""
+        running = state.capture is not None and state.capture.running
+        if value is True and running:
+            return "running"
+        if value is False and not running:
+            return "none running"                                          # (a capture that stopped by itself is tidied up by the next toggle)
         try:
             return "started" if toggle_input_capture() is not None else "stopped"
         except OSError as error:

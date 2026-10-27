@@ -1971,6 +1971,30 @@ def test_the_capture_command_starts_a_capture_and_the_next_one_stops_it_and_says
     assert "capture" in macro.cfg.COMMANDS
 
 
+def test_the_capture_command_with_a_value_only_starts_or_only_stops(macro, monkeypatch, tmp_path):
+    """The debug option: a start that leaves a capture that runs already alone, and an end that does not start one."""
+    toggles = []
+    monkeypatch.setattr(macro, "toggle_input_capture", lambda: toggles.append(1) or (object() if len(toggles) % 2 else None))
+    gui = remote_gui(macro, monkeypatch, tmp_path)
+    macro.state.capture = None
+    assert gui.capture_command(False) == "none running" and toggles == []                       # (nothing to end: not started by it)
+    assert gui.capture_command(True) == "started" and toggles == [1]
+    macro.state.capture = types.SimpleNamespace(running=True)
+    assert gui.capture_command(True) == "running" and toggles == [1]                              # (one runs: left alone)
+    assert gui.capture_command(False) == "stopped" and toggles == [1, 1]
+    macro.state.capture = None
+
+
+def test_a_capture_command_is_read_with_no_value_or_a_true_or_false_one(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
+    for details in ({}, dict(value=True), dict(value=False)):
+        write_command(macro, "capture", **details)
+        assert macro.read_command_with_id()[1]["command"] == "capture"
+    for details in (dict(value="yes"), dict(value=1)):
+        write_command(macro, "capture", **details)
+        assert macro.read_command_with_id()[1] is None, details
+
+
 def test_the_status_file_says_whether_the_window_is_busy_and_a_new_run_does_not_clear_it(macro, monkeypatch):
     """The bot's /rview until done waits for `busy` to go down."""
     written = []

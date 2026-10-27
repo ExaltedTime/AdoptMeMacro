@@ -698,6 +698,92 @@ def test_a_macro_that_is_running_is_left_alone_and_one_that_does_not_come_up_is_
     assert asyncio.run(discord_bot.ensure_macro(config)) == ("Started the macro, but its process is not there - see /log and macro_stderr.log.", False)
 
 
+class FakeMessage:
+    def __init__(self):
+        self.edits = []
+
+    async def edit(self, **kwargs):
+        self.edits.append(kwargs)
+
+
+def debug_fakes(monkeypatch, answers=None):
+    """The debug session with the macro and Discord replaced: `sent` is every command asked for, `said` what the channel was told."""
+    sent, said, message = [], [], FakeMessage()
+
+    async def submit(command, **details):
+        sent.append((command, details))
+        return (answers or {}).get((command, details.get("value")), ""), "name"
+
+    async def say(interaction, text=None, **kwargs):
+        said.append(text)
+        return message
+
+    async def ended(name, seconds):
+        return "stopped"
+    monkeypatch.setattr(discord_bot, "submit_command", submit)
+    monkeypatch.setattr(discord_bot, "say", say)
+    monkeypatch.setattr(discord_bot, "wait_for_end", ended)
+    monkeypatch.setattr(discord_bot, "grab_roblox_jpeg", lambda: (b"jpeg", False))
+    monkeypatch.setattr(discord_bot.cfg, "BOT_RVIEW_INTERVAL", 0.01)
+    return sent, said, message
+
+
+def test_a_debug_session_starts_a_capture_and_a_rolling_view_and_ends_both_once_when_the_command_is_over(monkeypatch):
+    sent, said, message = debug_fakes(monkeypatch)
+
+    async def run():
+        session = discord_bot.DebugSession(object())
+        await session.start()
+        await asyncio.sleep(0.1)
+        await session.end()
+        await session.end()                                                           # (once)
+    asyncio.run(run())
+    assert sent == [("capture", {"value": True}), ("capture", {"value": False})]       # (a start, not a toggle: a capture that runs already is left alone, and the end only ends)
+    assert said[0].startswith("Capture running. Rolling view") and "stopped and being zipped" in said[-1] and len(said) == 2
+    assert len(message.edits) >= 3 and message.edits[-1]["content"] == "Capture running. Rolling view over."          # (pictures while it went, then over)
+    assert all("attachments" in e for e in message.edits[:-1])
+
+
+def test_a_debug_session_without_a_capture_still_shows_the_view_and_says_why_and_a_command_that_ends_it_does_it_through_announce(monkeypatch, tmp_path):
+    sent, said, message = debug_fakes(monkeypatch, answers={("capture", True): "The macro dropped the command (too old) - nothing was done."})
+    monkeypatch.setattr(discord_bot.cfg, "COMMANDS_DIR", str(tmp_path))
+    monkeypatch.setattr(discord_bot.cfg, "BOT_ACTION_POLL", 0.01)
+    monkeypatch.setattr(discord_bot.cfg, "BOT_ACTION_WAIT", 0.3)
+    told = []
+
+    async def tell(client, config, text):
+        told.append(text)
+    monkeypatch.setattr(discord_bot, "tell_channel", tell)
+
+    async def run():
+        session = discord_bot.DebugSession(object())
+        await session.start()
+        (tmp_path / "name.done").write_text("done")                                       # the macro's action ends: announce says so, and then the session ends
+        await discord_bot.announce_when_done(None, None, "name", "The test", "", session.end)
+        return session
+    session = asyncio.run(run())
+    assert sent == [("capture", {"value": True})] and said[0].startswith("No capture (The macro dropped the command")
+    assert told == ["The test finished (done)."] and session.ended is True and message.edits[-1]["content"].endswith("Rolling view over.")
+
+
+def test_the_session_ends_even_when_the_macro_never_reports(monkeypatch, tmp_path):
+    sent, said, message = debug_fakes(monkeypatch)
+    monkeypatch.setattr(discord_bot.cfg, "COMMANDS_DIR", str(tmp_path))
+    monkeypatch.setattr(discord_bot.cfg, "BOT_ACTION_POLL", 0.01)
+    monkeypatch.setattr(discord_bot.cfg, "BOT_ACTION_WAIT", 0.05)
+
+    async def tell(client, config, text):
+        pass
+    monkeypatch.setattr(discord_bot, "tell_channel", tell)
+
+    async def run():
+        session = discord_bot.DebugSession(object())
+        await session.start()
+        await discord_bot.announce_when_done(None, None, "name", "The test", "", session.end)
+        return session
+    assert asyncio.run(run()).ended is True and sent[-1] == ("capture", {"value": False})
+
+
 def test_the_macros_answer_to_capture_is_said_in_words():
     assert "/capture again to end it" in discord_bot.capture_text("started")
     assert "stopped" in discord_bot.capture_text("stopped") and "/captures" in discord_bot.capture_text("stopped")

@@ -137,15 +137,41 @@ def test_the_phone_is_found_by_typing_its_name_in_the_toys_search_clicking_the_f
     monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: events.append(("click", (x, y))))
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
     monkeypatch.setattr(macro, "close_backpack", lambda step: events.append(("close", step)))
-    monkeypatch.setattr(macro, "grab_screen", lambda: frame("menu"))                          # (a frame with the phone's icon in the hotbar)
+    looks = [frame("toys_card"), frame("menu")]                                               # (the phone's card is up after the first item is clicked; at the end the hotbar has its icon)
+    monkeypatch.setattr(macro, "grab_screen", lambda: looks.pop(0) if len(looks) > 1 else looks[0])
+    monkeypatch.setattr(macro, "log_run_event", lambda text: events.append(("log", text)))
     assert macro.equip_trade_phone() is True
     clicks = [e[1] for e in events if e[0] == "click"]
     presses = [e[1] for e in events if e[0] == "press"]
-    assert presses == [cfg.KEYS["backpack"], *"phone", *["backspace"] * len("phone")]
-    assert clicks == [cfg.TRADE_HUB_TOYS_TAB_POS, cfg.TRADES_SEARCH_POS, cfg.TRADE_HUB_PHONE_POS, cfg.TRADE_HUB_EQUIP_POS, cfg.TRADES_SEARCH_POS, cfg.TRADES_UNFOCUS_POS]
+    assert presses == [cfg.KEYS["backpack"], *["backspace"] * 5, *"phone", *["backspace"] * 5]          # (the box emptied first: what a search before left in it)
+    equip = (1111 + cfg.TRADES_EQUIP_OFFSET[0], 780 + cfg.TRADES_EQUIP_OFFSET[1])                       # from the middle of the card's name, where the real frame has it
+    assert clicks == [cfg.TRADE_HUB_TOYS_TAB_POS, cfg.TRADES_SEARCH_POS, cfg.TRADE_HUB_PHONE_POS, (equip[0], equip[1]), cfg.TRADES_SEARCH_POS, cfg.TRADES_UNFOCUS_POS]
+    assert abs(equip[0] - 1073) <= 3 and abs(equip[1] - 855) <= 3                                      # (the Equip button of the real frame)
     assert events[-1] == ("close", "the Trading Hub Phone") and macro.state.typing is False
     typed = {e[1]: e[2] for e in events if e[0] == "press"}
     assert all(typed[key] is True for key in "phone") and typed[cfg.KEYS["backpack"]] is False        # (the hotkeys are left alone while it types: "phone" has the stop key)
+
+
+def test_the_badge_is_never_equipped_when_the_search_leaves_it_first_the_search_is_tried_again_and_then_nothing_is_equipped(macro, monkeypatch):
+    """The phone's card is looked for after the first item is clicked, and Equip only goes where that card is: a search that did not filter (the badge first) gets no Equip."""
+    cfg = macro.cfg
+    events = []
+    monkeypatch.undo()
+    monkeypatch.setattr(macro, "time", types.SimpleNamespace(**{**vars(macro.time), "time": lambda: 1000.0, "sleep": lambda s: None}))
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "check_running", lambda: None)
+    monkeypatch.setattr(macro.pydirectinput, "press", lambda key, **k: events.append(("press", key)), raising=False)
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: events.append(("click", (x, y))))
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "close_backpack", lambda step: events.append(("close", step)))
+    monkeypatch.setattr(macro, "log_run_event", lambda text: events.append(("log", text)))
+    monkeypatch.setattr(macro, "grab_screen", lambda: frame("menu"))                          # (no card of the phone: the hotbar of this frame has the phone's icon, but the card is not there)
+    assert macro.equip_trade_phone() is False
+    clicks = [e[1] for e in events if e[0] == "click"]
+    assert clicks.count(cfg.TRADE_HUB_PHONE_POS) == cfg.TRADES_EQUIP_TRIES and clicks.count(cfg.TRADES_SEARCH_POS) == cfg.TRADES_EQUIP_TRIES + 1
+    assert not [c for c in clicks if c not in (cfg.TRADE_HUB_TOYS_TAB_POS, cfg.TRADES_SEARCH_POS, cfg.TRADE_HUB_PHONE_POS, cfg.TRADES_UNFOCUS_POS)]        # (no Equip anywhere)
+    assert [e[1] for e in events if e[0] == "log"].count("trade listings: the item clicked is not the Trading Hub Phone - searching again") == 1
+    assert events[-1] == ("close", "the Trading Hub Phone")                                    # (the search cleared, the backpack closed)
 
 
 def test_the_hotkeys_are_not_acted_on_while_the_macro_types_its_own_letters(macro, monkeypatch):

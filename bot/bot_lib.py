@@ -440,6 +440,20 @@ def loop_idle(status: Optional[dict[str, Any]]) -> bool:
     return status is not None and bool(status.get("stopped"))
 
 
+def macro_busy(status: Optional[dict[str, Any]]) -> Optional[bool]:
+    """Whether the macro's window is running something (the loop or an action), from status.json; None if it does not say (no status, or one from before it did)."""
+    busy = status.get("busy") if status else None
+    return busy if isinstance(busy, bool) else None
+
+
+def rview_finished(elapsed: float, limit: float, until_done: bool, busy: Optional[bool], seen_busy: bool, grace: float) -> bool:
+    """Whether the rolling view is over: its time (`limit` seconds) is up or - with `until_done` - the macro has stopped being busy after it was seen busy, or was not busy at all for
+    `grace` seconds from the start (what was asked for was over already, or never began). A status that does not say (`busy` None) never ends it early."""
+    if elapsed >= limit:
+        return True
+    return until_done and busy is False and (seen_busy or elapsed >= grace)
+
+
 def heartbeat_due(last: Optional[float], hours: float, now: float) -> bool:
     """Whether a heartbeat post is due: `hours` is not 0 and that long has passed since `last` (None: never, so it is due at once)."""
     return hours > 0 and (last is None or now - last >= hours * 3600)

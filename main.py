@@ -1864,17 +1864,6 @@ def wait_trade_screen(*screens: str) -> bool:
             return False
         wait_interruptible(cfg.TRADES_POLL)
 
-def wait_for_phone_first() -> bool:
-    """Wait up to TRADES_SEARCH_MAX_WAIT seconds for the backpack's list to be the search's: the phone's picture in the first slot (POPUP_TEMPLATES["phone_icon"]; in the unfiltered list it
-    is in the second, behind the badge). In a capture the list followed the typed text by about two seconds."""
-    deadline = time.time() + cfg.TRADES_SEARCH_MAX_WAIT
-    while True:
-        if popup_visible(grab_screen(), "phone_icon"):
-            return True
-        if time.time() >= deadline:
-            return False
-        wait_interruptible(cfg.TRADES_POLL)
-
 def equip_trade_phone() -> bool:
     """Open the backpack, the Toys tab, type TRADES_SEARCH_TEXT in its search box, click the first item (the phone: the Special row's order changed with the favourites filter, and the
     slot of the badge was taken for it) and Equip, clear the search (a filter left in it would show the other features' backpack items wrong) and close the backpack with its key (the
@@ -1891,16 +1880,13 @@ def equip_trade_phone() -> bool:
                 return False
             type_keys(["backspace"] * len(cfg.TRADES_SEARCH_TEXT))          # (what a search before left in the box)
             type_text(cfg.TRADES_SEARCH_TEXT)
-            again = " - searching again" if attempt + 1 < cfg.TRADES_EQUIP_TRIES else ""
-            if not wait_for_phone_first():                                   # (the list follows the text a couple of seconds late: a click before it was the badge's, the item that was first)
-                log_run_event("trade listings: the search did not leave the phone first" + again)
-                continue
-            hover_click(*cfg.TRADE_HUB_PHONE_POS)                           # the first item of what the search leaves: the phone
+            wait_interruptible(cfg.TRADES_SEARCH_SETTLE)
+            hover_click(*cfg.TRADE_HUB_PHONE_POS)                           # the first item of what the search leaves
             wait_interruptible(cfg.UI_SETTLE)
             card = popup_found(grab_screen(), "phone_card")
             if card is not None:
                 break
-            log_run_event("trade listings: the item clicked is not the Trading Hub Phone" + again)
+            log_run_event("trade listings: the item clicked is not the Trading Hub Phone" + (" - searching again" if attempt + 1 < cfg.TRADES_EQUIP_TRIES else ""))
         if card is not None:
             hover_click(card[0] + cfg.TRADES_EQUIP_OFFSET[0], card[1] + cfg.TRADES_EQUIP_OFFSET[1])      # (its Equip, where the card is: never the badge's)
             wait_interruptible(cfg.UI_SETTLE)

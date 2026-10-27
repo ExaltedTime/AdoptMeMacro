@@ -78,6 +78,13 @@ def test_each_screen_of_the_phone_is_told_from_a_real_frame_and_the_listing_from
     assert macro.popup_visible(frame("menu"), "trade_phone_hotbar") and not macro.popup_visible(np.zeros((1080, 1920, 3), np.uint8), "trade_phone_hotbar")
 
 
+def test_the_listings_are_known_outside_the_trading_hub_too_where_their_title_is_trading_hub_and_not_my_listings(macro):
+    """The player's own screenshot: in the house the listing's window is "TRADING HUB  LISTING 1/2" (what the stray window `trading_hub` closes), and /trades went no further."""
+    house = cv2.imread(os.path.join(os.path.dirname(__file__), "popups", "trading_hub.png"))
+    assert macro.trade_screen(house) == "listings" and macro.listing_shown(house) == 1
+    assert macro.trade_screen(frame("menu")) == "menu" and macro.listing_shown(frame("menu")) is None          # (the menu has the same title and no numbers)
+
+
 def test_the_rows_whole_in_the_list_are_found_by_their_accept_buttons_and_known_again_by_their_pictures(macro):
     offers = frame("offers")
     assert macro.visible_offers(offers) == pytest.approx([453, 589], abs=3)                  # (the third row is cut off by the list's bottom)

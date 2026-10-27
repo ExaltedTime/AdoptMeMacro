@@ -1954,6 +1954,23 @@ def test_sloop_runs_setup_and_then_the_loop_whether_or_not_one_was_running(macro
     assert ("start_loop",) not in stopped.calls
 
 
+def test_the_capture_command_starts_a_capture_and_the_next_one_stops_it_and_says_which(macro, monkeypatch, tmp_path):
+    """Run while a command goes on (the loop is not stopped, nothing is queued): what the capture hotkey does."""
+    state_of = []
+    monkeypatch.setattr(macro, "toggle_input_capture", lambda: state_of.append(1) or (object() if len(state_of) % 2 else None))
+    gui = remote_gui(macro, monkeypatch, tmp_path, running=True)
+    gui.do_command("capture", {"command": "capture"}, "c1")
+    assert done_text(macro, "c1") == "started" and gui.calls == [] and gui.pending == []
+    gui.do_command("capture", {"command": "capture"}, "c2")
+    assert done_text(macro, "c2") == "stopped"
+    def broken():
+        raise OSError("no space left")
+    monkeypatch.setattr(macro, "toggle_input_capture", broken)
+    gui.do_command("capture", {"command": "capture"}, "c3")
+    assert done_text(macro, "c3") == "failed: no space left"
+    assert "capture" in macro.cfg.COMMANDS
+
+
 def test_the_status_file_says_whether_the_window_is_busy_and_a_new_run_does_not_clear_it(macro, monkeypatch):
     """The bot's /rview until done waits for `busy` to go down."""
     written = []

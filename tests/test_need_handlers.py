@@ -156,11 +156,24 @@ def test_a_ride_that_did_not_clear_its_need_sets_the_backpack_filter_and_rides_o
 
 def test_the_filter_is_set_by_the_clicks_setup_makes_and_setup_does_it_too(macro, events, monkeypatch):
     cfg = macro.cfg
+    import cv2
     monkeypatch.setattr(macro, "backpack_on_purpose", contextlib_null)
+    card = cv2.imread(os.path.join(os.path.dirname(__file__), "trades", "toys_card.png"))     # (a frame with the card of an item and its green Equip button)
+    monkeypatch.setattr(macro, "grab_screen", lambda: card)
+    monkeypatch.setattr(macro, "log_run_event", lambda text: events.append(("log", text)))
     macro.set_backpack_filter()
     clicks = [e[1] for e in events if e[0] == "click"]
-    assert clicks == [cfg.SETUP_BACKPACK_SETTINGS_POS, cfg.SETUP_SORT_MENU_POS, cfg.SETUP_FAVORITES_POS, cfg.SETUP_CONFIRM_POS]
+    equip = clicks[-1]
+    assert clicks[:-1] == [cfg.SETUP_BACKPACK_SETTINGS_POS, cfg.SETUP_SORT_MENU_POS, cfg.SETUP_FAVORITES_POS, cfg.SETUP_CONFIRM_POS, cfg.PET_SECOND_ITEM_POS]
+    assert abs(equip[0] - 1072) <= 3 and abs(equip[1] - 857) <= 3                              # the favourite pet's Equip, found on the card
+    confirm = next(i for i, e in enumerate(events) if e[:2] == ("click", cfg.SETUP_CONFIRM_POS))
+    assert ("tab", cfg.INVENTORY_PETS_TAB_POS) in events and events.index(("tab", cfg.INVENTORY_PETS_TAB_POS)) > confirm        # (the pets tab after the filter is confirmed)
     assert [e for e in events if e[0] == "press"] == [("press", cfg.KEYS["backpack"])] and events[-1] == ("close", "setup")
+    events.clear()
+    import numpy as np
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((1080, 1920, 3), np.uint8))   # an item with no Equip button (it is equipped): nothing more is clicked
+    macro.set_backpack_filter()
+    assert [e[1] for e in events if e[0] == "click"][-1] == cfg.PET_SECOND_ITEM_POS and any(e[0] == "log" and "equipped already" in e[1] for e in events)
 
 
 def contextlib_null():

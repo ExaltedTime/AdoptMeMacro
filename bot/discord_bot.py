@@ -240,6 +240,17 @@ async def wait_for_end(name: str, seconds: float) -> Optional[str]:
         await asyncio.sleep(cfg.BOT_COMMAND_ACK_POLL)
 
 
+def capture_text(ended: Optional[str]) -> str:
+    """What to say of the macro's answer to /capture."""
+    if ended == "started":
+        return "A capture is running: do what you want to test (/trades, /setup ...), then /capture again to end it."
+    if ended == "stopped":
+        return "The capture is stopped and being zipped: /captures lists it, /pull takes it."
+    if ended and ended.startswith("failed"):
+        return f"The capture did not work ({ended.removeprefix('failed: ')}) - see /log."
+    return "The macro has not said whether a capture started or stopped - see /status."
+
+
 def blank_text(ended: Optional[str]) -> str:
     """What to say of the macro's answer to /blank."""
     return {"blanked": "The screen is blank (the macro still sees the game).", "shown": "The screen is shown.",
@@ -811,6 +822,21 @@ def build(config: bot_lib.Config) -> discord.Client:
             remember("open")
         text, pictures = await decline_offer(listing.value, offer)
         await say(interaction, text + " Its loop is stopped; /loop it again when you want it back.", files=[discord.File(path) for path in pictures])
+
+    @command("capture", "Start a capture (screen and input), or end the one that runs: use it during a command to test")
+    async def capture(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        problem, started = await ensure_macro(config)
+        if problem:
+            await say(interaction, problem)
+            return
+        if started:
+            remember("open")
+        problem, name = await submit_command("capture")
+        if problem:
+            await say(interaction, problem)
+            return
+        await say(interaction, ("Started the macro first. " if started else "") + capture_text(await wait_for_end(name, cfg.BOT_CAPTURE_WAIT)))
 
     @command("leave_trade_hub", "Have the macro leave the Trading Hub for a regular server")
     async def leave_trade_hub(interaction: discord.Interaction) -> None:

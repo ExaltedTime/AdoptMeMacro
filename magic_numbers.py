@@ -245,7 +245,7 @@ for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
 COMMANDS_DIR = os.path.join(DEBUG_DIR, "commands")          # the commands for the macro, one <time>-<id>.json file each, written by the Discord bot (see read_command_with_id()); the macro removes each once read and leaves a <time>-<id>.ack saying it was taken or why not
-COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus", "blackout", "test", "reset_config", "server_link", "trades", "decline")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, travel to / leave the Trading Hub, take pictures of the backpack's pets tab, or run Setup and then the loop (`sloop`), bring the Roblox window to the front (`focus`), blank / show the screen (`blackout`), run one need handler on its own or every teleport one (`test`, what the Debug tab's Test buttons do), reset the config (`reset_config`), save the private server link (`server_link`), take pictures of the offers on the two trade listings (`trades`), or decline one of them (`decline`)
+COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus", "blackout", "test", "reset_config", "server_link", "trades", "decline", "capture")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, travel to / leave the Trading Hub, take pictures of the backpack's pets tab, or run Setup and then the loop (`sloop`), bring the Roblox window to the front (`focus`), blank / show the screen (`blackout`), run one need handler on its own or every teleport one (`test`, what the Debug tab's Test buttons do), reset the config (`reset_config`), save the private server link (`server_link`), take pictures of the offers on the two trade listings (`trades`), decline one of them (`decline`), or start the input capture (the capture hotkey's) and stop it again (`capture`)
 NEED_NAMES = ("catch", "pet", "choose", "ride", "walk", "hungry", "thirsty", "dirty", "potty", "sleepy", "bored", "beach", "school", "cafe", "salon", "pizza", "camping", "sick")   # the Debug tab's need switches (the keys of main.py's NEED_HANDLER_CLASSES)
 OPTION_SWITCHES = {"side_quest": "side_quest_enabled", "resume_on_focus_loss": "resume_on_focus_loss", "record_next_run": "record_next_run",
                    "use_private_server": "use_private_server", "blackout_hotkey": "blackout_hotkey_enabled",
@@ -281,7 +281,8 @@ BOT_CHANNEL_RETRY_WAIT = 2.0                                # seconds before the
 BOT_WATCH_INTERVAL = 10                                     # seconds between the Discord bot's looks at what the macro wrote (failures, run charts, captures, status)
 BOT_ALERT_GAP = 60                                          # seconds: at most one failure post per this long, the rest counted ("N more failures")
 BOT_FILE_SETTLE = 5                                         # seconds a run chart must be unchanged before it is posted
-BOT_RVIEW_SECONDS = 30                                      # /rview: how long the rolling view runs when it is not told
+BOT_CAPTURE_WAIT = 20.0                                     # seconds the bot waits, after /capture, for the macro to say whether a capture started or stopped
+BOT_RVIEW_SECONDS = 30                                     # /rview: how long the rolling view runs when it is not told
 BOT_RVIEW_MAX_SECONDS = 900                                 # the longest it can be asked to run, in seconds, and the most "until done" runs
 BOT_RVIEW_START_GRACE = 15.0                                # seconds "until done" waits for the macro to show that it is busy, before an idle macro means that what was asked for is over
 BOT_RVIEW_INTERVAL = 1.0                                    # seconds between its pictures
@@ -846,6 +847,9 @@ BOT_TRADES_POLL = 1.0
 INVENTORY_DIR = os.path.join(DEBUG_DIR, "inventory")            # the pictures (001.png, 002.png ...), emptied at the start of each tour
 INVENTORY_DONE_PATH = os.path.join(INVENTORY_DIR, "done.json")  # written when the tour ends, however it ends: {"pictures": N, "ended": why}
 INVENTORY_PETS_TAB_POS = (817, 713)
+PET_SECOND_ITEM_POS = (975, 707)                                # the pets tab's second item, right of the green plus tile: the favourite pet, with the favourites filter on (equip_favorite_pet())
+EQUIP_BUTTON_BOX = (900, 780, 1215, 930)                        # where the Equip button of the backpack's card is (find_equip_button())...
+EQUIP_BUTTON_SIZE = ((100, 200), (25, 45))                      # ...its (width, height) range in px: 148 x 35 on a real frame
 INVENTORY_EXPAND_POS = (938, 642)                               # the orange button left of the settings one, in the normal backpack's header (measured on tests/popups/backpack_open.png)
 INVENTORY_LOAD_WAIT = 3.0                                       # seconds after the backpack has expanded, for its items to load before the first picture (blank cells in it, otherwise)
 INVENTORY_EXPAND_SETTLE = 1.0                                  # seconds after it is clicked, for the backpack to expand

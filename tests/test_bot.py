@@ -289,6 +289,18 @@ def test_a_loop_has_started_when_the_status_is_new_and_does_not_say_that_nothing
     assert not bot_lib.loop_started(None, since)
 
 
+def test_the_rolling_view_ends_at_its_time_or_when_the_macro_is_done_with_what_it_was_doing():
+    finished = bot_lib.rview_finished
+    assert bot_lib.macro_busy({"busy": True}) is True and bot_lib.macro_busy({"busy": False}) is False
+    assert bot_lib.macro_busy({}) is None and bot_lib.macro_busy(None) is None and bot_lib.macro_busy({"busy": "yes"}) is None
+    assert not finished(10, 30, False, None, False, 15) and finished(30, 30, False, None, False, 15)               # (30 s, or the time given)
+    assert not finished(10, 30, False, False, True, 15)                                                          # without until_done an idle macro does not end it
+    assert finished(10, 900, True, False, True, 15)                                                              # seen busy, and no more: done
+    assert not finished(10, 900, True, True, True, 15) and not finished(5, 900, True, False, False, 15)         # still busy; or not seen busy yet, within the grace
+    assert finished(15, 900, True, False, False, 15)                                                             # never busy: over (or never began) after the grace
+    assert not finished(100, 900, True, None, True, 15) and finished(900, 900, True, True, True, 15)            # a status that does not say never ends it early; the most is the most
+
+
 def test_the_trade_pictures_are_listed_in_order_without_the_rows_cleared_without_them_and_said(tmp_path):
     (tmp_path / "rows").mkdir()
     for name in ("L2_01.png", "L1_02.png", "L1_01.png", "declined.png", "done.json", "decline.json", "rows/L1_01.png"):

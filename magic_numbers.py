@@ -193,6 +193,9 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "decline_button":     {"box": (680, 660, 1000, 760), "threshold": 0.85},
     "decline_dialog":     {"box": (760, 430, 1160, 620), "threshold": 0.85},
     "trade_phone_hotbar": {"box": (940, 950, 1100, 1075), "threshold": 0.85},
+    # The backpack's card of the item clicked, with "Trading Hub Phone" (the badge next to it in the Toys tab has another name): found, it says the phone is the item that is selected,
+    # and where its Equip button is (TRADES_EQUIP_OFFSET from the middle of the name).
+    "phone_card":         {"box": (850, 700, 1250, 900), "threshold": 0.85},   # (the box is where the card's name can be: with the item in the first slot or the second)
 }
 # The sick need's own "Ask Doctor Heart to heal your family?" Yes/No dialog (POPUP_TEMPLATES["sick_dialog"]) has the
 # same Yes green + No red as a minigame popup; it is the sick handler's to answer (SICK_FINAL_CLICK_POS is its Yes),
@@ -278,7 +281,9 @@ BOT_CHANNEL_RETRY_WAIT = 2.0                                # seconds before the
 BOT_WATCH_INTERVAL = 10                                     # seconds between the Discord bot's looks at what the macro wrote (failures, run charts, captures, status)
 BOT_ALERT_GAP = 60                                          # seconds: at most one failure post per this long, the rest counted ("N more failures")
 BOT_FILE_SETTLE = 5                                         # seconds a run chart must be unchanged before it is posted
-BOT_RVIEW_SECONDS = 30                                      # /rview: how long the rolling view runs
+BOT_RVIEW_SECONDS = 30                                      # /rview: how long the rolling view runs when it is not told
+BOT_RVIEW_MAX_SECONDS = 900                                 # the longest it can be asked to run, in seconds, and the most "until done" runs
+BOT_RVIEW_START_GRACE = 15.0                                # seconds "until done" waits for the macro to show that it is busy, before an idle macro means that what was asked for is over
 BOT_RVIEW_INTERVAL = 1.0                                    # seconds between its pictures
 BOT_RVIEW_WIDTH = 1280                                      # pixels wide each picture is made (a full-size one is slow to upload every second)
 BOT_RVIEW_JPEG_QUALITY = 80
@@ -806,7 +811,10 @@ TRADES_LISTINGS = (1, 2)                                        # the listings l
 TRADES_MAX_OFFERS = 30                                          # the most offers of a listing /decline can be asked for
 TRADES_SEARCH_POS = (1070, 642)                                 # the backpack's search box ("Enter Search...")
 TRADES_SEARCH_TEXT = "phone"                                    # typed in it in the Toys tab: the phone is then the first item (TRADE_HUB_PHONE_POS), where the slot-by-slot search had the badge there
-TRADES_UNFOCUS_POS = (745, 681)                                 # a click here (the tab's name) takes the focus out of the search box, so that the backpack key is not typed into it
+TRADES_SEARCH_SETTLE = 1.0                                      # seconds after the text is typed, for the list to be filtered
+TRADES_EQUIP_TRIES = 2                                          # the search and the first item are tried this often until the card that comes up is the phone's
+TRADES_EQUIP_OFFSET = (-38, 75)                                 # from the middle of the card's name to its Equip button (measured on a frame of the phone's card)
+TRADES_UNFOCUS_POS = (745, 681)                                # a click here (the tab's name) takes the focus out of the search box, so that the backpack key is not typed into it
 FOCUS_FORCE_TRIES = 2                                           # when Windows refuses activate(): force_foreground()'s ways (an Alt tap and activate again, then minimize and restore)
 TYPE_KEY_DELAY = 0.08                                          # seconds after each key of type_keys()
 TRADES_PHONE_LISTINGS_POS = (870, 430)                          # the phone's TRADE LISTINGS
@@ -839,9 +847,10 @@ INVENTORY_DIR = os.path.join(DEBUG_DIR, "inventory")            # the pictures (
 INVENTORY_DONE_PATH = os.path.join(INVENTORY_DIR, "done.json")  # written when the tour ends, however it ends: {"pictures": N, "ended": why}
 INVENTORY_PETS_TAB_POS = (817, 713)
 INVENTORY_EXPAND_POS = (938, 642)                               # the orange button left of the settings one, in the normal backpack's header (measured on tests/popups/backpack_open.png)
-INVENTORY_EXPAND_SETTLE = 1.0                                   # seconds after it is clicked, for the backpack to expand
+INVENTORY_LOAD_WAIT = 3.0                                       # seconds after the backpack has expanded, for its items to load before the first picture (blank cells in it, otherwise)
+INVENTORY_EXPAND_SETTLE = 1.0                                  # seconds after it is clicked, for the backpack to expand
 INVENTORY_PANEL_BOX = (1090, 0, 1920, 1080)                    # (left, top, right, bottom) of each picture: the right side of the screen, where the expanded backpack is (the first picture, of (1090, 36, 1840, 1050), showed its right-hand column cut off)
-INVENTORY_SCROLL_POS = (1465, 560)                              # the mouse is over the pets here while the wheel turns
+INVENTORY_SCROLL_POS = (1907, 560)                              # the mouse is over the list's scroll bar (the thin white bar at the list's right edge, 817 px into INVENTORY_PANEL_BOX in a picture) while the wheel turns: over an item, its description opens and covers the items round it
 WHEEL_NOTCH = 120                                               # what a turn of the mouse wheel by one notch is, in the units Windows takes (pyautogui.scroll() passes them on as they are: 10 is a twelfth of a notch)
 INVENTORY_SCROLL_CLICKS = 10                                    # notches of the wheel per step when how far a notch goes could not be measured (300 went from the first rows of the pets to the end of the list in one step)
 INVENTORY_PROBE_CLICKS = 1                                      # the first step is this many notches, and the two pictures say how many pixels the list moved: how many notches make a step of INVENTORY_STEP_PIXELS

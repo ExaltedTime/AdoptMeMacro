@@ -1954,6 +1954,19 @@ def test_sloop_runs_setup_and_then_the_loop_whether_or_not_one_was_running(macro
     assert ("start_loop",) not in stopped.calls
 
 
+def test_the_status_file_says_whether_the_window_is_busy_and_a_new_run_does_not_clear_it(macro, monkeypatch):
+    """The bot's /rview until done waits for `busy` to go down."""
+    written = []
+    monkeypatch.setattr(macro, "write_status", lambda: written.append(macro.run_stats.busy))
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.action_buttons, gui.status = [], types.SimpleNamespace(config=lambda **k: None)
+    gui._set_running_ui(True)
+    macro.run_stats.reset()                                                                  # (the workflow starts: its stats start afresh)
+    assert macro.run_stats.busy is True
+    gui._set_running_ui(False, "[DONE]")
+    assert written == [True, False] and macro.run_stats.busy is False
+
+
 class Refused(Exception):
     """pygetwindow's PyGetWindowException: Windows would not give the foreground ("Error code from Windows: 0 - The operation completed successfully.")."""
 

@@ -348,6 +348,19 @@ def cv2_read(path):
     return cv2.imread(str(path))
 
 
+def test_the_tour_waits_for_the_items_to_load_after_the_backpack_expands_before_its_first_picture(macro, tour, monkeypatch):
+    cfg = macro.cfg
+    tour.screens.extend([tour.screen(level) for level in (50, 50, 50, 50, 50)])
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: tour.log.append(("wait", s)))
+    monkeypatch.setattr(macro, "panel_picture", lambda img: (tour.log.append(("picture",)), img)[1])
+    (tour.folder).mkdir(parents=True)
+    assert macro.inventory_tour() is True
+    kinds = [e for e in tour.log if e[0] in ("click", "wait", "picture", "move")]
+    expand = kinds.index(("click", cfg.INVENTORY_EXPAND_POS))
+    assert ("wait", cfg.INVENTORY_EXPAND_SETTLE) in kinds[expand:expand + 2]
+    assert ("wait", cfg.INVENTORY_LOAD_WAIT) in kinds[expand:kinds.index(("picture",))]                                  # (between the expanding and the first picture)
+
+
 def test_the_tour_ends_at_the_most_pictures_asked_for_when_the_list_goes_on(macro, tour, monkeypatch):
     monkeypatch.setattr(macro.cfg, "INVENTORY_MAX_PICTURES", 2)
     counter = iter(range(10, 250, 10))

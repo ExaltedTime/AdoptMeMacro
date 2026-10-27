@@ -683,13 +683,15 @@ class RunStats:
     last_resolved: Optional[dict[str, str]] = None                   # {"need", "time"}
     last_failure: Optional[dict[str, Optional[str]]] = None          # {"time", "reason", "screenshot"}
     stopped: Optional[str] = None                                    # when what was running was ended by the user ([STOP], the window's X, the Discord bot) or finished: no more updates are due
+    busy: bool = False                                               # the window is running something (the loop or an action: its buttons are off): the bot's /rview until that is over
 
     def reset(self) -> None:
-        """Start afresh (a workflow was just started)."""
+        """Start afresh (a workflow was just started); `busy` is the window's, not the run's, and stays."""
+        busy = self.busy
         fresh = RunStats()
         for item in fields(self):
             setattr(self, item.name, getattr(fresh, item.name))
-        self.run, self.started = state.run_number, time.strftime("%Y-%m-%d %H:%M:%S")
+        self.run, self.started, self.busy = state.run_number, time.strftime("%Y-%m-%d %H:%M:%S"), busy
 
 run_stats = RunStats()
 
@@ -1772,6 +1774,7 @@ def inventory_tour() -> bool:
                 ended = "the backpack did not expand"
                 close_backpack("the inventory")
                 return False
+            wait_interruptible(cfg.INVENTORY_LOAD_WAIT)                    # (the items of an expanded backpack load a while after it opens: the first picture had blank cells)
             hover_move(*cfg.INVENTORY_SCROLL_POS)                          # (with the nudge that makes Roblox see the pointer over the list: a plain move did not, and the wheel turned nothing)
             previous, clicks, measured = None, cfg.INVENTORY_SCROLL_CLICKS, False
             while True:
@@ -1836,18 +1839,31 @@ def equip_trade_phone() -> bool:
         logger.debug("Opening backpack...")
         pydirectinput.press(cfg.KEYS["backpack"])
         wait_interruptible(cfg.UI_SETTLE)
-        if not click_steps([("Toys tab", cfg.TRADE_HUB_TOYS_TAB_POS), ("Search box", cfg.TRADES_SEARCH_POS)]):
+        if not click_steps([("Toys tab", cfg.TRADE_HUB_TOYS_TAB_POS)]):
             return False
-        type_text(cfg.TRADES_SEARCH_TEXT)
-        wait_interruptible(cfg.UI_SETTLE)
-        if not click_steps([("The first item", cfg.TRADE_HUB_PHONE_POS), ("Equip", cfg.TRADE_HUB_EQUIP_POS), ("Search box", cfg.TRADES_SEARCH_POS)]):
-            return False
-        type_keys(["backspace"] * len(cfg.TRADES_SEARCH_TEXT))
-        hover_click(*cfg.TRADES_UNFOCUS_POS)                              # (out of the box: the backpack key would be typed into it)
-        wait_interruptible(cfg.UI_SETTLE)
+        card = None
+        for attempt in range(cfg.TRADES_EQUIP_TRIES):
+            if not click_steps([("Search box", cfg.TRADES_SEARCH_POS)]):
+                return False
+            type_keys(["backspace"] * len(cfg.TRADES_SEARCH_TEXT))          # (what a search before left in the box)
+            type_text(cfg.TRADES_SEARCH_TEXT)
+            wait_interruptible(cfg.TRADES_SEARCH_SETTLE)
+            hover_click(*cfg.TRADE_HUB_PHONE_POS)                           # the first item of what the search leaves
+            wait_interruptible(cfg.UI_SETTLE)
+            card = popup_found(grab_screen(), "phone_card")
+            if card is not None:
+                break
+            log_run_event("trade listings: the item clicked is not the Trading Hub Phone" + (" - searching again" if attempt + 1 < cfg.TRADES_EQUIP_TRIES else ""))
+        if card is not None:
+            hover_click(card[0] + cfg.TRADES_EQUIP_OFFSET[0], card[1] + cfg.TRADES_EQUIP_OFFSET[1])      # (its Equip, where the card is: never the badge's)
+            wait_interruptible(cfg.UI_SETTLE)
+        if click_steps([("Search box", cfg.TRADES_SEARCH_POS)]):
+            type_keys(["backspace"] * len(cfg.TRADES_SEARCH_TEXT))          # (cleared: a filter left in it would show the other features' backpack items wrong)
+            hover_click(*cfg.TRADES_UNFOCUS_POS)                            # (out of the box: the backpack key would be typed into it)
+            wait_interruptible(cfg.UI_SETTLE)
         close_backpack("the Trading Hub Phone")
     wait_interruptible(cfg.UI_SETTLE)
-    return popup_visible(grab_screen(), "trade_phone_hotbar")
+    return card is not None and popup_visible(grab_screen(), "trade_phone_hotbar")
 
 def type_keys(keys: Sequence[str]) -> None:
     """Press `keys` one after the other, TYPE_KEY_DELAY apart, into whatever text box has the focus. The macro's own hotkeys are not acted on meanwhile (state.typing): the stop
@@ -6898,6 +6914,8 @@ class AdoptMeGUI:
         for btn in self.action_buttons:
             btn.config(state=button_state)  # type: ignore[call-overload]
         self.status.config(text="Running..." if running else (status_text or "Ready"))
+        run_stats.busy = running                                         # (in the status file, for the bot)
+        write_status()
 
     def add_config_checkbox(self, parent: Any, label: str, key: str, config: dict[str, Any]) -> None:
         """A checkbox for the persisted switch `key`; not in action_buttons (usable while a

@@ -608,21 +608,27 @@ def build(config: bot_lib.Config) -> discord.Client:
 
     rolling = {"on": False}                                        # one rolling view at a time
 
-    @command("rview", "A rolling view: the Roblox window once a second for 30 seconds, in one message that updates")
-    async def rview(interaction: discord.Interaction) -> None:
+    @command("rview", "A rolling view of Roblox, a picture a second: 30 s, a time you give, or until the macro is done")
+    @app_commands.describe(seconds="How long, in seconds (default 30; with until_done, the most)", until_done="True to go on until the macro has finished what it is doing")
+    async def rview(interaction: discord.Interaction, seconds: Optional[app_commands.Range[int, 1, cfg.BOT_RVIEW_MAX_SECONDS]] = None, until_done: bool = False) -> None:
         await interaction.response.defer(thinking=True)
         if rolling["on"]:
             await say(interaction, "A rolling view is already running.")
             return
         rolling["on"] = True
+        limit = seconds if seconds is not None else (cfg.BOT_RVIEW_MAX_SECONDS if until_done else cfg.BOT_RVIEW_SECONDS)
         try:
             started = time.monotonic()
             shown = 0
+            seen_busy = False
             while True:
                 elapsed = time.monotonic() - started
-                left = max(0, round(cfg.BOT_RVIEW_SECONDS - elapsed))
+                busy = bot_lib.macro_busy(bot_lib.read_json(bot_lib.status_path())) if until_done else None
+                seen_busy = seen_busy or busy is True
+                done = bot_lib.rview_finished(elapsed, limit, until_done, busy, seen_busy, cfg.BOT_RVIEW_START_GRACE)
+                left = max(0, round(limit - elapsed))
                 jpeg, blank = await asyncio.to_thread(grab_roblox_jpeg)
-                note = f"Rolling view - {left} s left" + (" - the screen looks blank (the PC may be locked or asleep)" if blank else "")
+                note = (f"Rolling view - until the macro is done (at most {left} s more)" if until_done else f"Rolling view - {left} s left") + (" - the screen looks blank (the PC may be locked or asleep)" if blank else "")
                 if len(jpeg) > cfg.BOT_MAX_UPLOAD_MB * 1048576:
                     note += " - this picture was too big to send"
                     attachments = []
@@ -630,7 +636,7 @@ def build(config: bot_lib.Config) -> discord.Client:
                     attachments = [discord.File(io.BytesIO(jpeg), f"view{shown % 2}.jpg")]    # (a new name each time, so the picture shown is replaced)
                 await interaction.edit_original_response(content=note, attachments=attachments)
                 shown += 1
-                if elapsed >= cfg.BOT_RVIEW_SECONDS:
+                if done:
                     break
                 await asyncio.sleep(max(0.0, started + shown * cfg.BOT_RVIEW_INTERVAL - time.monotonic()))
             await interaction.edit_original_response(content="Rolling view over.")

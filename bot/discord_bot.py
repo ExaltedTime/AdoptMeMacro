@@ -938,6 +938,12 @@ def build(config: bot_lib.Config) -> discord.Client:
         await ask_macro(interaction, "leave_trade_hub", "Asked the macro to leave the Trading Hub for a regular server. Its loop is stopped; /loop it again once it is back.",
                         label="Leaving the Trading Hub", debug=debug)
 
+    @command("recenter", "Have the macro close what is open (stray windows, the trade phone) and respawn the character")
+    @app_commands.describe(debug=DEBUG_HELP)
+    async def recenter(interaction: discord.Interaction, debug: bool = False) -> None:
+        await ask_macro(interaction, "recenter", "Asked the macro to close what is open and respawn. Its loop is stopped; /loop it again afterwards.",
+                        label="Recentering", debug=debug)
+
     @command("refresh_debug", "Empty the macro's debug folder (the game config stays); not while its loop runs")
     async def refresh_debug(interaction: discord.Interaction) -> None:
         await ask_macro(interaction, "refresh_debug", "Asked the macro to empty its debug folder (everything but the game config).", idle_only=True)

@@ -195,6 +195,8 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "trade_phone_hotbar": {"box": (940, 950, 1100, 1075), "threshold": 0.85},
     # The backpack's card of the item clicked, with "Trading Hub Phone" (the badge next to it in the Toys tab has another name): found, it says the phone is the item that is selected,
     # and where its Equip button is (TRADES_EQUIP_OFFSET from the middle of the name).
+    # The phone's picture in the first slot of the Toys tab's Special row: there once the search has filtered the list (before that the badge is first and it is the second).
+    "phone_icon":         {"box": (850, 690, 950, 790), "threshold": 0.8},
     "phone_card":         {"box": (850, 700, 1250, 900), "threshold": 0.85},   # (the box is where the card's name can be: with the item in the first slot or the second)
 }
 # The sick need's own "Ask Doctor Heart to heal your family?" Yes/No dialog (POPUP_TEMPLATES["sick_dialog"]) has the
@@ -812,7 +814,7 @@ TRADES_LISTINGS = (1, 2)                                        # the listings l
 TRADES_MAX_OFFERS = 30                                          # the most offers of a listing /decline can be asked for
 TRADES_SEARCH_POS = (1070, 642)                                 # the backpack's search box ("Enter Search...")
 TRADES_SEARCH_TEXT = "phone"                                    # typed in it in the Toys tab: the phone is then the first item (TRADE_HUB_PHONE_POS), where the slot-by-slot search had the badge there
-TRADES_SEARCH_SETTLE = 1.0                                      # seconds after the text is typed, for the list to be filtered
+TRADES_SEARCH_MAX_WAIT = 6.0                                    # seconds after the text is typed, for the list to be filtered (it was about 2 s late in a capture: the first item clicked sooner was the badge)
 TRADES_EQUIP_TRIES = 2                                          # the search and the first item are tried this often until the card that comes up is the phone's
 TRADES_EQUIP_OFFSET = (-38, 75)                                 # from the middle of the card's name to its Equip button (measured on a frame of the phone's card)
 TRADES_UNFOCUS_POS = (745, 681)                                # a click here (the tab's name) takes the focus out of the search box, so that the backpack key is not typed into it

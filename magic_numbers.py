@@ -232,7 +232,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MINIGAME_TEMPLATE_DIR = os.path.join(SCRIPT_DIR, "ref", "halloween")
 STRAY_WINDOW_DIR = os.path.join(SCRIPT_DIR, "ref", "popups")
 MINIGAME_OVERLAY_DIR = os.path.join(SCRIPT_DIR, "ref", "overlays")
-NEEDS_DIR = os.path.join(SCRIPT_DIR, "ref", "needs")      # the learned need icons - the one folder in ref/ the macro also writes to (see prompt_rename_need())
+NEEDS_DIR = os.path.join(SCRIPT_DIR, "ref", "needs")      # the saved need icons
 HAUNTLET_DIGIT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "digits")   # 0.png ... 9.png: the digits of the ROOM panel, see read_hauntlet_room()
 HAUNTLET_ITEM_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "items")      # a folder per item (phone/, key/, ...) of pictures of its slot; see read_hauntlet_items()
 HAUNTLET_COUNT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "counts")    # x/, 1/, 2/: the glyphs of an item's "x2" badge
@@ -680,10 +680,6 @@ pydirectinput.PAUSE = 0.05
 REFERENCE_WIDTH, REFERENCE_HEIGHT = 1920, 1080
 REFERENCE_CENTER_X, REFERENCE_CENTER_Y = REFERENCE_WIDTH // 2, REFERENCE_HEIGHT // 2
 ROBLOX_RECT_TTL = 1.0   # seconds the Roblox window's position and size are remembered between lookups
-
-# Behavior flags
-FOCUS_WINDOW_ON_ACTION = True  # click the Roblox window to focus it before acting
-SAVE_NEW_NEEDS = False
 
 # Timing (seconds)
 RESPAWN_KEY_DURATION = 0.05    # how long each respawn key is held

@@ -238,10 +238,9 @@ def one_need(macro, monkeypatch):
     """process_needs() with a single 'hungry' icon on a dark screen and a handler that succeeds."""
     import numpy as np
     screen = np.zeros((1080, 1920, 3), np.uint8)
-    monkeypatch.setattr(macro.cfg, "SAVE_NEW_NEEDS", False)                  # (True would ask for a name for an unknown icon)
     monkeypatch.setattr(macro, "focus_roblox_click", lambda: True)
     monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([(100, 50, 30)], screen))
-    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(0, screen[:10, :10], "hungry", 0.9)]))
+    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([("hungry", 0.9)]))
     monkeypatch.setattr(macro, "respawn_character", lambda: None)
     monkeypatch.setattr(macro, "check_focus", lambda: None)
 
@@ -702,7 +701,7 @@ def test_every_check_reaches_the_log_even_when_it_finds_nothing(macro, one_need,
 
 
 def test_idle_checks_that_found_icons_nothing_matched_are_counted_too(macro, one_need, monkeypatch):
-    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(0, img[:10, :10], None, 0.5)]))
+    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(None, 0.5)]))
     macro.state.run_number = 4
     for _ in range(4):
         macro.process_needs()
@@ -1043,7 +1042,7 @@ def test_a_failed_sick_is_logged_as_a_failure_by_process_needs(macro, sick_run, 
     screen = np.zeros((1080, 1920, 3), np.uint8)
     monkeypatch.setattr(macro, "focus_roblox_click", lambda: True)
     monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([(100, 50, 30)], screen))
-    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(0, screen[:10, :10], "sick", 0.9)]))
+    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([("sick", 0.9)]))
     monkeypatch.setattr(macro, "check_focus", lambda: None)
     monkeypatch.setattr(macro, "save_failure_report", lambda reason: None)
     assert macro.process_needs() is False
@@ -1140,7 +1139,7 @@ def test_a_change_in_what_is_on_screen_is_logged_again(macro, one_need, monkeypa
     macro.state.run_number = 4
     macro.process_needs()
     macro.process_needs()
-    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(0, one_need[:10, :10], "thirsty", 0.9)]))
+    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([("thirsty", 0.9)]))
     macro.process_needs()
     log = open(macro.cfg.RUN_LOG_PATH).read()
     assert log.index("detected: hungry") < log.index("same checks: 1 over") < log.index("detected: thirsty")

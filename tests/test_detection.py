@@ -122,7 +122,7 @@ def test_a_one_off_missed_icon_cannot_pass_the_flicker_recheck(macro, icon_scree
         return None if len(calls) == 1 else real(*args, **kwargs)
 
     monkeypatch.setattr(macro.cv2, "HoughCircles", misses_once)
-    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(i, img[:5, :5], "hungry", 0.9) for i, _ in enumerate(found)]))
+    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([("hungry", 0.9) for _ in found]))
     monkeypatch.setattr(macro, "check_focus", lambda: None)
     monkeypatch.setattr(macro.cfg, "NEED_GONE_FLICKER_RECHECK_DELAY", 0)
     assert macro._need_cleared("hungry") is False              # the second, fresh look saw it

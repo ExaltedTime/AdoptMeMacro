@@ -53,13 +53,7 @@ every second instead of a line per check.
    Nothing found → return `False` immediately (silently).
 3. For each detected icon, match it against the saved reference icons in
    `ref/needs/` (`find_matching_need()`). An icon that doesn't match anything
-   well enough triggers `prompt_rename_need()` (asks you, in a dialog, to
-   name and save it - only when `SAVE_NEW_NEEDS` is on) and is otherwise skipped this pass - it isn't
-   "resolved," it's just been taught for next time. The saved icon is the
-   high-contrast black-and-white form (`preprocess_icon()`); cancelling the
-   dialog or an empty name saves it as `unnamed_<idx>`. The dialog runs on the
-   GUI's thread (`run_on_ui_thread()`, no timeout) since the worker has no
-   console to read from; without a GUI it asks on the console.
+   well enough is skipped this pass.
 4. Every icon that *did* match is collected into an ordered list of need
    names, in the order they were detected, and logged (`detected: ...`, and
    printed with each icon's score; icons on screen but none recognised are
@@ -143,7 +137,7 @@ an extra walk from wherever the previous need left the character standing.
 - **ICON PROCESSING** - `preprocess_icon()` / `icon_signature()` / `compare_signatures()`. See
   [Need-icon matching](#need-icon-matching).
 - **NEED ICON DETECTION** - `detect_need_icons()`, `find_matching_need()`,
-  `prompt_rename_need()`. See [Need-icon detection](#need-icon-detection).
+  `identify_icons()`. See [Need-icon detection](#need-icon-detection).
 - **CLICKING** - `hover_click()`, `hover_move()`, `wait_interruptible()`,
   `wait_stoppable()`, `release_all_inputs()`. See
   [Click & input primitives](#click--input-primitives).
@@ -294,8 +288,7 @@ re-read the folder) - including subfolders, so related icons can be grouped (the
 seasonal `diving` and `puddle` icons live in `ref/needs/weather/`); a need's
 name is just its file name, wherever it sits - and keeps the best score. A best score below
 `ICON_MATCH_THRESHOLD` means "not confident this is anything we've
-seen" - the icon is then unknown and, when `SAVE_NEW_NEEDS` is on, goes to
-`prompt_rename_need()`; otherwise it is just skipped.
+seen" - the icon is then unknown and is skipped.
 
 ## Waiting for a need to clear
 
@@ -1505,7 +1498,7 @@ exact values and rationale):
 
 | Group | Examples |
 |---|---|
-| Behavior flags | `ENABLED_NEEDS`, `HOTKEYS["stop"]`, `BACKPACK_*`, `HALLOWEEN`, `MINIGAME_*`, `SCREEN_CHANGE_SIZE`, `HAUNTLET_2_*`, `GHOST_*`, `REJOIN_*`, `HELICOPTER_REQUIRED`, `FOCUS_WINDOW_ON_ACTION` |
+| Behavior flags | `ENABLED_NEEDS`, `HOTKEYS["stop"]`, `BACKPACK_*`, `HALLOWEEN`, `MINIGAME_*`, `SCREEN_CHANGE_SIZE`, `HAUNTLET_2_*`, `GHOST_*`, `REJOIN_*`, `HELICOPTER_REQUIRED` |
 | Window / coordinates | `REFERENCE_WIDTH`, `REFERENCE_HEIGHT`, `REFERENCE_CENTER_X/Y`, `ROBLOX_RECT_TTL` |
 | Key bindings | `KEYS` (every key the macro presses, by what it is for: walking, jump, backpack, mount, interact, speed boost, zoom, helicopter, camera turn), `KEY_SEQUENCES` (respawn, leaving the game), `HOTKEYS` (stop, capture, blackout), and the derived `MOVE_KEYS` and `HELD_KEYS`; `STOP_HOTKEY_POLL_INTERVAL` |
 | Timing | `WATCH_POLL_INTERVAL`, `NEED_WATCH_JOIN_TIMEOUT`, `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `STOP_CLICK_GRACE`, `NEED_GONE_*` |
@@ -1797,8 +1790,7 @@ The variants: every timing and walk step scaled by 0.05, 0.5, 1.7 and 20; other
 intervals, hours and counts changed; counts at their lowest and highest; the
 event flag off; needs removed from or added to the table; button names reordered;
 helicopter for every need; thresholds nudged up and down, colour tolerances
-widened, search boxes and click positions moved; other key bindings; behaviour
-flags flipped (`SAVE_NEW_NEEDS`, `FOCUS_WINDOW_ON_ACTION`); two other time zones; a
+widened, search boxes and click positions moved; other key bindings; two other time zones; a
 different hash seed; run from another working directory; a `debug/` folder with a
 real config and logs in it; extra files in `ref/`; the tests in reverse and in
 shuffled order; and each test file run on its own. The one test file that is *meant* to depend

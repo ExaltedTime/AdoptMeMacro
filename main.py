@@ -26,7 +26,7 @@ from typing import Collection, Any, Callable, ContextManager, Iterable, Iterator
 from abc import ABC, abstractmethod
 from functools import lru_cache, partial
 import tkinter as tk
-from tkinter import messagebox, scrolledtext, simpledialog, ttk
+from tkinter import messagebox, scrolledtext, ttk
 
 import numpy as np
 import cv2
@@ -202,8 +202,6 @@ def is_roblox_focused() -> bool:
 
 def focus_roblox_click() -> bool:
     """Focus Roblox and click near the top edge to make sure input registers."""
-    if not cfg.FOCUS_WINDOW_ON_ACTION:
-        return True
     if not focus_roblox():
         return False
     pyautogui.moveTo(*to_screen(cfg.REFERENCE_WIDTH * cfg.FOCUS_CLICK_X_PERCENT, cfg.FOCUS_CLICK_Y))
@@ -1029,44 +1027,18 @@ def find_matching_need(icon_variants: list[Image]) -> tuple[Optional[str], float
         return best_match, best_score
     return None, best_score
 
-def prompt_rename_need(icon_img: Image, idx: int) -> str:
-    """Save a new need icon and ask for its name (dialog or console); a cancelled dialog saves
-    it as unnamed_<idx>. See docs/ARCHITECTURE.md#process_needs-step-by-step.
-    """
-    logger.info("New need detected")
-    temp_path = os.path.join(cfg.NEEDS_DIR, f"temp_{idx}.png")
-    cv2.imwrite(temp_path, preprocess_icon(icon_img))
-
-    prompt = "Need name (hungry/thirsty/dirty/potty/sleepy/catch/walk/other):"
-    if state.macro_window is not None:
-        answer = state.macro_window.run_on_ui_thread(
-            lambda: simpledialog.askstring("New need", prompt, parent=state.macro_window.root), timeout=None)
-        focus_roblox_click()   # the dialog took the focus
-    else:
-        print(f"{prompt} ", end="", flush=True)                           # (a question to the person at the terminal, not a log line)
-        answer = input()
-    need_name = (answer or "").strip().lower() or f"unnamed_{idx}"
-
-    os.rename(temp_path, os.path.join(cfg.NEEDS_DIR, f"{need_name}.png"))
-    logger.info(f"Saved: {need_name}")
-    return need_name
-
-def identify_icons(found_icons: list[tuple[int, int, int]], full_img: Image) -> Iterator[tuple[int, Image, Optional[str], float]]:
-    """Match each detected icon against the saved needs. Yields
-    (index, icon_image, need_name_or_None, score) per icon, checking
-    check_running() between icons."""
-    for idx, (cx, cy, _) in enumerate(found_icons):
+def identify_icons(found_icons: list[tuple[int, int, int]], full_img: Image) -> Iterator[tuple[Optional[str], float]]:
+    """Match each detected icon against the saved needs. Yields (need_name_or_None, score) per icon, checking check_running() between icons."""
+    for cx, cy, _ in found_icons:
         check_running()
-        icon_img = extract_icon(full_img, cx, cy, cfg.ICON_CROP_RADIUS)
-        need_name, score = find_matching_need(icon_variants(full_img, cx, cy))
-        yield idx, icon_img, need_name, score
+        yield find_matching_need(icon_variants(full_img, cx, cy))
 
 def scan_needs(fresh: bool = False) -> list[Optional[str]]:
     """One-shot snapshot: every need name currently detected on screen. `fresh`
     makes the circle search run even if the strip looks unchanged (see
     detect_need_icons())."""
     found_icons, full_img = detect_need_icons(fresh=fresh)
-    return [name for _, _, name, _ in identify_icons(found_icons, full_img)]
+    return [name for name, _ in identify_icons(found_icons, full_img)]
 
 def _need_cleared(need_name: str) -> bool:
     """True if `need_name` is missing on two checks in a row (the second a fresh search) - the
@@ -2944,18 +2916,7 @@ def process_needs() -> bool:
         note_idle_check()
         return False
 
-    matched_needs = []
-    for idx, icon_img, need_name, score in identify_icons(found_icons, full_img):
-        if not need_name:
-            if cfg.SAVE_NEW_NEEDS:
-                logger.info(f"New need (best score: {score:.4f})")
-                # prompt_rename_need() already saves the reference icon into
-                # NEEDS_DIR - that .png file is the only record needed for this
-                # need to be recognized next time, so there's nothing further to
-                # persist here.
-                prompt_rename_need(icon_img, idx)
-            continue
-        matched_needs.append((need_name, score))
+    matched_needs = [(name, score) for name, score in identify_icons(found_icons, full_img) if name]      # (an icon that matches none is skipped)
 
     names = [name for name, _ in matched_needs]
     if names:

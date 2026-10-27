@@ -197,6 +197,7 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     # and where its Equip button is (TRADES_EQUIP_OFFSET from the middle of the name).
     # The phone's picture in the first slot of the Toys tab's Special row: there once the search has filtered the list (before that the badge is first and it is the second).
     "search_placeholder": {"box": (990, 620, 1180, 665), "threshold": 0.8},   # ("Enter Search...": in the backpack's search box while it is empty and has no focus)
+    "phone_item":         {"box": (640, 400, 1290, 960), "threshold": 0.8},   # (the phone's picture anywhere in the Toys tab's grid: the primary way to find it, clicked where it is)
     "phone_icon":         {"box": (850, 690, 950, 790), "threshold": 0.8},
     "phone_card":         {"box": (850, 700, 1250, 900), "threshold": 0.85},   # (the box is where the card's name can be: with the item in the first slot or the second)
 }

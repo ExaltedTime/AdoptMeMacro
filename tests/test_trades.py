@@ -132,6 +132,12 @@ def test_the_boards_of_offers_is_known_in_a_real_screenshot_and_closed_before_th
     assert macro.open_trade_listings() is False and game.log == ["trade listings: the board of offers could not be closed"]
 
 
+def without_item_match(macro, monkeypatch):
+    """The phone's picture is not seen in the grid, so that the search is what finds it."""
+    real = macro.popup_found
+    monkeypatch.setattr(macro, "popup_found", lambda img, name: None if name == "phone_item" else real(img, name))
+
+
 def test_the_phone_is_found_by_typing_its_name_in_the_toys_search_clicking_the_first_item_and_the_search_is_cleared_before_the_backpack_is_closed(macro, game, monkeypatch):
     cfg = macro.cfg
     events = []
@@ -144,6 +150,7 @@ def test_the_phone_is_found_by_typing_its_name_in_the_toys_search_clicking_the_f
     monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: events.append(("click", (x, y))))
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
     monkeypatch.setattr(macro, "close_backpack", lambda step: events.append(("close", step)))
+    without_item_match(macro, monkeypatch)
     looks = [frame("menu"), frame("toys_unfiltered"), frame("toys_unfiltered"), frame("toys_unfiltered"), frame("toys_filtered"), frame("toys_card"), frame("menu")]       # (no payday popup; the box has taken the focus (no placeholder in it); the list follows the typed text late: two looks of the old list, then the filtered one; the phone's card after the first item is clicked; at the end the hotbar has its icon)
     def grab():
         events.append(("grab",))
@@ -180,13 +187,36 @@ def test_the_badge_is_never_equipped_a_search_that_does_not_work_is_tried_again_
     monkeypatch.setattr(macro, "close_backpack", lambda step: events.append(("close", step)))
     monkeypatch.setattr(macro, "log_run_event", lambda text: events.append(("log", text)))
     monkeypatch.setattr(macro, "grab_screen", lambda: frame(shown))
+    without_item_match(macro, monkeypatch)
     assert macro.equip_trade_phone() is False
     clicks = [e[1] for e in events if e[0] == "click"]
     assert clicks.count(cfg.TRADE_HUB_PHONE_POS) == (cfg.TRADES_EQUIP_TRIES if clicked_first else 0) and clicks.count(cfg.TRADES_SEARCH_POS) == cfg.TRADES_EQUIP_TRIES + 1
     assert not [c for c in clicks if c not in (cfg.TRADE_HUB_TOYS_TAB_POS, cfg.TRADES_SEARCH_POS, cfg.TRADE_HUB_PHONE_POS, cfg.TRADES_UNFOCUS_POS)]        # (no Equip anywhere)
     logs = [e[1] for e in events if e[0] == "log"]
-    assert logs == [f"trade listings: {log} - searching again", f"trade listings: {log}"]
+    search = "trade listings: the phone's picture is not in the Toys tab, searching for it"
+    assert logs == [search, f"trade listings: {log} - trying again", search, f"trade listings: {log}"]
     assert events[-1] == ("close", "the Trading Hub Phone")                                    # (the search cleared, the backpack closed)
+
+
+def test_the_phone_is_found_by_its_picture_in_the_grid_and_clicked_where_it_is_without_the_search(macro, monkeypatch):
+    cfg = macro.cfg
+    events = []
+    clock = types.SimpleNamespace(now=1000.0)
+    monkeypatch.setattr(macro, "time", types.SimpleNamespace(**{**vars(macro.time), "time": lambda: clock.now, "sleep": lambda s: None}))
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: setattr(clock, "now", clock.now + s))
+    monkeypatch.setattr(macro, "check_running", lambda: None)
+    monkeypatch.setattr(macro.pydirectinput, "press", lambda key, **k: events.append(("press", key)), raising=False)
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: events.append(("click", (x, y))))
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "close_backpack", lambda step: events.append(("close", step)))
+    monkeypatch.setattr(macro, "log_run_event", lambda text: events.append(("log", text)))
+    looks = [frame("menu"), frame("toys_unfiltered"), frame("toys_card"), frame("menu")]               # (no popup; the unfiltered grid has the phone second, behind the badge; its card; the hotbar)
+    monkeypatch.setattr(macro, "grab_screen", lambda: looks.pop(0) if len(looks) > 1 else looks[0])
+    assert macro.equip_trade_phone() is True
+    clicks = [e[1] for e in events if e[0] == "click"]
+    assert clicks[0] == cfg.TRADE_HUB_TOYS_TAB_POS and clicks[2] == (1111 + cfg.TRADES_EQUIP_OFFSET[0], 780 + cfg.TRADES_EQUIP_OFFSET[1]) and len(clicks) == 3
+    assert abs(clicks[1][0] - 975) <= 3 and abs(clicks[1][1] - 743) <= 3                                 # (the second slot, not the badge's first)
+    assert [e[1] for e in events if e[0] == "press"] == [cfg.KEYS["backpack"]] and not [e for e in events if e[0] == "log"]
 
 
 def test_a_payday_popup_over_the_backpack_is_dismissed_first_and_letters_are_typed_only_once_the_box_has_the_focus(macro, monkeypatch):

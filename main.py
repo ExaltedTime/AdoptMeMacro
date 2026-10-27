@@ -1903,8 +1903,20 @@ def equip_trade_phone() -> bool:
         if not click_steps([("Toys tab", cfg.TRADE_HUB_TOYS_TAB_POS)]):
             return False
         card = None
+        searched = False
         for attempt in range(cfg.TRADES_EQUIP_TRIES):
-            again = " - searching again" if attempt + 1 < cfg.TRADES_EQUIP_TRIES else ""
+            again = " - trying again" if attempt + 1 < cfg.TRADES_EQUIP_TRIES else ""
+            item = popup_found(grab_screen(), "phone_item")                  # (the primary way: its picture, wherever it is in the grid, is clicked)
+            if item is not None:
+                hover_click(*item)
+                wait_interruptible(cfg.UI_SETTLE)
+                card = popup_found(grab_screen(), "phone_card")
+                if card is not None:
+                    break
+                log_run_event("trade listings: the item clicked is not the Trading Hub Phone" + again)
+                continue
+            log_run_event("trade listings: the phone's picture is not in the Toys tab, searching for it")
+            searched = True
             if not focus_search_box():
                 log_run_event("trade listings: the backpack's search box did not take the focus" + again)
                 continue
@@ -1921,7 +1933,7 @@ def equip_trade_phone() -> bool:
         if card is not None:
             hover_click(card[0] + cfg.TRADES_EQUIP_OFFSET[0], card[1] + cfg.TRADES_EQUIP_OFFSET[1])      # (its Equip, where the card is: never the badge's)
             wait_interruptible(cfg.UI_SETTLE)
-        if click_steps([("Search box", cfg.TRADES_SEARCH_POS)]):
+        if searched and click_steps([("Search box", cfg.TRADES_SEARCH_POS)]):
             type_keys(["backspace"] * len(cfg.TRADES_SEARCH_TEXT))          # (cleared: a filter left in it would show the other features' backpack items wrong)
             hover_click(*cfg.TRADES_UNFOCUS_POS)                            # (out of the box: the backpack key would be typed into it)
             wait_interruptible(cfg.UI_SETTLE)

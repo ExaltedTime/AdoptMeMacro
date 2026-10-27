@@ -144,7 +144,7 @@ def test_the_phone_is_found_by_typing_its_name_in_the_toys_search_clicking_the_f
     monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: events.append(("click", (x, y))))
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
     monkeypatch.setattr(macro, "close_backpack", lambda step: events.append(("close", step)))
-    looks = [frame("toys_unfiltered"), frame("toys_unfiltered"), frame("toys_filtered"), frame("toys_card"), frame("menu")]       # (the list follows the typed text late: two looks of the old list, then the filtered one; the phone's card after the first item is clicked; at the end the hotbar has its icon)
+    looks = [frame("menu"), frame("toys_unfiltered"), frame("toys_unfiltered"), frame("toys_unfiltered"), frame("toys_filtered"), frame("toys_card"), frame("menu")]       # (no payday popup; the box has taken the focus (no placeholder in it); the list follows the typed text late: two looks of the old list, then the filtered one; the phone's card after the first item is clicked; at the end the hotbar has its icon)
     def grab():
         events.append(("grab",))
         return looks.pop(0) if len(looks) > 1 else looks[0]
@@ -152,7 +152,7 @@ def test_the_phone_is_found_by_typing_its_name_in_the_toys_search_clicking_the_f
     monkeypatch.setattr(macro, "log_run_event", lambda text: events.append(("log", text)))
     assert macro.equip_trade_phone() is True
     first_item = next(i for i, e in enumerate(events) if e == ("click", cfg.TRADE_HUB_PHONE_POS))
-    assert [e[0] for e in events[:first_item]].count("grab") == 3                              # (the first item is not clicked before the list is the search's)
+    assert [e[0] for e in events[:first_item]].count("grab") == 5                              # (the first item is not clicked before the list is the search's)
     clicks = [e[1] for e in events if e[0] == "click"]
     presses = [e[1] for e in events if e[0] == "press"]
     assert presses == [cfg.KEYS["backpack"], *["backspace"] * 5, *"phone", *["backspace"] * 5]          # (the box emptied first: what a search before left in it)
@@ -187,6 +187,29 @@ def test_the_badge_is_never_equipped_a_search_that_does_not_work_is_tried_again_
     logs = [e[1] for e in events if e[0] == "log"]
     assert logs == [f"trade listings: {log} - searching again", f"trade listings: {log}"]
     assert events[-1] == ("close", "the Trading Hub Phone")                                    # (the search cleared, the backpack closed)
+
+
+def test_a_payday_popup_over_the_backpack_is_dismissed_first_and_letters_are_typed_only_once_the_box_has_the_focus(macro, monkeypatch):
+    cfg = macro.cfg
+    events = []
+    clock = types.SimpleNamespace(now=1000.0)
+    monkeypatch.setattr(macro, "time", types.SimpleNamespace(**{**vars(macro.time), "time": lambda: clock.now, "sleep": lambda s: None}))
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: setattr(clock, "now", clock.now + s))
+    monkeypatch.setattr(macro, "check_running", lambda: None)
+    monkeypatch.setattr(macro.pydirectinput, "press", lambda key, **k: events.append(("press", key)), raising=False)
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: events.append(("click", (x, y))))
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "close_backpack", lambda step: events.append(("close", step)))
+    monkeypatch.setattr(macro, "log_run_event", lambda text: events.append(("log", text)))
+    monkeypatch.setattr(macro, "grab_screen", lambda: frame("payday_over_backpack"))
+    assert macro.detect_paycheck() is True and ("click", cfg.PAYCHECK_DISMISS_POS_1) in events           # (the real frame of the popup over the backpack's header)
+    events.clear()
+    monkeypatch.setattr(macro, "detect_paycheck", lambda: False)
+    monkeypatch.setattr(macro, "grab_screen", lambda: frame("search_unfocused"))                          # (the click did not reach the box: its placeholder is still there after the letter)
+    assert macro.focus_search_box() is False
+    assert [e[1] for e in events if e[0] == "press"] == ["backspace"] * 5 + ["p"]                         # (one letter in the game, not the whole word)
+    monkeypatch.setattr(macro, "grab_screen", lambda: frame("toys_unfiltered"))
+    assert macro.focus_search_box() is True
 
 
 def test_the_hotkeys_are_not_acted_on_while_the_macro_types_its_own_letters(macro, monkeypatch):

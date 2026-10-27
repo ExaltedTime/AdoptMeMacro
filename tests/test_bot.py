@@ -289,6 +289,22 @@ def test_a_loop_has_started_when_the_status_is_new_and_does_not_say_that_nothing
     assert not bot_lib.loop_started(None, since)
 
 
+def test_the_trade_pictures_are_listed_in_order_without_the_rows_cleared_without_them_and_said(tmp_path):
+    (tmp_path / "rows").mkdir()
+    for name in ("L2_01.png", "L1_02.png", "L1_01.png", "declined.png", "done.json", "decline.json", "rows/L1_01.png"):
+        (tmp_path / name).write_text("x")
+    assert [os.path.basename(p) for p in bot_lib.trade_pictures(str(tmp_path))] == ["L1_01.png", "L1_02.png", "L2_01.png"]
+    bot_lib.clear_trades(str(tmp_path))
+    assert sorted(os.listdir(tmp_path)) == ["rows"] and os.listdir(tmp_path / "rows") == ["L1_01.png"]            # (the rows stay: /decline needs them until the next tour)
+    found = {"listings": {"1": {"offers": 3, "pictures": 2, "ended": "the end of the list"}, "2": {"offers": 0, "pictures": 0, "ended": "no list of offers"}}, "problem": ""}
+    text = bot_lib.trades_text(found)
+    assert "Listing 1: 3 offers, 2 pictures (the end of the list)." in text and "Listing 2: 0 offers (no list of offers)." in text and "/decline" in text
+    assert "/decline" not in bot_lib.trades_text({"listings": {"1": {"offers": 0, "pictures": 0, "ended": "x"}}, "problem": ""})
+    assert bot_lib.trades_text({"listings": {}, "problem": "the trade listings could not be opened"}) == "The trade listings were not looked at: the trade listings could not be opened."
+    assert bot_lib.decline_text({"listing": 2, "offer": 1, "declined": True, "why": ""}).startswith("Declined offer 1 of listing 2")
+    assert bot_lib.decline_text({"listing": 2, "offer": 1, "declined": False, "why": "the offer did not open"}) == "Did not decline offer 1 of listing 2: the offer did not open."
+
+
 def test_the_pictures_of_an_inventory_tour_are_listed_in_order_cleared_and_sent_ten_at_a_time(tmp_path):
     for name in ("002.png", "001.png", "010.png", "notes.png", "done.json"):
         (tmp_path / name).write_text("x")

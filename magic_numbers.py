@@ -178,6 +178,18 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "go_home":         {"box": (1280, 60, 1460, 140), "threshold": 0.8},
     # The purple backpack button at the bottom centre: the game's normal UI, there in the world and the Trading Hub and not on a loading screen.
     "backpack_button": {"box": (880, 950, 1040, 1075), "threshold": 0.8},
+    # The Trading Hub Phone's screens (trades_tour(), decline_offer(); crops of tests/trades/): the phone's TRADE LISTINGS button, the "TRADING HUB" menu's title, the
+    # "MY LISTINGS" title and the "1/2" / "2/2" of its "LISTING n/2", the "OFFERS" title (also there, dimmed, over an offer opened on its own), that offer's red DECLINE
+    # button, the "Are you sure you want to decline this offer?" dialog, and the phone's icon in the hotbar (it is equipped: a click in the world uses it).
+    "trade_phone_home":   {"box": (700, 300, 1250, 560), "threshold": 0.85},
+    "trade_menu":         {"box": (640, 300, 1000, 390), "threshold": 0.85},
+    "my_listings":        {"box": (640, 300, 1000, 390), "threshold": 0.85},
+    "listing_1_of_2":     {"box": (1060, 300, 1200, 390), "threshold": 0.85},
+    "listing_2_of_2":     {"box": (1060, 300, 1200, 390), "threshold": 0.85},
+    "offers_title":       {"box": (640, 300, 1000, 390), "threshold": 0.85},
+    "decline_button":     {"box": (680, 660, 1000, 760), "threshold": 0.85},
+    "decline_dialog":     {"box": (760, 430, 1160, 620), "threshold": 0.85},
+    "trade_phone_hotbar": {"box": (940, 950, 1100, 1075), "threshold": 0.85},
 }
 # The sick need's own "Ask Doctor Heart to heal your family?" Yes/No dialog (POPUP_TEMPLATES["sick_dialog"]) has the
 # same Yes green + No red as a minigame popup; it is the sick handler's to answer (SICK_FINAL_CLICK_POS is its Yes),
@@ -227,7 +239,7 @@ for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
 COMMANDS_DIR = os.path.join(DEBUG_DIR, "commands")          # the commands for the macro, one <time>-<id>.json file each, written by the Discord bot (see read_command_with_id()); the macro removes each once read and leaves a <time>-<id>.ack saying it was taken or why not
-COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus", "blackout", "test", "reset_config", "server_link")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, travel to / leave the Trading Hub, take pictures of the backpack's pets tab, or run Setup and then the loop (`sloop`), bring the Roblox window to the front (`focus`), blank / show the screen (`blackout`), run one need handler on its own or every teleport one (`test`, what the Debug tab's Test buttons do), reset the config (`reset_config`), or save the private server link (`server_link`)
+COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus", "blackout", "test", "reset_config", "server_link", "trades", "decline")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, travel to / leave the Trading Hub, take pictures of the backpack's pets tab, or run Setup and then the loop (`sloop`), bring the Roblox window to the front (`focus`), blank / show the screen (`blackout`), run one need handler on its own or every teleport one (`test`, what the Debug tab's Test buttons do), reset the config (`reset_config`), save the private server link (`server_link`), take pictures of the offers on the two trade listings (`trades`), or decline one of them (`decline`)
 NEED_NAMES = ("catch", "pet", "choose", "ride", "walk", "hungry", "thirsty", "dirty", "potty", "sleepy", "bored", "beach", "school", "cafe", "salon", "pizza", "camping", "sick")   # the Debug tab's need switches (the keys of main.py's NEED_HANDLER_CLASSES)
 OPTION_SWITCHES = {"side_quest": "side_quest_enabled", "resume_on_focus_loss": "resume_on_focus_loss", "record_next_run": "record_next_run",
                    "use_private_server": "use_private_server", "blackout_hotkey": "blackout_hotkey_enabled",
@@ -760,6 +772,44 @@ BACKPACK_NORMAL_MIN_WHITE_FRACTION = 0.2
 # settings one in the normal backpack's header; clicking the selected tab again does nothing), scrolled
 # a step at a time with a picture of its panel after each. First run: the backpack expanded, a picture was made, and the wheel moved nothing (it was given 1/120 of
 # a notch a step: see WHEEL_NOTCH), so the tour ended after that one picture; the window of the macro was in the picture.
+# The trade listings (trades_tour(), the bot's /trades, and decline_offer(), /decline), after a human's run through the Trading Hub Phone (tests/trades/): the phone is used
+# by a click in the world once it is equipped, its TRADE LISTINGS button, VIEW MY LISTINGS, the listing's OFFERS button, and then the list of offers: a row each (the green
+# ACCEPT button, the red DECLINE, what you and they put up), a few rows tall, scrolled with the wheel. A row clicked opens that offer on its own, with a DECLINE button that asks "Are you sure?".
+TRADES_DIR = os.path.join(DEBUG_DIR, "trades")                  # L1_01.png, L1_02.png ... (the list of the first listing at each scroll that showed offers not seen before, the offers numbered on them), L2_01.png ... for the second
+TRADES_ROWS_DIR = os.path.join(TRADES_DIR, "rows")              # L1_01.png ...: a picture of each numbered offer's row, which decline_offer() looks for in the list (so that it declines that one, whatever the list has become)
+TRADES_DONE_PATH = os.path.join(TRADES_DIR, "done.json")        # written when a tour ends: {"listings": {"1": {"offers": n, "pictures": n, "ended": why}, ...}, "problem": ""}
+TRADES_DECLINED_PATH = os.path.join(TRADES_DIR, "declined.png")  # the offer that was declined, as it showed on its own
+TRADES_DECLINE_DONE_PATH = os.path.join(TRADES_DIR, "decline.json")   # written when a decline ends: {"listing": n, "offer": n, "declined": true or false, "why": ...}
+TRADES_LISTINGS = (1, 2)                                        # the listings looked at (the game allows two)
+TRADES_MAX_OFFERS = 30                                          # the most offers of a listing /decline can be asked for
+TRADES_PHONE_SLOT_POS = (972, 755)                              # the Trading Hub Phone in the backpack's Toys tab (the second of the Special row with the favourites filter Setup turns on; found by searching later)
+TRADES_PHONE_EQUIP_POS = (1053, 850)                            # its Equip button
+TRADES_PHONE_LISTINGS_POS = (870, 430)                          # the phone's TRADE LISTINGS
+TRADES_MENU_VIEW_POS = (855, 650)                               # the menu's VIEW MY LISTINGS
+TRADES_NEXT_POS = (1290, 530)                                   # the arrow at the right of the listing (with two listings, it goes from one to the other)
+TRADES_OFFERS_POS = (755, 702)                                  # the listing's OFFERS
+TRADES_BACK_POS = (1210, 342)                                   # the orange arrow at the top: a screen back
+TRADES_CLOSE_POS = (1277, 339)                                  # the red X at the top: the phone away
+TRADES_ROW_CLICK_DY = 12                                        # an offer is opened by a click at TRADES_ROW_CLICK_X, this far below its ACCEPT button's middle
+TRADES_ROW_CLICK_X = 1069
+TRADES_DETAIL_DECLINE_POS = (835, 702)                          # DECLINE of an offer on its own
+TRADES_DECLINE_YES_POS = (1048, 660)                            # Yes of the dialog
+TRADES_ACCEPT_BOX = (640, 395, 840, 735)                        # where the green ACCEPT buttons of the rows are (and the list's top and bottom: a row must be whole in it)
+TRADES_ACCEPT_HSV = ((45, 110, 130), (80, 255, 255))            # their colour (OpenCV's HSV)
+TRADES_ACCEPT_SIZE = ((150, 230), (22, 55))                     # (width, height) range in px of one
+TRADES_ROW_BOX = (640, -52, 1262, 78)                           # a row, from an ACCEPT button's middle: (left, top, right, bottom), top and bottom as offsets
+TRADES_ROW_MATCH = 0.93                                         # TM_CCOEFF_NORMED score of a row found again
+TRADES_PANEL_BOX = (570, 270, 1350, 780)                        # the phone's screen, the picture of each step
+TRADES_SCROLL_POS = (960, 560)                                  # the mouse is over the list here while the wheel turns
+TRADES_SCROLL_CLICKS = 3                                        # notches of the wheel per step of a tour (halved, down to one, when a step lost the rows seen before)
+TRADES_FIND_CLICKS = 1                                          # per step when looking for an offer to decline
+TRADES_SCROLL_SETTLE = 0.5                                      # seconds after a step, before the picture
+TRADES_SAME_LEVEL = 1.0                                         # a list whose mean grey level differs from the last picture's by less than this did not move: its end
+TRADES_MAX_STEPS = 40                                           # steps of one listing's tour at the most
+TRADES_SCREEN_WAIT = 4.0                                        # seconds a screen of the phone is waited for after the click that opens it
+TRADES_POLL = 0.25
+BOT_TRADES_WAIT = 300.0                                         # seconds the bot waits, after /trades or /decline, for the macro to end (TRADES_DONE_PATH, TRADES_DECLINE_DONE_PATH)
+BOT_TRADES_POLL = 1.0
 INVENTORY_DIR = os.path.join(DEBUG_DIR, "inventory")            # the pictures (001.png, 002.png ...), emptied at the start of each tour
 INVENTORY_DONE_PATH = os.path.join(INVENTORY_DIR, "done.json")  # written when the tour ends, however it ends: {"pictures": N, "ended": why}
 INVENTORY_PETS_TAB_POS = (817, 713)

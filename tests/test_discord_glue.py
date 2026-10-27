@@ -452,6 +452,69 @@ def test_an_inventory_tour_that_never_ends_or_is_refused_is_said(tour_folder, mo
     assert asyncio.run(discord_bot.collect_inventory()) == ("The macro dropped the command (too old) - nothing was done.", [])
 
 
+@pytest.fixture
+def trades_folder(tmp_path, monkeypatch):
+    folder = tmp_path / "trades"
+    folder.mkdir()
+    for name, path in (("TRADES_DIR", folder), ("TRADES_DONE_PATH", folder / "done.json"), ("TRADES_DECLINE_DONE_PATH", folder / "decline.json"), ("TRADES_DECLINED_PATH", folder / "declined.png")):
+        monkeypatch.setattr(discord_bot.cfg, name, str(path))
+    monkeypatch.setattr(discord_bot.cfg, "BOT_TRADES_POLL", 0.01)
+    monkeypatch.setattr(discord_bot.cfg, "BOT_TRADES_WAIT", 0.3)
+    return folder
+
+
+def test_a_look_at_the_trade_listings_is_asked_for_waited_for_and_its_pictures_listed(trades_folder, monkeypatch):
+    sent = []
+
+    async def send(command, **details):
+        sent.append((command, details))
+        return ""
+    monkeypatch.setattr(discord_bot, "send_command", send)
+    (trades_folder / "L1_09.png").write_text("from an earlier tour")                    # cleared before the macro is asked
+
+    async def macro_tour():
+        await asyncio.sleep(0.05)
+        for name in ("L2_01.png", "L1_01.png"):
+            (trades_folder / name).write_text("picture")
+        (trades_folder / "done.json").write_text(json.dumps({"listings": {"1": {"offers": 2, "pictures": 1, "ended": "the end of the list"}}, "problem": ""}))
+
+    async def both():
+        task = asyncio.ensure_future(macro_tour())
+        result = await discord_bot.collect_trades()
+        await task
+        return result
+    text, pictures = asyncio.run(both())
+    assert sent == [("trades", {})] and [pathlib.Path(p).name for p in pictures] == ["L1_01.png", "L2_01.png"]
+    assert text.startswith("Listing 1: 2 offers, 1 picture") and "/loop" in text
+    text, pictures = asyncio.run(discord_bot.collect_trades())                          # (the marker was removed with the pictures: this one never ends)
+    assert "has not ended its look at the trade listings" in text and pictures == []
+
+
+def test_a_decline_is_asked_for_with_its_listing_and_offer_and_the_picture_of_what_was_declined_comes_back(trades_folder, monkeypatch):
+    sent = []
+
+    async def send(command, **details):
+        sent.append((command, details))
+        return ""
+    monkeypatch.setattr(discord_bot, "send_command", send)
+
+    async def macro_decline():
+        await asyncio.sleep(0.05)
+        (trades_folder / "declined.png").write_text("picture")
+        (trades_folder / "decline.json").write_text(json.dumps({"listing": 2, "offer": 3, "declined": True, "why": ""}))
+
+    async def both():
+        task = asyncio.ensure_future(macro_decline())
+        result = await discord_bot.decline_offer(2, 3)
+        await task
+        return result
+    text, pictures = asyncio.run(both())
+    assert sent == [("decline", {"listing": 2, "offer": 3})] and text.startswith("Declined offer 3 of listing 2") and [pathlib.Path(p).name for p in pictures] == ["declined.png"]
+    (trades_folder / "decline.json").write_text(json.dumps({"listing": 2, "offer": 3, "declined": False, "why": "the offer did not open"}))   # (cleared before the macro is asked: gone)
+    text, pictures = asyncio.run(discord_bot.decline_offer(2, 3))
+    assert "has not ended the decline" in text and pictures == []
+
+
 class ChannelClient:
     def __init__(self):
         self.channel = FakeChannel()

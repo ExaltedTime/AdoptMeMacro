@@ -292,7 +292,8 @@ def test_the_tour_numbers_the_offers_in_the_order_they_are_seen_keeps_a_picture_
     assert second.shape[:2] == (macro.cfg.TRADES_PANEL_BOX[3] - macro.cfg.TRADES_PANEL_BOX[1], macro.cfg.TRADES_PANEL_BOX[2] - macro.cfg.TRADES_PANEL_BOX[0])
 
 
-def test_a_step_that_lost_every_row_seen_before_is_taken_back_and_made_shorter(macro, game):
+def test_a_step_that_lost_every_row_seen_before_is_taken_back_and_made_shorter(macro, game, monkeypatch):
+    monkeypatch.setattr(macro.cfg, "TRADES_SCROLL_CLICKS", 3)                                  # (a longer step than the one used, to see it halved)
     offers = frame("offers")
     lost = scrolled(offers, with_new_row=True)
     lost[395:735, 640:1262] = np.roll(lost[395:735, 640:1262], 7, axis=1)                    # (nothing in it is a row seen before, though rows are in sight)
@@ -396,3 +397,22 @@ def test_the_trade_commands_are_read_for_a_listing_and_an_offer_the_macro_has_an
     action = macro.OUTSIDE_ACTIONS["decline:2:3"]
     assert action.func is macro.decline_offer and action.args == (2, 3)
     assert macro.OUTSIDE_ACTIONS["trades"] is macro.trades_tour and "trades" in cfg.COMMANDS
+
+
+def test_recenter_closes_the_trade_phone_and_the_stray_windows_respawns_and_closes_what_is_left(macro, monkeypatch):
+    cfg = macro.cfg
+    log, screens, strays = [], ["phone", None], [["profile", None], [None]]
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "grab_screen", lambda: None)
+    monkeypatch.setattr(macro, "trade_screen", lambda img: screens.pop(0) if screens else None)
+    monkeypatch.setattr(macro, "close_trade_phone", lambda: log.append("phone closed"))
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: log.append(("click", (x, y))))
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: (strays[0].pop(0) if strays[0] else None) if strays else None)
+    monkeypatch.setattr(macro, "respawn_character", lambda: (log.append("respawned"), strays.pop(0)))
+    monkeypatch.setattr(macro, "log_run_event", lambda text: log.append(text))
+    assert macro.recenter() is True
+    assert log == ["phone closed", "respawned", "recenter: 2 window(s) closed, respawned"]            # (the phone first, the stray window; after the respawn nothing is left)
+    screens[:] = ["board"]
+    log.clear()
+    assert macro.close_open_windows() == 1 and log == [("click", cfg.STRAY_WINDOWS["trade_board"]["close_pos"])]

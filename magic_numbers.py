@@ -249,7 +249,7 @@ for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
 COMMANDS_DIR = os.path.join(DEBUG_DIR, "commands")          # the commands for the macro, one <time>-<id>.json file each, written by the Discord bot (see read_command_with_id()); the macro removes each once read and leaves a <time>-<id>.ack saying it was taken or why not
-COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus", "blackout", "test", "reset_config", "server_link", "trades", "decline", "capture")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, travel to / leave the Trading Hub, take pictures of the backpack's pets tab, or run Setup and then the loop (`sloop`), bring the Roblox window to the front (`focus`), blank / show the screen (`blackout`), run one need handler on its own or every teleport one (`test`, what the Debug tab's Test buttons do), reset the config (`reset_config`), save the private server link (`server_link`), take pictures of the offers on the two trade listings (`trades`), decline one of them (`decline`), or start the input capture (the capture hotkey's) and stop it again (`capture`)
+COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus", "blackout", "test", "reset_config", "server_link", "trades", "decline", "capture", "recenter")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, travel to / leave the Trading Hub, take pictures of the backpack's pets tab, or run Setup and then the loop (`sloop`), bring the Roblox window to the front (`focus`), blank / show the screen (`blackout`), run one need handler on its own or every teleport one (`test`, what the Debug tab's Test buttons do), reset the config (`reset_config`), save the private server link (`server_link`), take pictures of the offers on the two trade listings (`trades`), decline one of them (`decline`), or start the input capture (the capture hotkey's) and stop it again (`capture`), or close what is open and respawn (`recenter`)
 NEED_NAMES = ("catch", "pet", "choose", "ride", "walk", "hungry", "thirsty", "dirty", "potty", "sleepy", "bored", "beach", "school", "cafe", "salon", "pizza", "camping", "sick")   # the Debug tab's need switches (the keys of main.py's NEED_HANDLER_CLASSES)
 OPTION_SWITCHES = {"side_quest": "side_quest_enabled", "resume_on_focus_loss": "resume_on_focus_loss", "record_next_run": "record_next_run",
                    "use_private_server": "use_private_server", "blackout_hotkey": "blackout_hotkey_enabled",
@@ -688,6 +688,7 @@ MATCH_ONLY_LEFT_HALF = True    # compare only the left half of each icon (a badg
 
 # Timing (seconds)
 RESPAWN_KEY_DURATION = 0.05    # how long each respawn key is held
+RECENTER_CLOSE_TRIES = 4           # /recenter: windows closed one after the other (a stray window can have another behind it), at most this many
 RESPAWN_CONFIRM_LOOK_DELAY = 0.5  # after the respawn keys, before checking the respawn dialog is gone
 RESPAWN_WAIT = 4.0             # settle time after respawning, before it's usable
 WALK_TO_BUTTONS_DURATION = 0.8 # time spent walking forward to reach the action buttons
@@ -838,8 +839,8 @@ TRADES_ACCEPT_SIZE = ((150, 230), (22, 55))                     # (width, height
 TRADES_ROW_BOX = (640, -52, 1262, 78)                           # a row, from an ACCEPT button's middle: (left, top, right, bottom), top and bottom as offsets
 TRADES_ROW_MATCH = 0.93                                         # TM_CCOEFF_NORMED score of a row found again
 TRADES_PANEL_BOX = (570, 270, 1350, 780)                        # the phone's screen, the picture of each step
-TRADES_SCROLL_POS = (960, 560)                                  # the mouse is over the list here while the wheel turns
-TRADES_SCROLL_CLICKS = 3                                        # notches of the wheel per step of a tour (halved, down to one, when a step lost the rows seen before)
+TRADES_SCROLL_POS = (1274, 560)                                 # the mouse is on the list's scroll bar here while the wheel turns (over a row, the description of the item under it covers the rows)
+TRADES_SCROLL_CLICKS = 1                                        # notches of the wheel per step of a tour (halved, down to one, when a step lost the rows seen before)
 TRADES_FIND_CLICKS = 1                                          # per step when looking for an offer to decline
 TRADES_SCROLL_SETTLE = 0.5                                      # seconds after a step, before the picture
 TRADES_SAME_LEVEL = 1.0                                         # a list whose mean grey level differs from the last picture's by less than this did not move: its end

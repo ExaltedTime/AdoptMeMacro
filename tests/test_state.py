@@ -1445,7 +1445,7 @@ def answer(macro, name):
 def test_a_fresh_command_is_read_once_and_the_file_is_removed(macro, monkeypatch, tmp_path):
     monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
     assert macro.read_command_with_id()[1] is None                                       # (no file)
-    for command in ("start", "stop", "exit", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus"):
+    for command in ("start", "stop", "exit", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus", "recenter"):
         name = write_command(macro, command)
         assert macro.read_command_with_id()[1]["command"] == command and commands_waiting(macro) == []
         assert answer(macro, name) == "taken"
@@ -1514,7 +1514,7 @@ def test_the_commands_do_what_the_buttons_do_and_polling_goes_on_except_after_ex
 
 
 def test_outside_actions_run_what_their_buttons_run_one_after_the_other_in_the_order_asked(macro, monkeypatch, tmp_path):
-    names = {"rejoin": "leave_and_rejoin", "setup": "setup_game", "trade_hub": "travel_to_trade_hub", "leave_trade_hub": "leave_trade_hub"}
+    names = {"rejoin": "leave_and_rejoin", "setup": "setup_game", "trade_hub": "travel_to_trade_hub", "leave_trade_hub": "leave_trade_hub", "recenter": "recenter"}
     for command, action in names.items():
         gui = remote_gui(macro, monkeypatch, tmp_path)
         write_command(macro, command)

@@ -1484,6 +1484,40 @@ def respawn_character() -> None:
     wait_interruptible(cfg.RESPAWN_WAIT)
     logger.debug("Respawn complete")
 
+def close_open_windows() -> int:
+    """Close what is open on top of the game: the trade phone's screens (close_trade_phone(), and the board of offers) and the stray windows (dismiss_stray_windows(), one after the
+    other, at most RECENTER_CLOSE_TRIES). Returns how many were closed."""
+    closed = 0
+    screen = trade_screen(grab_screen())
+    if screen == "board":
+        hover_click(*cfg.STRAY_WINDOWS["trade_board"]["close_pos"])
+        wait_interruptible(cfg.UI_SETTLE)
+        closed += 1
+    elif screen == "dialog":
+        hover_click(*cfg.EXIT_STAY_POS)                                  # (Cancel: nothing is declined)
+        wait_interruptible(cfg.UI_SETTLE)
+        screen = trade_screen(grab_screen())
+        closed += 1
+    if screen in ("detail", "offers", "listings", "menu", "phone"):
+        close_trade_phone()
+        wait_interruptible(cfg.UI_SETTLE)
+        closed += 1
+    for _ in range(cfg.RECENTER_CLOSE_TRIES):
+        if dismiss_stray_windows() is None:
+            break
+        closed += 1
+    return closed
+
+def recenter() -> bool:
+    """The bot's /recenter: close what is open (close_open_windows()), respawn the character (it is back where it spawns), and close what the respawn left. True once done."""
+    if not focus_roblox():
+        return False
+    closed = close_open_windows()
+    respawn_character()
+    closed += close_open_windows()
+    log_run_event(f"recenter: {closed} window(s) closed, respawned")
+    return True
+
 def hold_key(key: str, duration: float) -> None:
     """Hold `key` down for `duration` seconds (interruptibly). Always
     releases the key, even if StopRequested/FocusLost fires mid-hold -
@@ -6382,7 +6416,7 @@ class DebugCapture(logging.Handler):
         self.at_line_start = True
 
 OUTSIDE_ACTIONS: dict[str, Callable[[], Any]] = {"rejoin": leave_and_rejoin, "setup": setup_game, "trade_hub": travel_to_trade_hub, "leave_trade_hub": leave_trade_hub, "inventory": inventory_tour, "sloop": exit_minigame_and_setup,
-                                          "trades": trades_tour,
+                                          "trades": trades_tour, "recenter": recenter,
                                           **{f"test:{name}": partial(test_need_handler, name) for name in (*DEBUG_HANDLERS, cfg.TEST_ALL_TELEPORTS)},
                                           **{f"decline:{listing}:{number}": partial(decline_offer, listing, number) for listing in cfg.TRADES_LISTINGS for number in range(1, cfg.TRADES_MAX_OFFERS + 1)}}   # the commands that do what a button does (AdoptMeGUI.act_from_outside())
 

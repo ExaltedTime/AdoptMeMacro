@@ -698,6 +698,13 @@ def test_a_macro_that_is_running_is_left_alone_and_one_that_does_not_come_up_is_
     assert asyncio.run(discord_bot.ensure_macro(config)) == ("Started the macro, but its process is not there - see /log and macro_stderr.log.", False)
 
 
+def test_the_macros_answer_to_capture_is_said_in_words():
+    assert "/capture again to end it" in discord_bot.capture_text("started")
+    assert "stopped" in discord_bot.capture_text("stopped") and "/captures" in discord_bot.capture_text("stopped")
+    assert discord_bot.capture_text("failed: no space left") == "The capture did not work (no space left) - see /log."
+    assert "has not said" in discord_bot.capture_text(None)
+
+
 def test_the_macros_answer_to_blank_is_said_in_words(tmp_path, monkeypatch):
     assert discord_bot.blank_text("blanked").startswith("The screen is blank") and discord_bot.blank_text("shown") == "The screen is shown."
     assert "was not blanked" in discord_bot.blank_text("not blanked") and "has not said" in discord_bot.blank_text(None)

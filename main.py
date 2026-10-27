@@ -1639,8 +1639,39 @@ def set_backpack_filter() -> None:
         logger.debug("Confirming...")
         hover_click(*cfg.SETUP_CONFIRM_POS)
         wait_interruptible(cfg.UI_SETTLE)
+        equip_favorite_pet()
         logger.debug("Closing backpack...")
         close_backpack("setup")
+
+def find_equip_button(img: Image) -> Optional[Point]:
+    """The middle of the green Equip button of the backpack's card of the item clicked, or None (an item that is equipped has another button, an Unequip): the blob of GREEN_BUTTON_COLOR of the
+    size of one (EQUIP_BUTTON_SIZE) in EQUIP_BUTTON_BOX, where a card can be (the green plus tile of the pets tab is smaller)."""
+    left, top, right, bottom = cfg.EQUIP_BUTTON_BOX
+    mask = exact_color_mask(img[top:bottom, left:right], cfg.GREEN_BUTTON_COLOR, cfg.GREEN_BUTTON_TOLERANCE)
+    count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    (min_w, max_w), (min_h, max_h) = cfg.EQUIP_BUTTON_SIZE
+    for i in range(1, count):
+        if min_w <= stats[i, cv2.CC_STAT_WIDTH] <= max_w and min_h <= stats[i, cv2.CC_STAT_HEIGHT] <= max_h:
+            return left + int(centres[i][0]), top + int(centres[i][1])
+    return None
+
+def equip_favorite_pet() -> bool:
+    """In the open backpack: the pets tab, the second item (the first is the green plus tile; with the favourites filter the second is the favourite pet) and its Equip button, found on the
+    card (find_equip_button()): the pet had got unequipped. An item that has no Equip button is equipped already: nothing is clicked. True if Equip was clicked."""
+    logger.debug("Opening the pets tab...")
+    select_backpack_tab(cfg.INVENTORY_PETS_TAB_POS)
+    wait_interruptible(cfg.UI_SETTLE)
+    logger.debug("Selecting the favorite pet...")
+    hover_click(*cfg.PET_SECOND_ITEM_POS)
+    wait_interruptible(cfg.UI_SETTLE)
+    button = find_equip_button(grab_screen())
+    if button is None:
+        log_run_event("favorite pet: no Equip button on the second item (it is equipped already)")
+        return False
+    logger.debug("Equipping the pet...")
+    hover_click(*button)
+    wait_interruptible(cfg.UI_SETTLE)
+    return True
 
 def send_macro_window_to_back() -> None:
     """Drop the macro's own window behind everything (it's normally
@@ -1818,6 +1849,8 @@ def trade_screen(img: Image) -> Optional[str]:
     later ones are also there (dimmed) under them."""
     for name, screen in (("decline_dialog", "dialog"), ("trade_board", "board"), ("decline_button", "detail"), ("offers_title", "offers"), ("my_listings", "listings"), ("trade_menu", "menu"), ("trade_phone_home", "phone")):
         if popup_visible(img, name):
+            if screen == "menu" and listing_shown(img) is not None:
+                return "listings"                    # (outside the Trading Hub the listings' title is "TRADING HUB", not "MY LISTINGS", with the same "LISTING 1/2": the menu's title is the same, and has no such numbers)
             return screen
     return None
 
@@ -6507,6 +6540,8 @@ class AdoptMeGUI:
         elif command == "blackout":
             value = data.get("value") if data else None
             finish_command(stem, self.blackout_command(value if isinstance(value, bool) else None))
+        elif command == "capture":
+            finish_command(stem, self.capture_command())
         elif command == "focus":
             focus_roblox()                                                          # the window to the front (no click): after an update the macro's own window may be
         elif command == "sloop":
@@ -6667,6 +6702,15 @@ class AdoptMeGUI:
             toggle_input_capture()
         except OSError as error:
             logger.warning(f"Input capture: {error}")
+
+    def capture_command(self) -> str:
+        """The `capture` command (Tk's thread): what the capture hotkey does - start a capture, or stop the one that is running - while a command of the bot goes on, to see what it
+        does. What happened, for the bot: "started", "stopped" or "failed: why"."""
+        try:
+            return "started" if toggle_input_capture() is not None else "stopped"
+        except OSError as error:
+            logger.warning(f"Input capture: {error}")
+            return f"failed: {error}"
 
     def blackout_by_hotkey(self) -> None:
         """HOTKEYS["blackout"] was pressed: blank the screen or show it again (Tk's thread), unless the Options subtab's checkbox has the key off (it is

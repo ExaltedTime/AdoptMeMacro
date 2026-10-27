@@ -152,18 +152,67 @@ def done_marker(tour):
 
 def test_the_tour_takes_a_picture_scrolls_and_stops_when_a_step_moves_nothing(macro, tour):
     cfg = macro.cfg
-    tour.screens.extend([tour.screen(level) for level in (50, 50, 50, 120, 200, 200)])      # (the first two are the looks at the backpack opening and expanding)
+    tour.screens.extend([tour.screen(level) for level in (50, 50, 50, 50, 120, 200, 200)])  # (the first two are the looks at the backpack opening and expanding, the fourth the look after the first notch)
     (tour.folder).mkdir(parents=True)
     (tour.folder / "007.png").write_text("from an earlier tour")
     assert macro.inventory_tour() is True
     assert sorted(os.listdir(tour.folder)) == ["001.png", "002.png", "003.png", "done.json"]
     assert done_marker(tour) == {"pictures": 3, "ended": "the end of the list"}
-    kinds = [event[0] for event in tour.log]
     assert tour.log[:4] == [("press", cfg.KEYS["backpack"]), ("tab", cfg.INVENTORY_PETS_TAB_POS), ("click", cfg.INVENTORY_EXPAND_POS), ("move", cfg.INVENTORY_SCROLL_POS)]     # the expand button, not the selected tab again
-    assert kinds.count("scroll") == 3 and tour.log[-1] == ("close", "the inventory") and ("scroll", cfg.INVENTORY_SCROLL_CLICKS) in tour.log
+    scrolls = [event[1] for event in tour.log if event[0] == "scroll"]
+    assert scrolls == [cfg.INVENTORY_PROBE_CLICKS, cfg.INVENTORY_SCROLL_CLICKS - cfg.INVENTORY_PROBE_CLICKS, cfg.INVENTORY_SCROLL_CLICKS, cfg.INVENTORY_SCROLL_CLICKS]     # (a first notch that could not be measured: the usual step, less that notch)
+    assert tour.log[-1] == ("close", "the inventory")
     import cv2
     left, top, right, bottom = cfg.INVENTORY_PANEL_BOX
     assert cv2.imread(str(tour.folder / "001.png")).shape[:2] == (bottom - top, right - left)               # each picture is the panel
+
+
+def textured(macro, height=1080, width=830, seed=1):
+    """A tall made-up list: noise, so that every band of it is found once."""
+    import numpy as np
+    return np.random.default_rng(seed).integers(0, 255, (height * 4, width, 3), dtype=np.uint8)
+
+
+def test_how_far_the_list_moved_is_found_by_where_a_band_of_the_picture_went(macro):
+    import numpy as np
+    tall = textured(macro)
+    first, after = tall[0:1080], tall[37:37 + 1080]                                           # the list moved up by 37 px
+    assert macro.scroll_shift(first, after) == 37
+    covered = after.copy()
+    covered[:, :260] = 0                                                                     # a tooltip over the strip at the left: the one at the right still finds it
+    assert macro.scroll_shift(first, covered) == 37
+    both = after.copy()
+    both[:, :260] = 0
+    both[:, 570:] = 0
+    assert macro.scroll_shift(first, both) is None                                           # (neither strip: not found)
+    assert macro.scroll_shift(first, first) is None                                          # did not move
+    assert macro.scroll_shift(np.full((1080, 830, 3), 90, np.uint8), np.full((1080, 830, 3), 90, np.uint8)) is None      # nothing to find in a flat picture
+    assert macro.scroll_shift(first, after[:500]) is None
+
+
+def test_the_step_is_as_many_notches_as_move_the_list_the_wanted_distance_after_measuring_the_first_notch(macro, tour, monkeypatch):
+    cfg = macro.cfg
+    tall = textured(macro)
+    position = {"y": 0}
+    per_notch = 45
+    monkeypatch.setattr(macro, "scroll_down", lambda clicks: (tour.log.append(("scroll", clicks)), position.update(y=min(position["y"] + clicks * per_notch, len(tall) - 1080))))
+    monkeypatch.setattr(macro, "panel_picture", lambda img: tall[position["y"]:position["y"] + 1080])
+    tour.screens.append(tour.screen(0))                                                      # (what the looks at the backpack opening and expanding see; the pictures are the list's)
+    (tour.folder).mkdir(parents=True)
+    assert macro.inventory_tour() is True
+    scrolls = [event[1] for event in tour.log if event[0] == "scroll"]
+    wanted = round(cfg.INVENTORY_STEP_PIXELS / per_notch)
+    assert scrolls[:3] == [cfg.INVENTORY_PROBE_CLICKS, wanted - cfg.INVENTORY_PROBE_CLICKS, wanted]                    # the first notch, the rest of the first step, then whole steps
+    assert done_marker(tour)["ended"] == "the end of the list"
+    pictures = [cv2_read(tour.folder / name) for name in sorted(os.listdir(tour.folder)) if name.endswith(".png")]
+    import numpy as np
+    step = wanted * per_notch
+    assert len(pictures) > 3 and step < 1080 and np.array_equal(pictures[0][step:], pictures[1][:1080 - step])          # each picture's bottom is the next one's top: nothing is skipped
+
+
+def cv2_read(path):
+    import cv2
+    return cv2.imread(str(path))
 
 
 def test_the_tour_ends_at_the_most_pictures_asked_for_when_the_list_goes_on(macro, tour, monkeypatch):

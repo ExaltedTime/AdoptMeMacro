@@ -1693,9 +1693,26 @@ def same_picture(a: Image, b: Image, level: Optional[float] = None) -> bool:
     """Whether two pictures of the panel show the same thing: their mean grey levels differ by less than `level` (INVENTORY_SAME_LEVEL)."""
     return a.shape == b.shape and float(np.abs(a.astype(np.int16) - b.astype(np.int16)).mean()) < (cfg.INVENTORY_SAME_LEVEL if level is None else level)
 
+def scroll_shift(before: Image, after: Image) -> Optional[int]:
+    """How many pixels the list moved up between two pictures of the panel: the band of `before` at INVENTORY_SHIFT_BAND is looked for in `after` (in the strip at the left and the strip at
+    the right of the panel, the better match counts), at least INVENTORY_SHIFT_MATCH good; its place in `after` is how far the list moved. None if it did not move, or the band was not found."""
+    if before.shape != after.shape:
+        return None
+    height, width = before.shape[:2]
+    top, bottom = int(height * cfg.INVENTORY_SHIFT_BAND[0]), int(height * cfg.INVENTORY_SHIFT_BAND[1])
+    best: Optional[tuple[float, int]] = None
+    for left, right in ((0, width // 4), (width * 3 // 4, width)):
+        band = before[top:bottom, left:right]
+        if float(band.std()) < cfg.INVENTORY_SHIFT_MIN_SPREAD:
+            continue
+        _, score, _, (_, y) = cv2.minMaxLoc(cv2.matchTemplate(after[:, left:right], band, cv2.TM_CCOEFF_NORMED))
+        if score >= cfg.INVENTORY_SHIFT_MATCH and (best is None or score > best[0]):
+            best = (float(score), top - y)
+    return best[1] if best is not None and best[1] > 0 else None
+
 def inventory_tour() -> bool:
     """Open the backpack, select its pets tab, click the expand button (INVENTORY_EXPAND_POS, checked with detect_backpack_expanded()) and scroll down it a step at a
-    time (INVENTORY_SCROLL_CLICKS notches of the wheel, over INVENTORY_SCROLL_POS),
+    time over INVENTORY_SCROLL_POS (a step is as many notches of the wheel as move the list INVENTORY_STEP_PIXELS, measured on the first step: scroll_shift()),
     saving a picture of the panel (INVENTORY_PANEL_BOX) at each step in INVENTORY_DIR - emptied first - until a step moves nothing (the end of the list) or there
     are INVENTORY_MAX_PICTURES. The backpack is closed again. INVENTORY_DONE_PATH says how many pictures and why it ended, however it ended (the bot waits for it).
     True if the tour was made, even if scrolling moved nothing at all (then there is one picture)."""
@@ -1723,7 +1740,7 @@ def inventory_tour() -> bool:
                 close_backpack("the inventory")
                 return False
             hover_move(*cfg.INVENTORY_SCROLL_POS)                          # (with the nudge that makes Roblox see the pointer over the list: a plain move did not, and the wheel turned nothing)
-            previous = None
+            previous, clicks, measured = None, cfg.INVENTORY_SCROLL_CLICKS, False
             while True:
                 picture = panel_picture(grab_screen())
                 if previous is not None and same_picture(previous, picture):
@@ -1735,8 +1752,20 @@ def inventory_tour() -> bool:
                 pictures += 1
                 cv2.imwrite(os.path.join(cfg.INVENTORY_DIR, f"{pictures:03d}.png"), picture)
                 previous = picture
-                scroll_down(cfg.INVENTORY_SCROLL_CLICKS)
-                wait_interruptible(cfg.INVENTORY_SCROLL_SETTLE)
+                if measured:
+                    scroll_down(clicks)
+                else:                                                      # the first step: a notch or so, and the pictures say how far a notch goes
+                    probe = min(cfg.INVENTORY_PROBE_CLICKS, clicks)
+                    scroll_down(probe)
+                    wait_interruptible(cfg.INVENTORY_SCROLL_SETTLE)
+                    shift = scroll_shift(picture, panel_picture(grab_screen()))
+                    measured = True
+                    if shift is not None:
+                        clicks = max(1, round(cfg.INVENTORY_STEP_PIXELS * probe / shift))
+                        logger.debug(f"The list moves {shift / probe:.0f} px a notch: {clicks} notches a step")
+                    else:
+                        logger.debug(f"How far a notch goes could not be measured: {clicks} notches a step")
+                    scroll_down(max(0, clicks - probe))
             close_backpack("the inventory")
     finally:
         bring_macro_window_to_front()

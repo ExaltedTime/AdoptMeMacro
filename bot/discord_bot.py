@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
-from typing import Any, Awaitable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -217,17 +217,74 @@ def action_end_text(label: str, ended: str, then: str = "") -> str:
     return text
 
 
-async def announce_when_done(client: discord.Client, config: bot_lib.Config, name: str, label: str, then: str = "") -> None:
+async def announce_when_done(client: discord.Client, config: bot_lib.Config, name: str, label: str, then: str = "", on_end: Optional[Callable[[], Awaitable[None]]] = None) -> None:
     """Say in the channel how the macro's action for the command `name` ended - it writes that when it does (finish_command()) - or that it has not reported in
-    BOT_ACTION_WAIT seconds."""
-    deadline = time.time() + cfg.BOT_ACTION_WAIT
-    while time.time() < deadline:
-        ended = bot_lib.take_ack(cfg.COMMANDS_DIR, name, "done")
-        if ended is not None:
-            await tell_channel(client, config, action_end_text(label, ended, then))
+    BOT_ACTION_WAIT seconds; then `on_end` (the end of a debug session)."""
+    try:
+        deadline = time.time() + cfg.BOT_ACTION_WAIT
+        while time.time() < deadline:
+            ended = bot_lib.take_ack(cfg.COMMANDS_DIR, name, "done")
+            if ended is not None:
+                await tell_channel(client, config, action_end_text(label, ended, then))
+                return
+            await asyncio.sleep(cfg.BOT_ACTION_POLL)
+        await tell_channel(client, config, f"{label} has not reported that it finished in {cfg.BOT_ACTION_WAIT:g} s - see /status.")
+    finally:
+        if on_end is not None:
+            await on_end()
+
+
+DEBUG_HELP = "True to run a capture and a rolling view while it goes, both ending when it does"
+
+
+class DebugSession:
+    """The `debug` option of a command: a capture (the macro's `capture` command) and a rolling view in a message of its own, both started before the command goes to the macro and
+    both ended by end() when it is over - the one place that does it. The rolling view stops at BOT_RVIEW_MAX_SECONDS whatever happens."""
+
+    def __init__(self, interaction: discord.Interaction) -> None:
+        self.interaction = interaction
+        self.message: Any = None
+        self.over = asyncio.Event()
+        self.task: Optional[asyncio.Future] = None
+        self.capture_started = False
+        self.note = ""
+        self.ended = False
+
+    async def start(self) -> None:
+        problem, _ = await submit_command("capture", value=True)
+        self.capture_started = not problem
+        self.note = "Capture running. " if self.capture_started else f"No capture ({problem}) "
+        self.message = await say(self.interaction, self.note + "Rolling view starting...", wait=True)
+        self.task = asyncio.ensure_future(self.view())
+
+    async def view(self) -> None:
+        """The message's picture, once a second, until end() or BOT_RVIEW_MAX_SECONDS."""
+        started, shown = time.monotonic(), 0
+        try:
+            while not self.over.is_set() and time.monotonic() - started < cfg.BOT_RVIEW_MAX_SECONDS:
+                jpeg, blank = await asyncio.to_thread(grab_roblox_jpeg)
+                text = self.note + "Rolling view until the command is done" + (" - the screen looks blank" if blank else "")
+                files = [] if len(jpeg) > cfg.BOT_MAX_UPLOAD_MB * 1048576 else [discord.File(io.BytesIO(jpeg), f"view{shown % 2}.jpg")]
+                await self.message.edit(content=text, attachments=files)
+                shown += 1
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(self.over.wait(), max(0.0, started + shown * cfg.BOT_RVIEW_INTERVAL - time.monotonic()))
+            await self.message.edit(content=self.note + "Rolling view over.")
+        except Exception:
+            log.exception("the debug rolling view failed")
+
+    async def end(self) -> None:
+        """The command is over: the rolling view stops and the capture is ended (and said). Once."""
+        if self.ended:
             return
-        await asyncio.sleep(cfg.BOT_ACTION_POLL)
-    await tell_channel(client, config, f"{label} has not reported that it finished in {cfg.BOT_ACTION_WAIT:g} s - see /status.")
+        self.ended = True
+        self.over.set()
+        if self.task is not None:
+            await self.task
+        if self.capture_started:
+            problem, name = await submit_command("capture", value=False)
+            ended = None if problem else await wait_for_end(name, cfg.BOT_CAPTURE_WAIT)
+            await say(self.interaction, problem or capture_text(ended))
 
 
 async def wait_for_end(name: str, seconds: float) -> Optional[str]:
@@ -246,6 +303,10 @@ def capture_text(ended: Optional[str]) -> str:
         return "A capture is running: do what you want to test (/trades, /setup ...), then /capture again to end it."
     if ended == "stopped":
         return "The capture is stopped and being zipped: /captures lists it, /pull takes it."
+    if ended == "running":
+        return "A capture is running already."
+    if ended == "none running":
+        return "No capture was running."
     if ended and ended.startswith("failed"):
         return f"The capture did not work ({ended.removeprefix('failed: ')}) - see /log."
     return "The macro has not said whether a capture started or stopped - see /status."
@@ -719,14 +780,15 @@ def build(config: bot_lib.Config) -> discord.Client:
         remember("stopped")
         await say(interaction, await stop_macro(config))
 
-    def announce(name: str, label: str, then: str = "") -> None:
-        task = asyncio.ensure_future(announce_when_done(client, config, name, label, then))
+    def announce(name: str, label: str, then: str = "", on_end: Optional[Callable[[], Awaitable[None]]] = None) -> None:
+        task = asyncio.ensure_future(announce_when_done(client, config, name, label, then, on_end))
         background.append(task)
         task.add_done_callback(task_ended)
 
-    async def ask_macro(interaction: discord.Interaction, command_name: str, said: str, idle_only: bool = False, label: str = "", then: str = "", **details: Any) -> bool:
+    async def ask_macro(interaction: discord.Interaction, command_name: str, said: str, idle_only: bool = False, label: str = "", then: str = "", debug: bool = False, **details: Any) -> bool:
         """Leave the running macro `command_name` (its window does it) and say `said`; with `idle_only` not while its loop runs. With a `label` the channel is told
-        when the action ends (announce_when_done()), and what `then` says after one that was done. True if the macro took the command."""
+        when the action ends (announce_when_done()), and what `then` says after one that was done. With `debug` a capture and a rolling view run until it has ended
+        (DebugSession). True if the macro took the command."""
         await interaction.response.defer(thinking=True)
         problem, started = await ensure_macro(config)
         if problem:
@@ -737,25 +799,33 @@ def build(config: bot_lib.Config) -> discord.Client:
         if idle_only and not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path())):
             await say(interaction, "The macro's loop is running - /stop it first.")
             return False
+        session = DebugSession(interaction) if debug else None
+        if session is not None:
+            await session.start()                                     # (before the command: the capture has its start too)
         problem, name = await submit_command(command_name, **details)
         await say(interaction, problem or (("Started the macro first. " if started else "") + said))
-        if label and not problem:
-            announce(name, label, then)
+        if session is not None and problem:
+            await session.end()
+        elif (label or session is not None) and not problem:
+            announce(name, label or "The command", then, session.end if session is not None else None)
         return not problem
 
     @command("rejoin", "Have the macro leave the game and rejoin it (stops its loop first)")
-    async def rejoin(interaction: discord.Interaction) -> None:
-        await ask_macro(interaction, "rejoin", "Asked the macro to leave and rejoin. Its loop is stopped; /loop it again once it is back in the game.", label="The rejoin")
+    @app_commands.describe(debug=DEBUG_HELP)
+    async def rejoin(interaction: discord.Interaction, debug: bool = False) -> None:
+        await ask_macro(interaction, "rejoin", "Asked the macro to leave and rejoin. Its loop is stopped; /loop it again once it is back in the game.", label="The rejoin", debug=debug)
 
     @command("setup", "Have the macro run Setup (stops its loop first)")
-    async def setup(interaction: discord.Interaction) -> None:
+    @app_commands.describe(debug=DEBUG_HELP)
+    async def setup(interaction: discord.Interaction, debug: bool = False) -> None:
         loop_running = not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path()))
         await ask_macro(interaction, "setup", "Asked the macro to run Setup." + (" Its loop starts again once Setup is done." if loop_running else ""),
-                        label="Setup", then="Its loop starts again." if loop_running else "")
+                        label="Setup", then="Its loop starts again." if loop_running else "", debug=debug)
 
     @command("sloop", "Have the macro run Setup and then its loop (starts the macro if it is not running)")
-    async def sloop(interaction: discord.Interaction) -> None:
-        if await ask_macro(interaction, "sloop", "Asked the macro to run Setup and then its loop.", label="Setup", then="Its loop starts now."):
+    @app_commands.describe(debug=DEBUG_HELP)
+    async def sloop(interaction: discord.Interaction, debug: bool = False) -> None:
+        if await ask_macro(interaction, "sloop", "Asked the macro to run Setup and then its loop.", label="Setup", then="Its loop starts now.", debug=debug):
             remember("running")
 
     @command("blank", "Blank the screen with a black window, or show it again (starts the macro if it is not running)")
@@ -775,12 +845,14 @@ def build(config: bot_lib.Config) -> discord.Client:
         await say(interaction, ("Started the macro first. " if started else "") + blank_text(await wait_for_end(name, cfg.BOT_BLANK_WAIT)))
 
     @command("trade_hub", "Have the macro travel to the Trading Hub (stops its loop first)")
-    async def trade_hub(interaction: discord.Interaction) -> None:
+    @app_commands.describe(debug=DEBUG_HELP)
+    async def trade_hub(interaction: discord.Interaction, debug: bool = False) -> None:
         await ask_macro(interaction, "trade_hub", "Asked the macro to travel to the Trading Hub. Its loop is stopped; /leave_trade_hub and /loop when you want it back.",
-                        label="The trip to the Trading Hub")
+                        label="The trip to the Trading Hub", debug=debug)
 
     @command("inventory", "Have the macro scroll down the backpack's pets tab and send pictures of it (stops its loop first)")
-    async def inventory(interaction: discord.Interaction) -> None:
+    @app_commands.describe(debug=DEBUG_HELP)
+    async def inventory(interaction: discord.Interaction, debug: bool = False) -> None:
         await interaction.response.defer(thinking=True)
         problem, started = await ensure_macro(config)
         if problem:
@@ -788,14 +860,22 @@ def build(config: bot_lib.Config) -> discord.Client:
             return
         if started:
             remember("open")
-        text, pictures = await collect_inventory()
+        session = DebugSession(interaction) if debug else None
+        if session is not None:
+            await session.start()
+        try:
+            text, pictures = await collect_inventory()
+        finally:
+            if session is not None:
+                await session.end()
         batches = bot_lib.in_batches(pictures, cfg.BOT_FILES_PER_MESSAGE)
         await say(interaction, text, files=[discord.File(path) for path in batches[0]] if batches else [])
         for batch in batches[1:]:
             await say(interaction, files=[discord.File(path) for path in batch])
 
     @command("trades", "Send pictures of the offers on your two trade listings (opens the phone; stops the loop)")
-    async def trades(interaction: discord.Interaction) -> None:
+    @app_commands.describe(debug=DEBUG_HELP)
+    async def trades(interaction: discord.Interaction, debug: bool = False) -> None:
         await interaction.response.defer(thinking=True)
         problem, started = await ensure_macro(config)
         if problem:
@@ -803,16 +883,23 @@ def build(config: bot_lib.Config) -> discord.Client:
             return
         if started:
             remember("open")
-        text, pictures = await collect_trades()
+        session = DebugSession(interaction) if debug else None
+        if session is not None:
+            await session.start()
+        try:
+            text, pictures = await collect_trades()
+        finally:
+            if session is not None:
+                await session.end()
         batches = bot_lib.in_batches(pictures, cfg.BOT_FILES_PER_MESSAGE)
         await say(interaction, text, files=[discord.File(path) for path in batches[0]] if batches else [])
         for batch in batches[1:]:
             await say(interaction, files=[discord.File(path) for path in batch])
 
     @command("decline", "Decline an offer on a listing by the number /trades showed (stops the macro's loop)")
-    @app_commands.describe(listing="1 or 2", offer="The offer's number on the pictures of /trades")
+    @app_commands.describe(listing="1 or 2", offer="The offer's number on the pictures of /trades", debug=DEBUG_HELP)
     @app_commands.choices(listing=[app_commands.Choice(name=str(number), value=number) for number in cfg.TRADES_LISTINGS])
-    async def decline(interaction: discord.Interaction, listing: app_commands.Choice[int], offer: app_commands.Range[int, 1, cfg.TRADES_MAX_OFFERS]) -> None:
+    async def decline(interaction: discord.Interaction, listing: app_commands.Choice[int], offer: app_commands.Range[int, 1, cfg.TRADES_MAX_OFFERS], debug: bool = False) -> None:
         await interaction.response.defer(thinking=True)
         problem, started = await ensure_macro(config)
         if problem:
@@ -820,7 +907,14 @@ def build(config: bot_lib.Config) -> discord.Client:
             return
         if started:
             remember("open")
-        text, pictures = await decline_offer(listing.value, offer)
+        session = DebugSession(interaction) if debug else None
+        if session is not None:
+            await session.start()
+        try:
+            text, pictures = await decline_offer(listing.value, offer)
+        finally:
+            if session is not None:
+                await session.end()
         await say(interaction, text + " Its loop is stopped; /loop it again when you want it back.", files=[discord.File(path) for path in pictures])
 
     @command("capture", "Start a capture (screen and input), or end the one that runs: use it during a command to test")
@@ -839,9 +933,10 @@ def build(config: bot_lib.Config) -> discord.Client:
         await say(interaction, ("Started the macro first. " if started else "") + capture_text(await wait_for_end(name, cfg.BOT_CAPTURE_WAIT)))
 
     @command("leave_trade_hub", "Have the macro leave the Trading Hub for a regular server")
-    async def leave_trade_hub(interaction: discord.Interaction) -> None:
+    @app_commands.describe(debug=DEBUG_HELP)
+    async def leave_trade_hub(interaction: discord.Interaction, debug: bool = False) -> None:
         await ask_macro(interaction, "leave_trade_hub", "Asked the macro to leave the Trading Hub for a regular server. Its loop is stopped; /loop it again once it is back.",
-                        label="Leaving the Trading Hub")
+                        label="Leaving the Trading Hub", debug=debug)
 
     @command("refresh_debug", "Empty the macro's debug folder (the game config stays); not while its loop runs")
     async def refresh_debug(interaction: discord.Interaction) -> None:
@@ -987,8 +1082,9 @@ def build(config: bot_lib.Config) -> discord.Client:
 
     @command("test", "Run one need handler, or every teleport one (the Debug tab's Test buttons; stops the loop)")
     @app_commands.choices(handler=test_choices)
-    async def test_command(interaction: discord.Interaction, handler: app_commands.Choice[str]) -> None:
-        await ask_macro(interaction, "test", f"Asked the macro to test {handler.value}. Its loop is stopped; /loop it again afterwards.", label=f"The {handler.value} test", handler=handler.value)
+    @app_commands.describe(debug=DEBUG_HELP)
+    async def test_command(interaction: discord.Interaction, handler: app_commands.Choice[str], debug: bool = False) -> None:
+        await ask_macro(interaction, "test", f"Asked the macro to test {handler.value}. Its loop is stopped; /loop it again afterwards.", label=f"The {handler.value} test", debug=debug, handler=handler.value)
 
     @command("reset_config", "Reset the game config: totals, timers and switches (the private server link is kept)")
     @app_commands.describe(sure="Must be True: this cannot be undone")

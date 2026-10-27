@@ -579,6 +579,9 @@ def read_command_with_id() -> tuple[str, Optional[dict[str, Any]]]:
     if data["command"] == "test" and data.get("handler") not in (*DEBUG_HANDLERS, cfg.TEST_ALL_TELEPORTS):
         dropped(f"test {data.get('handler')} is not a handler the macro has")
         return stem, None
+    if data["command"] == "capture" and "value" in data and not isinstance(data["value"], bool):
+        dropped("capture is asked for with a true or false value, or none")
+        return stem, None
     if data["command"] == "decline" and (data.get("listing") not in cfg.TRADES_LISTINGS or not isinstance(data.get("offer"), int) or isinstance(data.get("offer"), bool)
                                          or not 1 <= data["offer"] <= cfg.TRADES_MAX_OFFERS):
         dropped(f"decline listing {data.get('listing')} offer {data.get('offer')} is not an offer the macro can be asked for")
@@ -6542,7 +6545,8 @@ class AdoptMeGUI:
             value = data.get("value") if data else None
             finish_command(stem, self.blackout_command(value if isinstance(value, bool) else None))
         elif command == "capture":
-            finish_command(stem, self.capture_command())
+            value = data.get("value") if data else None
+            finish_command(stem, self.capture_command(value if isinstance(value, bool) else None))
         elif command == "focus":
             focus_roblox()                                                          # the window to the front (no click): after an update the macro's own window may be
         elif command == "sloop":
@@ -6704,9 +6708,15 @@ class AdoptMeGUI:
         except OSError as error:
             logger.warning(f"Input capture: {error}")
 
-    def capture_command(self) -> str:
+    def capture_command(self, value: Optional[bool] = None) -> str:
         """The `capture` command (Tk's thread): what the capture hotkey does - start a capture, or stop the one that is running - while a command of the bot goes on, to see what it
-        does. What happened, for the bot: "started", "stopped" or "failed: why"."""
+        does; with `value` True only a start (a capture that is running already is left: "running"), False only a stop ("none running" if there is none). What happened, for the bot:
+        "started", "stopped", "running", "none running" or "failed: why"."""
+        running = state.capture is not None and state.capture.running
+        if value is True and running:
+            return "running"
+        if value is False and not running:
+            return "none running"                                          # (a capture that stopped by itself is tidied up by the next toggle)
         try:
             return "started" if toggle_input_capture() is not None else "stopped"
         except OSError as error:

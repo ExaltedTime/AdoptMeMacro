@@ -1,4 +1,4 @@
-"""The Discord bot: ask the macro's PC how it is doing from anywhere, and control it: /status, /screenshot, /log, /report, /results, /pull, the
+"""The Discord bot: ask the macro's PC how it is doing from anywhere, and control it: /status, /screenshot, /log, /report, /results, /pull, /onedrive, the
 commands that start, stop and change the macro, and /update and /rollback. It runs on the PC the macro runs on, in the same logged-in desktop session (it reads the macro's files and grabs its screen),
 and connects out to Discord, so no port needs opening. Only one user, in one channel, is obeyed (bot_config.json).
 
@@ -1145,6 +1145,17 @@ def build(config: bot_lib.Config) -> discord.Client:
             await say(interaction, f"Nothing copied: {error}")
             return
         await say(interaction, f"Copied `{name}` ({len(files)} file{'s' if len(files) != 1 else ''}, {bot_lib.size_text(megabytes)}) to OneDrive, in `{os.path.join(config.onedrive_dir, folder.value)}` on the PC (checked: every file is there at its size). The OneDrive app uploads it from there - if it does not, look at the app's own status (paused, a full OneDrive, or this folder not synced).")
+
+    @command("onedrive", "Why a /pull is not uploaded: onedrive_dir, the OneDrive app and the files copied, told from the PC")
+    async def onedrive(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        processes = await asyncio.to_thread(list_processes)
+        accounts = await asyncio.to_thread(bot_lib.onedrive_accounts)
+        text = await asyncio.to_thread(bot_lib.onedrive_report, config.onedrive_dir, processes, dict(os.environ), accounts, time.time())
+        if bot_lib.fits_a_message(text):
+            await say(interaction, f"```\n{text}\n```")
+        else:
+            await say(interaction, file=discord.File(io.BytesIO(text.encode("utf-8")), "onedrive.txt"))
 
     @pull.autocomplete("item")
     async def pull_items(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:

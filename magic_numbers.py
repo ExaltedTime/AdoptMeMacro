@@ -198,6 +198,21 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     # The phone's picture in the first slot of the Toys tab's Special row: there once the search has filtered the list (before that the badge is first and it is the second).
     "search_placeholder": {"box": (990, 620, 1180, 665), "threshold": 0.8},   # ("Enter Search...": in the backpack's search box while it is empty and has no focus)
     "phone_item":         {"box": (640, 400, 1290, 960), "threshold": 0.8},   # (the phone's picture anywhere in the Toys tab's grid: the primary way to find it, clicked where it is)
+    # Setup's states (setup_game(): crops of tests/setup/, real frames of a run): the house's lock button as Lock and as Unlock, the backpack's FILTERS panel and its sort button as Default and as Favorites,
+    # Favorites in the sort menu, the game's settings, the Interaction page's label and menu entry, the Trading setting as No One and No One in its list, and the pets tab's Alicorn and its card's Unequip.
+    "house_lock":                  {"box": (1040, 36, 1180, 84), "threshold": 0.85},
+    "house_unlock":                {"box": (1040, 36, 1180, 84), "threshold": 0.85},
+    "filter_panel":                {"box": (780, 570, 1000, 650), "threshold": 0.85},
+    "filter_sort_default":         {"box": (960, 650, 1100, 710), "threshold": 0.85},
+    "filter_sort_favorites":       {"box": (960, 650, 1100, 710), "threshold": 0.85},
+    "filter_option_favorites":     {"box": (950, 720, 1110, 850), "threshold": 0.85},
+    "settings_title":              {"box": (780, 300, 980, 370), "threshold": 0.85},
+    "settings_page_interaction":   {"box": (940, 335, 1110, 385), "threshold": 0.85},
+    "settings_option_interaction": {"box": (940, 400, 1110, 520), "threshold": 0.85},
+    "trading_no_one":              {"box": (990, 525, 1090, 570), "threshold": 0.85},
+    "trading_option_no_one":       {"box": (960, 570, 1100, 640), "threshold": 0.85},
+    "pet_alicorn":                 {"box": (900, 640, 1230, 900), "threshold": 0.8},
+    "pet_unequip":                 {"box": (980, 780, 1215, 840), "threshold": 0.85},
     "phone_icon":         {"box": (850, 690, 950, 790), "threshold": 0.8},
     "phone_card":         {"box": (850, 700, 1250, 900), "threshold": 0.85},   # (the box is where the card's name can be: with the item in the first slot or the second)
 }
@@ -220,6 +235,9 @@ BUTTON_SCAN_RETRY_WAIT = 5.0              # seconds before a button scan that di
 STRAY_OKAY_BOX = (800, 637, 1120, 680)
 STRAY_OKAY_MIN_PIXELS = 5000      # the button is ~11000 exact-color px in that box
 STRAY_OKAY_POS = (962, 657)
+SETUP_UI_WAIT = 5.0               # setup: seconds a button or window is waited for before it is said not to be there
+SETUP_LOOK_WAIT = 1.0             # setup: seconds a state that is probably there already (a label that says what it should) is looked for
+SETUP_POLL = 0.25                 # setup: seconds between looks while waiting
 SETUP_STRAY_TRIES = 3             # setup closes up to this many stray windows before it starts
 STRAY_CLOSE_SETTLE = 1.0          # after a click, before looking again
 # While a need handler (or setup) is running, the per-cycle checks (unscrew()) also run, this often.
@@ -856,7 +874,6 @@ BOT_TRADES_POLL = 1.0
 INVENTORY_DIR = os.path.join(DEBUG_DIR, "inventory")            # the pictures (001.png, 002.png ...), emptied at the start of each tour
 INVENTORY_DONE_PATH = os.path.join(INVENTORY_DIR, "done.json")  # written when the tour ends, however it ends: {"pictures": N, "ended": why}
 INVENTORY_PETS_TAB_POS = (817, 713)
-PET_SECOND_ITEM_POS = (975, 707)                                # the pets tab's second item, right of the green plus tile: the favourite pet, with the favourites filter on (equip_favorite_pet())
 EQUIP_BUTTON_BOX = (900, 780, 1215, 930)                        # where the Equip button of the backpack's card is (find_equip_button())...
 EQUIP_BUTTON_SIZE = ((100, 200), (25, 45))                      # ...its (width, height) range in px: 148 x 35 on a real frame
 INVENTORY_EXPAND_POS = (938, 642)                               # the orange button left of the settings one, in the normal backpack's header (measured on tests/popups/backpack_open.png)
@@ -1025,16 +1042,14 @@ LURE_RECOLLECT_INTERVAL = 4 * 60 * 60  # seconds (4 hours)
 SETUP_LOCK_HOUSE_POS = (1112, 65)
 SETUP_BACKPACK_SETTINGS_POS = (977, 646)
 SETUP_SORT_MENU_POS = (1031, 680)
-SETUP_FAVORITES_POS = (1023, 810)
 SETUP_CONFIRM_POS = (1047, 908)
-# Disabling trades: settings (gear) -> settings menu -> interaction tab -> trading
-# setting -> "no one" -> close. The macro window is sent to the back for this, since
+SETUP_FILTER_CANCEL_POS = (874, 904)         # the FILTERS panel's Cancel: a panel that was only looked at is left as it was
+# Disabling trades: settings (gear) -> settings menu -> Interaction (found by its text) -> trading
+# setting -> "No One" (found by its text) -> close. Each is looked at first and left as it is when it is right. The macro window is sent to the back for this, since
 # it covers the gear.
 SETUP_TRADES_SETTINGS_POS = (1894, 757)
 SETUP_TRADES_MENU_POS = (1027, 364)
-SETUP_TRADES_INTERACTION_TAB_POS = (1022, 436)
 SETUP_TRADES_SETTING_POS = (1029, 549)
-SETUP_TRADES_NO_ONE_POS = (1028, 604)
 SETUP_TRADES_CLOSE_POS = (1121, 358)
 
 # travel_to_trade_hub() and leave_trade_hub(): the clicks of a human's run (the backpack opens with the key; the Trading Hub Phone is the first of the Toys' Special row).

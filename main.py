@@ -1608,43 +1608,133 @@ def setup_game() -> bool:
     with task_unscrew(play_minigames=False):
         return _setup_steps()
 
+def setup_or_fail() -> bool:
+    """setup_game() for the commands from outside (the bot's /setup): a step that did not take is an error, so that the answer says so."""
+    if not setup_game():
+        raise RuntimeError("setup did not take: see the failure and the log")
+    return True
+
 def _setup_steps() -> bool:
+    """Respawn, then lock the house, set the backpack's filter and the trade setting - each looked at first and left as it is when it is what it should be, clicked when it is not, and
+    looked at again after (a step that did not take is a failure with a screenshot, and the others still run). True if every one is as it should be."""
     for _ in range(cfg.SETUP_STRAY_TRIES):
         if not dismiss_stray_windows():
             break
     respawn_character()
-    logger.debug("Locking house...")
-    hover_click(*cfg.SETUP_LOCK_HOUSE_POS)
-
-    set_backpack_filter()
-
-    disable_trades()
-
+    failed = [name for name, step in (("the house is not locked", lock_house), ("the backpack is not filtered to favorites", set_backpack_filter),
+                                      ("trades are not set to No One", disable_trades)) if not step()]
+    if failed:
+        log_failure("setup: " + "; ".join(failed))
+        return False
     logger.info("Setup complete")
+    log_run_event("setup: the house is locked, the backpack is filtered to favorites and trades are set to No One")
     return True
 
-def set_backpack_filter() -> None:
-    """Filter the backpack to favorites: open it, its settings, the sort menu, Favorites and Confirm, and close it. Setup does it, and so does a ride that did not clear its need
-    (when Setup did not run, the first vehicle was a car, not the helicopter)."""
+def wait_for_any(names: Sequence[str], seconds: float = cfg.SETUP_UI_WAIT) -> Optional[str]:
+    """The first of the crops `names` (POPUP_TEMPLATES) seen on screen, within `seconds`; None if none was."""
+    deadline = time.time() + seconds
+    while True:
+        img = grab_screen()
+        for name in names:
+            if popup_visible(img, name):
+                return name
+        if time.time() >= deadline:
+            return None
+        wait_interruptible(cfg.SETUP_POLL)
+
+def wait_for_template(name: str, seconds: float = cfg.SETUP_UI_WAIT) -> Optional[Point]:
+    """Where the crop `name` is, once it is on screen (within `seconds`); None if it did not come."""
+    deadline = time.time() + seconds
+    while True:
+        found = popup_found(grab_screen(), name)
+        if found is not None or time.time() >= deadline:
+            return found
+        wait_interruptible(cfg.SETUP_POLL)
+
+def lock_house() -> bool:
+    """The house's lock button (top of the screen, in the house after the respawn): its Unlock label means it is locked already and nothing is clicked; its Lock label is clicked, and the
+    Unlock label must follow. False (logged) if neither is seen, or it did not lock."""
+    seen = wait_for_any(("house_unlock", "house_lock"))
+    if seen == "house_unlock":
+        log_run_event("setup: the house is locked already")
+        return True
+    if seen is None:
+        log_run_event("setup: the house's lock button was not seen")
+        return False
+    logger.debug("Locking house...")
+    hover_click(*cfg.SETUP_LOCK_HOUSE_POS)
+    if wait_for_any(("house_unlock",)) is None:
+        log_run_event("setup: the house did not lock")
+        return False
+    log_run_event("setup: the house is locked")
+    return True
+
+def open_filter_panel() -> bool:
+    """In the open backpack: its settings button, and the FILTERS panel that comes up (tried twice). False (logged) if it did not."""
+    for _ in range(2):
+        logger.debug("Opening the filters...")
+        hover_click(*cfg.SETUP_BACKPACK_SETTINGS_POS)
+        if wait_for_template("filter_panel") is not None:
+            return True
+    log_run_event("setup: the backpack's filters did not open")
+    return False
+
+def pet_is_out(img: Image) -> bool:
+    """Whether the pet is out beside the character: its name bar is over it (find_pet_bar())."""
+    return bool(find_pet_bar(img))
+
+def sort_is_favorites() -> bool:
+    """Whether the open FILTERS panel says Favorites on its sort button (its crop, looked for for SETUP_LOOK_WAIT seconds)."""
+    return wait_for_any(("filter_sort_favorites",), cfg.SETUP_LOOK_WAIT) is not None
+
+def choose_sort_favorites() -> bool:
+    """In the open FILTERS panel, whose sort is not Favorites: open the sort menu, click Favorites where its text is, see the button say Favorites, and Confirm. The panel is cancelled
+    (nothing changed) and False (logged) if a step did not happen."""
+    logger.debug("Opening sort menu...")
+    hover_click(*cfg.SETUP_SORT_MENU_POS)
+    option = wait_for_template("filter_option_favorites")
+    if option is None:
+        log_run_event("setup: Favorites was not in the sort menu")
+    else:
+        hover_click(*option)
+        if sort_is_favorites():
+            hover_click(*cfg.SETUP_CONFIRM_POS)
+            wait_interruptible(cfg.UI_SETTLE)
+            return True
+        log_run_event("setup: the sort did not change to Favorites")
+    hover_click(*cfg.SETUP_FILTER_CANCEL_POS)
+    wait_interruptible(cfg.UI_SETTLE)
+    return False
+
+def set_backpack_filter() -> bool:
+    """Filter the backpack to favorites: open it and its filters; the sort is left as it is when it says Favorites already (Cancel), else it is chosen (choose_sort_favorites()), and the
+    filters are opened again to see that it says Favorites. When the pet is not out (no name bar over the character before the backpack opened) the Alicorn is equipped too
+    (equip_favorite_pet()). Setup does it, and so does a ride that did not clear its need (when Setup did not run, the first vehicle was a car, not the helicopter).
+    True if the sort is Favorites at the end."""
+    pet_out = pet_is_out(grab_screen())
+    ok, panel_open = False, True
     with backpack_on_purpose():
         logger.debug("Opening backpack...")
         pydirectinput.press(cfg.KEYS["backpack"])
         wait_interruptible(cfg.UI_SETTLE)
-        logger.debug("Opening settings...")
-        hover_click(*cfg.SETUP_BACKPACK_SETTINGS_POS)
-        wait_interruptible(cfg.UI_SETTLE)
-        logger.debug("Opening sort menu...")
-        hover_click(*cfg.SETUP_SORT_MENU_POS)
-        wait_interruptible(cfg.UI_SETTLE)
-        logger.debug("Selecting favorites...")
-        hover_click(*cfg.SETUP_FAVORITES_POS)
-        wait_interruptible(cfg.UI_SETTLE)
-        logger.debug("Confirming...")
-        hover_click(*cfg.SETUP_CONFIRM_POS)
-        wait_interruptible(cfg.UI_SETTLE)
-        equip_favorite_pet()
-        logger.debug("Closing backpack...")
+        if open_filter_panel():
+            if sort_is_favorites():
+                log_run_event("setup: the backpack's sort is Favorites already")
+                ok = True
+            elif choose_sort_favorites():
+                panel_open = open_filter_panel()                                                  # (looked at again: the Confirm took)
+                ok = panel_open and sort_is_favorites()
+                log_run_event("setup: the backpack is sorted by Favorites" if ok else "setup: the backpack's sort is not Favorites after Confirm")
+            else:
+                panel_open = False
+            if panel_open:
+                hover_click(*cfg.SETUP_FILTER_CANCEL_POS)                                         # (a panel only looked at is left as it was)
+                wait_interruptible(cfg.UI_SETTLE)
+        if not pet_out:
+            log_run_event("setup: the pet is not out - equipping the Alicorn")
+            equip_favorite_pet()
         close_backpack("setup")
+    return ok
 
 def find_equip_button(img: Image) -> Optional[Point]:
     """The middle of the green Equip button of the backpack's card of the item clicked, or None (an item that is equipped has another button, an Unequip): the blob of GREEN_BUTTON_COLOR of the
@@ -1659,22 +1749,28 @@ def find_equip_button(img: Image) -> Optional[Point]:
     return None
 
 def equip_favorite_pet() -> bool:
-    """In the open backpack: the pets tab, the second item (the first is the green plus tile; with the favourites filter the second is the favourite pet) and its Equip button, found on the
-    card (find_equip_button()): the pet had got unequipped. An item that has no Equip button is equipped already: nothing is clicked. True if Equip was clicked."""
+    """In the open backpack, when the pet is not out: the pets tab, the Alicorn found by its picture (POPUP_TEMPLATES["pet_alicorn"], wherever it is in the grid) and clicked, and its card's
+    Equip button, found by its colour (find_equip_button()). A card that says Unequip needs nothing. Looked at after: the card must say Unequip. True if the Alicorn is equipped."""
     logger.debug("Opening the pets tab...")
     select_backpack_tab(cfg.INVENTORY_PETS_TAB_POS)
     wait_interruptible(cfg.UI_SETTLE)
-    logger.debug("Selecting the favorite pet...")
-    hover_click(*cfg.PET_SECOND_ITEM_POS)
+    alicorn = wait_for_template("pet_alicorn")
+    if alicorn is None:
+        log_run_event("setup: the Alicorn was not seen in the pets tab")
+        return False
+    hover_click(*alicorn)
     wait_interruptible(cfg.UI_SETTLE)
     button = find_equip_button(grab_screen())
     if button is None:
-        log_run_event("favorite pet: no Equip button on the second item (it is equipped already)")
-        return False
+        equipped = wait_for_template("pet_unequip", cfg.SETUP_LOOK_WAIT) is not None
+        log_run_event("setup: the Alicorn is equipped already" if equipped else "setup: the Alicorn's card has no Equip button and does not say Unequip")
+        return equipped
     logger.debug("Equipping the pet...")
     hover_click(*button)
     wait_interruptible(cfg.UI_SETTLE)
-    return True
+    equipped = wait_for_template("pet_unequip") is not None
+    log_run_event("setup: the Alicorn is equipped" if equipped else "setup: the Alicorn's card does not say Unequip after Equip")
+    return equipped
 
 def send_macro_window_to_back() -> None:
     """Drop the macro's own window behind everything (it's normally
@@ -1689,29 +1785,51 @@ def bring_macro_window_to_front() -> None:
         state.macro_window.run_on_ui_thread(state.macro_window.bring_to_front)
 
 def disable_trades() -> bool:
-    """Set the game's trade setting to "no one". The macro window covers the
-    settings gear, so it's sent to the back for the duration and always
-    brought back, even if the run is stopped partway."""
+    """Set the game's trade setting to "no one": the settings (the gear), the Interaction page (when its label is not the one up), and the Trading setting, which is left alone when it says
+    No One and else opened and set to No One where that is in the list (found by its text); looked at after, and the settings closed. The macro window covers the settings gear, so it's
+    sent to the back for the duration and always brought back, even if the run is stopped partway. True if the setting says No One at the end."""
     logger.debug("Sending the macro window to the back...")
     send_macro_window_to_back()
+    ok = False
     try:
         wait_interruptible(cfg.UI_SETTLE)
         if not focus_roblox():
             return False
-        for label, pos in (("settings", cfg.SETUP_TRADES_SETTINGS_POS),
-                           ("settings menu", cfg.SETUP_TRADES_MENU_POS),
-                           ("interaction tab", cfg.SETUP_TRADES_INTERACTION_TAB_POS),
-                           ("trading setting", cfg.SETUP_TRADES_SETTING_POS),
-                           ("no one", cfg.SETUP_TRADES_NO_ONE_POS),
-                           ("closing settings", cfg.SETUP_TRADES_CLOSE_POS)):
-            logger.debug(f"{label}...")
-            hover_click(*pos)
-            wait_interruptible(cfg.UI_SETTLE)
+        if wait_for_any(("settings_title",), 0.0) is None:
+            hover_click(*cfg.SETUP_TRADES_SETTINGS_POS)
+        if wait_for_template("settings_title") is None:
+            log_run_event("setup: the game's settings did not open")
+            return False
+        if wait_for_any(("settings_page_interaction",), cfg.SETUP_LOOK_WAIT) is None:
+            hover_click(*cfg.SETUP_TRADES_MENU_POS)
+            page = wait_for_template("settings_option_interaction")
+            if page is None:
+                log_run_event("setup: Interaction was not in the settings' menu")
+            else:
+                hover_click(*page)
+                if wait_for_any(("settings_page_interaction",)) is None:
+                    log_run_event("setup: the settings did not change to Interaction")
+        if wait_for_any(("settings_page_interaction",), 0.0) is not None:
+            if wait_for_any(("trading_no_one",), cfg.SETUP_LOOK_WAIT) is not None:
+                log_run_event("setup: trading says No One already")
+                ok = True
+            else:
+                hover_click(*cfg.SETUP_TRADES_SETTING_POS)
+                option = wait_for_template("trading_option_no_one")
+                if option is None:
+                    log_run_event("setup: No One was not in the trading setting's list")
+                else:
+                    hover_click(*option)
+                    ok = wait_for_any(("trading_no_one",)) is not None
+                    log_run_event("setup: trading is set to No One" if ok else "setup: trading does not say No One after the click")
+        hover_click(*cfg.SETUP_TRADES_CLOSE_POS)
+        wait_interruptible(cfg.UI_SETTLE)
+        if wait_for_any(("settings_title",), 0.0) is not None:
+            log_run_event("setup: the game's settings did not close")
     finally:
         logger.debug("Bringing the macro window back...")
         bring_macro_window_to_front()
-    logger.info("Trades disabled")
-    return True
+    return ok
 
 def click_steps(steps: Sequence[tuple[str, tuple[int, int]]]) -> bool:
     """Click each (what, position) in turn with UI_SETTLE after it, logging it; False (nothing more clicked) if Roblox can't be focused first."""
@@ -3508,7 +3626,7 @@ def exit_minigame_and_setup() -> bool:
         raise RuntimeError("could not leave the Trading Hub")
     if not exit_minigame():
         raise RuntimeError("could not leave the minigame")
-    return setup_game()
+    return setup_or_fail()
 
 def detect_minigame_finished(img: Image) -> bool:
     """True if the minigame finish screen is on screen in `img`: the red
@@ -6458,7 +6576,7 @@ class DebugCapture(logging.Handler):
         self.text.insert(tk.END, line + "\n", level)
         self.at_line_start = True
 
-OUTSIDE_ACTIONS: dict[str, Callable[[], Any]] = {"rejoin": leave_and_rejoin, "setup": setup_game, "trade_hub": travel_to_trade_hub, "leave_trade_hub": leave_trade_hub, "inventory": inventory_tour, "sloop": exit_minigame_and_setup,
+OUTSIDE_ACTIONS: dict[str, Callable[[], Any]] = {"rejoin": leave_and_rejoin, "setup": setup_or_fail, "trade_hub": travel_to_trade_hub, "leave_trade_hub": leave_trade_hub, "inventory": inventory_tour, "sloop": exit_minigame_and_setup,
                                           "trades": trades_tour, "recenter": recenter,
                                           **{f"test:{name}": partial(test_need_handler, name) for name in (*DEBUG_HANDLERS, cfg.TEST_ALL_TELEPORTS)},
                                           **{f"decline:{listing}:{number}": partial(decline_offer, listing, number) for listing in cfg.TRADES_LISTINGS for number in range(1, cfg.TRADES_MAX_OFFERS + 1)},

@@ -652,9 +652,9 @@ def same_place(path: str, root: str) -> bool:
     return path == root or path.startswith(root.rstrip("\\/") + os.sep)
 
 
-def onedrive_report(folder: str, processes: Optional[list[tuple[int, str]]], env: dict[str, str], accounts: list[tuple[str, str]], now: float) -> str:
+def onedrive_report(folder: str, running: Optional[bool], env: dict[str, str], accounts: list[tuple[str, str]], now: float) -> str:
     """What can be told of why files copied into `folder` (onedrive_dir) are not uploaded: that it is a folder that can be written to and has room, whether it is inside a folder
-    OneDrive syncs (the OneDrive folders of the environment and of the registry), whether the OneDrive app runs and when it last wrote its logs, and what the newest files in it are
+    OneDrive syncs (the OneDrive folders of the environment and of the registry), whether the OneDrive app runs (a process named OneDrive.exe) and when it last wrote its logs, and what the newest files in it are
     - their size, age and Windows attributes (a cloud placeholder or "online-only" is a file OneDrive has handled)."""
     lines = [f"onedrive_dir: {folder or '(not set)'}"]
     if not folder or not os.path.isdir(folder):
@@ -679,11 +679,7 @@ def onedrive_report(folder: str, processes: Optional[list[tuple[int, str]]], env
     inside = [f"{key} ({root})" for key, root in roots if same_place(folder, root)]
     lines.append("OneDrive folders of this PC: " + (", ".join(f"{key} = {root}" for key, root in roots) or "none found (no environment variable, no account in the registry)"))
     lines.append("  onedrive_dir is inside: " + (", ".join(inside) if inside else "NONE of them - OneDrive does not sync this folder"))
-    if processes is None:
-        lines.append("OneDrive app: processes of this PC cannot be listed")
-    else:
-        running = [line for _, line in processes if "onedrive.exe" in line.lower()]
-        lines.append("OneDrive app: " + (f"running ({len(running)} process{'es' if len(running) != 1 else ''})" if running else "NOT running"))
+    lines.append("OneDrive app: " + ("running" if running else "NOT running (no OneDrive.exe)" if running is not None else "processes of this PC cannot be listed"))
     logs = os.path.join(env.get("LOCALAPPDATA", ""), "Microsoft", "OneDrive", "logs")
     if env.get("LOCALAPPDATA") and os.path.isdir(logs):
         for account in sorted(os.listdir(logs)):
@@ -693,6 +689,8 @@ def onedrive_report(folder: str, processes: Optional[list[tuple[int, str]]], env
             except OSError:
                 newest = None
             lines.append(f"  its log for {account}: " + (f"last written {age_text(now - newest)} ago" if newest else "nothing in it"))
+            if newest and now - newest < cfg.ONEDRIVE_LOG_FRESH and not running:
+                lines.append("  (a log written this recently means OneDrive is running, whatever the process list says)")
     files = []
     for root, _, names in os.walk(folder):
         for name in names:

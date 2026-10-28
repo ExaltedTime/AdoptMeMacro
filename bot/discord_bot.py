@@ -104,6 +104,23 @@ def list_processes() -> Optional[list[tuple[int, str]]]:
         return None
 
 
+def onedrive_running() -> Optional[bool]:
+    """Whether the OneDrive app (a process named OneDrive.exe) runs on this PC; None when that can't be found out. By the process's name: its command line is empty to a program that is not
+    allowed to read it, and a search of the command lines then found no OneDrive."""
+    try:
+        import psutil
+        return any((p.info["name"] or "").lower() == "onedrive.exe" for p in psutil.process_iter(["name"]))
+    except ImportError:
+        pass
+    try:
+        if os.name == "nt":
+            out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq OneDrive.exe", "/NH"], capture_output=True, text=True, timeout=15).stdout
+            return "onedrive.exe" in out.lower()
+        return None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def macro_process_running() -> Optional[bool]:
     """Whether main.py is running on this PC; None when that can't be found out."""
     processes = list_processes()
@@ -1149,9 +1166,9 @@ def build(config: bot_lib.Config) -> discord.Client:
     @command("onedrive", "Why a /pull is not uploaded: onedrive_dir, the OneDrive app and the files copied, told from the PC")
     async def onedrive(interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
-        processes = await asyncio.to_thread(list_processes)
+        running = await asyncio.to_thread(onedrive_running)
         accounts = await asyncio.to_thread(bot_lib.onedrive_accounts)
-        text = await asyncio.to_thread(bot_lib.onedrive_report, config.onedrive_dir, processes, dict(os.environ), accounts, time.time())
+        text = await asyncio.to_thread(bot_lib.onedrive_report, config.onedrive_dir, running, dict(os.environ), accounts, time.time())
         if bot_lib.fits_a_message(text):
             await say(interaction, f"```\n{text}\n```")
         else:

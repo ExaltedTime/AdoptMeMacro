@@ -861,13 +861,15 @@ def test_the_onedrive_report_says_where_a_copy_is_and_whether_onedrive_can_see_i
     local.mkdir(parents=True)
     (local / "x.odl").write_text("log")
     env = {"OneDrive": str(synced), "LOCALAPPDATA": str(tmp_path / "local")}
-    text = bot_lib.onedrive_report(str(target), [(1, r"C:\Program Files\Microsoft OneDrive\OneDrive.exe /background"), (2, "python bot.py")], env, [("Personal", str(synced))], os.path.getmtime(target / "captures" / "a.zip") + 90)
+    text = bot_lib.onedrive_report(str(target), True, env, [("Personal", str(synced))], os.path.getmtime(target / "captures" / "a.zip") + 90)
     assert "write test: a small file was written, read back and removed - ok" in text and not [f for f in os.listdir(target) if f.startswith("_onedrive_probe")]
-    assert "onedrive_dir is inside: OneDrive (" in text and "OneDrive app: running (1 process)" in text and "its log for Personal: last written" in text
+    assert "onedrive_dir is inside: OneDrive (" in text and "OneDrive app: running" in text and "its log for Personal: last written" in text
     assert "1 file(s)" in text and "captures" in text and "a.zip - 0 MB, 2 min old, plain" in text.replace(os.sep, "/").replace("captures/", "")
-    outside = bot_lib.onedrive_report(str(target), [], {"OneDrive": str(tmp_path / "elsewhere")}, [], 0)
-    assert "NONE of them - OneDrive does not sync this folder" in outside and "OneDrive app: NOT running" in outside
+    outside = bot_lib.onedrive_report(str(target), False, {"OneDrive": str(tmp_path / "elsewhere")}, [], 0)
+    assert "NONE of them - OneDrive does not sync this folder" in outside and "OneDrive app: NOT running (no OneDrive.exe)" in outside
     assert "cannot be listed" in bot_lib.onedrive_report(str(target), None, {}, [], 0) and "none found" in bot_lib.onedrive_report(str(target), None, {}, [], 0)
-    assert "not a folder on this PC" in bot_lib.onedrive_report(str(tmp_path / "none"), [], {}, [], 0) and "(not set)" in bot_lib.onedrive_report("", [], {}, [], 0)
+    assert "not a folder on this PC" in bot_lib.onedrive_report(str(tmp_path / "none"), False, {}, [], 0) and "(not set)" in bot_lib.onedrive_report("", False, {}, [], 0)
+    fresh = bot_lib.onedrive_report(str(target), False, env, [], os.path.getmtime(local / "x.odl") + 30)           # (a log written 30 s ago: the app runs, whatever the process list said)
+    assert "OneDrive app: NOT running" in fresh and "means OneDrive is running" in fresh
     assert bot_lib.attribute_text(0x20) == "plain" and bot_lib.attribute_text(0x400000 | 0x1) == "read-only, cloud placeholder (recall on data access)"
     assert bot_lib.same_place(str(synced / "a"), str(synced)) and not bot_lib.same_place(str(tmp_path / "OneDrive2"), str(synced))

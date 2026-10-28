@@ -2137,7 +2137,7 @@ def visible_offers(img: Image) -> list[int]:
     (TRADES_ROW_BOX) is inside the list's top and bottom."""
     left, top, right, bottom = cfg.TRADES_BUTTON_BOX
     hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, *cfg.TRADES_BUTTON_HSV[0]) | cv2.inRange(hsv, *cfg.TRADES_BUTTON_HSV[1])
+    mask = cv2.bitwise_or(cv2.inRange(hsv, *cfg.TRADES_BUTTON_HSV[0]), cv2.inRange(hsv, *cfg.TRADES_BUTTON_HSV[1]))
     count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
     (min_w, max_w), (min_h, max_h) = cfg.TRADES_BUTTON_SIZE
     found = []

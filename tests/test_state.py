@@ -1398,26 +1398,6 @@ def test_the_end_wait_is_marked_while_a_need_is_waited_for_and_a_held_popup_is_n
     assert macro.unscrew(in_task=True) is None and checked == []                         # the paycheck check, which clicks, is skipped
 
 
-def test_the_run_logs_and_charts_of_an_older_layout_are_moved_into_the_runs_folder(macro, tmp_path, monkeypatch):
-    cfg = macro.cfg
-    for name, folder in (("run1.txt", "logs/runs"), ("run1.png", "images/reports"), ("run2.png", "reports")):
-        path = tmp_path / "old" / folder / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("x")
-    old = tmp_path / "old"
-    for name, folder in (("debug_needs.png", "images"), ("debug_buttons.png", ""), ("1/screen.png", "images/failures")):
-        path = tmp_path / "old" / folder / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("x")
-    for name, value in (("DEBUG_DIR", old), ("LOGS_DIR", old / "logs"), ("FAILURE_DIR", old / "failures"), ("RUNS_DIR", old / "runs")):
-        monkeypatch.setattr(cfg, name, str(value))
-    macro.migrate_debug_layout()
-    assert (old / "failures" / "1" / "screen.png").exists() and not (old / "images").exists()          # the failures moved up; the debug images are gone
-    assert not (old / "debug_buttons.png").exists()
-    assert sorted(os.listdir(old / "runs")) == ["run1.png", "run1.txt", "run2.png"]
-    assert not (old / "logs" / "runs").exists() and not (old / "images" / "reports").exists() and not (old / "reports").exists()
-
-
 # --- commands from outside (the Discord bot): read_command_with_id(), poll_commands() ---
 
 def write_raw_command(macro, text):

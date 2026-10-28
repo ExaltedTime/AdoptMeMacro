@@ -1,4 +1,4 @@
-"""The Discord bot: ask the macro's PC how it is doing from anywhere, and control it: /status, /screenshot, /log, /report, /results, /captures, /pull, the
+"""The Discord bot: ask the macro's PC how it is doing from anywhere, and control it: /status, /screenshot, /log, /report, /results, /pull, /onedrive, the
 commands that start, stop and change the macro, and /update and /rollback. It runs on the PC the macro runs on, in the same logged-in desktop session (it reads the macro's files and grabs its screen),
 and connects out to Discord, so no port needs opening. Only one user, in one channel, is obeyed (bot_config.json).
 
@@ -302,7 +302,7 @@ def capture_text(ended: Optional[str]) -> str:
     if ended == "started":
         return "A capture is running: do what you want to test (/trades, /setup ...), then /capture again to end it."
     if ended == "stopped":
-        return "The capture is stopped and being zipped: /captures lists it, /pull takes it."
+        return "The capture is stopped and being zipped: /pull captures takes it once the zips are made (a /pull before then says so)."
     if ended == "running":
         return "A capture is running already."
     if ended == "none running":
@@ -328,11 +328,17 @@ async def start_window(config: bot_lib.Config) -> str:
         result = await open_macro(config)
         if not result.startswith("Started the macro ("):
             return result
-        deadline = time.time() + cfg.BOT_START_CONFIRM
-        while time.time() < deadline:
-            if bot_lib.started_since(bot_lib.read_json(bot_lib.status_path()), since):
-                return ""
-            await asyncio.sleep(cfg.BOT_COMMAND_ACK_POLL)
+        return await wait_for_window(since)
+
+
+async def wait_for_window(since: datetime) -> str:
+    """Wait up to BOT_START_CONFIRM seconds for the macro's window to write its status (at or after `since`): it reads commands from then on, and drops those left before.
+    "" when it did, else what to say."""
+    deadline = time.time() + cfg.BOT_START_CONFIRM
+    while time.time() < deadline:
+        if bot_lib.started_since(bot_lib.read_json(bot_lib.status_path()), since):
+            return ""
+        await asyncio.sleep(cfg.BOT_COMMAND_ACK_POLL)
     return "The macro started, but its window did not come up in time - see /log and macro_stderr.log."
 
 
@@ -378,8 +384,8 @@ async def collect_trades() -> tuple[str, list[str]]:
     return bot_lib.trades_text(done) + " Its loop is stopped; /loop it again when you want it back.", bot_lib.trade_pictures(cfg.TRADES_DIR)
 
 
-async def decline_offer(listing: int, offer: int) -> tuple[str, list[str]]:
-    """Ask the macro to decline offer `offer` of listing `listing` (/decline) and wait up to BOT_TRADES_WAIT seconds for it to end: what to say, and the picture of the offer if it was declined."""
+async def decline_offer(listing: int, offer: int | str) -> tuple[str, list[str]]:
+    """Ask the macro to decline offer `offer` (a number, or `*` for all of them) of listing `listing` (/decline) and wait up to BOT_TRADES_WAIT seconds for it to end: what to say, and the picture of the offer if it was declined."""
     bot_lib.clear_trades(cfg.TRADES_DIR)
     problem = await send_command("decline", listing=listing, offer=offer)
     if problem:
@@ -391,7 +397,7 @@ async def decline_offer(listing: int, offer: int) -> tuple[str, list[str]]:
         done = bot_lib.read_json(cfg.TRADES_DECLINE_DONE_PATH)
     if done is None:
         return f"The macro has not ended the decline in {cfg.BOT_TRADES_WAIT:g} s (its loop may not have stopped) - see /status.", []
-    return bot_lib.decline_text(done), [cfg.TRADES_DECLINED_PATH] if os.path.exists(cfg.TRADES_DECLINED_PATH) else []
+    return bot_lib.decline_text(done), [cfg.TRADES_DECLINED_PATH] if offer != cfg.TRADES_ALL_OFFERS and os.path.exists(cfg.TRADES_DECLINED_PATH) else []
 
 
 async def stop_macro(config: bot_lib.Config) -> str:
@@ -565,8 +571,12 @@ async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say, l
             await say(f"pip failed (exit {code}) - the macro was not started. Use /rollback.\n```\n{output[-1200:]}\n```")
             return False
     if was_running:
+        since = datetime.now()
         if await start_again(config, loop_was_running, say):
-            problem = await send_command("focus")                       # the macro's own window is up again: the game is brought back to the front
+            with launching():
+                problem = await wait_for_window(since)                    # (a command written before the window is up is dropped: that was the "focus" of an update)
+            if not problem:
+                problem = await send_command("focus")                   # the macro's own window is up again: the game is brought back to the front
             if problem:
                 await say(f"The Roblox window could not be brought to the front: {problem}")
         else:
@@ -896,10 +906,14 @@ def build(config: bot_lib.Config) -> discord.Client:
         for batch in batches[1:]:
             await say(interaction, files=[discord.File(path) for path in batch])
 
-    @command("decline", "Decline an offer on a listing by the number /trades showed (stops the macro's loop)")
-    @app_commands.describe(listing="1 or 2", offer="The offer's number on the pictures of /trades", debug=DEBUG_HELP)
+    @command("decline", "Decline an offer by its /trades number, or * for all of a listing (stops the loop)")
+    @app_commands.describe(listing="1 or 2", offer="The offer's number on the pictures of /trades, or * for every offer of the listing", debug=DEBUG_HELP)
     @app_commands.choices(listing=[app_commands.Choice(name=str(number), value=number) for number in cfg.TRADES_LISTINGS])
-    async def decline(interaction: discord.Interaction, listing: app_commands.Choice[int], offer: app_commands.Range[int, 1, cfg.TRADES_MAX_OFFERS], debug: bool = False) -> None:
+    async def decline(interaction: discord.Interaction, listing: app_commands.Choice[int], offer: str, debug: bool = False) -> None:
+        number = bot_lib.parse_offer(offer)
+        if number is None:
+            await interaction.response.send_message(f"The offer is a number from 1 to {cfg.TRADES_MAX_OFFERS}, or {cfg.TRADES_ALL_OFFERS} for all of them.", ephemeral=True)
+            return
         await interaction.response.defer(thinking=True)
         problem, started = await ensure_macro(config)
         if problem:
@@ -911,7 +925,7 @@ def build(config: bot_lib.Config) -> discord.Client:
         if session is not None:
             await session.start()
         try:
-            text, pictures = await decline_offer(listing.value, offer)
+            text, pictures = await decline_offer(listing.value, number)
         finally:
             if session is not None:
                 await session.end()
@@ -1130,18 +1144,24 @@ def build(config: bot_lib.Config) -> discord.Client:
         except (ValueError, OSError) as error:
             await say(interaction, f"Nothing copied: {error}")
             return
-        await say(interaction, f"Copied `{name}` ({len(files)} file{'s' if len(files) != 1 else ''}, {bot_lib.size_text(megabytes)}) to OneDrive, in `{folder.value}/`. The OneDrive app on the PC uploads it from there.")
+        await say(interaction, f"Copied `{name}` ({len(files)} file{'s' if len(files) != 1 else ''}, {bot_lib.size_text(megabytes)}) to OneDrive, in `{os.path.join(config.onedrive_dir, folder.value)}` on the PC (checked: every file is there at its size). The OneDrive app uploads it from there - if it does not, look at the app's own status (paused, a full OneDrive, or this folder not synced).")
+
+    @command("onedrive", "Why a /pull is not uploaded: onedrive_dir, the OneDrive app and the files copied, told from the PC")
+    async def onedrive(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(thinking=True)
+        processes = await asyncio.to_thread(list_processes)
+        accounts = await asyncio.to_thread(bot_lib.onedrive_accounts)
+        text = await asyncio.to_thread(bot_lib.onedrive_report, config.onedrive_dir, processes, dict(os.environ), accounts, time.time())
+        if bot_lib.fits_a_message(text):
+            await say(interaction, f"```\n{text}\n```")
+        else:
+            await say(interaction, file=discord.File(io.BytesIO(text.encode("utf-8")), "onedrive.txt"))
 
     @pull.autocomplete("item")
     async def pull_items(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         source = getattr(interaction.namespace, "folder", None)
         names = [bot_lib.PULL_ALL, *bot_lib.pull_entries(source or "")]
         return [app_commands.Choice(name=("* (everything in the folder)" if n == bot_lib.PULL_ALL else n)[:100], value=n) for n in names if current.lower() in n.lower()][:25]
-
-    @command("captures", "The newest minigame captures on the PC (/pull minigame_captures copies one to OneDrive)")
-    async def captures(interaction: discord.Interaction) -> None:
-        await interaction.response.defer(thinking=True)
-        await say(interaction, f"```\n{bot_lib.captures_text(bot_lib.captures_dir())}\n```")
 
     background: list[asyncio.Task] = []                                # (kept: a task nobody holds can be collected while it runs)
 

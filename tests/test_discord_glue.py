@@ -622,7 +622,14 @@ def test_after_an_update_that_started_the_macro_again_the_roblox_window_is_broug
     monkeypatch.setattr(discord_bot, "send_command", send)
     monkeypatch.setattr(discord_bot, "git", git_plain)
     monkeypatch.setattr(discord_bot, "running_pids", running)
+    window_waits = []
+
+    async def window_up(since):
+        window_waits.append(since)
+        return ""
+    monkeypatch.setattr(discord_bot, "wait_for_window", window_up)
     assert asyncio.run(discord_bot.apply_commit(macro_calls.config, ["merge"], "0" * 40, macro_calls.say, True)) is True
+    assert len(window_waits) == 1                                                          # (focus is sent only once the window is up: before, the macro drops it)
     assert macro_calls.calls == ["stop", "loop"] and sent == ["focus"]                    # (after the macro was started again)
 
     async def not_started(config):
@@ -786,7 +793,7 @@ def test_the_session_ends_even_when_the_macro_never_reports(monkeypatch, tmp_pat
 
 def test_the_macros_answer_to_capture_is_said_in_words():
     assert "/capture again to end it" in discord_bot.capture_text("started")
-    assert "stopped" in discord_bot.capture_text("stopped") and "/captures" in discord_bot.capture_text("stopped")
+    assert "stopped" in discord_bot.capture_text("stopped") and "/pull captures" in discord_bot.capture_text("stopped")
     assert discord_bot.capture_text("failed: no space left") == "The capture did not work (no space left) - see /log."
     assert "has not said" in discord_bot.capture_text(None)
 

@@ -459,10 +459,6 @@ def heartbeat_due(last: Optional[float], hours: float, now: float) -> bool:
     return hours > 0 and (last is None or now - last >= hours * 3600)
 
 
-def captures_dir() -> str:
-    return cfg.RUN_CAPTURES_DIR
-
-
 def run_charts(runs_dir: str = "") -> list[str]:
     """The run charts (RUNS_DIR/run<N>.png) there are now, oldest first."""
     return sorted(glob.glob(os.path.join(runs_dir or cfg.RUNS_DIR, "run*.png")), key=os.path.getmtime)
@@ -517,29 +513,7 @@ def save_state(path: str, state: BotState) -> None:
     os.replace(temp, path)
 
 
-# --- captures, and pulling things out of the debug folder into OneDrive (/captures, /pull) ---
-
-CAPTURE_NAME = re.compile(r"^(hauntlet_2|ghost_gallery)_(\d{8}_\d{6})")
-
-
-def capture_folders(captures_dir: str) -> list[str]:
-    """The capture folders in `captures_dir` (named like a capture's), oldest first - by the time in the name, not the minigame's."""
-    named = [(match[2], folder) for folder in glob.glob(os.path.join(captures_dir, "*"))
-             if (match := CAPTURE_NAME.match(os.path.basename(folder))) and os.path.isdir(folder)]
-    return [folder for _, folder in sorted(named)]
-
-
-def captures_text(captures_dir: str, limit: int = 10) -> str:
-    """The /captures message: the newest `limit` minigame captures on this PC, each with its outcome, zip count and size."""
-    rows = []
-    for folder in reversed(capture_folders(captures_dir)):
-        info = read_json(os.path.join(folder, "info.json")) or {}
-        zips = glob.glob(os.path.join(folder, "zips", "*.zip"))
-        rows.append(f"{os.path.basename(folder)}: {info.get('outcome', 'not finished')}, {len(zips)} zips, {sum(os.path.getsize(z) for z in zips) / 1048576:.0f} MB")
-        if len(rows) == limit:
-            break
-    return "\n".join(rows) if rows else "No minigame captures on this PC."
-
+# --- pulling things out of the debug folder into OneDrive (/pull) ---
 
 PULL_ALL = "*"           # the item that means everything in the folder
 
@@ -587,13 +561,21 @@ def pull_files(path: str, name: str) -> list[tuple[str, str]]:
     if os.path.isfile(path):
         return [(path, name)]
     found = []
+    unzipped = []
     for root, folders, files in os.walk(path):
-        if "zips" in folders:
+        if "zips" in folders or any(file.startswith("frame_") for file in files):          # (a capture)
+            zips = os.path.join(root, "zips")
+            if not os.path.isdir(zips):
+                unzipped.append(os.path.basename(root))                                    # (its zips are not there yet - zip_capture() puts them there once all are made -: not its frames, which are the same again as the zips)
+                folders[:] = []
+                continue
             folders[:] = ["zips"]
             files = []
         for file in sorted(files):
             full = os.path.join(root, file)
             found.append((full, os.path.join(name, os.path.relpath(full, path))))
+    if unzipped and not found:
+        raise ValueError(f"{', '.join(unzipped)} has no zips yet - it is still being zipped, or was never zipped: try again in a moment")
     return found
 
 
@@ -624,12 +606,106 @@ def copy_pull(files: list[tuple[str, str]], onedrive_dir: str, source: str, max_
             shutil.copy2(long_path(src), target)
             if not existed:
                 made.append(target)
+            if os.path.getsize(target) != os.path.getsize(long_path(src)):                    # (a copy that is not the file: said, not reported as done)
+                raise OSError(f"{relative} was copied as {os.path.getsize(target)} bytes, not {os.path.getsize(long_path(src))}")
     except OSError:
         for path in made:
             with contextlib.suppress(OSError):
                 os.remove(path)
         raise
     return total
+
+
+# --- /onedrive: why a copy into onedrive_dir is not uploaded, told from the PC without anyone at it ---
+
+ATTRIBUTE_FLAGS = ((0x1, "read-only"), (0x2, "hidden"), (0x4, "system"), (0x400, "reparse point"), (0x1000, "offline"), (0x40000, "cloud placeholder (recall on open)"),
+                   (0x400000, "cloud placeholder (recall on data access)"), (0x80000, "pinned: always keep"), (0x100000, "unpinned: online-only"))
+
+
+def attribute_text(attributes: int) -> str:
+    """The Windows file attributes of `attributes` (st_file_attributes) that say something about a synced file, in words."""
+    return ", ".join(name for flag, name in ATTRIBUTE_FLAGS if attributes & flag) or "plain"
+
+
+def onedrive_accounts() -> list[tuple[str, str]]:
+    """(account, its synced folder) of each OneDrive account in the registry (Windows; none elsewhere or when it cannot be read)."""
+    try:
+        import winreg
+    except ImportError:
+        return []
+    found = []
+    try:                                                        # (the attributes are Windows's: mypy on another system does not know them)
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\OneDrive\Accounts") as accounts:  # type: ignore[attr-defined]
+            for index in range(winreg.QueryInfoKey(accounts)[0]):  # type: ignore[attr-defined]
+                name = winreg.EnumKey(accounts, index)  # type: ignore[attr-defined]
+                with winreg.OpenKey(accounts, name) as account:  # type: ignore[attr-defined]
+                    with contextlib.suppress(OSError):
+                        found.append((name, str(winreg.QueryValueEx(account, "UserFolder")[0])))  # type: ignore[attr-defined]
+    except OSError:
+        pass
+    return found
+
+
+def same_place(path: str, root: str) -> bool:
+    """Whether `path` is `root` or inside it (the way Windows compares: whatever the case, whichever slashes)."""
+    path, root = os.path.normcase(os.path.abspath(path)), os.path.normcase(os.path.abspath(root))
+    return path == root or path.startswith(root.rstrip("\\/") + os.sep)
+
+
+def onedrive_report(folder: str, processes: Optional[list[tuple[int, str]]], env: dict[str, str], accounts: list[tuple[str, str]], now: float) -> str:
+    """What can be told of why files copied into `folder` (onedrive_dir) are not uploaded: that it is a folder that can be written to and has room, whether it is inside a folder
+    OneDrive syncs (the OneDrive folders of the environment and of the registry), whether the OneDrive app runs and when it last wrote its logs, and what the newest files in it are
+    - their size, age and Windows attributes (a cloud placeholder or "online-only" is a file OneDrive has handled)."""
+    lines = [f"onedrive_dir: {folder or '(not set)'}"]
+    if not folder or not os.path.isdir(folder):
+        return "\n".join(lines + ["It is not a folder on this PC: nothing can be copied there."])
+    lines.append(f"  full path: {os.path.abspath(folder)}" + (" (a link to another place: OneDrive does not sync through one)" if os.path.islink(folder) else ""))
+    probe = os.path.join(folder, f"_onedrive_probe_{int(now)}.txt")
+    try:
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("probe")
+        with open(probe, encoding="utf-8") as f:
+            read = f.read()
+        os.remove(probe)
+        lines.append("  write test: a small file was written, read back and removed - " + ("ok" if read == "probe" else f"it read back as {read!r}"))
+    except OSError as error:
+        lines.append(f"  write test: FAILED ({error})")
+    try:
+        free = shutil.disk_usage(folder).free
+        lines.append(f"  free space on its drive: {size_text(free / 1048576)}")
+    except OSError as error:
+        lines.append(f"  free space: unknown ({error})")
+    roots = [(key, env[key]) for key in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial") if env.get(key)] + [(f"registry {name}", root) for name, root in accounts]
+    inside = [f"{key} ({root})" for key, root in roots if same_place(folder, root)]
+    lines.append("OneDrive folders of this PC: " + (", ".join(f"{key} = {root}" for key, root in roots) or "none found (no environment variable, no account in the registry)"))
+    lines.append("  onedrive_dir is inside: " + (", ".join(inside) if inside else "NONE of them - OneDrive does not sync this folder"))
+    if processes is None:
+        lines.append("OneDrive app: processes of this PC cannot be listed")
+    else:
+        running = [line for _, line in processes if "onedrive.exe" in line.lower()]
+        lines.append("OneDrive app: " + (f"running ({len(running)} process{'es' if len(running) != 1 else ''})" if running else "NOT running"))
+    logs = os.path.join(env.get("LOCALAPPDATA", ""), "Microsoft", "OneDrive", "logs")
+    if env.get("LOCALAPPDATA") and os.path.isdir(logs):
+        for account in sorted(os.listdir(logs)):
+            path = os.path.join(logs, account)
+            try:
+                newest = max((os.path.getmtime(os.path.join(path, name)) for name in os.listdir(path)), default=None) if os.path.isdir(path) else None
+            except OSError:
+                newest = None
+            lines.append(f"  its log for {account}: " + (f"last written {age_text(now - newest)} ago" if newest else "nothing in it"))
+    files = []
+    for root, _, names in os.walk(folder):
+        for name in names:
+            path = os.path.join(root, name)
+            try:
+                info = os.stat(path)
+            except OSError:
+                continue
+            files.append((info.st_mtime, os.path.relpath(path, folder), info.st_size, getattr(info, "st_file_attributes", 0)))
+    lines.append(f"in the folder: {len(files)} file(s), {size_text(sum(size for _, _, size, _ in files) / 1048576)}; the newest:")
+    for modified, relative, size, attributes in sorted(files, reverse=True)[:10]:
+        lines.append(f"  {relative} - {size_text(size / 1048576)}, {age_text(now - modified)} old, {attribute_text(attributes)}")
+    return "\n".join(lines)
 
 
 def long_path(path: str) -> str:
@@ -712,8 +788,21 @@ def trades_text(done: dict[str, Any]) -> str:
     return "\n".join(lines or ["No listings were looked at."]) + ("\n/decline <listing> <offer> declines an offer by the number on the pictures." if any(f.get("offers") for f in done.get("listings", {}).values()) else "")
 
 
+def parse_offer(text: str) -> Optional[int | str]:
+    """/decline's offer: a number from 1 to TRADES_MAX_OFFERS, or TRADES_ALL_OFFERS as it is; None if it is neither."""
+    text = text.strip()
+    if text == cfg.TRADES_ALL_OFFERS:
+        return text
+    return int(text) if text.isdigit() and 1 <= int(text) <= cfg.TRADES_MAX_OFFERS else None
+
+
 def decline_text(done: dict[str, Any]) -> str:
     """What the /decline message says."""
+    if done.get("offer") == cfg.TRADES_ALL_OFFERS:
+        declined = f"{done.get('count', 0)} offer(s) of listing {done.get('listing')}"
+        if done.get("declined"):
+            return f"Declined {declined}."
+        return f"Declined {declined}; it stopped: {done.get('why') or 'it did not end'}."
     where = f"offer {done.get('offer')} of listing {done.get('listing')}"
     if done.get("declined"):
         return f"Declined {where} (the offer as it was is in the picture)."

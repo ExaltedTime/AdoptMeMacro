@@ -202,8 +202,6 @@ def is_roblox_focused() -> bool:
 
 def focus_roblox_click() -> bool:
     """Focus Roblox and click near the top edge to make sure input registers."""
-    if not cfg.FOCUS_WINDOW_ON_ACTION:
-        return True
     if not focus_roblox():
         return False
     pyautogui.moveTo(*to_screen(cfg.REFERENCE_WIDTH * cfg.FOCUS_CLICK_X_PERCENT, cfg.FOCUS_CLICK_Y))
@@ -420,37 +418,6 @@ state = State()
 # LOGGING
 # ============================================================================
 
-def migrate_debug_layout() -> None:
-    """Move what an older version left in debug/ into the logs/ and failures/ subfolders (see LOGS_DIR / FAILURE_DIR), if it isn't
-    there already, and drop the images/ folder it had (the debug_*.png views are not made any more). Never raises."""
-    moves = [(os.path.join(cfg.DEBUG_DIR, name), os.path.join(cfg.LOGS_DIR, name))
-             for name in ("run_log.txt", "run_counter.txt", "output.log", "output.log.old", "status.json")]
-    old_images = os.path.join(cfg.DEBUG_DIR, "images")
-    moves += [(os.path.join(old_images, "failures"), cfg.FAILURE_DIR)]
-    try:
-        for source, target in moves:
-            if os.path.exists(source) and not os.path.exists(target):
-                os.replace(source, target)
-        for old_folder in (os.path.join(cfg.LOGS_DIR, "runs"), os.path.join(old_images, "reports"), os.path.join(cfg.DEBUG_DIR, "reports")):       # run logs and run charts: now together in RUNS_DIR
-            if os.path.isdir(old_folder):
-                os.makedirs(cfg.RUNS_DIR, exist_ok=True)
-                for name in os.listdir(old_folder):
-                    if not os.path.exists(os.path.join(cfg.RUNS_DIR, name)):
-                        os.replace(os.path.join(old_folder, name), os.path.join(cfg.RUNS_DIR, name))
-                if not os.listdir(old_folder):
-                    os.rmdir(old_folder)
-        for folder in (cfg.DEBUG_DIR, old_images):
-            if os.path.isdir(folder):
-                for name in os.listdir(folder):
-                    if name.startswith("debug_") and name.endswith(".png"):
-                        os.remove(os.path.join(folder, name))
-        if os.path.isdir(old_images) and not os.listdir(old_images):
-            os.rmdir(old_images)
-    except OSError as error:
-        logger.warning(f"Couldn't move the old debug files: {error}")
-
-migrate_debug_layout()
-
 def refresh_debug() -> int:
     """Empty the debug folder except the game config and recreate its subfolders (run
     numbers start from 1 again). Returns the number of entries removed.
@@ -532,7 +499,7 @@ def read_command_with_id() -> tuple[str, Optional[dict[str, Any]]]:
     COMMAND_MAX_AGE seconds (left over from before the macro started, say), is none - and a warning says why, so that a bot host whose clock is off does
     not have every command ignored without a trace. A `set` command must also name a switch that exists (`kind` "need" and a NEED_NAMES name, or "option"
     and an OPTION_SWITCHES name or SHOW_DEBUG_LINES_OPTION) and give it a true or false `value`. One command is read per call, the oldest first, so two sent
-    close together are both done, in order. A `decline` names a `listing` of TRADES_LISTINGS and an `offer` of 1 to TRADES_MAX_OFFERS. A `test` names a need handler (DEBUG_HANDLERS) or TEST_ALL_TELEPORTS, and a `server_link` gives a `link` that parse_server_link() knows. Never raises. See docs/ARCHITECTURE.md#remote-control."""
+    close together are both done, in order. A `decline` names a `listing` of TRADES_LISTINGS and an `offer` of 1 to TRADES_MAX_OFFERS or TRADES_ALL_OFFERS. A `test` names a need handler (DEBUG_HANDLERS) or TEST_ALL_TELEPORTS, and a `server_link` gives a `link` that parse_server_link() knows. Never raises. See docs/ARCHITECTURE.md#remote-control."""
     try:
         names = sorted(name for name in os.listdir(cfg.COMMANDS_DIR) if name.endswith(".json"))
     except OSError:
@@ -582,8 +549,8 @@ def read_command_with_id() -> tuple[str, Optional[dict[str, Any]]]:
     if data["command"] == "capture" and "value" in data and not isinstance(data["value"], bool):
         dropped("capture is asked for with a true or false value, or none")
         return stem, None
-    if data["command"] == "decline" and (data.get("listing") not in cfg.TRADES_LISTINGS or not isinstance(data.get("offer"), int) or isinstance(data.get("offer"), bool)
-                                         or not 1 <= data["offer"] <= cfg.TRADES_MAX_OFFERS):
+    if data["command"] == "decline" and (data.get("listing") not in cfg.TRADES_LISTINGS or not (data.get("offer") == cfg.TRADES_ALL_OFFERS or (
+            isinstance(data.get("offer"), int) and not isinstance(data.get("offer"), bool) and 1 <= data["offer"] <= cfg.TRADES_MAX_OFFERS))):
         dropped(f"decline listing {data.get('listing')} offer {data.get('offer')} is not an offer the macro can be asked for")
         return stem, None
     if data["command"] == "server_link" and (not isinstance(data.get("link"), str) or parse_server_link(data["link"].strip()) is None):
@@ -913,11 +880,10 @@ def icon_disc_mask(width: int, height: int, radius_fraction: float) -> Image:
     return (xx - cx) ** 2 + (yy - cy) ** 2 <= (radius_fraction * width / 2) ** 2
 
 @lru_cache(maxsize=None)
-def icon_match_mask(size: tuple[int, int], radius_fraction: float, left_half: bool) -> Image:
-    """The part of a signature (see icon_signature()) that is compared: the disc inside the icon's ring, and only
-    its left half when `left_half`."""
+def icon_match_mask(size: tuple[int, int], radius_fraction: float) -> Image:
+    """The part of a signature (see icon_signature()) that is compared: the left half of the disc inside the icon's ring (a badge sits at the icon's top right)."""
     mask = icon_disc_mask(size[0], size[1], radius_fraction)
-    return mask[:, :mask.shape[1] // 2] if left_half else mask
+    return mask[:, :mask.shape[1] // 2]
 
 def icon_signature(icon_img: Image) -> Image:
     """Comparable form of an icon: outside-the-ring pixels blacked out, preprocessed,
@@ -926,14 +892,12 @@ def icon_signature(icon_img: Image) -> Image:
     height, width = icon_img.shape[:2]
     icon_img = np.where(icon_disc_mask(width, height, cfg.ICON_MATCH_RADIUS_FRACTION)[:, :, None], icon_img, 0).astype(icon_img.dtype)
     proc = cv2.resize(preprocess_icon(icon_img), cfg.ICON_COMPARE_SIZE).astype(np.float32) / cfg.PIXEL_MAX
-    if cfg.MATCH_ONLY_LEFT_HALF:
-        proc = proc[:, :proc.shape[1] // 2]
-    return proc
+    return proc[:, :proc.shape[1] // 2]
 
 def compare_signatures(sig1: Image, sig2: Image) -> float:
     """Return a 0-1 similarity score (1 = identical) between two signatures: one minus the mean squared difference
     over the part inside the icon's ring (icon_match_mask())."""
-    mask = icon_match_mask(cfg.ICON_COMPARE_SIZE, cfg.ICON_MATCH_RADIUS_FRACTION, cfg.MATCH_ONLY_LEFT_HALF)
+    mask = icon_match_mask(cfg.ICON_COMPARE_SIZE, cfg.ICON_MATCH_RADIUS_FRACTION)
     return 1.0 - float(np.sum(((sig1 - sig2) ** 2) * mask) / np.count_nonzero(mask))
 
 # ============================================================================
@@ -1509,14 +1473,16 @@ def close_open_windows() -> int:
     return closed
 
 def recenter() -> bool:
-    """The bot's /recenter: close what is open (close_open_windows()), respawn the character (it is back where it spawns), and close what the respawn left. True once done."""
+    """The bot's /recenter: leave the minigame if one is being played (exit_minigame()), close what is open (close_open_windows()), respawn the character (it is back where it spawns),
+    and close what the respawn left. False (logged) if a minigame could not be left - the rest is done all the same."""
     if not focus_roblox():
         return False
+    left = exit_minigame()
     closed = close_open_windows()
     respawn_character()
     closed += close_open_windows()
-    log_run_event(f"recenter: {closed} window(s) closed, respawned")
-    return True
+    log_run_event(f"recenter: {closed} window(s) closed, respawned" + ("" if left else " (the minigame could not be left)"))
+    return left
 
 def hold_key(key: str, duration: float) -> None:
     """Hold `key` down for `duration` seconds (interruptibly). Always
@@ -1774,19 +1740,15 @@ def travel_to_trade_hub() -> bool:
     log_run_event("travelling to the Trading Hub")
     return True
 
-def scroll_down(clicks: int, direction: int = -1) -> None:
-    """Turn the mouse wheel `clicks` notches down (WHEEL_NOTCH units each; `direction` 1: up), over wherever the mouse is, INVENTORY_SCROLL_CHUNK at a time with INVENTORY_SCROLL_PAUSE
+def scroll_down(clicks: int) -> None:
+    """Turn the mouse wheel `clicks` notches down (WHEEL_NOTCH units each), over wherever the mouse is, INVENTORY_SCROLL_CHUNK at a time with INVENTORY_SCROLL_PAUSE
     between: a game may take one huge turn of the wheel for a small one."""
     while clicks > 0:
         check_running()
         step = min(clicks, cfg.INVENTORY_SCROLL_CHUNK)
-        pyautogui.scroll(direction * step * cfg.WHEEL_NOTCH)         # (Windows takes the wheel in 120ths of a notch: 10 would hardly move a list)
+        pyautogui.scroll(-step * cfg.WHEEL_NOTCH)         # (Windows takes the wheel in 120ths of a notch: 10 would hardly move a list)
         clicks -= step
         time.sleep(cfg.INVENTORY_SCROLL_PAUSE)
-
-def scroll_up(clicks: int) -> None:
-    """scroll_down() the other way."""
-    scroll_down(clicks, 1)
 
 def panel_picture(img: Image) -> Image:
     left, top, right, bottom = cfg.INVENTORY_PANEL_BOX
@@ -2072,14 +2034,49 @@ def offer_row(img: Image, y: int) -> Image:
     left, top, right, bottom = cfg.TRADES_ROW_BOX
     return img[y + top:y + bottom, left:right]
 
-def find_offer_row(img: Image, row: Image) -> Optional[int]:
-    """The y of the ACCEPT button's middle of the offer row in `img` that is the picture `row` (at least TRADES_ROW_MATCH), or None."""
-    left, top, right, bottom = cfg.TRADES_ROW_BOX
-    box = (left, cfg.TRADES_ACCEPT_BOX[1], right, cfg.TRADES_ACCEPT_BOX[3])
-    score, centre = find_template(img, row, box)
-    if centre is None or score < cfg.TRADES_ROW_MATCH:
-        return None
-    return centre[1] - row.shape[0] // 2 - top
+def row_is(img: Image, y: int, saved: Image) -> bool:
+    """Whether the offer row of `img` whose ACCEPT button's middle is at `y` looks like the picture `saved` (at least TRADES_ROW_MATCH)."""
+    row = offer_row(img, y)
+    return row.shape == saved.shape and float(cv2.matchTemplate(row, saved, cv2.TM_CCOEFF_NORMED)[0][0]) >= cfg.TRADES_ROW_MATCH
+
+class OfferList:
+    """Which offer is which in the offers list as it is scrolled, by where it is in the list - never by how it looks, since offers that look alike (the same eggs on both sides) were
+    taken for each other. The rows are TRADES_ROW_PITCH apart, so how far a step moved the list is told, to within a row, by where the first row of the picture before is among the
+    rows of the picture after (a step is shorter than a row). look() takes each picture in turn; an offer's number is its row counted from the first row seen (the top of the list)."""
+    def __init__(self) -> None:
+        self.ys: Optional[list[int]] = None          # the rows of the last picture
+        self.origin: Optional[int] = None            # where the first row was, in the first picture
+        self.offset = 0                              # how far the list has been moved
+        self.lost = False                            # a step that no row could be followed over
+
+    def look(self, img: Image) -> list[tuple[int, int]]:
+        """(number, y) of each row that is whole in `img`, top to bottom."""
+        ys = visible_offers(img)
+        if self.ys is not None:
+            if self.ys and ys:
+                self.offset += (self.ys[0] - ys[0]) % cfg.TRADES_ROW_PITCH
+            else:
+                self.lost = True
+        self.ys = ys
+        if self.origin is None and ys:
+            self.origin = ys[0]
+        return [(round((self.offset + y - self.origin) / cfg.TRADES_ROW_PITCH) + 1, y) for y in ys] if self.origin is not None else []
+
+def panel_of(img: Image) -> Image:
+    left, top, right, bottom = cfg.TRADES_PANEL_BOX
+    return img[top:bottom, left:right]
+
+def grab_still() -> Image:
+    """grab_screen() once the phone's panel has stopped moving (two looks TRADES_POLL apart alike), after TRADES_SCROLL_MAX_WAIT seconds at the latest: the list glides for a moment after
+    a turn of the wheel, and a picture of it then is of a place it is not at."""
+    deadline = time.time() + cfg.TRADES_SCROLL_MAX_WAIT
+    img = grab_screen()
+    while True:
+        wait_interruptible(cfg.TRADES_POLL)
+        again = grab_screen()
+        if same_picture(panel_of(img), panel_of(again), cfg.TRADES_SAME_LEVEL) or time.time() >= deadline:
+            return again
+        img = again
 
 def open_offers(number: int) -> bool:
     """From MY LISTINGS, show listing `number` and press its OFFERS: False (logged) if the listing is not there or no list of offers came up (a listing with none)."""
@@ -2101,45 +2098,33 @@ def draw_offer_number(picture: Image, y: int, number: int) -> None:
         cv2.putText(picture, f"#{number}", at, cv2.FONT_HERSHEY_SIMPLEX, 1.3, colour, width, cv2.LINE_AA)
 
 def offers_tour(listing: int) -> dict[str, Any]:
-    """On the offers list of listing `listing`: scroll it a step at a time (TRADES_SCROLL_CLICKS notches, fewer when a step lost the rows seen before), number the offers in the order
-    they are first seen (a row is known again by its picture), and keep a picture of the panel (TRADES_DIR/L<listing>_<n>.png) at each step that showed one not seen before, with the
-    pictures of the rows (TRADES_ROWS_DIR) that /decline looks for. Ends at the end of the list (a step that moves nothing) or at TRADES_MAX_STEPS. Returns how it went."""
-    rows: list[Image] = []
-    pictures, previous, clicks, ended, gap = 0, None, cfg.TRADES_SCROLL_CLICKS, "the end of the list", False
-    for step in range(cfg.TRADES_MAX_STEPS):
-        img = grab_screen()
-        panel_left, panel_top, panel_right, panel_bottom = cfg.TRADES_PANEL_BOX
-        panel = img[panel_top:panel_bottom, panel_left:panel_right].copy()
-        ys = visible_offers(img)
-        known = [find_offer_row(img, row) is not None for row in rows]
-        if rows and ys and not any(known) and previous is not None:       # none of the rows seen before is in sight: the step was too long
-            if clicks > 1:
-                scroll_up(clicks)
-                clicks = max(1, clicks // 2)
-                wait_interruptible(cfg.TRADES_SCROLL_SETTLE)
-                continue
-            gap = True
+    """On the offers list of listing `listing`: scroll it a step at a time (TRADES_SCROLL_CLICKS notches, a step that is shorter than an offer, so that none is skipped), number the
+    offers by where they are in the list (OfferList), and keep a picture of the panel (TRADES_DIR/L<listing>_<n>.png) at each step that showed one not seen before, with the pictures of the
+    rows (TRADES_ROWS_DIR) that /decline checks. Ends at the end of the list (a step that moves nothing) or at TRADES_MAX_STEPS. Returns how it went."""
+    seen: set[int] = set()
+    offers, pictures, ended = OfferList(), 0, "the end of the list"
+    previous = None
+    for _ in range(cfg.TRADES_MAX_STEPS):
+        img = grab_still()
+        panel = panel_of(img)
+        if previous is not None and same_picture(previous, panel, cfg.TRADES_SAME_LEVEL):
+            break
+        previous = panel.copy()
         fresh = False
-        for y in ys:
-            row = offer_row(img, y)
-            number = next((i + 1 for i, saved in enumerate(rows) if find_offer_row(img, saved) == y), None)
-            if number is None:
-                rows.append(row.copy())
-                number = len(rows)
+        marked = panel.copy()
+        for number, y in offers.look(img):
+            if number not in seen:
+                seen.add(number)
                 fresh = True
-                cv2.imwrite(os.path.join(cfg.TRADES_ROWS_DIR, f"L{listing}_{number:02d}.png"), row)
-            draw_offer_number(panel, y, number)
+                cv2.imwrite(os.path.join(cfg.TRADES_ROWS_DIR, f"L{listing}_{number:02d}.png"), offer_row(img, y))
+            draw_offer_number(marked, y, number)
         if fresh:
             pictures += 1
-            cv2.imwrite(os.path.join(cfg.TRADES_DIR, f"L{listing}_{pictures:02d}.png"), panel)
-        if previous is not None and same_picture(previous, img[panel_top:panel_bottom, panel_left:panel_right], cfg.TRADES_SAME_LEVEL):
-            break
-        previous = img[panel_top:panel_bottom, panel_left:panel_right].copy()
-        scroll_down(clicks)
-        wait_interruptible(cfg.TRADES_SCROLL_SETTLE)
+            cv2.imwrite(os.path.join(cfg.TRADES_DIR, f"L{listing}_{pictures:02d}.png"), marked)
+        scroll_down(cfg.TRADES_SCROLL_CLICKS)
     else:
         ended = f"{cfg.TRADES_MAX_STEPS} steps made"
-    return {"offers": len(rows), "pictures": pictures, "ended": ended + (" (some offers may have been skipped)" if gap else "")}
+    return {"offers": len(seen), "pictures": pictures, "ended": ended + (" (the place in the list was lost at a step: some offers may be numbered wrong)" if offers.lost else "")}
 
 def close_trade_phone() -> None:
     """The red X of the screen that is up (any of them but the offer on its own, which goes back first): the phone is away."""
@@ -2184,8 +2169,8 @@ def trades_tour() -> bool:
     return True
 
 def decline_offer(listing: int, number: int) -> bool:
-    """The bot's /decline: decline offer `number` of listing `listing` as /trades numbered it. The offer is found by its row's picture from that tour (TRADES_ROWS_DIR), scrolling the
-    list a step at a time (TRADES_FIND_CLICKS notches) - one that is not there any more (it was declined, taken back, or the list is not the one that was photographed) is not
+    """The bot's /decline: decline offer `number` of listing `listing` as /trades numbered it. The offer is found by its place in the list (OfferList), scrolling a step at a time
+    (TRADES_SCROLL_CLICKS notches), and must look like its picture from that tour (TRADES_ROWS_DIR) - one that does not (it was declined, taken back, or the list is not the one that was photographed) is not
     touched: then nothing is clicked and the answer says so. The row is opened (an offer on its own), its DECLINE clicked, and Yes in "Are you sure?" - each only when the
     screen it is on is seen. The offer as it was is kept (TRADES_DECLINED_PATH). TRADES_DECLINE_DONE_PATH says how it ended, however it does. True if declined."""
     result: dict[str, Any] = {"listing": listing, "offer": number, "declined": False, "why": "stopped"}
@@ -2198,39 +2183,88 @@ def decline_offer(listing: int, number: int) -> bool:
         if not open_trade_listings() or not open_offers(listing):
             result["why"] = "the offers of that listing could not be opened (see the log)"
             return False
-        y, previous = None, None
+        y, previous, offers = None, None, OfferList()
         for _ in range(cfg.TRADES_MAX_STEPS):
-            img = grab_screen()
-            y = find_offer_row(img, row)
-            if y is not None:
-                break
-            panel = img[cfg.TRADES_PANEL_BOX[1]:cfg.TRADES_PANEL_BOX[3], cfg.TRADES_PANEL_BOX[0]:cfg.TRADES_PANEL_BOX[2]]
+            img = grab_still()
+            panel = panel_of(img)
             if previous is not None and same_picture(previous, panel, cfg.TRADES_SAME_LEVEL):
                 break
             previous = panel.copy()
-            scroll_down(cfg.TRADES_FIND_CLICKS)
-            wait_interruptible(cfg.TRADES_SCROLL_SETTLE)
+            y = next((at for found, at in offers.look(img) if found == number), None)
+            if y is not None:
+                break
+            scroll_down(cfg.TRADES_SCROLL_CLICKS)
+        if y is not None and not row_is(img, y, row):
+            y = None                                                     # (the offer at that place is not the one that was photographed: the list changed)
         if y is None:
             result["why"] = "that offer is not in the list any more (it changed since /trades: /trades again)"
             close_trade_phone()
             return False
-        hover_click(cfg.TRADES_ROW_CLICK_X, y + cfg.TRADES_ROW_CLICK_DY)
-        if not wait_trade_screen("detail"):
-            result["why"] = "the offer did not open"
-            return False
-        cv2.imwrite(cfg.TRADES_DECLINED_PATH, grab_screen()[cfg.TRADES_PANEL_BOX[1]:cfg.TRADES_PANEL_BOX[3], cfg.TRADES_PANEL_BOX[0]:cfg.TRADES_PANEL_BOX[2]])
-        hover_click(*cfg.TRADES_DETAIL_DECLINE_POS)
-        if not wait_trade_screen("dialog"):
-            result["why"] = "the \"Are you sure?\" dialog did not come up (nothing was declined)"
-            return False
-        hover_click(*cfg.TRADES_DECLINE_YES_POS)
-        wait_interruptible(cfg.UI_SETTLE)
-        if trade_screen(grab_screen()) == "dialog":
-            result["why"] = "the dialog is still up after Yes"
+        if not decline_row(y, result):
             return False
         result["declined"], result["why"] = True, ""
         log_run_event(f"trade listings: declined offer {number} of listing {listing}")
         return True
+    finally:
+        bring_macro_window_to_front()
+        write_json_file(cfg.TRADES_DECLINE_DONE_PATH, result)
+
+def decline_row(y: int, result: dict[str, Any]) -> bool:
+    """Decline the offer whose row has its ACCEPT button's middle at `y` of the list on screen: open it (an offer on its own), keep its picture (TRADES_DECLINED_PATH), press DECLINE
+    and Yes - each only once the screen it is on is seen. False, with `result["why"]` saying where it ended, if one was not."""
+    hover_click(cfg.TRADES_ROW_CLICK_X, y + cfg.TRADES_ROW_CLICK_DY)
+    if not wait_trade_screen("detail"):
+        result["why"] = "the offer did not open"
+        return False
+    cv2.imwrite(cfg.TRADES_DECLINED_PATH, panel_of(grab_screen()))
+    hover_click(*cfg.TRADES_DETAIL_DECLINE_POS)
+    if not wait_trade_screen("dialog"):
+        result["why"] = "the \"Are you sure?\" dialog did not come up (nothing was declined)"
+        return False
+    hover_click(*cfg.TRADES_DECLINE_YES_POS)
+    wait_interruptible(cfg.UI_SETTLE)
+    if trade_screen(grab_screen()) == "dialog":
+        result["why"] = "the dialog is still up after Yes"
+        return False
+    return True
+
+def wait_list_settled(top: int) -> Optional[list[int]]:
+    """After a decline: the rows (visible_offers()) of the list once it has stopped moving and its first row is at `top` again or none is left - the offer being declined is shown for a while
+    with no ACCEPT button, and the row under it is the first in sight until it is gone. None if that did not happen in TRADES_DECLINE_MAX_WAIT seconds."""
+    deadline = time.time() + cfg.TRADES_DECLINE_MAX_WAIT
+    while True:
+        ys = visible_offers(grab_still())
+        if not ys or ys[0] <= top + cfg.TRADES_TOP_TOLERANCE:
+            return ys
+        if time.time() >= deadline:
+            return None
+
+def decline_all(listing: int) -> bool:
+    """The bot's /decline with `*`: decline every offer of listing `listing`, the first in sight each time (decline_row()) until none is left, at most TRADES_MAX_OFFERS. TRADES_DECLINE_DONE_PATH
+    says how many were declined and how it ended, however it does. True if the list was emptied."""
+    result: dict[str, Any] = {"listing": listing, "offer": "*", "declined": False, "count": 0, "why": "stopped"}
+    send_macro_window_to_back()
+    try:
+        if not open_trade_listings() or not open_offers(listing):
+            result["why"] = "the offers of that listing could not be opened (see the log)"
+            return False
+        ys = visible_offers(grab_still())
+        top = ys[0] if ys else 0
+        while ys:
+            if result["count"] >= cfg.TRADES_MAX_OFFERS:
+                result["why"] = f"stopped after {cfg.TRADES_MAX_OFFERS} offers (there may be more)"
+                return False
+            if not decline_row(ys[0], result):
+                return False
+            result["count"] += 1
+            settled = wait_list_settled(top)
+            if settled is None:
+                result["why"] = "the list did not settle after a decline"
+                return False
+            ys = settled
+        result["declined"], result["why"] = result["count"] > 0, "" if result["count"] else "there are no offers in that listing"
+        log_run_event(f"trade listings: declined {result['count']} offers of listing {listing}")
+        return result["declined"]
     finally:
         bring_macro_window_to_front()
         write_json_file(cfg.TRADES_DECLINE_DONE_PATH, result)
@@ -5117,7 +5151,9 @@ def zip_capture(folder: str) -> list[str]:
     <name>_part01.zip, _part02.zip, ... (stored, not compressed: PNGs don't shrink). The first part also holds
     events.jsonl and info.json, which are small; the frames go in time order, none twice. Returns the zip paths."""
     out = os.path.join(folder, "zips")
-    os.makedirs(out, exist_ok=True)
+    building = out + ".partial"                                                                  # (the zips are only in zips/ once all are made: /pull and OneDrive must not take half of them)
+    shutil.rmtree(building, ignore_errors=True)
+    os.makedirs(building)
     frames = sorted(f for f in os.listdir(folder) if f.startswith("frame_") and f.endswith(".png"))
     head = sum(os.path.getsize(os.path.join(folder, f)) for f in ("info.json", "events.jsonl") if os.path.exists(os.path.join(folder, f)))
     plan = plan_zip_parts([os.path.getsize(os.path.join(folder, name)) for name in frames], head)
@@ -5126,11 +5162,13 @@ def zip_capture(folder: str) -> list[str]:
     paths = []
     for number, names in enumerate(parts, 1):
         path = os.path.join(out, f"{os.path.basename(folder)}_part{number:02d}.zip")
-        with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as z:
+        with zipfile.ZipFile(os.path.join(building, os.path.basename(path)), "w", zipfile.ZIP_STORED) as z:
             for name in names:
                 if os.path.exists(os.path.join(folder, name)):
                     z.write(os.path.join(folder, name), name)
         paths.append(path)
+    shutil.rmtree(out, ignore_errors=True)                                                       # (the zips of an earlier stop of the same folder)
+    os.replace(building, out)
     return paths
 
 def zip_capture_in_background(folder: str) -> threading.Thread:
@@ -6418,7 +6456,8 @@ class DebugCapture(logging.Handler):
 OUTSIDE_ACTIONS: dict[str, Callable[[], Any]] = {"rejoin": leave_and_rejoin, "setup": setup_game, "trade_hub": travel_to_trade_hub, "leave_trade_hub": leave_trade_hub, "inventory": inventory_tour, "sloop": exit_minigame_and_setup,
                                           "trades": trades_tour, "recenter": recenter,
                                           **{f"test:{name}": partial(test_need_handler, name) for name in (*DEBUG_HANDLERS, cfg.TEST_ALL_TELEPORTS)},
-                                          **{f"decline:{listing}:{number}": partial(decline_offer, listing, number) for listing in cfg.TRADES_LISTINGS for number in range(1, cfg.TRADES_MAX_OFFERS + 1)}}   # the commands that do what a button does (AdoptMeGUI.act_from_outside())
+                                          **{f"decline:{listing}:{number}": partial(decline_offer, listing, number) for listing in cfg.TRADES_LISTINGS for number in range(1, cfg.TRADES_MAX_OFFERS + 1)},
+                                          **{f"decline:{listing}:{cfg.TRADES_ALL_OFFERS}": partial(decline_all, listing) for listing in cfg.TRADES_LISTINGS}}   # the commands that do what a button does (AdoptMeGUI.act_from_outside())
 
 def blackout_seen_by_capture(before: Image, after: Image) -> Optional[bool]:
     """Whether the macro's screenshots see the window of the blackout test: `before` is a screenshot without it, `after` one with it up, white. Seen if

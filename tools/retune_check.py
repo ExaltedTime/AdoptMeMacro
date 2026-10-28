@@ -127,7 +127,7 @@ VARIANTS.update({
     "keys_remapped": 'KEYS.update(backpack="v", mount="f", interact="f", zoom_in="o", helicopter="t", jump="x")\nHOTKEYS["stop"] = "q"\n' + KEYS_REBUILD,
 
     # behaviour flags flipped
-    "flags_flipped": {"patch": "MATCH_ONLY_LEFT_HALF = False\nFOCUS_WINDOW_ON_ACTION = False\nSAVE_NEW_NEEDS = True\n", "deselect": [SCREENSHOT_TEST]},
+    "flags_flipped": "SAVE_NEW_NEEDS = True\n",
     # the machine and the folders around the code
     "tz_new_york": {"env": {"TZ": "America/New_York"}},
     "tz_kolkata": {"env": {"TZ": "Asia/Kolkata"}},

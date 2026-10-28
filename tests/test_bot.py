@@ -315,6 +315,9 @@ def test_the_trade_pictures_are_listed_in_order_without_the_rows_cleared_without
     assert bot_lib.trades_text({"listings": {}, "problem": "the trade listings could not be opened"}) == "The trade listings were not looked at: the trade listings could not be opened."
     assert bot_lib.decline_text({"listing": 2, "offer": 1, "declined": True, "why": ""}).startswith("Declined offer 1 of listing 2")
     assert bot_lib.decline_text({"listing": 2, "offer": 1, "declined": False, "why": "the offer did not open"}) == "Did not decline offer 1 of listing 2: the offer did not open."
+    assert bot_lib.decline_text({"listing": 1, "offer": "*", "declined": True, "count": 4, "why": ""}) == "Declined 4 offer(s) of listing 1."
+    assert bot_lib.decline_text({"listing": 1, "offer": "*", "declined": False, "count": 2, "why": "the offer did not open"}) == "Declined 2 offer(s) of listing 1; it stopped: the offer did not open."
+    assert [bot_lib.parse_offer(text) for text in ("3", " 12 ", "*", "0", "31", "x", "-1", "**", "")] == [3, 12, "*", None, None, None, None, None, None]
 
 
 def test_the_pictures_of_an_inventory_tour_are_listed_in_order_cleared_and_sent_ten_at_a_time(tmp_path):
@@ -439,17 +442,6 @@ def make_capture(root, name, outcome="finished (the game over screen)", zips=("c
     return folder
 
 
-def test_the_captures_message_lists_the_newest_first_by_the_time_in_the_name(tmp_path):
-    make_capture(tmp_path, "hauntlet_2_20261016_100000_9330cc_room23", zips=("a_part01.zip", "a_part02.zip"))
-    make_capture(tmp_path, "ghost_gallery_20261016_110000", outcome=None)
-    make_capture(tmp_path, "notes_20261016_150000")                                             # (not a capture's name)
-    (tmp_path / "hauntlet_2_20261016_090000").write_text("a file, not a folder")
-    first, second = bot_lib.captures_text(str(tmp_path)).splitlines()
-    assert first == "ghost_gallery_20261016_110000: not finished, 1 zips, 1 MB"
-    assert second == "hauntlet_2_20261016_100000_9330cc_room23: finished (the game over screen), 2 zips, 2 MB"
-    assert bot_lib.captures_text(str(tmp_path / "none")) == "No minigame captures on this PC."
-
-
 @pytest.fixture
 def debug_folders(tmp_path, monkeypatch):
     """The folders /pull takes from, in tmp_path, with a capture, failures, logs and a game config (which must never be reachable)."""
@@ -491,6 +483,20 @@ def test_what_can_be_pulled_is_what_is_in_the_folder_newest_first_and_nothing_el
                          ("failures", ".hidden"), ("failures", "nope"), ("logs", None), ("debug", None), (".config", None), ("../x", None)):
         with pytest.raises(ValueError):
             bot_lib.resolve_pull(source, item)
+
+
+def test_a_capture_that_is_still_being_zipped_is_not_pulled_its_frames_are_not_its_zips(debug_folders):
+    root = debug_folders / "captures"
+    make_capture(root, "capture_20261027_124037", zips=())
+    import shutil
+    shutil.rmtree(root / "capture_20261027_124037" / "zips")
+    (root / "capture_20261027_124037" / "zips.partial").mkdir()                                # (stopped; its zips are being made)
+    path, name = bot_lib.resolve_pull("captures", None)
+    with pytest.raises(ValueError, match="still being zipped"):
+        bot_lib.pull_files(path, name)
+    make_capture(root, "capture_20261027_130000", zips=("a.zip",))                             # (everything: the one that is whole is taken, the other left)
+    path, name = bot_lib.resolve_pull("captures", bot_lib.PULL_ALL)
+    assert [rel for _, rel in bot_lib.pull_files(path, name)] == [os.path.join("captures", "capture_20261027_130000", "zips", "a.zip")]
 
 
 def test_a_capture_is_pulled_as_its_zips_alone_not_its_frames_and_other_things_as_all_their_files(debug_folders):
@@ -837,10 +843,31 @@ def test_every_slash_command_has_a_name_and_descriptions_discord_accepts():
     source = (pathlib.Path(__file__).parent.parent / "bot" / "discord_bot.py").read_text(encoding="utf-8")
     commands = re.findall(r'@command\("([^"]+)", "((?:[^"\\]|\\.)*)"\)', source)
     names = {name for name, _ in commands}
-    assert {"status", "screenshot", "rview", "log", "report", "results", "captures", "pull", "start", "loop", "stop", "exit", "rejoin", "setup", "refresh_debug",
+    assert {"status", "screenshot", "rview", "log", "report", "results", "pull", "onedrive", "start", "loop", "stop", "exit", "rejoin", "setup", "refresh_debug",
             "trade_hub", "leave_trade_hub", "inventory", "recenter", "sloop", "blank", "update", "restart", "rollback", "need", "option", "options"} <= names
     for name, description in commands:
         assert re.fullmatch(r"[a-z0-9_-]{1,32}", name) and 1 <= len(description) <= 100, name
     for described in re.findall(r'@app_commands\.describe\((.*)\)', source):
         for value in re.findall(r'="((?:[^"\\]|\\.)*)"', described):
             assert 1 <= len(value) <= 100, value
+
+
+def test_the_onedrive_report_says_where_a_copy_is_and_whether_onedrive_can_see_it(tmp_path):
+    synced = tmp_path / "OneDrive"
+    target = synced / "AdoptMeMacro"
+    (target / "captures").mkdir(parents=True)
+    (target / "captures" / "a.zip").write_bytes(b"x" * 2048)
+    local = tmp_path / "local" / "Microsoft" / "OneDrive" / "logs" / "Personal"
+    local.mkdir(parents=True)
+    (local / "x.odl").write_text("log")
+    env = {"OneDrive": str(synced), "LOCALAPPDATA": str(tmp_path / "local")}
+    text = bot_lib.onedrive_report(str(target), [(1, r"C:\Program Files\Microsoft OneDrive\OneDrive.exe /background"), (2, "python bot.py")], env, [("Personal", str(synced))], os.path.getmtime(target / "captures" / "a.zip") + 90)
+    assert "write test: a small file was written, read back and removed - ok" in text and not [f for f in os.listdir(target) if f.startswith("_onedrive_probe")]
+    assert "onedrive_dir is inside: OneDrive (" in text and "OneDrive app: running (1 process)" in text and "its log for Personal: last written" in text
+    assert "1 file(s)" in text and "captures" in text and "a.zip - 0 MB, 2 min old, plain" in text.replace(os.sep, "/").replace("captures/", "")
+    outside = bot_lib.onedrive_report(str(target), [], {"OneDrive": str(tmp_path / "elsewhere")}, [], 0)
+    assert "NONE of them - OneDrive does not sync this folder" in outside and "OneDrive app: NOT running" in outside
+    assert "cannot be listed" in bot_lib.onedrive_report(str(target), None, {}, [], 0) and "none found" in bot_lib.onedrive_report(str(target), None, {}, [], 0)
+    assert "not a folder on this PC" in bot_lib.onedrive_report(str(tmp_path / "none"), [], {}, [], 0) and "(not set)" in bot_lib.onedrive_report("", [], {}, [], 0)
+    assert bot_lib.attribute_text(0x20) == "plain" and bot_lib.attribute_text(0x400000 | 0x1) == "read-only, cloud placeholder (recall on data access)"
+    assert bot_lib.same_place(str(synced / "a"), str(synced)) and not bot_lib.same_place(str(tmp_path / "OneDrive2"), str(synced))

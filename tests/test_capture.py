@@ -254,6 +254,7 @@ def test_a_capture_is_split_into_zips_under_the_limit_with_every_file_once(macro
     flat = [name for names in members for name in names]
     assert sorted(flat) == sorted([f for f in os.listdir(folder) if f != "zips"])           # everything, none twice
     assert {"events.jsonl", "info.json"} <= set(members[0])                                    # the small files are in the first part
+    assert not os.path.exists(os.path.join(folder, "zips.partial"))                            # (they were made there, and moved when all were)
     frames = [n for names in members for n in names if n.startswith("frame_")]
     assert frames == sorted(frames)                                                            # in time order across the parts
     with zipfile.ZipFile(paths[1]) as z:

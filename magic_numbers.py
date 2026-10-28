@@ -341,7 +341,7 @@ MINIGAME_CAPTURE = True
 RUN_CAPTURES_DIR = os.path.join(DEBUG_DIR, "minigame_captures")
 RUN_CAPTURE_ZIPS = 5
 # What the Discord bot's /pull can copy into OneDrive: the folders of debug/ (not the game config, which holds the private server link).
-PULL_SOURCES = {"failures": FAILURE_DIR, "logs": LOGS_DIR, "runs": RUNS_DIR, "minigame_captures": RUN_CAPTURES_DIR, "captures": CAPTURES_DIR, "recordings": RECORDINGS_DIR}
+PULL_SOURCES = {"failures": FAILURE_DIR, "logs": LOGS_DIR, "runs": RUNS_DIR, "minigame_captures": RUN_CAPTURES_DIR, "captures": CAPTURES_DIR, "recordings": RECORDINGS_DIR, "screenshots": SCREENSHOTS_DIR}
 RUN_CAPTURES_BEST = 2
 RUN_CAPTURES_WORST = 2
 RUN_CAPTURES_FAILED = 5                   # the latest this many runs that failed (did not finish, or had a failure logged) are kept too

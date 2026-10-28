@@ -446,9 +446,9 @@ def make_capture(root, name, outcome="finished (the game over screen)", zips=("c
 def debug_folders(tmp_path, monkeypatch):
     """The folders /pull takes from, in tmp_path, with a capture, failures, logs and a game config (which must never be reachable)."""
     root = tmp_path / "debug"
-    for name in ("failures", "logs", "runs", "minigame_captures", "captures", "recordings"):
+    for name in ("failures", "logs", "runs", "minigame_captures", "captures", "recordings", "screenshots"):
         (root / name).mkdir(parents=True)
-    monkeypatch.setattr(bot_lib.cfg, "PULL_SOURCES", {name: str(root / name) for name in ("failures", "logs", "runs", "minigame_captures", "captures", "recordings")})
+    monkeypatch.setattr(bot_lib.cfg, "PULL_SOURCES", {name: str(root / name) for name in ("failures", "logs", "runs", "minigame_captures", "captures", "recordings", "screenshots")})
     (root / ".config").write_text('{"private_server_link": "secret"}')
     return root
 
@@ -497,6 +497,14 @@ def test_a_capture_that_is_still_being_zipped_is_not_pulled_its_frames_are_not_i
     make_capture(root, "capture_20261027_130000", zips=("a.zip",))                             # (everything: the one that is whole is taken, the other left)
     path, name = bot_lib.resolve_pull("captures", bot_lib.PULL_ALL)
     assert [rel for _, rel in bot_lib.pull_files(path, name)] == [os.path.join("captures", "capture_20261027_130000", "zips", "a.zip")]
+
+
+def test_a_screenshot_is_pulled_as_a_file_the_newest_first(debug_folders):
+    touch(debug_folders / "screenshots" / "screenshot_20261028_090000.png", 100)
+    touch(debug_folders / "screenshots" / "screenshot_20261028_091500.png", 10)
+    assert bot_lib.pull_entries("screenshots") == ["screenshot_20261028_091500.png", "screenshot_20261028_090000.png"]
+    path, name = bot_lib.resolve_pull("screenshots", None)
+    assert bot_lib.pull_files(path, name) == [(path, "screenshot_20261028_091500.png")]
 
 
 def test_a_capture_is_pulled_as_its_zips_alone_not_its_frames_and_other_things_as_all_their_files(debug_folders):

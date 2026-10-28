@@ -2014,17 +2014,18 @@ def select_listing(number: int) -> bool:
     return listing_shown(grab_screen()) == number
 
 def visible_offers(img: Image) -> list[int]:
-    """The y (top to bottom) of the middle of the ACCEPT button of each offer row that is whole in the list: the buttons are the green blobs of TRADES_ACCEPT_BOX of the size of
-    one (TRADES_ACCEPT_SIZE), and a row is whole when its box (TRADES_ROW_BOX) is inside the list's top and bottom."""
-    left, top, right, bottom = cfg.TRADES_ACCEPT_BOX
+    """The y (top to bottom) of the middle of the ACCEPT button of each offer row that is whole in the list. The buttons looked for are the red DECLINE ones (the blobs of TRADES_BUTTON_BOX
+    of the size of one, TRADES_BUTTON_SIZE), TRADES_DECLINE_DY below: an "Exact Match" offer's row is green, and so is its ACCEPT button, which is lost in it. A row is whole when its box
+    (TRADES_ROW_BOX) is inside the list's top and bottom."""
+    left, top, right, bottom = cfg.TRADES_BUTTON_BOX
     hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, cfg.TRADES_ACCEPT_HSV[0], cfg.TRADES_ACCEPT_HSV[1])
+    mask = cv2.inRange(hsv, *cfg.TRADES_BUTTON_HSV[0]) | cv2.inRange(hsv, *cfg.TRADES_BUTTON_HSV[1])
     count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    (min_w, max_w), (min_h, max_h) = cfg.TRADES_ACCEPT_SIZE
+    (min_w, max_w), (min_h, max_h) = cfg.TRADES_BUTTON_SIZE
     found = []
     for i in range(1, count):
         if min_w <= stats[i, cv2.CC_STAT_WIDTH] <= max_w and min_h <= stats[i, cv2.CC_STAT_HEIGHT] <= max_h:
-            y = top + int(centres[i][1])
+            y = top + int(centres[i][1]) - cfg.TRADES_DECLINE_DY
             if y + cfg.TRADES_ROW_BOX[1] >= top and y + cfg.TRADES_ROW_BOX[3] <= bottom:
                 found.append(y)
     return sorted(found)

@@ -115,6 +115,14 @@ def test_the_rows_whole_in_the_list_are_found_by_their_accept_buttons_and_a_row_
     assert macro.row_is(offers, 453, first[:-1]) is False                                    # (a picture of another size is no match)
 
 
+def test_an_exact_match_offer_has_a_green_row_and_is_found_all_the_same(macro):
+    exact = frame("offers_exact_match")                                                      # (the first row is green, ACCEPT with it; found by its red DECLINE)
+    assert macro.visible_offers(exact) == pytest.approx([453, 589], abs=3)
+    assert macro.trade_screen(exact) == "offers"
+    first = macro.offer_row(exact, macro.visible_offers(exact)[0])
+    assert macro.row_is(exact, macro.visible_offers(exact)[0], first) and not macro.row_is(exact, macro.visible_offers(exact)[1], first)
+
+
 def test_the_phone_is_opened_from_the_world_equipping_it_only_when_it_is_not_in_the_hotbar_and_from_a_screen_further_in_it_is_gone_back_from(macro, game):
     cfg = macro.cfg
     assert macro.open_trade_listings() is True and game.state == "listing_1" and game.equipped == 0

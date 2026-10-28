@@ -459,10 +459,6 @@ def heartbeat_due(last: Optional[float], hours: float, now: float) -> bool:
     return hours > 0 and (last is None or now - last >= hours * 3600)
 
 
-def captures_dir() -> str:
-    return cfg.RUN_CAPTURES_DIR
-
-
 def run_charts(runs_dir: str = "") -> list[str]:
     """The run charts (RUNS_DIR/run<N>.png) there are now, oldest first."""
     return sorted(glob.glob(os.path.join(runs_dir or cfg.RUNS_DIR, "run*.png")), key=os.path.getmtime)
@@ -517,29 +513,7 @@ def save_state(path: str, state: BotState) -> None:
     os.replace(temp, path)
 
 
-# --- captures, and pulling things out of the debug folder into OneDrive (/captures, /pull) ---
-
-CAPTURE_NAME = re.compile(r"^(hauntlet_2|ghost_gallery)_(\d{8}_\d{6})")
-
-
-def capture_folders(captures_dir: str) -> list[str]:
-    """The capture folders in `captures_dir` (named like a capture's), oldest first - by the time in the name, not the minigame's."""
-    named = [(match[2], folder) for folder in glob.glob(os.path.join(captures_dir, "*"))
-             if (match := CAPTURE_NAME.match(os.path.basename(folder))) and os.path.isdir(folder)]
-    return [folder for _, folder in sorted(named)]
-
-
-def captures_text(captures_dir: str, limit: int = 10) -> str:
-    """The /captures message: the newest `limit` minigame captures on this PC, each with its outcome, zip count and size."""
-    rows = []
-    for folder in reversed(capture_folders(captures_dir)):
-        info = read_json(os.path.join(folder, "info.json")) or {}
-        zips = glob.glob(os.path.join(folder, "zips", "*.zip"))
-        rows.append(f"{os.path.basename(folder)}: {info.get('outcome', 'not finished')}, {len(zips)} zips, {sum(os.path.getsize(z) for z in zips) / 1048576:.0f} MB")
-        if len(rows) == limit:
-            break
-    return "\n".join(rows) if rows else "No minigame captures on this PC."
-
+# --- pulling things out of the debug folder into OneDrive (/pull) ---
 
 PULL_ALL = "*"           # the item that means everything in the folder
 

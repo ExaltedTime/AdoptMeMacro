@@ -793,7 +793,7 @@ def test_the_session_ends_even_when_the_macro_never_reports(monkeypatch, tmp_pat
 
 def test_the_macros_answer_to_capture_is_said_in_words():
     assert "/capture again to end it" in discord_bot.capture_text("started")
-    assert "stopped" in discord_bot.capture_text("stopped") and "/captures" in discord_bot.capture_text("stopped")
+    assert "stopped" in discord_bot.capture_text("stopped") and "/pull captures" in discord_bot.capture_text("stopped")
     assert discord_bot.capture_text("failed: no space left") == "The capture did not work (no space left) - see /log."
     assert "has not said" in discord_bot.capture_text(None)
 

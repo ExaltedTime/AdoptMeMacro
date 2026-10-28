@@ -442,17 +442,6 @@ def make_capture(root, name, outcome="finished (the game over screen)", zips=("c
     return folder
 
 
-def test_the_captures_message_lists_the_newest_first_by_the_time_in_the_name(tmp_path):
-    make_capture(tmp_path, "hauntlet_2_20261016_100000_9330cc_room23", zips=("a_part01.zip", "a_part02.zip"))
-    make_capture(tmp_path, "ghost_gallery_20261016_110000", outcome=None)
-    make_capture(tmp_path, "notes_20261016_150000")                                             # (not a capture's name)
-    (tmp_path / "hauntlet_2_20261016_090000").write_text("a file, not a folder")
-    first, second = bot_lib.captures_text(str(tmp_path)).splitlines()
-    assert first == "ghost_gallery_20261016_110000: not finished, 1 zips, 1 MB"
-    assert second == "hauntlet_2_20261016_100000_9330cc_room23: finished (the game over screen), 2 zips, 2 MB"
-    assert bot_lib.captures_text(str(tmp_path / "none")) == "No minigame captures on this PC."
-
-
 @pytest.fixture
 def debug_folders(tmp_path, monkeypatch):
     """The folders /pull takes from, in tmp_path, with a capture, failures, logs and a game config (which must never be reachable)."""
@@ -840,7 +829,7 @@ def test_every_slash_command_has_a_name_and_descriptions_discord_accepts():
     source = (pathlib.Path(__file__).parent.parent / "bot" / "discord_bot.py").read_text(encoding="utf-8")
     commands = re.findall(r'@command\("([^"]+)", "((?:[^"\\]|\\.)*)"\)', source)
     names = {name for name, _ in commands}
-    assert {"status", "screenshot", "rview", "log", "report", "results", "captures", "pull", "start", "loop", "stop", "exit", "rejoin", "setup", "refresh_debug",
+    assert {"status", "screenshot", "rview", "log", "report", "results", "pull", "start", "loop", "stop", "exit", "rejoin", "setup", "refresh_debug",
             "trade_hub", "leave_trade_hub", "inventory", "recenter", "sloop", "blank", "update", "restart", "rollback", "need", "option", "options"} <= names
     for name, description in commands:
         assert re.fullmatch(r"[a-z0-9_-]{1,32}", name) and 1 <= len(description) <= 100, name

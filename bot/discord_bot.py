@@ -1,4 +1,4 @@
-"""The Discord bot: ask the macro's PC how it is doing from anywhere, and control it: /status, /screenshot, /log, /report, /results, /captures, /pull, the
+"""The Discord bot: ask the macro's PC how it is doing from anywhere, and control it: /status, /screenshot, /log, /report, /results, /pull, the
 commands that start, stop and change the macro, and /update and /rollback. It runs on the PC the macro runs on, in the same logged-in desktop session (it reads the macro's files and grabs its screen),
 and connects out to Discord, so no port needs opening. Only one user, in one channel, is obeyed (bot_config.json).
 
@@ -302,7 +302,7 @@ def capture_text(ended: Optional[str]) -> str:
     if ended == "started":
         return "A capture is running: do what you want to test (/trades, /setup ...), then /capture again to end it."
     if ended == "stopped":
-        return "The capture is stopped and being zipped: /captures lists it, /pull takes it."
+        return "The capture is stopped and being zipped: /pull captures takes it."
     if ended == "running":
         return "A capture is running already."
     if ended == "none running":
@@ -1151,11 +1151,6 @@ def build(config: bot_lib.Config) -> discord.Client:
         source = getattr(interaction.namespace, "folder", None)
         names = [bot_lib.PULL_ALL, *bot_lib.pull_entries(source or "")]
         return [app_commands.Choice(name=("* (everything in the folder)" if n == bot_lib.PULL_ALL else n)[:100], value=n) for n in names if current.lower() in n.lower()][:25]
-
-    @command("captures", "The newest minigame captures on the PC (/pull minigame_captures copies one to OneDrive)")
-    async def captures(interaction: discord.Interaction) -> None:
-        await interaction.response.defer(thinking=True)
-        await say(interaction, f"```\n{bot_lib.captures_text(bot_lib.captures_dir())}\n```")
 
     background: list[asyncio.Task] = []                                # (kept: a task nobody holds can be collected while it runs)
 

@@ -1,4 +1,4 @@
-"""The Discord bot: ask the macro's PC how it is doing from anywhere, and control it: /status, /screenshot, /log, /report, /results, /pull, /onedrive, the
+"""The Discord bot: ask the macro's PC how it is doing from anywhere, and control it: /status, /screenshot, /log, /report, /results, /pull, the
 commands that start, stop and change the macro, and /update and /rollback. It runs on the PC the macro runs on, in the same logged-in desktop session (it reads the macro's files and grabs its screen),
 and connects out to Discord, so no port needs opening. Only one user, in one channel, is obeyed (bot_config.json).
 
@@ -100,23 +100,6 @@ def list_processes() -> Optional[list[tuple[int, str]]]:
         else:
             command = ["pgrep", "-af", "."]
         return bot_lib.parse_process_lines(subprocess.run(command, capture_output=True, text=True, timeout=15).stdout)
-    except (OSError, subprocess.SubprocessError):
-        return None
-
-
-def onedrive_running() -> Optional[bool]:
-    """Whether the OneDrive app (a process named OneDrive.exe) runs on this PC; None when that can't be found out. By the process's name: its command line is empty to a program that is not
-    allowed to read it, and a search of the command lines then found no OneDrive."""
-    try:
-        import psutil
-        return any((p.info["name"] or "").lower() == "onedrive.exe" for p in psutil.process_iter(["name"]))
-    except ImportError:
-        pass
-    try:
-        if os.name == "nt":
-            out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq OneDrive.exe", "/NH"], capture_output=True, text=True, timeout=15).stdout
-            return "onedrive.exe" in out.lower()
-        return None
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -1162,17 +1145,6 @@ def build(config: bot_lib.Config) -> discord.Client:
             await say(interaction, f"Nothing copied: {error}")
             return
         await say(interaction, f"Copied `{name}` ({len(files)} file{'s' if len(files) != 1 else ''}, {bot_lib.size_text(megabytes)}) to OneDrive, in `{os.path.join(config.onedrive_dir, folder.value)}` on the PC (checked: every file is there at its size). The OneDrive app uploads it from there - if it does not, look at the app's own status (paused, a full OneDrive, or this folder not synced).")
-
-    @command("onedrive", "Why a /pull is not uploaded: onedrive_dir, the OneDrive app and the files copied, told from the PC")
-    async def onedrive(interaction: discord.Interaction) -> None:
-        await interaction.response.defer(thinking=True)
-        running = await asyncio.to_thread(onedrive_running)
-        accounts = await asyncio.to_thread(bot_lib.onedrive_accounts)
-        text = await asyncio.to_thread(bot_lib.onedrive_report, config.onedrive_dir, running, dict(os.environ), accounts, time.time())
-        if bot_lib.fits_a_message(text):
-            await say(interaction, f"```\n{text}\n```")
-        else:
-            await say(interaction, file=discord.File(io.BytesIO(text.encode("utf-8")), "onedrive.txt"))
 
     @pull.autocomplete("item")
     async def pull_items(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:

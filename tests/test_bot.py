@@ -854,33 +854,10 @@ def test_every_slash_command_has_a_name_and_descriptions_discord_accepts():
     source = (pathlib.Path(__file__).parent.parent / "bot" / "discord_bot.py").read_text(encoding="utf-8")
     commands = re.findall(r'@command\("([^"]+)", "((?:[^"\\]|\\.)*)"\)', source)
     names = {name for name, _ in commands}
-    assert {"status", "screenshot", "rview", "log", "report", "results", "pull", "onedrive", "start", "loop", "stop", "exit", "rejoin", "setup", "refresh_debug",
+    assert {"status", "screenshot", "rview", "log", "report", "results", "pull", "start", "loop", "stop", "exit", "rejoin", "setup", "refresh_debug",
             "trade_hub", "leave_trade_hub", "inventory", "recenter", "sloop", "blank", "update", "restart", "rollback", "need", "option", "options"} <= names
     for name, description in commands:
         assert re.fullmatch(r"[a-z0-9_-]{1,32}", name) and 1 <= len(description) <= 100, name
     for described in re.findall(r'@app_commands\.describe\((.*)\)', source):
         for value in re.findall(r'="((?:[^"\\]|\\.)*)"', described):
             assert 1 <= len(value) <= 100, value
-
-
-def test_the_onedrive_report_says_where_a_copy_is_and_whether_onedrive_can_see_it(tmp_path):
-    synced = tmp_path / "OneDrive"
-    target = synced / "AdoptMeMacro"
-    (target / "captures").mkdir(parents=True)
-    (target / "captures" / "a.zip").write_bytes(b"x" * 2048)
-    local = tmp_path / "local" / "Microsoft" / "OneDrive" / "logs" / "Personal"
-    local.mkdir(parents=True)
-    (local / "x.odl").write_text("log")
-    env = {"OneDrive": str(synced), "LOCALAPPDATA": str(tmp_path / "local")}
-    text = bot_lib.onedrive_report(str(target), True, env, [("Personal", str(synced))], os.path.getmtime(target / "captures" / "a.zip") + 90)
-    assert "write test: a small file was written, read back and removed - ok" in text and not [f for f in os.listdir(target) if f.startswith("_onedrive_probe")]
-    assert "onedrive_dir is inside: OneDrive (" in text and "OneDrive app: running" in text and "its log for Personal: last written" in text
-    assert "1 file(s)" in text and "captures" in text and "a.zip - 0 MB, 2 min old, plain" in text.replace(os.sep, "/").replace("captures/", "")
-    outside = bot_lib.onedrive_report(str(target), False, {"OneDrive": str(tmp_path / "elsewhere")}, [], 0)
-    assert "NONE of them - OneDrive does not sync this folder" in outside and "OneDrive app: NOT running (no OneDrive.exe)" in outside
-    assert "cannot be listed" in bot_lib.onedrive_report(str(target), None, {}, [], 0) and "none found" in bot_lib.onedrive_report(str(target), None, {}, [], 0)
-    assert "not a folder on this PC" in bot_lib.onedrive_report(str(tmp_path / "none"), False, {}, [], 0) and "(not set)" in bot_lib.onedrive_report("", False, {}, [], 0)
-    fresh = bot_lib.onedrive_report(str(target), False, env, [], os.path.getmtime(local / "x.odl") + 30)           # (a log written 30 s ago: the app runs, whatever the process list said)
-    assert "OneDrive app: NOT running" in fresh and "means OneDrive is running" in fresh
-    assert bot_lib.attribute_text(0x20) == "plain" and bot_lib.attribute_text(0x400000 | 0x1) == "read-only, cloud placeholder (recall on data access)"
-    assert bot_lib.same_place(str(synced / "a"), str(synced)) and not bot_lib.same_place(str(tmp_path / "OneDrive2"), str(synced))

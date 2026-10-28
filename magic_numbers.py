@@ -868,7 +868,6 @@ TRADES_SAME_LEVEL = 1.0                                         # two pictures o
 TRADES_MAX_STEPS = 60                                           # steps of one listing's tour at the most
 TRADES_SCREEN_WAIT = 4.0                                        # seconds a screen of the phone is waited for after the click that opens it
 TRADES_POLL = 0.25
-ONEDRIVE_LOG_FRESH = 300.0                                      # /onedrive: a OneDrive log written within this many seconds shows the app is running
 BOT_TRADES_WAIT = 300.0                                         # seconds the bot waits, after /trades or /decline, for the macro to end (TRADES_DONE_PATH, TRADES_DECLINE_DONE_PATH)
 BOT_TRADES_POLL = 1.0
 INVENTORY_DIR = os.path.join(DEBUG_DIR, "inventory")            # the pictures (001.png, 002.png ...), emptied at the start of each tour

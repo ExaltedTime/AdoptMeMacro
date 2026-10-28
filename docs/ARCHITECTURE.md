@@ -1278,7 +1278,7 @@ look at a few frames in a row.
 at least `HAUNTLET_TIMER_MIN_WHITE` white pixels in `HAUNTLET_TIMER_BOX` when it is, none when it isn't - it is hidden in a room's first moments and
 while the player passes through a door, which is also when the screen still shows the *last* room's doors. `find_hauntlet_doors()`
 finds the three doors of a room from the TVs above them: each TV shows its number (the players standing before that door)
-in a light cyan (`HAUNTLET_TV_GLOW`) that no other pixel of the game has in that quantity; `find_door_tvs()` takes the pieces
+in a light cyan (`HAUNTLET_TV_GLOW`) that no other pixel of the game has in that quantity (in a red room - room 12, three failures "no doors found" - the digits are 140-240 in red and 228-255 in green, so a range that stopped at 225 and 248 saw none of the three: `tests/hauntlet_2/doors/red_room_12_*`; the wider range finds the TVs of two more rooms in the 113 frames of a whole run and loses none, and the rule for the outer two with the middle one hidden takes any two blobs, not only neighbours, as stray glows now sit between); `find_door_tvs()` takes the pieces
 of `HAUNTLET_TV_AREA` px (except those in `HAUNTLET_TV_HUD_BOX`, where the room panel and timer glow) and wants three of them in a row (the same height within
 `HAUNTLET_TV_ROW_TOLERANCE`, evenly spaced within `HAUNTLET_TV_SPACING_TOLERANCE`), else `[]` - a fork's hall has no TVs, and neither do
 the close-ups. **With the camera close** - which is how it looks once the macro stands still in a room - the middle TV is above the top of

@@ -65,9 +65,17 @@ def test_the_three_doors_of_a_room_are_found_with_their_kinds(macro):
     kinds = {}
     for name in door_fixtures():
         doors = macro.find_hauntlet_doors(frame(macro, name))
-        assert len(doors) == 3 and doors[0].x < doors[1].x < doors[2].x and len({door.y for door in doors}) == 1
+        assert len(doors) == 3 and doors[0].x < doors[1].x < doors[2].x and max(door.y for door in doors) - min(door.y for door in doors) <= 3
         kinds[name] = [door.kind for door in doors]
     assert len(kinds) >= 7 and kinds == door_fixtures()                                      # (a mismatch names its fixture)
+
+
+def test_the_tvs_of_a_red_room_are_found_though_their_digits_are_paler_cyan_than_in_other_rooms(macro):
+    for name, xs in (("a", [266, 627, 1002]), ("b", [408, 815, 1239]), ("c", [287, 652, 1031])):                # (room 12 three times: "no doors found")
+        tvs = macro.find_door_tvs(frame(macro, f"red_room_12_digits_off_the_glow_range_{name}"))
+        assert [x for x, _ in tvs] == pytest.approx(xs, abs=6) and max(y for _, y in tvs) - min(y for _, y in tvs) <= 6, name
+    for name in ("room_8_camera_along_the_wall_no_tvs", "room_11_camera_at_a_corner_no_tvs"):                 # (no TVs in view at all: the camera has turned)
+        assert macro.find_door_tvs(frame(macro, name)) == [], name
 
 
 def test_a_forks_hall_and_a_blank_screen_have_no_doors(macro):

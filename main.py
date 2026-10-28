@@ -5606,7 +5606,7 @@ def find_door_tvs(img: Image) -> list[tuple[int, int]]:
                 and all(cfg.HAUNTLET_TV_SPACING[0] <= gap <= cfg.HAUNTLET_TV_SPACING[1] for gap in gaps)
                 and abs(gaps[0] - gaps[1]) <= cfg.HAUNTLET_TV_SPACING_TOLERANCE * max(gaps)):
             return [(int(x), int(y)) for x, y in (first, middle, last)]
-    for (first, last), size in zip(zip(found, found[1:]), (((a + b) / 2) ** 0.5 for (_, _, a), (_, _, b) in zip(blobs, blobs[1:]))):
+    for (first, last), size in ((((a[0], a[1]), (b[0], b[1])), ((a[2] + b[2]) / 2) ** 0.5) for a, b in itertools.combinations(blobs, 2)):       # (any two, not only neighbours: stray glows can sit between the outer two)
         far_apart = last[0] - first[0] >= cfg.HAUNTLET_TV_PAIR_RATIO * size       # twice the neighbours' gap for the TVs' size
         if (abs(first[1] - last[1]) <= cfg.HAUNTLET_TV_ROW_TOLERANCE
                 and cfg.HAUNTLET_TV_PAIR_GAP[0] <= last[0] - first[0] <= cfg.HAUNTLET_TV_PAIR_GAP[1]

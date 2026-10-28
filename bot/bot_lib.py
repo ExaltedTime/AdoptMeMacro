@@ -606,6 +606,8 @@ def copy_pull(files: list[tuple[str, str]], onedrive_dir: str, source: str, max_
             shutil.copy2(long_path(src), target)
             if not existed:
                 made.append(target)
+            if os.path.getsize(target) != os.path.getsize(long_path(src)):                    # (a copy that is not the file: said, not reported as done)
+                raise OSError(f"{relative} was copied as {os.path.getsize(target)} bytes, not {os.path.getsize(long_path(src))}")
     except OSError:
         for path in made:
             with contextlib.suppress(OSError):

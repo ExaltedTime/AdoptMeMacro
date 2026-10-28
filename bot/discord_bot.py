@@ -1144,7 +1144,7 @@ def build(config: bot_lib.Config) -> discord.Client:
         except (ValueError, OSError) as error:
             await say(interaction, f"Nothing copied: {error}")
             return
-        await say(interaction, f"Copied `{name}` ({len(files)} file{'s' if len(files) != 1 else ''}, {bot_lib.size_text(megabytes)}) to OneDrive, in `{folder.value}/`. The OneDrive app on the PC uploads it from there.")
+        await say(interaction, f"Copied `{name}` ({len(files)} file{'s' if len(files) != 1 else ''}, {bot_lib.size_text(megabytes)}) to OneDrive, in `{os.path.join(config.onedrive_dir, folder.value)}` on the PC (checked: every file is there at its size). The OneDrive app uploads it from there - if it does not, look at the app's own status (paused, a full OneDrive, or this folder not synced).")
 
     @pull.autocomplete("item")
     async def pull_items(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:

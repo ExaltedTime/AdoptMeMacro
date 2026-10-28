@@ -600,6 +600,7 @@ def copy_pull(files: list[tuple[str, str]], onedrive_dir: str, source: str, max_
     made: list[str] = []                                  # what this copy made, to take away again if it fails half-way
     try:
         for src, relative in files:
+            relative = relative.removeprefix(source + os.sep)                               # (a whole folder is named after its source: not minigame_captures\minigame_captures\...)
             target = long_path(os.path.join(onedrive_dir, source, relative))
             os.makedirs(os.path.dirname(target), exist_ok=True)
             existed = os.path.exists(target)

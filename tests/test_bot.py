@@ -524,6 +524,9 @@ def test_pulled_files_are_copied_into_a_folder_of_the_source_and_a_too_big_pull_
     assert bot_lib.copy_pull(files, str(onedrive), "minigame_captures", 100) == pytest.approx(2, abs=0.01)
     assert sorted(os.listdir(onedrive / "minigame_captures" / name / "zips")) == ["p1.zip", "p2.zip"] and (debug_folders / "minigame_captures" / name / "zips" / "p1.zip").exists()
     bot_lib.copy_pull(files, str(onedrive), "minigame_captures", 100)                            # (again: replaces, no error)
+    path, name = bot_lib.resolve_pull("minigame_captures", bot_lib.PULL_ALL)                       # (the whole folder: its own name is not in the path twice)
+    bot_lib.copy_pull(bot_lib.pull_files(path, name), str(onedrive / "all"), "minigame_captures", 100)
+    assert sorted(os.listdir(onedrive / "all" / "minigame_captures")) == [bot_lib_name for bot_lib_name in os.listdir(debug_folders / "minigame_captures")]
     other = tmp_path / "other"
     other.mkdir()
     with pytest.raises(ValueError, match="more than the 1 MB"):

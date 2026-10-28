@@ -446,9 +446,9 @@ def make_capture(root, name, outcome="finished (the game over screen)", zips=("c
 def debug_folders(tmp_path, monkeypatch):
     """The folders /pull takes from, in tmp_path, with a capture, failures, logs and a game config (which must never be reachable)."""
     root = tmp_path / "debug"
-    for name in ("failures", "logs", "runs", "minigame_captures", "captures", "recordings"):
+    for name in ("failures", "logs", "runs", "minigame_captures", "captures", "recordings", "screenshots"):
         (root / name).mkdir(parents=True)
-    monkeypatch.setattr(bot_lib.cfg, "PULL_SOURCES", {name: str(root / name) for name in ("failures", "logs", "runs", "minigame_captures", "captures", "recordings")})
+    monkeypatch.setattr(bot_lib.cfg, "PULL_SOURCES", {name: str(root / name) for name in ("failures", "logs", "runs", "minigame_captures", "captures", "recordings", "screenshots")})
     (root / ".config").write_text('{"private_server_link": "secret"}')
     return root
 
@@ -499,6 +499,14 @@ def test_a_capture_that_is_still_being_zipped_is_not_pulled_its_frames_are_not_i
     assert [rel for _, rel in bot_lib.pull_files(path, name)] == [os.path.join("captures", "capture_20261027_130000", "zips", "a.zip")]
 
 
+def test_a_screenshot_is_pulled_as_a_file_the_newest_first(debug_folders):
+    touch(debug_folders / "screenshots" / "screenshot_20261028_090000.png", 100)
+    touch(debug_folders / "screenshots" / "screenshot_20261028_091500.png", 10)
+    assert bot_lib.pull_entries("screenshots") == ["screenshot_20261028_091500.png", "screenshot_20261028_090000.png"]
+    path, name = bot_lib.resolve_pull("screenshots", None)
+    assert bot_lib.pull_files(path, name) == [(path, "screenshot_20261028_091500.png")]
+
+
 def test_a_capture_is_pulled_as_its_zips_alone_not_its_frames_and_other_things_as_all_their_files(debug_folders):
     make_capture(debug_folders / "minigame_captures", "hauntlet_2_20261016_100000_9330cc_room23", zips=("p1.zip", "p2.zip"))
     path, name = bot_lib.resolve_pull("minigame_captures", None)
@@ -524,6 +532,9 @@ def test_pulled_files_are_copied_into_a_folder_of_the_source_and_a_too_big_pull_
     assert bot_lib.copy_pull(files, str(onedrive), "minigame_captures", 100) == pytest.approx(2, abs=0.01)
     assert sorted(os.listdir(onedrive / "minigame_captures" / name / "zips")) == ["p1.zip", "p2.zip"] and (debug_folders / "minigame_captures" / name / "zips" / "p1.zip").exists()
     bot_lib.copy_pull(files, str(onedrive), "minigame_captures", 100)                            # (again: replaces, no error)
+    path, name = bot_lib.resolve_pull("minigame_captures", bot_lib.PULL_ALL)                       # (the whole folder: its own name is not in the path twice)
+    bot_lib.copy_pull(bot_lib.pull_files(path, name), str(onedrive / "all"), "minigame_captures", 100)
+    assert sorted(os.listdir(onedrive / "all" / "minigame_captures")) == [bot_lib_name for bot_lib_name in os.listdir(debug_folders / "minigame_captures")]
     other = tmp_path / "other"
     other.mkdir()
     with pytest.raises(ValueError, match="more than the 1 MB"):
@@ -843,31 +854,10 @@ def test_every_slash_command_has_a_name_and_descriptions_discord_accepts():
     source = (pathlib.Path(__file__).parent.parent / "bot" / "discord_bot.py").read_text(encoding="utf-8")
     commands = re.findall(r'@command\("([^"]+)", "((?:[^"\\]|\\.)*)"\)', source)
     names = {name for name, _ in commands}
-    assert {"status", "screenshot", "rview", "log", "report", "results", "pull", "onedrive", "start", "loop", "stop", "exit", "rejoin", "setup", "refresh_debug",
+    assert {"status", "screenshot", "rview", "log", "report", "results", "pull", "start", "loop", "stop", "exit", "rejoin", "setup", "refresh_debug",
             "trade_hub", "leave_trade_hub", "inventory", "recenter", "sloop", "blank", "update", "restart", "rollback", "need", "option", "options"} <= names
     for name, description in commands:
         assert re.fullmatch(r"[a-z0-9_-]{1,32}", name) and 1 <= len(description) <= 100, name
     for described in re.findall(r'@app_commands\.describe\((.*)\)', source):
         for value in re.findall(r'="((?:[^"\\]|\\.)*)"', described):
             assert 1 <= len(value) <= 100, value
-
-
-def test_the_onedrive_report_says_where_a_copy_is_and_whether_onedrive_can_see_it(tmp_path):
-    synced = tmp_path / "OneDrive"
-    target = synced / "AdoptMeMacro"
-    (target / "captures").mkdir(parents=True)
-    (target / "captures" / "a.zip").write_bytes(b"x" * 2048)
-    local = tmp_path / "local" / "Microsoft" / "OneDrive" / "logs" / "Personal"
-    local.mkdir(parents=True)
-    (local / "x.odl").write_text("log")
-    env = {"OneDrive": str(synced), "LOCALAPPDATA": str(tmp_path / "local")}
-    text = bot_lib.onedrive_report(str(target), [(1, r"C:\Program Files\Microsoft OneDrive\OneDrive.exe /background"), (2, "python bot.py")], env, [("Personal", str(synced))], os.path.getmtime(target / "captures" / "a.zip") + 90)
-    assert "write test: a small file was written, read back and removed - ok" in text and not [f for f in os.listdir(target) if f.startswith("_onedrive_probe")]
-    assert "onedrive_dir is inside: OneDrive (" in text and "OneDrive app: running (1 process)" in text and "its log for Personal: last written" in text
-    assert "1 file(s)" in text and "captures" in text and "a.zip - 0 MB, 2 min old, plain" in text.replace(os.sep, "/").replace("captures/", "")
-    outside = bot_lib.onedrive_report(str(target), [], {"OneDrive": str(tmp_path / "elsewhere")}, [], 0)
-    assert "NONE of them - OneDrive does not sync this folder" in outside and "OneDrive app: NOT running" in outside
-    assert "cannot be listed" in bot_lib.onedrive_report(str(target), None, {}, [], 0) and "none found" in bot_lib.onedrive_report(str(target), None, {}, [], 0)
-    assert "not a folder on this PC" in bot_lib.onedrive_report(str(tmp_path / "none"), [], {}, [], 0) and "(not set)" in bot_lib.onedrive_report("", [], {}, [], 0)
-    assert bot_lib.attribute_text(0x20) == "plain" and bot_lib.attribute_text(0x400000 | 0x1) == "read-only, cloud placeholder (recall on data access)"
-    assert bot_lib.same_place(str(synced / "a"), str(synced)) and not bot_lib.same_place(str(tmp_path / "OneDrive2"), str(synced))

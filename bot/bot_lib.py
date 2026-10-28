@@ -600,6 +600,7 @@ def copy_pull(files: list[tuple[str, str]], onedrive_dir: str, source: str, max_
     made: list[str] = []                                  # what this copy made, to take away again if it fails half-way
     try:
         for src, relative in files:
+            relative = relative.removeprefix(source + os.sep)                               # (a whole folder is named after its source: not minigame_captures\minigame_captures\...)
             target = long_path(os.path.join(onedrive_dir, source, relative))
             os.makedirs(os.path.dirname(target), exist_ok=True)
             existed = os.path.exists(target)
@@ -614,98 +615,6 @@ def copy_pull(files: list[tuple[str, str]], onedrive_dir: str, source: str, max_
                 os.remove(path)
         raise
     return total
-
-
-# --- /onedrive: why a copy into onedrive_dir is not uploaded, told from the PC without anyone at it ---
-
-ATTRIBUTE_FLAGS = ((0x1, "read-only"), (0x2, "hidden"), (0x4, "system"), (0x400, "reparse point"), (0x1000, "offline"), (0x40000, "cloud placeholder (recall on open)"),
-                   (0x400000, "cloud placeholder (recall on data access)"), (0x80000, "pinned: always keep"), (0x100000, "unpinned: online-only"))
-
-
-def attribute_text(attributes: int) -> str:
-    """The Windows file attributes of `attributes` (st_file_attributes) that say something about a synced file, in words."""
-    return ", ".join(name for flag, name in ATTRIBUTE_FLAGS if attributes & flag) or "plain"
-
-
-def onedrive_accounts() -> list[tuple[str, str]]:
-    """(account, its synced folder) of each OneDrive account in the registry (Windows; none elsewhere or when it cannot be read)."""
-    try:
-        import winreg
-    except ImportError:
-        return []
-    found = []
-    try:                                                        # (the attributes are Windows's: mypy on another system does not know them)
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\OneDrive\Accounts") as accounts:  # type: ignore[attr-defined]
-            for index in range(winreg.QueryInfoKey(accounts)[0]):  # type: ignore[attr-defined]
-                name = winreg.EnumKey(accounts, index)  # type: ignore[attr-defined]
-                with winreg.OpenKey(accounts, name) as account:  # type: ignore[attr-defined]
-                    with contextlib.suppress(OSError):
-                        found.append((name, str(winreg.QueryValueEx(account, "UserFolder")[0])))  # type: ignore[attr-defined]
-    except OSError:
-        pass
-    return found
-
-
-def same_place(path: str, root: str) -> bool:
-    """Whether `path` is `root` or inside it (the way Windows compares: whatever the case, whichever slashes)."""
-    path, root = os.path.normcase(os.path.abspath(path)), os.path.normcase(os.path.abspath(root))
-    return path == root or path.startswith(root.rstrip("\\/") + os.sep)
-
-
-def onedrive_report(folder: str, processes: Optional[list[tuple[int, str]]], env: dict[str, str], accounts: list[tuple[str, str]], now: float) -> str:
-    """What can be told of why files copied into `folder` (onedrive_dir) are not uploaded: that it is a folder that can be written to and has room, whether it is inside a folder
-    OneDrive syncs (the OneDrive folders of the environment and of the registry), whether the OneDrive app runs and when it last wrote its logs, and what the newest files in it are
-    - their size, age and Windows attributes (a cloud placeholder or "online-only" is a file OneDrive has handled)."""
-    lines = [f"onedrive_dir: {folder or '(not set)'}"]
-    if not folder or not os.path.isdir(folder):
-        return "\n".join(lines + ["It is not a folder on this PC: nothing can be copied there."])
-    lines.append(f"  full path: {os.path.abspath(folder)}" + (" (a link to another place: OneDrive does not sync through one)" if os.path.islink(folder) else ""))
-    probe = os.path.join(folder, f"_onedrive_probe_{int(now)}.txt")
-    try:
-        with open(probe, "w", encoding="utf-8") as f:
-            f.write("probe")
-        with open(probe, encoding="utf-8") as f:
-            read = f.read()
-        os.remove(probe)
-        lines.append("  write test: a small file was written, read back and removed - " + ("ok" if read == "probe" else f"it read back as {read!r}"))
-    except OSError as error:
-        lines.append(f"  write test: FAILED ({error})")
-    try:
-        free = shutil.disk_usage(folder).free
-        lines.append(f"  free space on its drive: {size_text(free / 1048576)}")
-    except OSError as error:
-        lines.append(f"  free space: unknown ({error})")
-    roots = [(key, env[key]) for key in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial") if env.get(key)] + [(f"registry {name}", root) for name, root in accounts]
-    inside = [f"{key} ({root})" for key, root in roots if same_place(folder, root)]
-    lines.append("OneDrive folders of this PC: " + (", ".join(f"{key} = {root}" for key, root in roots) or "none found (no environment variable, no account in the registry)"))
-    lines.append("  onedrive_dir is inside: " + (", ".join(inside) if inside else "NONE of them - OneDrive does not sync this folder"))
-    if processes is None:
-        lines.append("OneDrive app: processes of this PC cannot be listed")
-    else:
-        running = [line for _, line in processes if "onedrive.exe" in line.lower()]
-        lines.append("OneDrive app: " + (f"running ({len(running)} process{'es' if len(running) != 1 else ''})" if running else "NOT running"))
-    logs = os.path.join(env.get("LOCALAPPDATA", ""), "Microsoft", "OneDrive", "logs")
-    if env.get("LOCALAPPDATA") and os.path.isdir(logs):
-        for account in sorted(os.listdir(logs)):
-            path = os.path.join(logs, account)
-            try:
-                newest = max((os.path.getmtime(os.path.join(path, name)) for name in os.listdir(path)), default=None) if os.path.isdir(path) else None
-            except OSError:
-                newest = None
-            lines.append(f"  its log for {account}: " + (f"last written {age_text(now - newest)} ago" if newest else "nothing in it"))
-    files = []
-    for root, _, names in os.walk(folder):
-        for name in names:
-            path = os.path.join(root, name)
-            try:
-                info = os.stat(path)
-            except OSError:
-                continue
-            files.append((info.st_mtime, os.path.relpath(path, folder), info.st_size, getattr(info, "st_file_attributes", 0)))
-    lines.append(f"in the folder: {len(files)} file(s), {size_text(sum(size for _, _, size, _ in files) / 1048576)}; the newest:")
-    for modified, relative, size, attributes in sorted(files, reverse=True)[:10]:
-        lines.append(f"  {relative} - {size_text(size / 1048576)}, {age_text(now - modified)} old, {attribute_text(attributes)}")
-    return "\n".join(lines)
 
 
 def long_path(path: str) -> str:

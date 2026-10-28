@@ -1494,7 +1494,7 @@ def test_the_commands_do_what_the_buttons_do_and_polling_goes_on_except_after_ex
 
 
 def test_outside_actions_run_what_their_buttons_run_one_after_the_other_in_the_order_asked(macro, monkeypatch, tmp_path):
-    names = {"rejoin": "leave_and_rejoin", "setup": "setup_game", "trade_hub": "travel_to_trade_hub", "leave_trade_hub": "leave_trade_hub", "recenter": "recenter"}
+    names = {"rejoin": "leave_and_rejoin", "setup": "setup_or_fail", "trade_hub": "travel_to_trade_hub", "leave_trade_hub": "leave_trade_hub", "recenter": "recenter"}
     for command, action in names.items():
         gui = remote_gui(macro, monkeypatch, tmp_path)
         write_command(macro, command)
@@ -1510,7 +1510,7 @@ def test_outside_actions_run_what_their_buttons_run_one_after_the_other_in_the_o
     gui.drain_pending()
     assert gui.calls == [("run_async", "leave_and_rejoin")] and gui.pending == ["setup"]
     gui.drain_pending()
-    assert gui.calls[-1] == ("run_async", "setup_game") and gui.pending == []
+    assert gui.calls[-1] == ("run_async", "setup_or_fail") and gui.pending == []
     gui.root.scheduled.clear()
     gui.drain_pending()
     assert gui.root.scheduled == [] and not gui.pending_chain                  # the queue is empty: the checking ends
@@ -1531,7 +1531,7 @@ def test_a_running_loop_is_told_to_stop_once_and_given_up_on_if_it_never_ends_an
     assert gui.pending == ["setup"] and not any(call[0] == "run_async" for call in gui.calls)
     gui.is_running = False
     gui.drain_pending()
-    assert gui.calls[-1] == ("run_async", "setup_game")
+    assert gui.calls[-1] == ("run_async", "setup_or_fail")
 
 
 def test_the_trade_hub_trips_click_the_recorded_positions_in_order(macro, monkeypatch):
@@ -1895,7 +1895,7 @@ def test_a_loop_that_was_running_starts_again_when_the_setup_that_stopped_it_is_
     assert ("start_loop",) not in gui.calls
     gui.is_running, gui.running_loop = False, False
     gui.drain_pending()
-    assert gui.calls[-1] == ("run_async", "setup_game")
+    assert gui.calls[-1] == ("run_async", "setup_or_fail")
     gui.running_stem, gui.running_loop = "s1", False                                       # (the action runs)
     gui._finish_running("[DONE]")
     assert gui.calls[-1] == ("start_loop",) and gui.resume_loop is False and done_text(macro, "s1") == "done"

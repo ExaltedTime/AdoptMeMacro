@@ -198,6 +198,21 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     # The phone's picture in the first slot of the Toys tab's Special row: there once the search has filtered the list (before that the badge is first and it is the second).
     "search_placeholder": {"box": (990, 620, 1180, 665), "threshold": 0.8},   # ("Enter Search...": in the backpack's search box while it is empty and has no focus)
     "phone_item":         {"box": (640, 400, 1290, 960), "threshold": 0.8},   # (the phone's picture anywhere in the Toys tab's grid: the primary way to find it, clicked where it is)
+    # Setup's states (setup_game(): crops of tests/setup/, real frames of a run): the house's lock button as Lock and as Unlock, the backpack's FILTERS panel and its sort button as Default and as Favorites,
+    # Favorites in the sort menu, the game's settings, the Interaction page's label and menu entry, the Trading setting as No One and No One in its list, and the pets tab's Alicorn and its card's Unequip.
+    "house_lock":                  {"box": (1040, 36, 1180, 84), "threshold": 0.85},
+    "house_unlock":                {"box": (1040, 36, 1180, 84), "threshold": 0.85},
+    "filter_panel":                {"box": (780, 570, 1000, 650), "threshold": 0.85},
+    "filter_sort_default":         {"box": (960, 650, 1100, 710), "threshold": 0.85},
+    "filter_sort_favorites":       {"box": (960, 650, 1100, 710), "threshold": 0.85},
+    "filter_option_favorites":     {"box": (950, 720, 1110, 850), "threshold": 0.85},
+    "settings_title":              {"box": (780, 300, 980, 370), "threshold": 0.85},
+    "settings_page_interaction":   {"box": (940, 335, 1110, 385), "threshold": 0.85},
+    "settings_option_interaction": {"box": (940, 400, 1110, 520), "threshold": 0.85},
+    "trading_no_one":              {"box": (990, 525, 1090, 570), "threshold": 0.85},
+    "trading_option_no_one":       {"box": (960, 570, 1100, 640), "threshold": 0.85},
+    "pet_alicorn":                 {"box": (900, 640, 1230, 900), "threshold": 0.8},
+    "pet_unequip":                 {"box": (980, 780, 1215, 840), "threshold": 0.85},
     "phone_icon":         {"box": (850, 690, 950, 790), "threshold": 0.8},
     "phone_card":         {"box": (850, 700, 1250, 900), "threshold": 0.85},   # (the box is where the card's name can be: with the item in the first slot or the second)
 }
@@ -220,6 +235,9 @@ BUTTON_SCAN_RETRY_WAIT = 5.0              # seconds before a button scan that di
 STRAY_OKAY_BOX = (800, 637, 1120, 680)
 STRAY_OKAY_MIN_PIXELS = 5000      # the button is ~11000 exact-color px in that box
 STRAY_OKAY_POS = (962, 657)
+SETUP_UI_WAIT = 5.0               # setup: seconds a button or window is waited for before it is said not to be there
+SETUP_LOOK_WAIT = 1.0             # setup: seconds a state that is probably there already (a label that says what it should) is looked for
+SETUP_POLL = 0.25                 # setup: seconds between looks while waiting
 SETUP_STRAY_TRIES = 3             # setup closes up to this many stray windows before it starts
 STRAY_CLOSE_SETTLE = 1.0          # after a click, before looking again
 # While a need handler (or setup) is running, the per-cycle checks (unscrew()) also run, this often.
@@ -262,7 +280,7 @@ RESUME_LOOP_AFTER = ("setup",)                              # the outside action
 REJOIN_STOP_POLL_MS = 500                                   # a rejoin asked for while the loop runs: how often to see whether it has stopped
 REJOIN_STOP_WAIT_MS = 15000                                 # and how long to wait for that before giving up
 START_LOOP_DELAY_MS = 1500                                  # after the window is up, before the --loop argument starts the loop
-BOT_COMMAND_ACK_WAIT = 5.0                                  # seconds the bot waits for the macro to take a command (it looks every COMMAND_POLL_MS) before it withdraws it and says so
+BOT_COMMAND_ACK_WAIT = 30.0                                 # seconds the bot waits for the macro to take a command (it looks every COMMAND_POLL_MS) before it withdraws it and says so
 BOT_COMMAND_ACK_POLL = 0.25                                 # seconds between the bot's looks for the macro's answer
 BOT_ACK_KEEP = 300                                          # seconds an answer of the macro that nobody read stays in the commands folder
 BOT_ACTION_WAIT = 3600.0                                    # seconds the bot waits for an action it asked for (Setup, a rejoin, a trip) to report that it ended, before it says it has not
@@ -341,7 +359,7 @@ MINIGAME_CAPTURE = True
 RUN_CAPTURES_DIR = os.path.join(DEBUG_DIR, "minigame_captures")
 RUN_CAPTURE_ZIPS = 5
 # What the Discord bot's /pull can copy into OneDrive: the folders of debug/ (not the game config, which holds the private server link).
-PULL_SOURCES = {"failures": FAILURE_DIR, "logs": LOGS_DIR, "runs": RUNS_DIR, "minigame_captures": RUN_CAPTURES_DIR, "captures": CAPTURES_DIR, "recordings": RECORDINGS_DIR}
+PULL_SOURCES = {"failures": FAILURE_DIR, "logs": LOGS_DIR, "runs": RUNS_DIR, "minigame_captures": RUN_CAPTURES_DIR, "captures": CAPTURES_DIR, "recordings": RECORDINGS_DIR, "screenshots": SCREENSHOTS_DIR}
 RUN_CAPTURES_BEST = 2
 RUN_CAPTURES_WORST = 2
 RUN_CAPTURES_FAILED = 5                   # the latest this many runs that failed (did not finish, or had a failure logged) are kept too
@@ -528,7 +546,7 @@ HAUNTLET_HEART_MAX = 5                     # a row longer than this isn't a row 
 HAUNTLET_TIMER_BOX = (730, 55, 865, 122)     # left, top, right, bottom
 HAUNTLET_TIMER_WHITE_LEVEL = 215
 HAUNTLET_TIMER_MIN_WHITE = 500
-HAUNTLET_TV_GLOW = ((150, 248, 248), (225, 255, 255))   # (low, high) red, green, blue of the number's light
+HAUNTLET_TV_GLOW = ((120, 215, 245), (240, 255, 255))   # (low, high) red, green, blue of the number's light: cyan, but in a red room (room 12) the digits were 140-240 red and 228-255 green on real frames, so the range stopped at 225 red and 248 green saw none of three
 HAUNTLET_TV_AREA = (80, 1200)                # px of one such number (a thin "1" is the smallest, a TV close to the camera the biggest)
 HAUNTLET_TV_HUD_BOX = (700, 0, 1220, 150)      # left, top, right, bottom: the room panel and timer; their glow is no TV
 HAUNTLET_TV_PAIR_GAP = (560, 1000)           # px between two TVs that are the outer two of three (900 with the camera close), when...
@@ -752,19 +770,20 @@ CHOOSE_SLOW_MOVE_DURATION = 1.0  # deliberate, slow mouse travel to the found bu
 # The pet's name bar ("Friend" on purple, a heart and the number on white, a gold outline that is not always there; its words change) shows over a pet that is standing still, where
 # focus_pet()'s search by movement finds nothing: the purple part of it is found by hue (HSV, OpenCV's: 129 / 148 / 255 and 131 / 181 / 255 on a real frame), a wide short blob
 # (PET_BAR_ASPECT) of PET_BAR_AREA px that has white right of it (at least PET_BAR_WHITE_FRACTION of that strip at least PET_BAR_WHITE_LEVEL in every channel), and the pet is
-# PET_BAR_BELOW bar heights under its bottom edge, at the join of the purple and the white (measured on a frame: bar 101 px of purple by 38, the pet's body about 4 heights below).
+# PET_BAR_BELOW_STEPS bar heights under its bottom edge, at the join of the purple and the white (measured: bar 101 px of purple by 38, the pet's body about 4 heights below; on a lying pet
+# near the camera, a bar 115 by 41 with the pet's body 1.5 heights below it, and only 0.28 of the strip at the bar's right white, where a standing pet's had 0.5).
 PET_BAR_HSV = ((122, 110, 200), (136, 215, 255))
 PET_BAR_AREA = (500, 20000)
 PET_BAR_ASPECT = (1.8, 4.0)
 PET_BAR_WHITE_LEVEL = 225
-PET_BAR_WHITE_FRACTION = 0.3
-PET_BAR_BELOW = 3.5
+PET_BAR_WHITE_FRACTION = 0.15
+PET_BAR_BELOW_STEPS = (3.5, 1.5, 2.5)                          # bar heights under the bar's bottom edge to click, in turn until the pet is focused
 # The choose button when no pixel is CHOOSE_BUTTON_COLOR (twice in run 34 it was in plain sight: a purple-to-magenta disc with a "?" and, not always, a white outline, under the
 # focused pet): the biggest roundish blob of this hue (OpenCV's HSV: purple 141, magenta 154; the pink BACK button is 167, the backpack's purple is 130 and paler), at least
-# CHOOSE_DISC_ROUNDNESS of its enclosing circle (the "?" is cut out of it), of CHOOSE_DISC_AREA px (about 180 px across), within CHOOSE_DISC_SQUARENESS of square. The ranges are
-# read off a picture of the failure, not measured on the pixels: it was not kept.
+# CHOOSE_DISC_ROUNDNESS of its enclosing circle (the "?" is cut out of it), of CHOOSE_DISC_AREA px (about 56 px across: 1801 px of the hue on a real frame), within CHOOSE_DISC_SQUARENESS of square. The hue is measured on a real frame (a failure in run 57, tests/popups/choose_disc.png): the exact colour above is not in the
+# disc then at all (the nearest pixel is 4 off in a channel: the disc's shading moves).
 CHOOSE_DISC_HSV = ((136, 180, 170), (158, 255, 255))
-CHOOSE_DISC_AREA = (6000, 45000)
+CHOOSE_DISC_AREA = (900, 9000)
 CHOOSE_DISC_SQUARENESS = 1.3
 CHOOSE_DISC_ROUNDNESS = 0.55
 CHOOSE_DISC_CLOSE = 5                                          # px: the closing that joins the disc round the "?" and its outline
@@ -834,9 +853,10 @@ TRADES_ROW_CLICK_DY = 12                                        # an offer is op
 TRADES_ROW_CLICK_X = 1069
 TRADES_DETAIL_DECLINE_POS = (835, 702)                          # DECLINE of an offer on its own
 TRADES_DECLINE_YES_POS = (1048, 660)                            # Yes of the dialog
-TRADES_ACCEPT_BOX = (640, 395, 840, 735)                        # where the green ACCEPT buttons of the rows are (and the list's top and bottom: a row must be whole in it)
-TRADES_ACCEPT_HSV = ((45, 110, 130), (80, 255, 255))            # their colour (OpenCV's HSV)
-TRADES_ACCEPT_SIZE = ((150, 230), (22, 55))                     # (width, height) range in px of one
+TRADES_BUTTON_BOX = (640, 395, 840, 735)                        # where the red DECLINE buttons of the rows are (and the list's top and bottom: a row must be whole in it). They are found, not the green ACCEPT buttons: an "Exact Match" offer has a green row, in which ACCEPT is lost
+TRADES_BUTTON_HSV = (((170, 150, 150), (180, 255, 255)), ((0, 150, 150), (5, 255, 255)))     # their colour (OpenCV's HSV; red is at both ends of the hue)
+TRADES_BUTTON_SIZE = ((150, 230), (22, 55))                     # (width, height) range in px of one
+TRADES_DECLINE_DY = 40                                          # px from the middle of a row's ACCEPT button, which is where a row is placed, to the middle of its DECLINE
 TRADES_ROW_BOX = (640, -52, 1262, 78)                           # a row, from an ACCEPT button's middle: (left, top, right, bottom), top and bottom as offsets
 TRADES_ROW_MATCH = 0.93                                         # TM_CCOEFF_NORMED score of a row that is the one that was photographed (/decline checks it)
 TRADES_ROW_PITCH = 136                                          # px from one offer row to the next: a step of the wheel is shorter, and the rows are told apart by their place in the list
@@ -853,7 +873,6 @@ BOT_TRADES_POLL = 1.0
 INVENTORY_DIR = os.path.join(DEBUG_DIR, "inventory")            # the pictures (001.png, 002.png ...), emptied at the start of each tour
 INVENTORY_DONE_PATH = os.path.join(INVENTORY_DIR, "done.json")  # written when the tour ends, however it ends: {"pictures": N, "ended": why}
 INVENTORY_PETS_TAB_POS = (817, 713)
-PET_SECOND_ITEM_POS = (975, 707)                                # the pets tab's second item, right of the green plus tile: the favourite pet, with the favourites filter on (equip_favorite_pet())
 EQUIP_BUTTON_BOX = (900, 780, 1215, 930)                        # where the Equip button of the backpack's card is (find_equip_button())...
 EQUIP_BUTTON_SIZE = ((100, 200), (25, 45))                      # ...its (width, height) range in px: 148 x 35 on a real frame
 INVENTORY_EXPAND_POS = (938, 642)                               # the orange button left of the settings one, in the normal backpack's header (measured on tests/popups/backpack_open.png)
@@ -1022,16 +1041,14 @@ LURE_RECOLLECT_INTERVAL = 4 * 60 * 60  # seconds (4 hours)
 SETUP_LOCK_HOUSE_POS = (1112, 65)
 SETUP_BACKPACK_SETTINGS_POS = (977, 646)
 SETUP_SORT_MENU_POS = (1031, 680)
-SETUP_FAVORITES_POS = (1023, 810)
 SETUP_CONFIRM_POS = (1047, 908)
-# Disabling trades: settings (gear) -> settings menu -> interaction tab -> trading
-# setting -> "no one" -> close. The macro window is sent to the back for this, since
+SETUP_FILTER_CANCEL_POS = (874, 904)         # the FILTERS panel's Cancel: a panel that was only looked at is left as it was
+# Disabling trades: settings (gear) -> settings menu -> Interaction (found by its text) -> trading
+# setting -> "No One" (found by its text) -> close. Each is looked at first and left as it is when it is right. The macro window is sent to the back for this, since
 # it covers the gear.
 SETUP_TRADES_SETTINGS_POS = (1894, 757)
 SETUP_TRADES_MENU_POS = (1027, 364)
-SETUP_TRADES_INTERACTION_TAB_POS = (1022, 436)
 SETUP_TRADES_SETTING_POS = (1029, 549)
-SETUP_TRADES_NO_ONE_POS = (1028, 604)
 SETUP_TRADES_CLOSE_POS = (1121, 358)
 
 # travel_to_trade_hub() and leave_trade_hub(): the clicks of a human's run (the backpack opens with the key; the Trading Hub Phone is the first of the Toys' Special row).

@@ -752,19 +752,20 @@ CHOOSE_SLOW_MOVE_DURATION = 1.0  # deliberate, slow mouse travel to the found bu
 # The pet's name bar ("Friend" on purple, a heart and the number on white, a gold outline that is not always there; its words change) shows over a pet that is standing still, where
 # focus_pet()'s search by movement finds nothing: the purple part of it is found by hue (HSV, OpenCV's: 129 / 148 / 255 and 131 / 181 / 255 on a real frame), a wide short blob
 # (PET_BAR_ASPECT) of PET_BAR_AREA px that has white right of it (at least PET_BAR_WHITE_FRACTION of that strip at least PET_BAR_WHITE_LEVEL in every channel), and the pet is
-# PET_BAR_BELOW bar heights under its bottom edge, at the join of the purple and the white (measured on a frame: bar 101 px of purple by 38, the pet's body about 4 heights below).
+# PET_BAR_BELOW_STEPS bar heights under its bottom edge, at the join of the purple and the white (measured: bar 101 px of purple by 38, the pet's body about 4 heights below; on a lying pet
+# near the camera, a bar 115 by 41 with the pet's body 1.5 heights below it, and only 0.28 of the strip at the bar's right white, where a standing pet's had 0.5).
 PET_BAR_HSV = ((122, 110, 200), (136, 215, 255))
 PET_BAR_AREA = (500, 20000)
 PET_BAR_ASPECT = (1.8, 4.0)
 PET_BAR_WHITE_LEVEL = 225
-PET_BAR_WHITE_FRACTION = 0.3
-PET_BAR_BELOW = 3.5
+PET_BAR_WHITE_FRACTION = 0.15
+PET_BAR_BELOW_STEPS = (3.5, 1.5, 2.5)                          # bar heights under the bar's bottom edge to click, in turn until the pet is focused
 # The choose button when no pixel is CHOOSE_BUTTON_COLOR (twice in run 34 it was in plain sight: a purple-to-magenta disc with a "?" and, not always, a white outline, under the
 # focused pet): the biggest roundish blob of this hue (OpenCV's HSV: purple 141, magenta 154; the pink BACK button is 167, the backpack's purple is 130 and paler), at least
-# CHOOSE_DISC_ROUNDNESS of its enclosing circle (the "?" is cut out of it), of CHOOSE_DISC_AREA px (about 180 px across), within CHOOSE_DISC_SQUARENESS of square. The ranges are
-# read off a picture of the failure, not measured on the pixels: it was not kept.
+# CHOOSE_DISC_ROUNDNESS of its enclosing circle (the "?" is cut out of it), of CHOOSE_DISC_AREA px (about 56 px across: 1801 px of the hue on a real frame), within CHOOSE_DISC_SQUARENESS of square. The hue is measured on a real frame (a failure in run 57, tests/popups/choose_disc.png): the exact colour above is not in the
+# disc then at all (the nearest pixel is 4 off in a channel: the disc's shading moves).
 CHOOSE_DISC_HSV = ((136, 180, 170), (158, 255, 255))
-CHOOSE_DISC_AREA = (6000, 45000)
+CHOOSE_DISC_AREA = (900, 9000)
 CHOOSE_DISC_SQUARENESS = 1.3
 CHOOSE_DISC_ROUNDNESS = 0.55
 CHOOSE_DISC_CLOSE = 5                                          # px: the closing that joins the disc round the "?" and its outline

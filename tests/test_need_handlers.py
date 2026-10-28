@@ -95,18 +95,30 @@ def pet_bar_frame():
 
 def test_a_pet_that_stands_still_is_found_by_its_name_bar_in_a_real_frame_and_nothing_else_is(macro):
     import numpy as np
-    x, y = macro.find_pet_bar(pet_bar_frame())
+    x, y = macro.find_pet_bar(pet_bar_frame())[0]
     assert abs(x - 1218) <= 4 and abs(y - 693) <= 6                                          # the join of the bar's purple and white, 3.5 bar heights under it: on the pet's body (1040-1260, 620-830)
-    assert macro.find_pet_bar(np.full((1080, 1920, 3), 30, np.uint8)) is None
+    assert macro.find_pet_bar(np.full((1080, 1920, 3), 30, np.uint8)) == []
     drawn = np.full((1080, 1920, 3), 30, np.uint8)
     drawn[522:560, 1117:1218] = (255, 107, 154)                                                # the purple part alone, nothing white at its right: not a bar
-    assert macro.find_pet_bar(drawn) is None
+    assert macro.find_pet_bar(drawn) == []
     drawn[522:560, 1218:1303] = 255
-    assert macro.find_pet_bar(drawn) == (1218, 693)
+    assert macro.find_pet_bar(drawn)[0] == (1218, 693)
     drawn[522:560, 1117:1218] = (255, 107, 154)
     tall = drawn.copy()
     tall[400:500, 1117:1218] = (255, 107, 154)                                                 # a square of the same purple (the backpack button is round and as tall as wide): not a bar
-    assert macro.find_pet_bar(tall) == (1218, 693)
+    assert macro.find_pet_bar(tall)[0] == (1218, 693)
+
+
+def test_a_lying_pet_close_to_the_camera_in_a_dark_house_is_found_by_its_bar_and_the_choose_button_by_its_disc(macro):
+    import cv2
+    frame = cv2.imread(os.path.join(os.path.dirname(__file__), "popups", "choose_pet_lying_in_house.png"))          # run 57: "no name bar either" and "no purple disc found either"
+    points = macro.find_pet_bar(frame)
+    assert len(points) == len(macro.cfg.PET_BAR_BELOW_STEPS) and all(abs(x - 1142) <= 3 for x, _ in points)
+    assert any(900 <= y <= 1010 for _, y in points)                                          # one of them is on the panda (its body is 890-1015 down)
+    assert macro.find_exact_color(frame, macro.cfg.CHOOSE_BUTTON_COLOR) is None              # (the disc's shading had moved off the exact colour)
+    x, y = macro.find_choose_disc(frame)
+    assert abs(x - 960) <= 4 and abs(y - 124) <= 4                                           # the "?" disc, 56 px across
+    assert macro.find_choose_disc(cv2.imread(os.path.join(os.path.dirname(__file__), "popups", "pet_with_bar_not_moving.png"))) == pytest.approx((892, 124), abs=4)       # (that frame has the disc too)
 
 
 def test_focus_pet_clicks_under_the_name_bar_when_nothing_moves_and_when_what_moved_was_not_the_pet(macro, monkeypatch):
@@ -187,18 +199,18 @@ def disc_screen(macro, outline=True, glyph=True, exact=False):
     import cv2
     import numpy as np
     img = np.full((1080, 1920, 3), 30, np.uint8)
-    disc = np.zeros((180, 180, 3), np.uint8)
-    for row in range(180):                                                                       # (the shading: purple (170, 30, 254) at the top to magenta (230, 20, 200) at the bottom, as RGB)
-        t = row / 179
+    disc = np.zeros((62, 62, 3), np.uint8)
+    for row in range(62):                                                                        # (the shading: purple (170, 30, 254) at the top to magenta (230, 20, 200) at the bottom, as RGB)
+        t = row / 61
         disc[row, :] = (round(254 - 54 * t), round(30 - 10 * t), round(170 + 60 * t))            # BGR
-    mask = np.zeros((180, 180), np.uint8)
-    cv2.circle(mask, (90, 90), 88, 255, -1)
-    region = img[645:825, 550:730]
+    mask = np.zeros((62, 62), np.uint8)
+    cv2.circle(mask, (31, 31), 30, 255, -1)
+    region = img[704:766, 609:671]                                                               # (56 px across on a real frame: the disc at the top of the screen)
     region[mask > 0] = disc[mask > 0]
     if glyph:
-        cv2.putText(img, "?", (606, 780), cv2.FONT_HERSHEY_SIMPLEX, 3.5, (255, 255, 255), 14, cv2.LINE_AA)
+        cv2.putText(img, "?", (629, 752), cv2.FONT_HERSHEY_SIMPLEX, 1.3, (255, 255, 255), 5, cv2.LINE_AA)
     if outline:
-        cv2.circle(img, (640, 735), 90, (255, 255, 255), 4)
+        cv2.circle(img, (640, 735), 32, (255, 255, 255), 3)
     img[80:150, 445:645] = (120, 41, 237)                                                       # BACK: pink (BGR), wide
     cv2.circle(img, (628, 132), 18, (254, 90, 140), -1)                                          # the E badge: small, purple
     img[300:340, 1000:1500] = (254, 40, 150)                                                     # a wide purple bar

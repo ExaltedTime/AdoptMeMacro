@@ -2482,13 +2482,14 @@ def focus_pet(click_duration: float = cfg.CLICK_MOVE_DURATION) -> bool:
             focus_pet_by_bar(grab_screen(), click_duration)
     return True
 
-def find_pet_bar(img: Image) -> Optional[Point]:
+def find_pet_bar(img: Image) -> list[Point]:
     """Where to click the pet by the name bar over it, for a pet that stands still (nothing moves for focus_pet() to find): the purple part of the bar by its hue (PET_BAR_HSV), a wide
-    short blob (PET_BAR_ASPECT, PET_BAR_AREA) with white at its right (PET_BAR_WHITE_*), whatever its words and outline - the pet is PET_BAR_BELOW bar heights under its bottom
-    edge, at the join of the purple and the white. The biggest such bar's (x, y), or None."""
+    short blob (PET_BAR_ASPECT, PET_BAR_AREA) with white at its right (PET_BAR_WHITE_*), whatever its words and outline. The pet is a different number of bar heights under the bar's bottom
+    edge with its pose (PET_BAR_BELOW_STEPS: 4 on one frame, 1.5 on a lying pet near the camera), at the join of the purple and the white: those points, the first to try first, for the
+    biggest such bar. No points if there is no bar."""
     mask = cv2.inRange(cv2.cvtColor(img, cv2.COLOR_BGR2HSV), cfg.PET_BAR_HSV[0], cfg.PET_BAR_HSV[1])
     count, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    best: Optional[tuple[int, Point]] = None
+    best: Optional[tuple[int, list[Point]]] = None
     for i in range(1, count):
         x, y, w, h, area = (int(v) for v in stats[i])
         if not cfg.PET_BAR_AREA[0] <= area <= cfg.PET_BAR_AREA[1] or not cfg.PET_BAR_ASPECT[0] <= w / h <= cfg.PET_BAR_ASPECT[1]:
@@ -2497,21 +2498,24 @@ def find_pet_bar(img: Image) -> Optional[Point]:
         if beside.size == 0 or float((beside.min(axis=2) >= cfg.PET_BAR_WHITE_LEVEL).mean()) < cfg.PET_BAR_WHITE_FRACTION:
             continue
         if best is None or area > best[0]:
-            best = (area, (x + w, int(y + h + cfg.PET_BAR_BELOW * h)))
-    return best[1] if best is not None else None
+            best = (area, [(x + w, int(y + h + below * h)) for below in cfg.PET_BAR_BELOW_STEPS])
+    return best[1] if best is not None else []
 
 def focus_pet_by_bar(img: Image, click_duration: float = cfg.CLICK_MOVE_DURATION) -> bool:
-    """Click the pet by the name bar over it (find_pet_bar()) and say whether that focused it (detect_pet_focus())."""
-    point = find_pet_bar(img)
-    if point is None:
+    """Click the pet by the name bar over it (find_pet_bar(), each place in turn) and say whether that focused it (detect_pet_focus())."""
+    points = find_pet_bar(img)
+    if not points:
         logger.debug("Focus_pet: no name bar either")
         return False
-    logger.debug(f"Focus_pet: clicking under the name bar at {point}...")
-    hover_click(*point, duration=click_duration)
-    wait_interruptible(cfg.FOCUS_PET_CLICK_SETTLE)
-    focused = detect_pet_focus(grab_screen())
-    log_run_event(f"pet: found by its name bar, {'focused' if focused else 'not focused'}")
-    return focused
+    for point in points:
+        logger.debug(f"Focus_pet: clicking under the name bar at {point}...")
+        hover_click(*point, duration=click_duration)
+        wait_interruptible(cfg.FOCUS_PET_CLICK_SETTLE)
+        if detect_pet_focus(grab_screen()):
+            log_run_event("pet: found by its name bar, focused")
+            return True
+    log_run_event("pet: found by its name bar, not focused")
+    return False
 
 def is_backpack_tab_selected(pos: Point) -> bool:
     """True if the backpack category tab at `pos` is already selected (orange)."""

@@ -485,6 +485,20 @@ def test_what_can_be_pulled_is_what_is_in_the_folder_newest_first_and_nothing_el
             bot_lib.resolve_pull(source, item)
 
 
+def test_a_capture_that_is_still_being_zipped_is_not_pulled_its_frames_are_not_its_zips(debug_folders):
+    root = debug_folders / "captures"
+    make_capture(root, "capture_20261027_124037", zips=())
+    import shutil
+    shutil.rmtree(root / "capture_20261027_124037" / "zips")
+    (root / "capture_20261027_124037" / "zips.partial").mkdir()                                # (stopped; its zips are being made)
+    path, name = bot_lib.resolve_pull("captures", None)
+    with pytest.raises(ValueError, match="still being zipped"):
+        bot_lib.pull_files(path, name)
+    make_capture(root, "capture_20261027_130000", zips=("a.zip",))                             # (everything: the one that is whole is taken, the other left)
+    path, name = bot_lib.resolve_pull("captures", bot_lib.PULL_ALL)
+    assert [rel for _, rel in bot_lib.pull_files(path, name)] == [os.path.join("captures", "capture_20261027_130000", "zips", "a.zip")]
+
+
 def test_a_capture_is_pulled_as_its_zips_alone_not_its_frames_and_other_things_as_all_their_files(debug_folders):
     make_capture(debug_folders / "minigame_captures", "hauntlet_2_20261016_100000_9330cc_room23", zips=("p1.zip", "p2.zip"))
     path, name = bot_lib.resolve_pull("minigame_captures", None)

@@ -302,7 +302,7 @@ def capture_text(ended: Optional[str]) -> str:
     if ended == "started":
         return "A capture is running: do what you want to test (/trades, /setup ...), then /capture again to end it."
     if ended == "stopped":
-        return "The capture is stopped and being zipped: /pull captures takes it."
+        return "The capture is stopped and being zipped: /pull captures takes it once the zips are made (a /pull before then says so)."
     if ended == "running":
         return "A capture is running already."
     if ended == "none running":

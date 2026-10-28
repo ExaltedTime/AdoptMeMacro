@@ -561,13 +561,21 @@ def pull_files(path: str, name: str) -> list[tuple[str, str]]:
     if os.path.isfile(path):
         return [(path, name)]
     found = []
+    unzipped = []
     for root, folders, files in os.walk(path):
-        if "zips" in folders:
+        if "zips" in folders or any(file.startswith("frame_") for file in files):          # (a capture)
+            zips = os.path.join(root, "zips")
+            if not os.path.isdir(zips):
+                unzipped.append(os.path.basename(root))                                    # (its zips are not there yet - zip_capture() puts them there once all are made -: not its frames, which are the same again as the zips)
+                folders[:] = []
+                continue
             folders[:] = ["zips"]
             files = []
         for file in sorted(files):
             full = os.path.join(root, file)
             found.append((full, os.path.join(name, os.path.relpath(full, path))))
+    if unzipped and not found:
+        raise ValueError(f"{', '.join(unzipped)} has no zips yet - it is still being zipped, or was never zipped: try again in a moment")
     return found
 
 

@@ -1156,7 +1156,7 @@ and clicks are recorded too, since `GetAsyncKeyState` sees them like any others.
 Each capture is a folder in `debug/captures/` (`CAPTURES_DIR`, git-ignored, emptied by **Refresh debug**;
 the newest `MAX_CAPTURES` are kept) named `capture_<date>_<time>`. **Getting one to someone else:** when a
 capture stops, `zip_capture()` (on a thread of its own) also splits it into zips of at most `CAPTURE_ZIP_MB`
-(chat attachments are limited to 30 MB) in the capture's `zips/` folder:
+(chat attachments are limited to 30 MB) in the capture's `zips/` folder (made in `zips.partial/` and moved into place once all are made, so a `/pull` never takes half of them; one that comes while they are made is told the capture is still being zipped and copies nothing):
 `capture_<time>_part01.zip`, `_part02.zip`, ... The frames are in time order, none twice; part 1 also holds
 `events.jsonl` and `info.json`. They are stored, not compressed (PNGs don't shrink), so a part holds only a
 few frames. Attach them all (send them in order); a zip arrives byte for byte, unlike a pasted image, which

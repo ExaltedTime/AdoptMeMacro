@@ -5151,7 +5151,9 @@ def zip_capture(folder: str) -> list[str]:
     <name>_part01.zip, _part02.zip, ... (stored, not compressed: PNGs don't shrink). The first part also holds
     events.jsonl and info.json, which are small; the frames go in time order, none twice. Returns the zip paths."""
     out = os.path.join(folder, "zips")
-    os.makedirs(out, exist_ok=True)
+    building = out + ".partial"                                                                  # (the zips are only in zips/ once all are made: /pull and OneDrive must not take half of them)
+    shutil.rmtree(building, ignore_errors=True)
+    os.makedirs(building)
     frames = sorted(f for f in os.listdir(folder) if f.startswith("frame_") and f.endswith(".png"))
     head = sum(os.path.getsize(os.path.join(folder, f)) for f in ("info.json", "events.jsonl") if os.path.exists(os.path.join(folder, f)))
     plan = plan_zip_parts([os.path.getsize(os.path.join(folder, name)) for name in frames], head)
@@ -5160,11 +5162,13 @@ def zip_capture(folder: str) -> list[str]:
     paths = []
     for number, names in enumerate(parts, 1):
         path = os.path.join(out, f"{os.path.basename(folder)}_part{number:02d}.zip")
-        with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as z:
+        with zipfile.ZipFile(os.path.join(building, os.path.basename(path)), "w", zipfile.ZIP_STORED) as z:
             for name in names:
                 if os.path.exists(os.path.join(folder, name)):
                     z.write(os.path.join(folder, name), name)
         paths.append(path)
+    shutil.rmtree(out, ignore_errors=True)                                                       # (the zips of an earlier stop of the same folder)
+    os.replace(building, out)
     return paths
 
 def zip_capture_in_background(folder: str) -> threading.Thread:

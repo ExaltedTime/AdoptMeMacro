@@ -6590,6 +6590,63 @@ def blackout_seen_by_capture(before: Image, after: Image) -> Optional[bool]:
         return None
     return mean_after - mean_before > cfg.BLACKOUT_SEEN_RISE
 
+def virtual_display_present() -> bool:
+    """Whether a virtual display (a software monitor: the Virtual Display Driver, see docs/ARCHITECTURE.md#blanking-the-screen) is installed on this Windows: the name of one of the PC's display
+    adapters has one of VIRTUAL_DISPLAY_NAMES in it. False elsewhere, and when the adapters cannot be listed."""
+    if os.name != "nt":
+        return False
+    try:
+        from ctypes import wintypes
+
+        class DisplayDevice(ctypes.Structure):
+            _fields_ = [("cb", wintypes.DWORD), ("DeviceName", ctypes.c_wchar * 32), ("DeviceString", ctypes.c_wchar * 128), ("StateFlags", wintypes.DWORD),
+                        ("DeviceID", ctypes.c_wchar * 128), ("DeviceKey", ctypes.c_wchar * 128)]
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]  # Windows only
+        for number in range(cfg.DISPLAY_ADAPTERS_MAX):
+            device = DisplayDevice()
+            device.cb = ctypes.sizeof(device)
+            if not user32.EnumDisplayDevicesW(None, number, ctypes.byref(device), 0):
+                break
+            if any(name in device.DeviceString.lower() for name in cfg.VIRTUAL_DISPLAY_NAMES):
+                return True
+    except (OSError, AttributeError, ValueError):
+        pass
+    return False
+
+def display_switch(mode: str) -> bool:
+    """Run Windows' own DisplaySwitch.exe (what Win+P does): `mode` is "/external" (the second screen only - the PC's own panel goes off) or "/internal" (the PC screen only). Nothing else is
+    ever passed to it. False (logged) if it could not be run."""
+    if mode not in ("/external", "/internal") or os.name != "nt":
+        return False
+    program = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "DisplaySwitch.exe")
+    try:
+        subprocess.run([program, mode], timeout=cfg.DISPLAY_SWITCH_TIMEOUT, check=False)
+    except (OSError, subprocess.SubprocessError) as error:
+        logger.warning(f"DisplaySwitch {mode} failed: {error}")
+        return False
+    return True
+
+def display_switch_worked() -> bool:
+    """After the switch to the second screen: Roblox is found and a screenshot of it is not one flat colour (a black screen, or no picture)."""
+    if roblox_window() is None:
+        return False
+    img = grab_screen()
+    return bool(int(img.max()) - int(img.min()) >= cfg.BLACKOUT_FLAT_LEVEL)
+
+def keep_awake(on: bool) -> None:
+    """While the screen is blank, ask Windows not to sleep or turn the display off by itself (SetThreadExecutionState; the same thread - Tk's - must undo it, and it goes with the process)."""
+    if os.name != "nt":
+        return
+    flags = 0x80000000 | (0x00000001 | 0x00000002 if on else 0)               # ES_CONTINUOUS, with ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED while on
+    try:
+        ctypes.windll.kernel32.SetThreadExecutionState(flags)  # type: ignore[attr-defined]  # Windows only
+    except (OSError, AttributeError):
+        pass
+
+def remember_display_switched(value: bool) -> None:
+    """Keep in the game config whether the PC's own panel is off (a macro that dies while it is must put it back on its next start: Blackout.recover_display())."""
+    update_game_config(lambda config: config.__setitem__("display_switched", value))
+
 class Blackout:
     """The screen blanked by a black window that is click-through, never takes the focus, and is left out of screenshots (SetWindowDisplayAffinity with
     WDA_EXCLUDEFROMCAPTURE, Windows 10 version 2004 and later): the person sees black, while the macro's screenshots, recordings and the Discord bot's
@@ -6600,10 +6657,36 @@ class Blackout:
         self.root = root
         self.window: Optional[tk.Toplevel] = None
         self.job: Optional[str] = None                 # the pending keep_on_top()
+        self.display_switched = False                  # the PC's own panel is off: the game is on the virtual display (switch_display())
 
     @property
     def shown(self) -> bool:
-        return self.window is not None
+        return self.window is not None or self.display_switched
+
+    def switch_display(self) -> bool:
+        """With a virtual display installed (virtual_display_present(); BLACKOUT_VIRTUAL_DISPLAY): switch to it alone, as Win+P's Second screen only does - the PC's own panel is then off, which
+        no black window can make it - and look that Roblox is still there and shows a picture (display_switch_worked(), BLACKOUT_DISPLAY_SETTLE seconds after the switch). If not, back to the PC screen and
+        False: the black window is used instead. True if the panel is off."""
+        if not cfg.BLACKOUT_VIRTUAL_DISPLAY or not virtual_display_present():
+            return False
+        remember_display_switched(True)                                       # (before: a crash in the middle must not leave the panel off with nothing that knows)
+        if display_switch("/external"):
+            time.sleep(cfg.BLACKOUT_DISPLAY_SETTLE)
+            if display_switch_worked():
+                self.display_switched = True
+                return True
+            logger.warning("The virtual display showed no picture of Roblox - back to the PC screen")
+        display_switch("/internal")
+        time.sleep(cfg.BLACKOUT_DISPLAY_SETTLE)
+        remember_display_switched(False)
+        return False
+
+    def recover_display(self) -> None:
+        """At the macro's start: a panel that was left off by a macro that died (display_switched in the game config) is put back on."""
+        if load_game_config().get("display_switched"):
+            logger.warning("The PC's own screen was left off by an earlier run - switching it back on")
+            display_switch("/internal")
+            remember_display_switched(False)
 
     def toggle(self) -> bool:
         """Turn it on or off; True if the screen is blank afterwards."""
@@ -6619,6 +6702,10 @@ class Blackout:
         if not self.supported():
             logger.warning("Blanking the screen only works on Windows")
             return False
+        if self.switch_display():
+            keep_awake(True)
+            logger.info(f"Screen off: the game is on the virtual display ({cfg.HOTKEYS['blackout'].upper()} again to show it)")
+            return True
         before = grab_screen()
         window = self.make_window()
         if window is None:
@@ -6633,6 +6720,7 @@ class Blackout:
             return False
         window.configure(bg="black")
         logger.info(f"Screen blanked ({cfg.HOTKEYS['blackout'].upper()} again to show it)")
+        keep_awake(True)
         self.keep_on_top()
         return True
 
@@ -6659,6 +6747,14 @@ class Blackout:
             pass
 
     def hide(self) -> None:
+        was_blank = self.shown
+        if self.display_switched:
+            display_switch("/internal")                                        # (the PC's own screen back; a macro that dies before this does it at its next start)
+            time.sleep(cfg.BLACKOUT_DISPLAY_SETTLE)
+            self.display_switched = False
+            remember_display_switched(False)
+        if was_blank:
+            keep_awake(False)
         if self.job is not None:
             try:
                 self.root.after_cancel(self.job)
@@ -6727,6 +6823,7 @@ class AdoptMeGUI:
         self.resume_loop = False                 # a loop that was running was stopped for an action that is followed by the loop again (RESUME_LOOP_AFTER)
         self.running_loop = False                # what run_async() runs is the loop
         self.blackout = Blackout(self.root)
+        self.blackout.recover_display()
         self.watch_stop_hotkey()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
@@ -6928,7 +7025,7 @@ class AdoptMeGUI:
         except Exception:
             logger.exception("Blanking the screen failed")
             self.blackout.hide()
-        return "blanked" if self.blackout.shown else ("not blanked" if want else "shown")
+        return ("blanked (display off)" if self.blackout.display_switched else "blanked") if self.blackout.shown else ("not blanked" if want else "shown")
 
     def screenshot_by_hotkey(self) -> None:
         """HOTKEYS["screenshot"] was pressed in Roblox: a picture of the whole screen into SCREENSHOTS_DIR (Tk's thread)."""

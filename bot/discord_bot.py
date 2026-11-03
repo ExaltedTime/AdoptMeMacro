@@ -314,7 +314,7 @@ def capture_text(ended: Optional[str]) -> str:
 
 def blank_text(ended: Optional[str]) -> str:
     """What to say of the macro's answer to /blank."""
-    return {"blanked": "The screen is blank (the macro still sees the game).", "shown": "The screen is shown.",
+    return {"blanked": "The screen is blank (the macro still sees the game).", "blanked (display off)": "The PC's own screen is off: the game is on the virtual display (the macro still sees it; /blank with on: False brings the screen back).", "shown": "The screen is shown.",
             "not blanked": "The screen was not blanked - see /log (its screenshots would have seen the black window, or the screen was too bright to test)."}.get(
         ended or "", "The macro has not said whether the screen is blank - see /status.")
 

@@ -2315,7 +2315,7 @@ def blackout_gui_for_command(macro, shown=False, show_works=True):
 
     class Blackout:
         def __init__(self):
-            self.shown, self.calls = shown, []
+            self.shown, self.calls, self.display_switched = shown, [], False
 
         def show(self):
             self.calls.append("show")
@@ -2327,6 +2327,71 @@ def blackout_gui_for_command(macro, shown=False, show_works=True):
             self.shown = False
     gui.blackout = Blackout()
     return gui
+
+
+def display_blackout(macro, monkeypatch, tmp_path, present=True, picture=True):
+    """A Blackout whose windows and display switch are recorders: `present` is whether a virtual display is installed, `picture` whether Roblox shows a picture on it."""
+    monkeypatch.setattr(macro.cfg, "GAME_CONFIG_PATH", str(tmp_path / ".config"))
+    root = types.SimpleNamespace(update=lambda: None, after=lambda ms, func: "job", after_cancel=lambda job: None)
+    blackout = macro.Blackout(root)
+    log = []
+    monkeypatch.setattr(macro, "virtual_display_present", lambda: present)
+    monkeypatch.setattr(macro, "display_switch", lambda mode: log.append(mode) or True)
+    monkeypatch.setattr(macro, "display_switch_worked", lambda: picture)
+    monkeypatch.setattr(macro, "keep_awake", lambda on: log.append(("awake", on)))
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.full((100, 100, 3), 60, np.uint8))
+    monkeypatch.setattr(macro.time, "sleep", lambda s: None)
+    monkeypatch.setattr(blackout, "supported", lambda: True)
+    return blackout, log
+
+
+def test_with_a_virtual_display_the_screen_is_blanked_by_switching_to_it_and_shown_by_switching_back(macro, monkeypatch, tmp_path):
+    blackout, log = display_blackout(macro, monkeypatch, tmp_path)
+    assert blackout.show() is True and blackout.shown and blackout.display_switched and blackout.window is None             # (no black window: the panel is off)
+    assert log == ["/external", ("awake", True)] and macro.load_game_config()["display_switched"] is True                      # (written before the switch: a crash must leave a trace)
+    blackout.hide()
+    assert log == ["/external", ("awake", True), "/internal", ("awake", False)] and not blackout.shown and macro.load_game_config()["display_switched"] is False
+
+
+def test_a_virtual_display_that_shows_no_picture_is_switched_away_from_and_the_black_window_is_used_instead(macro, monkeypatch, tmp_path):
+    blackout, log = display_blackout(macro, monkeypatch, tmp_path, picture=False)
+    monkeypatch.setattr(blackout, "make_window", lambda: None)                                # (the black window is not what is tested here)
+    assert blackout.show() is False and log == ["/external", "/internal"] and not blackout.display_switched and macro.load_game_config()["display_switched"] is False
+
+
+def test_without_a_virtual_display_the_display_is_not_touched_and_a_panel_left_off_is_put_back_at_the_start(macro, monkeypatch, tmp_path):
+    blackout, log = display_blackout(macro, monkeypatch, tmp_path, present=False)
+    monkeypatch.setattr(blackout, "make_window", lambda: None)
+    assert blackout.show() is False and log == []
+    macro.update_game_config(lambda config: config.__setitem__("display_switched", True))      # (an earlier macro died with the panel off)
+    blackout.recover_display()
+    assert log == ["/internal"] and macro.load_game_config()["display_switched"] is False
+    log.clear()
+    blackout.recover_display()
+    assert log == []                                                                           # (nothing left off: nothing done)
+    monkeypatch.setattr(macro.cfg, "BLACKOUT_VIRTUAL_DISPLAY", False)                          # (and the switch can be turned off)
+    blackout, log = display_blackout(macro, monkeypatch, tmp_path)
+    monkeypatch.setattr(blackout, "make_window", lambda: None)
+    assert blackout.show() is False and log == []
+
+
+def test_display_switch_only_ever_runs_the_two_modes_and_the_virtual_display_is_found_by_name_on_windows_only(macro, monkeypatch):
+    ran = []
+    monkeypatch.setattr(macro.subprocess, "run", lambda command, **kw: ran.append(command))
+    monkeypatch.setattr(macro.os, "name", "nt")
+    assert macro.display_switch("/external") is True and macro.display_switch("/internal") is True
+    assert macro.display_switch("/extend") is False and macro.display_switch("& calc") is False and [c[1] for c in ran] == ["/external", "/internal"]
+    assert ran[0][0].endswith("DisplaySwitch.exe")
+    monkeypatch.setattr(macro.os, "name", "posix")
+    assert macro.virtual_display_present() is False and macro.display_switch("/internal") is False
+    img = np.full((1080, 1920, 3), 3, np.uint8)
+    monkeypatch.setattr(macro, "roblox_window", lambda: object())
+    monkeypatch.setattr(macro, "grab_screen", lambda: img)
+    assert macro.display_switch_worked() is False                                              # a flat screen: no picture
+    img[100:200, 100:200] = 200
+    assert macro.display_switch_worked() is True
+    monkeypatch.setattr(macro, "roblox_window", lambda: None)
+    assert macro.display_switch_worked() is False
 
 
 def test_the_blackout_command_blanks_shows_or_switches_and_says_what_the_screen_is(macro):

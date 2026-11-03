@@ -720,6 +720,12 @@ NEED_CHECK_RETRY_DELAY = 5.0   # pause before re-checking when no need was found
 LOOP_DELAY = 2.0               # pause between iterations of the workflow loop
 STOP_CHECK_INTERVAL = 0.1      # granularity of the interruptible wait loop
                                # (so you can take over the computer) - see watch_stop_hotkey()
+BLACKOUT_VIRTUAL_DISPLAY = True   # blank by switching to an installed virtual display (the PC's own panel off, Win+P's Second screen only) rather than a black window; without one, the window is used
+VIRTUAL_DISPLAY_NAMES = ("virtual display", "mttvdd", "iddsample")   # what the name of a display adapter has in it when it is a virtual display (lower case; the Virtual Display Driver's is "Virtual Display Driver by MTT": not read off a real PC)
+DISPLAY_ADAPTERS_MAX = 32     # the display adapters looked through for one of those names
+DISPLAY_SWITCH_TIMEOUT = 15.0 # seconds DisplaySwitch.exe is given
+BLACKOUT_DISPLAY_SETTLE = 4.0 # seconds after a switch of display before the screen is looked at (Windows moves its windows over)
+BLACKOUT_FLAT_LEVEL = 8       # a screenshot whose brightest and darkest pixels are closer than this is one flat colour: black, or no picture
 BLACKOUT_RAISE_INTERVAL_MS = 200  # milliseconds between the black window being put back above everything while the screen is blank (the control window, coming back up, lands above it)
 BLACKOUT_SETTLE = 0.4         # seconds the test flash is shown before the screen is looked at, to see whether the macro's screenshots see the window
 BLACKOUT_SEEN_RISE = 40       # if the screenshot's mean grey level rises this much (0-255) while the white test window is up, the screenshots see the window

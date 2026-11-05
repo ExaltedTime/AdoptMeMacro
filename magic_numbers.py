@@ -155,6 +155,16 @@ STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     # The player's own profile page (Stickers / Preview / paint / save, with its red X): a click on a player or on the character
     # menu's Profile opens it. The crop is the toolbar; "close_pos" is the X.
     "profile": {"box": (480, 170, 1560, 360), "close_pos": (1462, 262)},
+    # A trade request from another player ("<name> sent you a trade request" with Decline and Accept) and its "Trade request from <name> has expired!" with Okay: they come up while trading is not
+    # set to No One. The words change with the name, so the request is known by its Decline button (the crop: the red button with its label - the teleport dialogs' red button says No) and the
+    # expired one by the first line of its card, "Trade request" (the name wraps to the next line); each is closed by a button found by its colour and size (DIALOG_BUTTONS, as the card's
+    # height follows its text): Decline - never Accept, which is green - or Okay (a third as wide again as Accept). A card whose button is not found is left alone.
+    "trade_request": {"box": (700, 560, 1260, 800), "button": "decline"},
+    "trade_request_expired": {"box": (700, 380, 1240, 560), "button": "okay"},
+}
+DIALOG_BUTTONS = {                              # the buttons of those cards (measured on a real frame: Decline 174 x 47 and Accept 174 x 49 side by side, Okay 360 x 49)
+    "decline": {"box": (700, 540, 1260, 790), "hsv": (((170, 150, 150), (180, 255, 255)), ((0, 150, 150), (5, 255, 255))), "size": ((150, 210), (30, 60))},
+    "okay":    {"box": (700, 540, 1260, 790), "hsv": (((45, 110, 130), (80, 255, 255)),), "size": ((300, 420), (30, 60))},
 }
 
 # Other things recognised by a crop in STRAY_WINDOW_DIR (file name = the name here) found within "box"

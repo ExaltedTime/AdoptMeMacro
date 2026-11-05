@@ -3510,6 +3510,22 @@ def wanting_exit_dialog() -> Iterator[None]:
     finally:
         state.exit_dialog_wanted = False
 
+def find_dialog_button(img: Image, spec: dict[str, Any]) -> Optional[Point]:
+    """The middle of the biggest blob of colour `spec` (DIALOG_BUTTONS: "box", "hsv" - one or two (low, high) ranges -, "size" - (width, height) ranges) in `img`, or None."""
+    left, top, right, bottom = spec["box"]
+    hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, *spec["hsv"][0])
+    for extra in spec["hsv"][1:]:
+        mask = cv2.bitwise_or(mask, cv2.inRange(hsv, *extra))
+    count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    (min_w, max_w), (min_h, max_h) = spec["size"]
+    best: Optional[tuple[int, Point]] = None
+    for i in range(1, count):
+        width, height, area = (int(stats[i, key]) for key in (cv2.CC_STAT_WIDTH, cv2.CC_STAT_HEIGHT, cv2.CC_STAT_AREA))
+        if min_w <= width <= max_w and min_h <= height <= max_h and (best is None or area > best[0]):
+            best = (area, (left + int(centres[i][0]), top + int(centres[i][1])))
+    return best[1] if best is not None else None
+
 def dismiss_stray_windows() -> Optional[str]:
     """Close any window from STRAY_WINDOWS that is open (found by its title crop); returns
     its name or None. See docs/ARCHITECTURE.md#need-handlers.
@@ -3526,6 +3542,15 @@ def dismiss_stray_windows() -> Optional[str]:
             continue
         if config.get("only_when_unwanted") and state.pet_focus_wanted:
             continue
+        if "button" in config:                                              # (closed by a button of its own colour and size, found: the card's height follows its text)
+            button = find_dialog_button(img, cfg.DIALOG_BUTTONS[config["button"]])
+            if button is None:
+                continue
+            logger.debug(f"Stray window open: {name}, pressing its {config['button']} button...")
+            log_run_event(f"stray window closed: {name}" + (" (trading is not set to No One)" if name.startswith("trade_request") else ""))
+            hover_click(*button)
+            time.sleep(cfg.STRAY_CLOSE_SETTLE)
+            return name
         logger.debug(f"Stray window open: {name}, closing it...")
         log_run_event(f"stray window closed: {name}")
         if name == "trading_hub":

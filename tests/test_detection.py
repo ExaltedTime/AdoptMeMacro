@@ -210,6 +210,31 @@ def test_each_stray_window_is_told_from_the_others_in_a_real_screenshot_and_clos
     assert {k for k in macro.cfg.STRAY_WINDOWS if macro.popup_visible(screen, k)} == {name}
 
 
+def test_a_trade_request_is_declined_never_accepted_and_an_expired_one_is_okayed_by_buttons_found_by_their_colour(macro, monkeypatch):
+    """Real screenshots of the two cards (the name in them changes: both are known by the pin, and the buttons are found, not clicked at fixed places)."""
+    monkeypatch.setattr(macro.time, "sleep", lambda s: None)
+    request = cv2.imread(os.path.join(os.path.dirname(__file__), "popups", "trade_request.png"))
+    expired = cv2.imread(os.path.join(os.path.dirname(__file__), "popups", "trade_request_expired.png"))
+    monkeypatch.setattr(macro, "grab_screen", lambda: request)
+    assert macro.dismiss_stray_windows() == "trade_request"
+    x, y = macro.clicks[-1]
+    assert abs(x - 870) <= 6 and abs(y - 660) <= 6 and abs(x - 1048) > 100                      # (Decline, the red one: Accept is the green one to its right)
+    macro.clicks.clear()
+    monkeypatch.setattr(macro, "grab_screen", lambda: expired)
+    assert macro.dismiss_stray_windows() == "trade_request_expired"
+    x, y = macro.clicks[-1]
+    assert abs(x - 961) <= 6 and abs(y - 660) <= 6                                              # (Okay, the wide green one)
+    macro.clicks.clear()
+    moved = request.copy()                                                                      # a shorter name: the card has a line less and the buttons are higher
+    moved[540:700, 640:1260] = request[568:728, 640:1260]
+    monkeypatch.setattr(macro, "grab_screen", lambda: moved)
+    assert macro.dismiss_stray_windows() == "trade_request" and abs(macro.clicks[-1][1] - 632) <= 8
+    macro.clicks.clear()
+    for name in ("teleport_nursery", "teleport_dealership", "cant_spawn_vehicle", "backpack_open", "trading_hub", "task_board_alerts", "paycheck", "star_rewards_claim"):
+        monkeypatch.setattr(macro, "grab_screen", lambda name=name: screenshot(name))
+        assert not any(macro.popup_visible(screenshot(name), key) for key in ("trade_request", "trade_request_expired")), name        # (no other dialog is taken for one)
+
+
 def test_the_finish_screens_of_both_minigames_are_recognised_in_real_screenshots_and_nothing_else_is(macro):
     for name in ("finish_screen_ghost_gallery", "finish_screen_hauntlet_2", "game_over"):            # (the second has the next game's countdown over the banner's top)
         assert macro.detect_minigame_finished(screenshot(name)) is True, name

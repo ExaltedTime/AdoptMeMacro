@@ -44,11 +44,9 @@ def _scale(_k):
         if (isinstance(_v, (int, float)) and not isinstance(_v, bool) and _n not in ("STOP_CHECK_INTERVAL", "REJOIN_INTERVAL", "GHOST_ALERT_DOT_GAP")
                 and (_n in _OTHER_TIMES or _re.search(r"(WAIT|DURATION|INTERVAL|DELAY|TIMEOUT|GAP|SETTLE|GRACE)$", _n))):
             globals()[_n] = _v * _k
-    for _table in (TELEPORT_WALK_NEEDS_NORMAL, TELEPORT_WALK_NEEDS_HALLOWEEN):
-        for _entry in _table.values():
-            _entry["steps"] = tuple((_key, _d * _k) for _key, _d in _entry["steps"])
+    for _entry in TELEPORT_WALK_NEEDS.values():
+        _entry["steps"] = tuple((_key, _d * _k) for _key, _d in _entry["steps"])
 _scale(%s)
-TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN else TELEPORT_WALK_NEEDS_NORMAL
 '''
 
 def scaled(factor: str) -> str:
@@ -58,8 +56,6 @@ def scaled(factor: str) -> str:
 
 VARIANTS = {
     "baseline": "",
-    # the event ends: the Halloween-only needs (sick) stop existing
-    "halloween_off": "HALLOWEEN = False\nTELEPORT_WALK_NEEDS = TELEPORT_WALK_NEEDS_NORMAL\n",
     "timings_x1.7": scaled("1.7"),
     "timings_x0.5": scaled("0.5"),
     "other_tuning": '''
@@ -92,11 +88,9 @@ for _n, _v in list(globals().items()):
 ''',
     # optional keys of the need tables left out
     "drop_optional_keys": '''
-for _table in (TELEPORT_WALK_NEEDS_NORMAL, TELEPORT_WALK_NEEDS_HALLOWEEN):
-    for _entry in _table.values():
-        for _key in ("max_wait", "helicopter"):
-            _entry.pop(_key, None)
-TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN else TELEPORT_WALK_NEEDS_NORMAL
+for _entry in TELEPORT_WALK_NEEDS.values():
+    for _key in ("max_wait", "helicopter"):
+        _entry.pop(_key, None)
 ''',
 }
 
@@ -104,12 +98,11 @@ TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLO
 
 KEYS_REBUILD = ('MOVE_KEYS = tuple(KEYS[name] for name in ("forward", "left", "back", "right"))\n'      # (what magic_numbers.py derives from the key tables, derived again)
                 'HELD_KEYS = tuple(dict.fromkeys([*KEYS.values(), *(key for keys in KEY_SEQUENCES.values() for key in keys)]))\n')
-REBUILD = "TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN else TELEPORT_WALK_NEEDS_NORMAL\n"
 
 VARIANTS.update({
     # a need deleted from the table / a new one added
-    "needs_removed": 'for _n in ("cafe", "pizza", "camping", "bored"):\n    TELEPORT_WALK_NEEDS_NORMAL.pop(_n, None)\n    TELEPORT_WALK_NEEDS_HALLOWEEN.pop(_n, None)\nNEED_NAMES = tuple(_n for _n in NEED_NAMES if _n not in ("cafe", "pizza", "camping", "bored"))\n' + REBUILD,
-    "need_added": 'TELEPORT_WALK_NEEDS_NORMAL["museum"] = dict(teleport_pos=TELEPORT_PETS_TAB_POS, steps=(("w", 3.0), ("d", 2.0)))\nNEED_NAMES = (*NEED_NAMES, "museum")\n' + REBUILD,
+    "needs_removed": 'for _n in ("cafe", "pizza", "camping", "bored"):\n    TELEPORT_WALK_NEEDS.pop(_n, None)\nNEED_NAMES = tuple(_n for _n in NEED_NAMES if _n not in ("cafe", "pizza", "camping", "bored"))\n',
+    "need_added": 'TELEPORT_WALK_NEEDS["museum"] = dict(teleport_pos=TELEPORT_PETS_TAB_POS, steps=(("w", 3.0), ("d", 2.0)))\nNEED_NAMES = (*NEED_NAMES, "museum")\n',
     "button_names_reordered": 'BUTTON_NAMES[:] = ["sleepy", "potty", "dirty", "thirsty", "hungry"]\n',
     "helicopter_everywhere": "HELICOPTER_REQUIRED = True\n",
     # thresholds and tolerances nudged either way (detection tuning)
@@ -126,8 +119,6 @@ VARIANTS.update({
     # other key bindings in the game
     "keys_remapped": 'KEYS.update(backpack="v", mount="f", interact="f", zoom_in="o", helicopter="t", jump="x")\nHOTKEYS["stop"] = "q"\n' + KEYS_REBUILD,
 
-    # behaviour flags flipped
-    "flags_flipped": "SAVE_NEW_NEEDS = True\n",
     # the machine and the folders around the code
     "tz_new_york": {"env": {"TZ": "America/New_York"}},
     "tz_kolkata": {"env": {"TZ": "Asia/Kolkata"}},

@@ -238,7 +238,6 @@ def one_need(macro, monkeypatch):
     """process_needs() with a single 'hungry' icon on a dark screen and a handler that succeeds."""
     import numpy as np
     screen = np.zeros((1080, 1920, 3), np.uint8)
-    monkeypatch.setattr(macro.cfg, "SAVE_NEW_NEEDS", False)                  # (True would ask for a name for an unknown icon)
     monkeypatch.setattr(macro, "focus_roblox_click", lambda: True)
     monkeypatch.setattr(macro, "detect_need_icons", lambda save_debug=False: ([(100, 50, 30)], screen))
     monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(0, screen[:10, :10], "hungry", 0.9)]))
@@ -2066,14 +2065,14 @@ def blackout_gui(macro, monkeypatch, tmp_path, hotkey_on=True, shown=False, loop
     return gui
 
 
-def test_the_blackout_key_blanks_the_screen_only_while_the_loop_runs_but_always_shows_it_again(macro, monkeypatch, tmp_path):
+def test_the_blackout_key_blanks_the_screen_while_the_macro_does_anything_but_always_shows_it_again(macro, monkeypatch, tmp_path):
     idle = blackout_gui(macro, monkeypatch, tmp_path, loop=False)                          # nothing runs
     idle.blackout_by_hotkey()
     assert idle.blackout.toggles == 0 and not idle.blackout.shown
-    other = blackout_gui(macro, monkeypatch, tmp_path)                                     # an action runs (Setup, say), not the loop
+    other = blackout_gui(macro, monkeypatch, tmp_path)                                     # an action runs (Setup, say), not the loop: blank all the same
     other.running_loop = False
     other.blackout_by_hotkey()
-    assert other.blackout.toggles == 0
+    assert other.blackout.toggles == 1 and other.blackout.shown
     running = blackout_gui(macro, monkeypatch, tmp_path)
     running.blackout_by_hotkey()
     assert running.blackout.shown and running.blackout.toggles == 1                         # the loop runs: blank
@@ -2414,3 +2413,30 @@ def test_the_blackout_command_is_obeyed_whatever_the_hotkeys_checkbox_says_and_t
     gui.do_command("blackout", {"command": "blackout", "value": "yes"}, "b3")                     # (not a switch: it switches)
     assert gui.calls == [("blackout", True), ("blackout", None), ("blackout", None)]
     assert [done_text(macro, name) for name in ("b1", "b2", "b3")] == ["blanked"] * 3
+
+
+def test_the_new_need_key_teaches_what_the_need_bar_shows_that_no_saved_need_matches_only_while_its_checkbox_is_on(macro, monkeypatch, tmp_path):
+    taught = []
+    monkeypatch.setattr(macro, "teach_new_needs", lambda: taught.append(1) or 1)
+    gui = blackout_gui(macro, monkeypatch, tmp_path)
+    gui.config_flag_vars = {"new_need_hotkey_enabled": types.SimpleNamespace(get=lambda: False)}
+    gui.new_need_by_hotkey()
+    assert taught == []                                                                      # (off: the key is typed in the game)
+    gui.config_flag_vars = {"new_need_hotkey_enabled": types.SimpleNamespace(get=lambda: True)}
+    gui.new_need_by_hotkey()
+    assert taught == [1]
+    monkeypatch.setattr(macro, "teach_new_needs", lambda: 1 / 0)
+    gui.new_need_by_hotkey()                                                                 # (a look that failed is logged, not raised into Tk)
+    assert macro.load_game_config()["new_need_hotkey_enabled"] is True and macro.cfg.HOTKEYS["new_need"] == "ú"
+
+
+def test_teaching_new_needs_asks_for_each_icon_on_the_bar_that_matches_nothing_and_none_that_is_known(macro, monkeypatch):
+    icon = np.zeros((10, 10, 3), np.uint8)
+    monkeypatch.setattr(macro, "detect_need_icons", lambda fresh=False: ([(1, 2, 3), (4, 5, 6), (7, 8, 9)], np.zeros((20, 20, 3), np.uint8)))
+    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(0, icon, "potty", 0.99), (1, icon, None, 0.5), (2, icon, None, 0.4)]))
+    asked = []
+    monkeypatch.setattr(macro, "prompt_rename_need", lambda image, idx, on_ui_thread=False: asked.append((idx, on_ui_thread)) or "x")
+    assert macro.teach_new_needs() == 2 and asked == [(1, True), (2, True)]                  # (Tk's thread asks the dialog itself)
+    monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(0, icon, "potty", 0.99)]))
+    asked.clear()
+    assert macro.teach_new_needs() == 0 and asked == []

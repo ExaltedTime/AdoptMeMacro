@@ -807,6 +807,7 @@ def _read_game_config() -> dict[str, Any]:
         "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
         "record_next_run": False,   # record the next run as a low quality video; cleared when that run starts
         "blackout_hotkey_enabled": True,   # whether HOTKEYS["blackout"] blanks the screen (off: that key can be typed in Roblox)
+        "new_need_hotkey_enabled": True,   # whether HOTKEYS["new_need"] teaches the macro a need icon it does not know (off: that key can be typed in Roblox)
         "needs_enabled": {},        # {need: whether it is acted on}, the Debug tab's switches; a need not in it follows ENABLED_NEEDS (see need_is_enabled())
         **{f"{name}_enabled": False for name in cfg.MINIGAME_LABELS},  # which Halloween minigames get played (see minigame_popup())
         "private_server_link": "",  # used by leave_and_rejoin(); kept here, not in the source, since it's a join key
@@ -996,19 +997,20 @@ def find_matching_need(icon_variants: list[Image]) -> tuple[Optional[str], float
         return best_match, best_score
     return None, best_score
 
-def prompt_rename_need(icon_img: Image, idx: int) -> str:
-    """Save a new need icon and ask for its name (dialog or console); a cancelled dialog saves
-    it as unnamed_<idx>. See docs/ARCHITECTURE.md#process_needs-step-by-step.
-    """
+def prompt_rename_need(icon_img: Image, idx: int, on_ui_thread: bool = False) -> str:
+    """Save a new need icon and ask for its name (dialog or console); a cancelled dialog saves it as unnamed_<idx>. `on_ui_thread`: the caller is Tk's thread, which asks the dialog itself
+    (run_on_ui_thread() would wait for itself). See docs/ARCHITECTURE.md#teaching-a-new-need."""
     logger.info("New need detected")
     temp_path = os.path.join(cfg.NEEDS_DIR, f"temp_{idx}.png")
     cv2.imwrite(temp_path, preprocess_icon(icon_img))
 
     prompt = "Need name (hungry/thirsty/dirty/potty/sleepy/catch/walk/other):"
     if state.macro_window is not None:
-        answer = state.macro_window.run_on_ui_thread(
-            lambda: simpledialog.askstring("New need", prompt, parent=state.macro_window.root), timeout=None)
-        focus_roblox_click()   # the dialog took the focus
+        window = state.macro_window
+        ask = lambda: simpledialog.askstring("New need", prompt, parent=window.root)
+        answer = ask() if on_ui_thread else window.run_on_ui_thread(ask, timeout=None)
+        if not on_ui_thread:
+            focus_roblox_click()   # the dialog took the focus
     else:
         print(f"{prompt} ", end="", flush=True)                           # (a question to the person at the terminal, not a log line)
         answer = input()
@@ -1017,6 +1019,23 @@ def prompt_rename_need(icon_img: Image, idx: int) -> str:
     os.rename(temp_path, os.path.join(cfg.NEEDS_DIR, f"{need_name}.png"))
     logger.info(f"Saved: {need_name}")
     return need_name
+
+def teach_new_needs() -> int:
+    """The new-need key's action (Tk's thread): look at the need bar now (detect_need_icons(), a fresh search) and ask for the name of each icon on it that matches no saved need
+    (prompt_rename_need(): saved into NEEDS_DIR under that name, so that it is recognised from the next look). Says in the log if there was none. Returns how many were taught."""
+    found_icons, full_img = detect_need_icons(fresh=True)
+    taught = 0
+    for idx, icon_img, need_name, score in identify_icons(found_icons, full_img):
+        if need_name:
+            continue
+        logger.info(f"New need on the bar (best score: {score:.4f})")
+        prompt_rename_need(icon_img, idx, on_ui_thread=True)
+        taught += 1
+    if taught:
+        logger.info(f"{taught} new need(s) taught - they are recognised from the next look")
+    else:
+        logger.info(f"No new need on the bar ({len(found_icons)} icon(s), all known)" if found_icons else "No need icon on the bar")
+    return taught
 
 def identify_icons(found_icons: list[tuple[int, int, int]], full_img: Image) -> Iterator[tuple[int, Image, Optional[str], float]]:
     """Match each detected icon against the saved needs. Yields
@@ -2877,6 +2896,8 @@ class ChooseNeedHandler(NeedHandler):
             match = find_choose_disc(img)
             if match is None:
                 logger.warning("No purple disc found either")
+                shot = save_failure_report("choose: no button in the focused view")          # (the failure screenshot taken after this is of the pet focus closed: the button is in this one)
+                log_run_event(f"choose: no button found - the focused view is in failures/{shot}")
                 return False
             logger.info(f"The choose button was found as a purple disc at {match}")
             log_run_event("choose: the button was found by its shape and hue, not its exact colour")
@@ -3082,18 +3103,7 @@ def process_needs() -> bool:
         note_idle_check()
         return False
 
-    matched_needs = []
-    for idx, icon_img, need_name, score in identify_icons(found_icons, full_img):
-        if not need_name:
-            if cfg.SAVE_NEW_NEEDS:
-                logger.info(f"New need (best score: {score:.4f})")
-                # prompt_rename_need() already saves the reference icon into
-                # NEEDS_DIR - that .png file is the only record needed for this
-                # need to be recognized next time, so there's nothing further to
-                # persist here.
-                prompt_rename_need(icon_img, idx)
-            continue
-        matched_needs.append((need_name, score))
+    matched_needs = [(need_name, score) for _, _, need_name, score in identify_icons(found_icons, full_img) if need_name]      # (an icon that matches none is skipped: the new-need key teaches it)
 
     names = [name for name, _ in matched_needs]
     if names:
@@ -6992,7 +7002,8 @@ class AdoptMeGUI:
         hotkeys = [(cfg.HOTKEYS["stop"], self.stop_by_hotkey, True, False),
                    (cfg.HOTKEYS["capture"], self.capture_by_hotkey, False, True),
                    (cfg.HOTKEYS["blackout"], self.blackout_by_hotkey, False, True),
-                   (cfg.HOTKEYS["screenshot"], self.screenshot_by_hotkey, False, True)]   # (key, action, only while a run is going, only while Roblox is focused)
+                   (cfg.HOTKEYS["screenshot"], self.screenshot_by_hotkey, False, True),
+                   (cfg.HOTKEYS["new_need"], self.new_need_by_hotkey, False, True)]   # (key, action, only while a run is going, only while Roblox is focused)
 
         def watch():
             was_down = [False] * len(hotkeys)
@@ -7027,6 +7038,16 @@ class AdoptMeGUI:
             self.blackout.hide()
         return ("blanked (display off)" if self.blackout.display_switched else "blanked") if self.blackout.shown else ("not blanked" if want else "shown")
 
+    def new_need_by_hotkey(self) -> None:
+        """HOTKEYS["new_need"] was pressed in Roblox: look at the need bar and ask for the name of any icon on it the macro does not know (Tk's thread), unless the Options subtab's checkbox
+        has the key off (it is then typed in the game)."""
+        if not self.config_flag_vars["new_need_hotkey_enabled"].get():
+            return
+        try:
+            teach_new_needs()
+        except Exception:
+            logger.exception("Looking for a new need failed")
+
     def screenshot_by_hotkey(self) -> None:
         """HOTKEYS["screenshot"] was pressed in Roblox: a picture of the whole screen into SCREENSHOTS_DIR (Tk's thread)."""
         try:
@@ -7058,10 +7079,10 @@ class AdoptMeGUI:
 
     def blackout_by_hotkey(self) -> None:
         """HOTKEYS["blackout"] was pressed: blank the screen or show it again (Tk's thread), unless the Options subtab's checkbox has the key off (it is
-        then typed in the game). The screen is only blanked while the loop is running; one that is blank can always be shown again."""
+        then typed in the game). The screen is only blanked while the macro is doing something (the loop or an action such as Setup); one that is blank can always be shown again."""
         if not self.config_flag_vars["blackout_hotkey_enabled"].get():
             return
-        if not self.blackout.shown and not (self.is_running and self.running_loop):
+        if not self.blackout.shown and not self.is_running:
             return
         try:
             self.blackout.toggle()
@@ -7390,6 +7411,7 @@ class AdoptMeGUI:
         folder, reset the config."""
         self.add_config_checkbox(parent, "Record the next run (low quality video)", "record_next_run", load_game_config())
         self.add_config_checkbox(parent, f"{cfg.HOTKEYS['blackout'].upper()} blanks the screen in Roblox (off: type it)", "blackout_hotkey_enabled", load_game_config())
+        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['new_need'].upper()} teaches a new need icon in Roblox (off: type it)", "new_need_hotkey_enabled", load_game_config())
         self.show_debug_var = tk.BooleanVar(value=True)
         tk.Checkbutton(parent, text="Show debug lines in the output", variable=self.show_debug_var, command=self.set_debug_lines_shown,
                        font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.bg, fg=self.fg,

@@ -53,13 +53,7 @@ every second instead of a line per check.
    Nothing found → return `False` immediately (silently).
 3. For each detected icon, match it against the saved reference icons in
    `ref/needs/` (`find_matching_need()`). An icon that doesn't match anything
-   well enough triggers `prompt_rename_need()` (asks you, in a dialog, to
-   name and save it - only when `SAVE_NEW_NEEDS` is on) and is otherwise skipped this pass - it isn't
-   "resolved," it's just been taught for next time. The saved icon is the
-   high-contrast black-and-white form (`preprocess_icon()`); cancelling the
-   dialog or an empty name saves it as `unnamed_<idx>`. The dialog runs on the
-   GUI's thread (`run_on_ui_thread()`, no timeout) since the worker has no
-   console to read from; without a GUI it asks on the console.
+   well enough is skipped this pass (it is taught by the new-need key, see [Teaching a new need](#teaching-a-new-need)).
 4. Every icon that *did* match is collected into an ordered list of need
    names, in the order they were detected, and logged (`detected: ...`, and
    printed with each icon's score; icons on screen but none recognised are
@@ -294,8 +288,11 @@ re-read the folder) - including subfolders, so related icons can be grouped (the
 seasonal `diving` and `puddle` icons live in `ref/needs/weather/`); a need's
 name is just its file name, wherever it sits - and keeps the best score. A best score below
 `ICON_MATCH_THRESHOLD` means "not confident this is anything we've
-seen" - the icon is then unknown and, when `SAVE_NEW_NEEDS` is on, goes to
-`prompt_rename_need()`; otherwise it is just skipped.
+seen" - the icon is then unknown and is skipped (the new-need key teaches it).
+
+### Teaching a new need
+
+`HOTKEYS["new_need"]` (`ú`, a key of its own on the keyboard layout, looked up like the screenshot key; only while Roblox is focused, and only while the Options subtab's **ú teaches a new need icon in Roblox** checkbox - `new_need_hotkey_enabled`, also `/option new_need_hotkey` - is on; off, the key can be typed in the game) looks at the need bar now (`teach_new_needs()`, on Tk's thread: `detect_need_icons(fresh=True)`, then `identify_icons()`) and asks the name of each icon on it that no saved need matches (`prompt_rename_need(on_ui_thread=True)`: the reference icon, in its black-and-white form from `preprocess_icon()`, is saved into `NEEDS_DIR` under the name typed - `unnamed_<n>` for a cancelled dialog or an empty name - and is recognised from the next look). It says in the log when there was no new icon. It replaced a flag that asked during a run.
 
 ## Waiting for a need to clear
 
@@ -464,7 +461,7 @@ rather than a flat sleep after the fact.
 | `hungry` / `thirsty` / `dirty` / `potty` / `sleepy` | `ButtonNeedHandler`: walk to the action buttons (`walk_to_buttons()`), refresh the button mapping (`refresh_button_mapping()`), click the matching one (`click_need_button()`), which then calls `wait_until_need_gone()` for that need name. A click can be refused - the game answers "Only Pets, Babies, and Dolls can use this." even when all five buttons were found - and for `BUTTON_REJECT_LOOK` seconds after each click `only_pets_message_visible()` looks for that text (the white of its letters against `ref/popups/only_pets.png`, `ONLY_PETS_*`, so what is behind it doesn't matter). If it is there the handler waits `BUTTON_RETRY_WAIT` seconds (the pet may be on its way: in a run three clicks a few seconds apart were all refused) and clicks again, up to `BUTTON_CLICK_TRIES` clicks in all (a run event each time); a click that is refused again gives the need up (the handler returns False without waiting for the icon), and one that takes after a retry gets only `BUTTON_RETRY_CLEAR_WAIT` seconds for the icon to clear (a retried need timed out at the full wait). |
 | `catch` | `CatchNeedHandler`: open backpack → toys → squeaky toy → equip → close backpack → wait `CATCH_WAIT_AFTER_EQUIP` → hold zoom-in → throw the toy by clicking empty space `CATCH_THROW_COUNT` times, `CATCH_EMOTE_DELAY` after each → unequip. A fixed sequence: it doesn't wait for the icon (the next check sees whether it cleared). |
 | `pet` | `PetNeedHandler`: `focus_pet()` (see below, with `PET_FOCUS_CLICK_DURATION`), click the screen centre, move to `PET_SWIPE_START_OFFSET` above it, then hold the mouse down and swipe once down to `PET_SWIPE_END_OFFSET` below it over `PET_SWIPE_DURATION`, releasing the button in a `finally`. Same as `catch` - always the full fixed duration. |
-| `choose` | `ChooseNeedHandler`: `focus_pet()` (see below), find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. It doesn't wait for the icon to clear (it's gone at once; the next check confirms). When no pixel has that exact colour (twice in run 34 the button was in plain sight under the focused pet), `find_choose_disc()` looks for it by its look: the biggest roundish blob of the purple-to-magenta hue `CHOOSE_DISC_HSV`, of `CHOOSE_DISC_AREA` px and at least `CHOOSE_DISC_ROUNDNESS` of its circle, so neither the white outline (not always there) nor the "?" (its text can change) matters; the disc is about 56 px across, measured on `tests/popups/choose_pet_lying_in_house.png`, where the exact colour was not in it at all (its shading moves) and the disc is what clicked. A choose that failed backs out of the pet focus (`dismiss_stray_windows()`): left in it, the next need's walk to the buttons went nowhere. |
+| `choose` | `ChooseNeedHandler`: `focus_pet()` (see below), find the exact-color button (`CHOOSE_BUTTON_COLOR`, since it has no distinguishing icon), hover to it slowly (`hover_click`) and click, then click screen-center to dismiss the menu. It doesn't wait for the icon to clear (it's gone at once; the next check confirms). When no pixel has that exact colour (twice in run 34 the button was in plain sight under the focused pet), `find_choose_disc()` looks for it by its look: the biggest roundish blob of the purple-to-magenta hue `CHOOSE_DISC_HSV`, of `CHOOSE_DISC_AREA` px and at least `CHOOSE_DISC_ROUNDNESS` of its circle, so neither the white outline (not always there) nor the "?" (its text can change) matters; the button is about `CHOOSE_DISC_AREA` px (180 across); the 56 px "?" that `tests/popups/choose_pet_lying_in_house.png` has at the top is the choose need's icon in the need bar, not the button (a range that took it clicked the bar, and the real button was missed: run 19, six failures with "No purple disc found either"). No kept frame has the button in view, so `_choose()` now saves the focused view (`save_failure_report()`) when it finds nothing. A choose that failed backs out of the pet focus (`dismiss_stray_windows()`): left in it, the next need's walk to the buttons went nowhere. |
 | `ride` | `RideNeedHandler`: step back, mount (`e`), walk forward briefly, then `equip_favorite_vehicle()` (backpack → vehicles → first vehicle → equip → close backpack), hold `r` (`KEYS["helicopter"]`) for `RIDE_R_HOLD_DURATION`, then `walk_alternating(("w", "s"), NEED_GONE_MAX_WAIT, need_name="ride")` - up to `NEED_GONE_MAX_WAIT`, ending early the moment "ride" is confirmed cleared (see below). A ride that did not clear its need (`state.need_cleared` false) or could not be done is followed by `set_backpack_filter()` - the favourites filter of the backpack, as Setup sets it (looked at first, left alone when it says Favorites), and, only when the pet is not out (no name bar over the character), the Alicorn found by its picture in the pets tab (`equip_favorite_pet()`: its card's green Equip button found by `find_equip_button()`; a card that says Unequip is left alone), and the ride once more, once: with Setup not run, the first vehicle was a car and not the helicopter the keys are for. |
 | `bored` / `beach` / `school` / `cafe` / `salon` / `pizza` / `camping` / `sick` | `TeleportWalkNeedHandler`, configured per need in `TELEPORT_WALK_NEEDS`: teleport to the nursery or dealership (`teleport_to()`), hold each `(key, seconds)` step with `hold_key()`, then `wait_until_need_gone()` (see [Waiting for a need to clear](#waiting-for-a-need-to-clear)). `process_needs()` respawns afterwards. An entry may also set `final_click`, the Yes of a dialog the need has to answer after the last hold (used by `sick`). After `SICK_PRE_CLICK_WAIT` the handler looks for the doctor's *prompt* - the purple hand button over the player's head, a reference crop (`ref/popups/doctor_prompt.png`, `POPUP_TEMPLATES["doctor_prompt"]`, `find_doctor_prompt()`) - for `SICK_PROMPT_LOOK` seconds (`look_until()`, a look every `SICK_LOOK_INTERVAL`), and clicks it where it is found. It does *not* press `e`: that is the key of the pet's own prompt, and in a recording of the macro it opened the pet's menu, the pet view backed out of, and the click on the Yes that followed hit nothing - while a hand clicking the prompt, by hand, brought up the dialog about 2.5 s later (`tests/sick/`: the real screenshots of the prompt, the dialog and the pet view). If the pet view is open when the handler starts it is backed out of first (`dismiss_stray_windows()`; it hides the prompt). Then it looks for the dialog (`detect_sick_dialog()`, `ref/popups/sick_dialog.png`) for `SICK_CONFIRM_WAIT` seconds; seen, it clicks the Yes (`final_click`). The need is given up at once - the character respawns, the handler returns False with no wait for the icon to clear and `process_needs()` logs the failure - when the prompt is not on screen (`sick: the doctor's prompt is not on screen`) or the dialog does not come up (`sick: no dialog after the prompt was clicked`). (Before this the handler pressed `e`, clicked Yes whether or not the dialog was recognised, and waited out the icon's 75 s: sick failed to clear 16 times in a 7-hour run, each costing about two minutes), `helicopter` (see below) and `max_wait` (how long to wait for the need to clear afterwards; default `NEED_GONE_MAX_WAIT`, 75s). Which table is used depends on `HALLOWEEN` - see below. |
 | `walk` | `WalkNeedHandler`: `walk_alternating(("a", "d"), NEED_GONE_MAX_WAIT, need_name="walk")` - up to `NEED_GONE_MAX_WAIT`, same early-exit as `ride` above. |
@@ -477,17 +474,10 @@ calls `equip_favorite_vehicle()` (the same backpack sequence `ride` uses; the
 first vehicle is the favorite once `setup_game()` has filtered the backpack),
 holds `r` for `HELICOPTER_HOLD_DURATION`, runs the entry's steps as
 usual, then presses space (`KEYS["jump"]`) on arrival, before any `final_click`.
-Only the Halloween `bored`, `beach` and `camping` entries use it.
+No entry of `TELEPORT_WALK_NEEDS` uses it now (the Halloween `bored`, `beach` and `camping` did, see `scripts/Halloween2026.py`).
 
-**Halloween.** `HALLOWEEN` (`magic_numbers.py`, next to `ENABLED_NEEDS`) is
-a plain boolean. The teleport-walk steps live in two tables,
-`TELEPORT_WALK_NEEDS_NORMAL` and `TELEPORT_WALK_NEEDS_HALLOWEEN`;
-`TELEPORT_WALK_NEEDS` - the one `TeleportWalkNeedHandler` and the handler
-registry actually read - is the normal table with the Halloween entries laid
-over it while the flag is on. The Halloween table covers `bored`, `beach`,
-`school`, `camping` (Halloween moves the nursery, so each has its own steps
-there; `bored`, `beach` and `camping` also fly by helicopter) and `sick`, which *only* exists there - with `HALLOWEEN` off it
-has no steps and isn't a need at all. While the flag is on, `unscrew()` also
+**Routes.** The teleport-walk steps live in one table, `TELEPORT_WALK_NEEDS` (what `TeleportWalkNeedHandler` and the handler registry read). The nursery's routes (`bored`, `beach`, `school`, `camping`, `sick`) are the ones from before Halloween moved it: the nursery is back where it was, and the event's own routes (and `helicopter`) are kept in `scripts/Halloween2026.py`, which the macro does not import. `HALLOWEEN` (`magic_numbers.py`, next to `ENABLED_NEEDS`) is
+a plain boolean that is left only for the minigames. While the flag is on, `unscrew()` also
 calls `minigame_popup()`, which plays or dismisses the minigame popups
 (see below).
 
@@ -1055,6 +1045,8 @@ actually on disk (so an old config missing a newer key still works), and
   one)** checkbox on the Settings tab, above the link (default on). Off, a
   rejoin goes to a public server and the link stays saved. **Reset Config**
   puts it back on.
+- **`new_need_hotkey_enabled`** - the **Ú teaches a new need icon in Roblox (off: type it)** checkbox on the Debug tab's Options subtab (default on; the label names
+  `HOTKEYS["new_need"]`). Off, the key does nothing here and can be typed in the game; see [Teaching a new need](#teaching-a-new-need).
 
 During a run, this file is read and updated by:
 
@@ -1221,7 +1213,7 @@ It is only turned on after a test (`Blackout.show()`): the window is first shown
 `BLACKOUT_SEEN_RISE` grey levels brighter the screenshots see the window and it is taken away again with a warning, and a screen already brighter than
 `BLACKOUT_TOO_BRIGHT` cannot be tested (`blackout_seen_by_capture()` is None) and is refused the same way (try again from a darker view). A Windows that refuses
 the capture exclusion gets the same warning. Only then is the window made black. The test shows as a brief white flash. It does not dim the backlight, and the
-window goes with the process (`close()` takes it away first). The hotkey blanks the screen only while the loop is running (`blackout_by_hotkey()`: not when nothing runs or an action such as Setup does), and shows a blank screen again at any time; it works at all only while the Options subtab's checkbox has it on (`blackout_hotkey_enabled`), and the `/blank` command does not ask either; the cursor is hidden over it.
+window goes with the process (`close()` takes it away first). The hotkey blanks the screen while the macro is doing anything - the loop or an action such as Setup (`blackout_by_hotkey()`; not when nothing runs), and shows a blank screen again at any time; it works at all only while the Options subtab's checkbox has it on (`blackout_hotkey_enabled`), and the `/blank` command does not ask either; the cursor is hidden over it.
 The control window is blanked with the rest of the screen: while the screen is blank the black window is put back at the top of the always-on-top windows every
 `BLACKOUT_RAISE_INTERVAL_MS` (`Blackout.keep_on_top()`, `SetWindowPos` with `HWND_TOPMOST` and no activation, the handles passed as pointer-sized values), and at once when the control window is brought back after a minigame (`bring_to_front()`), because the control window coming back up from the
 taskbar lands above it and Windows decides when, so a single raise is either too soon or too late.
@@ -1658,7 +1650,7 @@ the commands. It is started by hand, next to the macro: `python bot/discord_bot.
 | `/restart` | stops the macro as `/exit` does and starts it again as it was (with its loop only if the loop was going), then restarts the bot itself, as `/update` does but with no change of code; one at a time with `/update` and `/rollback`; a macro that was not running is not started |
 | `/rollback` | goes back to the commit the PC was on before the last `/update`, and restarts the macro the same way |
 | `/need <need> <on>` | switches a need on or off, as the Debug tab's checkbox does (the command goes through a command file; a macro that is not running is started first - see below); says what the game config shows a moment later |
-| `/option <option> <on>` | the other switches (every checkbox of the Settings tab and the Debug tab's Options subtab): `side_quest`, `resume_on_focus_loss`, `use_private_server`, `record_next_run`, `blackout_hotkey`, `play_<minigame>` and `show_debug_lines` (the output's debug lines, which is only a checkbox and so is not confirmed) |
+| `/option <option> <on>` | the other switches (every checkbox of the Settings tab and the Debug tab's Options subtab): `side_quest`, `resume_on_focus_loss`, `use_private_server`, `record_next_run`, `blackout_hotkey`, `new_need_hotkey`, `play_<minigame>` and `show_debug_lines` (the output's debug lines, which is only a checkbox and so is not confirmed) |
 | `/test <handler>` | what the Debug tab's Test button of a need does (`test_need_handler()`), or `teleports` for its "Test every teleport handler" (`TEST_ALL_TELEPORTS`); the macro's loop is stopped first and not started again, and the channel is told how it ended (`test` command, queued as `test:<handler>` in `OUTSIDE_ACTIONS`) |
 | `/reset_config <sure>` | Reset Config (`reset_game_config()`: totals, timers and switches back to their defaults, the private server link kept), only with `sure` true and not while the macro runs anything (`reset_config` command: `.done` says `given up` if it did) |
 | `/server_link <link>` | saves the private server link a rejoin goes to, as the box in the Settings tab does; the macro drops a link `parse_server_link()` does not know and nothing says the link back, but the channel shows what was typed, as for any command (`server_link` command) |
@@ -1793,7 +1785,7 @@ intervals, hours and counts changed; counts at their lowest and highest; the
 event flag off; needs removed from or added to the table; button names reordered;
 helicopter for every need; thresholds nudged up and down, colour tolerances
 widened, search boxes and click positions moved; other key bindings; behaviour
-flags flipped (`SAVE_NEW_NEEDS`); two other time zones; a
+two other time zones; a
 different hash seed; run from another working directory; a `debug/` folder with a
 real config and logs in it; extra files in `ref/`; the tests in reverse and in
 shuffled order; and each test file run on its own. The one test file that is *meant* to depend

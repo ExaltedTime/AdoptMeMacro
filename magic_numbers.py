@@ -25,8 +25,7 @@ ENABLED_NEEDS = {
 # ============================================================================
 # EVENT FLAGS
 # ============================================================================
-# While HALLOWEEN is on, some teleport needs use different steps (see
-# TELEPORT_WALK_NEEDS_HALLOWEEN) and unscrew() also runs minigame_popup().
+# While HALLOWEEN is on, unscrew() also runs minigame_popup() (the event's routes are in scripts/Halloween2026.py).
 HALLOWEEN = True
 
 # The "Ghost Gallery / Hauntlet 2 is starting soon! Teleport there now?" popups (one layout) are recognised by their
@@ -270,7 +269,7 @@ COMMANDS_DIR = os.path.join(DEBUG_DIR, "commands")          # the commands for t
 COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus", "blackout", "test", "reset_config", "server_link", "trades", "decline", "capture", "recenter")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, travel to / leave the Trading Hub, take pictures of the backpack's pets tab, or run Setup and then the loop (`sloop`), bring the Roblox window to the front (`focus`), blank / show the screen (`blackout`), run one need handler on its own or every teleport one (`test`, what the Debug tab's Test buttons do), reset the config (`reset_config`), save the private server link (`server_link`), take pictures of the offers on the two trade listings (`trades`), decline one of them (`decline`), or start the input capture (the capture hotkey's) and stop it again (`capture`), or close what is open and respawn (`recenter`)
 NEED_NAMES = ("catch", "pet", "choose", "ride", "walk", "hungry", "thirsty", "dirty", "potty", "sleepy", "bored", "beach", "school", "cafe", "salon", "pizza", "camping", "sick")   # the Debug tab's need switches (the keys of main.py's NEED_HANDLER_CLASSES)
 OPTION_SWITCHES = {"side_quest": "side_quest_enabled", "resume_on_focus_loss": "resume_on_focus_loss", "record_next_run": "record_next_run",
-                   "use_private_server": "use_private_server", "blackout_hotkey": "blackout_hotkey_enabled",
+                   "use_private_server": "use_private_server", "blackout_hotkey": "blackout_hotkey_enabled", "new_need_hotkey": "new_need_hotkey_enabled",
                    **{f"play_{name}": f"{name}_enabled" for name in MINIGAME_LABELS}}   # the other switches a command may change: name -> the game config's key ("show_debug_lines" too, which is only in the window)
 SHOW_DEBUG_LINES_OPTION = "show_debug_lines"
 TEST_ALL_TELEPORTS = "teleports"                       # the `test` command's handler for the Debug tab's "Test every teleport handler" (the others are NEED_NAMES)
@@ -700,7 +699,6 @@ REFERENCE_CENTER_X, REFERENCE_CENTER_Y = REFERENCE_WIDTH // 2, REFERENCE_HEIGHT 
 ROBLOX_RECT_TTL = 1.0   # seconds the Roblox window's position and size are remembered between lookups
 
 # Behavior flags
-SAVE_NEW_NEEDS = False
 
 # Timing (seconds)
 RESPAWN_KEY_DURATION = 0.05    # how long each respawn key is held
@@ -786,10 +784,10 @@ PET_BAR_WHITE_FRACTION = 0.15
 PET_BAR_BELOW_STEPS = (3.5, 1.5, 2.5)                          # bar heights under the bar's bottom edge to click, in turn until the pet is focused
 # The choose button when no pixel is CHOOSE_BUTTON_COLOR (twice in run 34 it was in plain sight: a purple-to-magenta disc with a "?" and, not always, a white outline, under the
 # focused pet): the biggest roundish blob of this hue (OpenCV's HSV: purple 141, magenta 154; the pink BACK button is 167, the backpack's purple is 130 and paler), at least
-# CHOOSE_DISC_ROUNDNESS of its enclosing circle (the "?" is cut out of it), of CHOOSE_DISC_AREA px (about 56 px across: 1801 px of the hue on a real frame), within CHOOSE_DISC_SQUARENESS of square. The hue is measured on a real frame (a failure in run 57, tests/popups/choose_disc.png): the exact colour above is not in the
+# CHOOSE_DISC_ROUNDNESS of its enclosing circle (the "?" is cut out of it), of CHOOSE_DISC_AREA px (about 180 px across, as the button is under the focused pet; the choose need's icon in the need bar is the same hue and 56 px across, 1801 px: not it, and a range that took it clicked the bar), within CHOOSE_DISC_SQUARENESS of square. The hue is measured on a real frame (a failure in run 57, tests/popups/choose_disc.png): the exact colour above is not in the
 # disc then at all (the nearest pixel is 4 off in a channel: the disc's shading moves).
 CHOOSE_DISC_HSV = ((136, 180, 170), (158, 255, 255))
-CHOOSE_DISC_AREA = (900, 9000)
+CHOOSE_DISC_AREA = (6000, 45000)
 CHOOSE_DISC_SQUARENESS = 1.3
 CHOOSE_DISC_ROUNDNESS = 0.55
 CHOOSE_DISC_CLOSE = 5                                          # px: the closing that joins the disc round the "?" and its outline
@@ -969,6 +967,7 @@ HOTKEYS = {                        # the macro's own keys, each a letter or digi
     "stop": "p",                   # stops a running macro
     "capture": "m",                # starts or stops an input capture
     "blackout": "h",               # blanks the screen with a black window (and again, to take it away)
+    "new_need": "ú",               # looks at the need bar and asks the name of an icon on it that no saved need matches (taught for the next look; same layout lookup as the screenshot key)
     "screenshot": "ô",             # saves a picture of the whole screen in SCREENSHOTS_DIR (not a letter of the alphabet: its key is looked up on the keyboard layout, see hotkey_vk())
 }
 MOVE_KEYS = tuple(KEYS[name] for name in ("forward", "left", "back", "right"))
@@ -979,8 +978,9 @@ HELD_KEYS = tuple(dict.fromkeys([*KEYS.values(), *(key for keys in KEY_SEQUENCES
 # wait for the need to clear. Each entry: where to teleport, the
 # (key, seconds) holds to perform in order, optionally a `final_click` (a need with one has a doctor's dialog to answer after the last hold:
 # its prompt is clicked, the dialog waited for and this is its Yes - sick; see TeleportWalkNeedHandler._open_dialog()), optionally `helicopter` (above) and optionally
-# `max_wait` (how long to wait for the need to clear afterwards; default NEED_GONE_MAX_WAIT).
-TELEPORT_WALK_NEEDS_NORMAL: dict[str, dict[str, Any]] = {
+# `max_wait` (how long to wait for the need to clear afterwards; default NEED_GONE_MAX_WAIT). One table: the nursery's routes (bored, beach, school, camping, sick) are the ones from
+# before Halloween moved it, which it is back to; the event's own are kept in scripts/Halloween2026.py.
+TELEPORT_WALK_NEEDS: dict[str, dict[str, Any]] = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["forward"], 16.0), (KEYS["left"], 10.0))),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["left"], 27.0),)),
     "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["forward"], 1.2), (KEYS["left"], 10.0))),
@@ -991,23 +991,6 @@ TELEPORT_WALK_NEEDS_NORMAL: dict[str, dict[str, Any]] = {
     "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["forward"], 2.5), (KEYS["right"], 3.0), (KEYS["forward"], 0.8)),
                     final_click=SICK_FINAL_CLICK_POS),
 }
-
-# Used instead of the entry of the same name above while HALLOWEEN is on (Halloween
-# moves the nursery) - and "sick" only exists here, so it isn't a need at all
-# outside Halloween.
-TELEPORT_WALK_NEEDS_HALLOWEEN: dict[str, dict[str, Any]] = {
-    "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["forward"], 9),), helicopter=True),
-    "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["left"], 20.0),), helicopter=True),
-    "school":  dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["forward"], 3), (KEYS["left"], 6))),
-    "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["back"], 20),), helicopter=True),
-    "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["forward"], 2.5), (KEYS["right"], 4.0), (KEYS["forward"], 1.2)),
-                    final_click=SICK_FINAL_CLICK_POS),
-}
-
-# The set actually used everywhere else (TeleportWalkNeedHandler and the
-# handler registry both read this).
-TELEPORT_WALK_NEEDS: dict[str, dict[str, Any]] = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN \
-    else TELEPORT_WALK_NEEDS_NORMAL
 
 WATCH_POLL_INTERVAL = 0.2           # how often the screen is looked at while waiting for the game's "Only Pets..." answer to a need button click
 DISABLED_NEEDS_REJOIN_THRESHOLD = 4  # this many needs disabled for the run (see NEED_STUCK_CHECKS) means something is

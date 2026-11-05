@@ -44,6 +44,8 @@ HUB_LOAD_WAIT = 90.0                                            # ...and then th
 # "box", and closed by clicking "close_pos" - see dismiss_stray_windows(). The Trading Hub also throws up a
 # "Go to the Trading Hub to edit listings!" popup, found by its green Okay button and clicked first.
 STRAY_WINDOW_MATCH_THRESHOLD = 0.8
+TEMPLATE_RECHECK_INTERVAL = 1.0   # seconds: load_templates() looks at a folder's files for changes at most this often
+POPUP_GRAY_GATE = 0.5          # popup_found() looks for a crop in grey first (about 5 times faster than in colour) and does the colour search only when that scored at least this (0 turns the gate off)
 STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     "trading_hub": {"box": (580, 290, 1020, 400), "close_pos": (1278, 339)},
     # The Trading Hub's board of offers ("TRADING HUB" with a magnifier on a pink board: the offers made on the player's listings, "OFFER DECLINED" with a Thanks! button, Listing #1 and #2

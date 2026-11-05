@@ -304,9 +304,24 @@ def test_the_learned_need_icons_load_from_ref_needs(macro):
     assert {"diving", "puddle"} <= names                       # the subfolder (ref/needs/weather/) is searched too
 
 
+def test_a_folder_is_not_even_listed_again_within_the_recheck_interval(macro, tmp_path, monkeypatch):
+    folder = tmp_path / "crops"
+    folder.mkdir()
+    cv2.imwrite(str(folder / "a.png"), np.full((4, 4, 3), 10, np.uint8))
+    clock = [100.0]
+    monkeypatch.setattr(macro.time, "monotonic", lambda: clock[0])
+    assert list(macro.load_templates(str(folder))) == ["a"]
+    cv2.imwrite(str(folder / "b.png"), np.full((4, 4, 3), 20, np.uint8))
+    clock[0] += macro.cfg.TEMPLATE_RECHECK_INTERVAL / 2
+    assert list(macro.load_templates(str(folder))) == ["a"]                       # (too soon)
+    clock[0] += macro.cfg.TEMPLATE_RECHECK_INTERVAL
+    assert sorted(macro.load_templates(str(folder))) == ["a", "b"]
+
+
 def test_templates_are_read_once_and_reread_when_a_file_changes(macro, tmp_path, monkeypatch):
     folder = tmp_path / "crops"
     folder.mkdir()
+    monkeypatch.setattr(macro.cfg, "TEMPLATE_RECHECK_INTERVAL", 0)                 # (the folder is looked at every time here)
     cv2.imwrite(str(folder / "A.png"), np.full((4, 4, 3), 10, np.uint8))
     reads = []
     real = macro.cv2.imread

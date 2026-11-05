@@ -3465,16 +3465,21 @@ def look_until(find: Callable[[Image], Any], seconds: float) -> Any:
 
 # directory -> (the files' names and modification times, {name: image}) - see load_templates().
 _TEMPLATE_CACHE: dict[str, tuple[Any, dict[str, Image]]] = {}
+_TEMPLATE_CHECKED: dict[str, float] = {}      # directory -> when its files were last looked at
 
 def load_templates(directory: str) -> dict[str, Image]:
     """{name: image} for every .png in `directory`, cached and re-read when a file changes.
     The images are shared: don't modify them. See docs/ARCHITECTURE.md#need-handlers.
     """
+    now = time.monotonic()
+    cached = _TEMPLATE_CACHE.get(directory)
+    if cached is not None and now - _TEMPLATE_CHECKED.get(directory, -1e9) < cfg.TEMPLATE_RECHECK_INTERVAL:
+        return dict(cached[1])                         # (the folder was looked at a moment ago: this is called a dozen times a look at the screen)
     if not os.path.isdir(directory):
         return {}
     files = sorted(f for f in os.listdir(directory) if f.lower().endswith(".png"))
     key = tuple((f, os.stat(os.path.join(directory, f)).st_mtime_ns) for f in files)
-    cached = _TEMPLATE_CACHE.get(directory)
+    _TEMPLATE_CHECKED[directory] = now
     if cached is None or cached[0] != key:
         templates = {}
         for f in files:
@@ -3503,6 +3508,9 @@ def find_template(img: Image, crop: Image, box: Box) -> tuple[float, Optional[Po
     _, score, _, (x, y) = cv2.minMaxLoc(cv2.matchTemplate(band, crop, cv2.TM_CCOEFF_NORMED))
     return float(score), (left + x + crop.shape[1] // 2, top + y + crop.shape[0] // 2)
 
+# crop name -> (the colour crop it is for, its grey version) - see popup_found().
+_GRAY_CROPS: dict[str, tuple[Image, Image]] = {}
+
 def popup_found(img: Image, name: str) -> Optional[Point]:
     """Where the STRAY_WINDOW_DIR crop `name` is in `img` - its centre - if it matches within its box well enough
     (POPUP_TEMPLATES, or STRAY_WINDOWS for a stray window), else None. See docs/ARCHITECTURE.md#popup-templates."""
@@ -3510,6 +3518,14 @@ def popup_found(img: Image, name: str) -> Optional[Point]:
     entry = cfg.POPUP_TEMPLATES.get(name) or cfg.STRAY_WINDOWS[name]
     if crop is None:
         return None
+    left, top, right, bottom = entry["box"]
+    band = img[top:bottom, left:right]
+    if cfg.POPUP_GRAY_GATE and crop.shape[0] <= band.shape[0] and crop.shape[1] <= band.shape[1]:
+        cached = _GRAY_CROPS.get(name)
+        if cached is None or cached[0] is not crop:
+            cached = _GRAY_CROPS[name] = (crop, cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY))
+        if float(cv2.minMaxLoc(cv2.matchTemplate(cv2.cvtColor(band, cv2.COLOR_BGR2GRAY), cached[1], cv2.TM_CCOEFF_NORMED))[1]) < cfg.POPUP_GRAY_GATE:
+            return None                                    # (a crop that is on screen is there in grey too: the colour search, three times the work, is for the ones that might be)
     score, centre = find_template(img, crop, entry["box"])
     return centre if score >= entry.get("threshold", cfg.STRAY_WINDOW_MATCH_THRESHOLD) else None
 

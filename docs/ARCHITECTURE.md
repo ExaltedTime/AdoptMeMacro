@@ -579,7 +579,7 @@ abandoned, since setup's clicks toggle things and can't be left halfway.
 Everything recognised by a crop in `ref/popups/` is looked up the same
 way, by `popup_found(img, name)` / `popup_visible(img, name)`: the crop is matched
 (`cv2.matchTemplate`, `TM_CCOEFF_NORMED`) within a box and counts as found when the score reaches
-a threshold - the crop's centre is returned too, for the BACK button's click. Each name's box and
+a threshold - the crop's centre is returned too, for the BACK button's click. The look is made in grey first (about five times faster) and the colour search only follows when the grey one scored `POPUP_GRAY_GATE`: most looks find nothing, and `dismiss_stray_windows()` makes a dozen of them a cycle (94 ms -> 40 ms for a cycle's checks on a real frame). The crops themselves are re-listed from their folder at most every `TEMPLATE_RECHECK_INTERVAL` (`load_templates()`). Each name's box and
 threshold are in `POPUP_TEMPLATES` (`paycheck`, `sick_dialog`, `doctor_prompt`, `backpack_normal`, `backpack_back`) or, for
 a stray window (and `pet_focus`), in `STRAY_WINDOWS` with `STRAY_WINDOW_MATCH_THRESHOLD`. The
 detectors (`detect_paycheck()`, `detect_sick_dialog()`, `detect_pet_focus()`, the title check in

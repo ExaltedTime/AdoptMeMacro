@@ -134,7 +134,7 @@ an extra walk from wherever the previous need left the character standing.
 - **GAME CONFIG** - `load_game_config()`/`save_game_config()`: the state
   that *does* persist across separate launches of the script (unlike
   `state.button_positions` above) - see [Persisted game config](#persisted-game-config).
-- **ICON PROCESSING** - `preprocess_icon()` / `icon_signature()` / `compare_signatures()`. See
+- **ICON PROCESSING** - `preprocess_icon()` / `icon_signature()` / `score_variants()`. See
   [Need-icon matching](#need-icon-matching).
 - **NEED ICON DETECTION** - `detect_need_icons()`, `find_matching_need()`,
   `prompt_rename_need()`. See [Need-icon detection](#need-icon-detection).
@@ -271,8 +271,9 @@ whatever is behind the icon, and on a bright scene they used to wreck the
 CLAHE and the threshold - then resizes the result to `ICON_COMPARE_SIZE`, scales it
 to 0-1, and keeps only the **left half** so an
 event badge overlapping an icon's top right doesn't affect the match.
-`compare_signatures()` scores two signatures as `1 - mean squared
-difference`, over that disc only (`icon_match_mask()`). The saved icons are
+`score_variants()` scores signatures as `1 - mean squared
+difference`, over that disc only (`icon_match_mask()`), every variant of the detected icon against every saved icon at once (the squared difference as
+`sum(L²) - 2·sum(L·S) + sum(S²)` over the disc's pixels, the middle term one matrix product: the 25 shifted variants against every saved need was most of a look at the need bar, 9 ms for an icon instead of 26 ms; the same scores to 1e-8 on every icon of the test frames). The saved icons are
 run through the same function when loaded, so none needed re-saving.
 
 A detected center can be a pixel or two off, which matters at this

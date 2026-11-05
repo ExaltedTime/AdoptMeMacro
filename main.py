@@ -874,6 +874,7 @@ def preprocess_icon(icon_img: Image) -> Image:
     _, binary = cv2.threshold(enhanced, cfg.ICON_BW_THRESHOLD, cfg.PIXEL_MAX, cv2.THRESH_BINARY)
     return binary
 
+@lru_cache(maxsize=None)
 def icon_disc_mask(width: int, height: int, radius_fraction: float) -> Image:
     """Boolean mask, True inside the disc (centred, `radius_fraction` of half the width across) of a width x height image."""
     yy, xx = np.mgrid[:height, :width]
@@ -894,12 +895,6 @@ def icon_signature(icon_img: Image) -> Image:
     icon_img = np.where(icon_disc_mask(width, height, cfg.ICON_MATCH_RADIUS_FRACTION)[:, :, None], icon_img, 0).astype(icon_img.dtype)
     proc = cv2.resize(preprocess_icon(icon_img), cfg.ICON_COMPARE_SIZE).astype(np.float32) / cfg.PIXEL_MAX
     return proc[:, :proc.shape[1] // 2]
-
-def compare_signatures(sig1: Image, sig2: Image) -> float:
-    """Return a 0-1 similarity score (1 = identical) between two signatures: one minus the mean squared difference
-    over the part inside the icon's ring (icon_match_mask())."""
-    mask = icon_match_mask(cfg.ICON_COMPARE_SIZE, cfg.ICON_MATCH_RADIUS_FRACTION)
-    return 1.0 - float(np.sum(((sig1 - sig2) ** 2) * mask) / np.count_nonzero(mask))
 
 # ============================================================================
 # NEED ICON DETECTION
@@ -983,19 +978,27 @@ def need_signatures() -> list[tuple[str, Image]]:
     return _NEED_SIGNATURES[1]
 
 def find_matching_need(icon_variants: list[Image]) -> tuple[Optional[str], float]:
-    """Compare a detected icon (its icon_variants() crops) against the saved
-    needs (need_signatures()), scoring each by its best-aligned variant.
-    Returns (name, score)."""
-    live_signatures = [icon_signature(v) for v in icon_variants]
-    best_match, best_score = None, 0.0
-    for name, saved_signature in need_signatures():
-        score = max(compare_signatures(sig, saved_signature) for sig in live_signatures)
-        if score > best_score:
-            best_match, best_score = name, score
-
+    """Compare a detected icon (its icon_variants() crops) against the saved needs (need_signatures()), scoring each by its best-aligned variant. Returns (name, score). The scores of every
+    variant against every saved icon are worked out at once (score_variants()): 25 variants against every saved need was most of a look at the need bar."""
+    saved = need_signatures()
+    if not saved:
+        return None, 0.0
+    scores = score_variants([icon_signature(v) for v in icon_variants], [signature for _, signature in saved]).max(axis=0)
+    best = int(np.argmax(scores))                       # (the first of equal scores, as the loop it replaced took)
+    best_match, best_score = saved[best][0], float(scores[best])
     if best_score >= cfg.ICON_MATCH_THRESHOLD:
         return best_match, best_score
     return None, best_score
+
+def score_variants(live: Sequence[Image], saved: Sequence[Image]) -> Image:
+    """The similarity (0-1, 1 = identical: one minus the mean squared difference over the part inside the icon's ring, icon_match_mask()) of every signature of `live` with every one of `saved`:
+    an array [live, saved]. The squared difference over the icon's disc is worked out as
+    sum(L^2) - 2 sum(L S) + sum(S^2) over the pixels of the mask, the middle term as one matrix product."""
+    mask = icon_match_mask(cfg.ICON_COMPARE_SIZE, cfg.ICON_MATCH_RADIUS_FRACTION)
+    a = np.stack([signature[mask] for signature in live]).astype(np.float64)
+    b = np.stack([signature[mask] for signature in saved]).astype(np.float64)
+    squared = (a * a).sum(axis=1)[:, None] - 2.0 * (a @ b.T) + (b * b).sum(axis=1)[None, :]
+    return 1.0 - squared / mask.sum()
 
 def prompt_rename_need(icon_img: Image, idx: int, on_ui_thread: bool = False) -> str:
     """Save a new need icon and ask for its name (dialog or console); a cancelled dialog saves it as unnamed_<idx>. `on_ui_thread`: the caller is Tk's thread, which asks the dialog itself
@@ -3310,7 +3313,8 @@ def detect_disconnect(img: Image) -> bool:
 def detect_white_screen(img: Image) -> bool:
     """True if most of `img` is completely white - the transition shown on a respawn, teleport or change of
     location (WHITE_SCREEN_LEVEL / WHITE_SCREEN_MIN_FRACTION). See docs/ARCHITECTURE.md#stuck-needs."""
-    return bool(np.count_nonzero(img.min(axis=2) >= cfg.WHITE_SCREEN_LEVEL) / (img.shape[0] * img.shape[1]) >= cfg.WHITE_SCREEN_MIN_FRACTION)
+    white = cv2.countNonZero(cv2.inRange(img, (cfg.WHITE_SCREEN_LEVEL,) * 3, (cfg.PIXEL_MAX,) * 3))        # (every channel at least the level: one pass, not a minimum over a copy of the picture)
+    return bool(white / (img.shape[0] * img.shape[1]) >= cfg.WHITE_SCREEN_MIN_FRACTION)
 
 ROBLOX_NOT_RUNNING = "Roblox isn't running"
 

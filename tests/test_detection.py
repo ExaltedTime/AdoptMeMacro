@@ -512,3 +512,29 @@ def test_the_cant_spawn_a_vehicle_window_is_closed_where_its_okay_is(macro, monk
         monkeypatch.setattr(macro, "grab_screen", lambda name=name: screenshot(name))
         assert macro.dismiss_stray_windows() is None
     assert clicks == []
+
+
+def test_all_the_variants_are_scored_against_all_the_saved_icons_at_once_to_the_scores_of_one_by_one(macro):
+    rng = np.random.default_rng(3)
+    size = macro.cfg.ICON_COMPARE_SIZE
+    shape = (size[1], size[0] // 2)                                                         # (a signature is the left half)
+    live = [rng.random(shape).astype(np.float32) for _ in range(5)]
+    saved = [rng.random(shape).astype(np.float32) for _ in range(4)]
+    mask = macro.icon_match_mask(size, macro.cfg.ICON_MATCH_RADIUS_FRACTION)
+    scores = macro.score_variants(live, saved)
+    assert scores.shape == (5, 4)
+    for i, a in enumerate(live):
+        for j, b in enumerate(saved):
+            assert scores[i, j] == pytest.approx(1.0 - float(np.sum(((a - b) ** 2) * mask) / np.count_nonzero(mask)), abs=1e-6)
+
+
+def test_a_white_screen_is_told_by_every_channel_being_light_over_most_of_the_picture(macro):
+    white = np.full((100, 100, 3), 255, np.uint8)
+    assert macro.detect_white_screen(white) is True
+    mostly = white.copy()
+    mostly[:, :20] = 0                                                                      # (80 % light)
+    assert macro.detect_white_screen(mostly) is (0.8 >= macro.cfg.WHITE_SCREEN_MIN_FRACTION)
+    tinted = white.copy()
+    tinted[:, :, 0] = 200                                                                   # (one channel under the level: not white)
+    assert macro.detect_white_screen(tinted) is False
+    assert macro.detect_white_screen(np.zeros((100, 100, 3), np.uint8)) is False

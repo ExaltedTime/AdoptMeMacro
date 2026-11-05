@@ -20,7 +20,7 @@ def test_the_constants_check_names_an_unused_constant_a_typo_and_an_uncalled_fun
         import check_constants
     finally:
         sys.path.pop(0)
-    (tmp_path / "bot").mkdir()
+    (tmp_path / "scripts").mkdir()
     (tmp_path / "tools").mkdir()
     (tmp_path / "tests").mkdir()
     (tmp_path / "docs").mkdir()

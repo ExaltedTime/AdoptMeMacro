@@ -1,13 +1,13 @@
 """Run the test suite against changed copies of the repo, to catch tests that only pass for today's setup.
 
-magic_numbers.py is the file that gets edited all the time (timings, routes, intervals, the event flag), and the
+magic_numbers.py is the file that gets edited all the time (timings, routes, intervals), and the
 machine the tests run on is never the one they were written on (another time zone, a debug/ folder full of real
 files, a different working directory). A test that only passes for today's values breaks the build for a harmless
 change. This copies the repo to a temporary folder once per variant, applies the variant's edits (to the copy of
 magic_numbers.py, the environment, the files around it, or the order the tests run in), and runs pytest there:
 
     python tools/retune_check.py            # every variant
-    python tools/retune_check.py halloween_off timings_x1.7
+    python tools/retune_check.py timings_x1.7 timings_x0.5
 
 Each variant should pass exactly as the unchanged repo does. A failure names a test that depends on a tuned value:
 give it a made-up entry or read the constant (see the `walker` fixture in tests/test_state.py) instead of pinning it.
@@ -44,11 +44,9 @@ def _scale(_k):
         if (isinstance(_v, (int, float)) and not isinstance(_v, bool) and _n not in ("STOP_CHECK_INTERVAL", "REJOIN_INTERVAL", "GHOST_ALERT_DOT_GAP")
                 and (_n in _OTHER_TIMES or _re.search(r"(WAIT|DURATION|INTERVAL|DELAY|TIMEOUT|GAP|SETTLE|GRACE)$", _n))):
             globals()[_n] = _v * _k
-    for _table in (TELEPORT_WALK_NEEDS_NORMAL, TELEPORT_WALK_NEEDS_HALLOWEEN):
-        for _entry in _table.values():
-            _entry["steps"] = tuple((_key, _d * _k) for _key, _d in _entry["steps"])
+    for _entry in TELEPORT_WALK_NEEDS.values():
+        _entry["steps"] = tuple((_key, _d * _k) for _key, _d in _entry["steps"])
 _scale(%s)
-TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN else TELEPORT_WALK_NEEDS_NORMAL
 '''
 
 def scaled(factor: str) -> str:
@@ -58,8 +56,6 @@ def scaled(factor: str) -> str:
 
 VARIANTS = {
     "baseline": "",
-    # the event ends: the Halloween-only needs (sick) stop existing
-    "halloween_off": "HALLOWEEN = False\nTELEPORT_WALK_NEEDS = TELEPORT_WALK_NEEDS_NORMAL\n",
     "timings_x1.7": scaled("1.7"),
     "timings_x0.5": scaled("0.5"),
     "other_tuning": '''
@@ -92,11 +88,9 @@ for _n, _v in list(globals().items()):
 ''',
     # optional keys of the need tables left out
     "drop_optional_keys": '''
-for _table in (TELEPORT_WALK_NEEDS_NORMAL, TELEPORT_WALK_NEEDS_HALLOWEEN):
-    for _entry in _table.values():
-        for _key in ("max_wait", "helicopter"):
-            _entry.pop(_key, None)
-TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN else TELEPORT_WALK_NEEDS_NORMAL
+for _entry in TELEPORT_WALK_NEEDS.values():
+    for _key in ("max_wait", "helicopter"):
+        _entry.pop(_key, None)
 ''',
 }
 
@@ -104,12 +98,11 @@ TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLO
 
 KEYS_REBUILD = ('MOVE_KEYS = tuple(KEYS[name] for name in ("forward", "left", "back", "right"))\n'      # (what magic_numbers.py derives from the key tables, derived again)
                 'HELD_KEYS = tuple(dict.fromkeys([*KEYS.values(), *(key for keys in KEY_SEQUENCES.values() for key in keys)]))\n')
-REBUILD = "TELEPORT_WALK_NEEDS = {**TELEPORT_WALK_NEEDS_NORMAL, **TELEPORT_WALK_NEEDS_HALLOWEEN} if HALLOWEEN else TELEPORT_WALK_NEEDS_NORMAL\n"
 
 VARIANTS.update({
     # a need deleted from the table / a new one added
-    "needs_removed": 'for _n in ("cafe", "pizza", "camping", "bored"):\n    TELEPORT_WALK_NEEDS_NORMAL.pop(_n, None)\n    TELEPORT_WALK_NEEDS_HALLOWEEN.pop(_n, None)\nNEED_NAMES = tuple(_n for _n in NEED_NAMES if _n not in ("cafe", "pizza", "camping", "bored"))\n' + REBUILD,
-    "need_added": 'TELEPORT_WALK_NEEDS_NORMAL["museum"] = dict(teleport_pos=TELEPORT_PETS_TAB_POS, steps=(("w", 3.0), ("d", 2.0)))\nNEED_NAMES = (*NEED_NAMES, "museum")\n' + REBUILD,
+    "needs_removed": 'for _n in ("cafe", "pizza", "camping", "bored"):\n    TELEPORT_WALK_NEEDS.pop(_n, None)\nNEED_NAMES = tuple(_n for _n in NEED_NAMES if _n not in ("cafe", "pizza", "camping", "bored"))\n',
+    "need_added": 'TELEPORT_WALK_NEEDS["museum"] = dict(teleport_pos=TELEPORT_PETS_TAB_POS, steps=(("w", 3.0), ("d", 2.0)))\nNEED_NAMES = (*NEED_NAMES, "museum")\n',
     "button_names_reordered": 'BUTTON_NAMES[:] = ["sleepy", "potty", "dirty", "thirsty", "hungry"]\n',
     "helicopter_everywhere": "HELICOPTER_REQUIRED = True\n",
     # thresholds and tolerances nudged either way (detection tuning)
@@ -126,8 +119,6 @@ VARIANTS.update({
     # other key bindings in the game
     "keys_remapped": 'KEYS.update(backpack="v", mount="f", interact="f", zoom_in="o", helicopter="t", jump="x")\nHOTKEYS["stop"] = "q"\n' + KEYS_REBUILD,
 
-    # behaviour flags flipped
-    "flags_flipped": "SAVE_NEW_NEEDS = True\n",
     # the machine and the folders around the code
     "tz_new_york": {"env": {"TZ": "America/New_York"}},
     "tz_kolkata": {"env": {"TZ": "Asia/Kolkata"}},
@@ -157,18 +148,18 @@ def prepare(copy: str, setup: str) -> None:
         for sub in ("logs", "failures", "recordings"):
             os.makedirs(os.path.join(copy, "debug", sub), exist_ok=True)
         with open(os.path.join(copy, "debug", ".config"), "w") as f:
-            f.write('{"side_quest_enabled": false, "ghost_gallery_enabled": true, "hauntlet_2_enabled": true, "resume_on_focus_loss": true, "record_next_run": true, "private_server_link": "https://www.roblox.com/share?code=%s&type=Server", "money_collected": 99999}' % ("a" * 32))
+            f.write('{"side_quest_enabled": false, "resume_on_focus_loss": true, "record_next_run": true, "private_server_link": "https://www.roblox.com/share?code=%s&type=Server", "money_collected": 99999}' % ("a" * 32))
         with open(os.path.join(copy, "debug", "logs", "run_counter.txt"), "w") as f:
             f.write("41")
         with open(os.path.join(copy, "debug", "logs", "run_log.txt"), "w") as f:
             f.write("[2026-10-11 23:04:31] [RUN 40] LOOP started\\n")
-    elif setup == "extra_refs":      # a learned icon, an unknown popup crop, an unknown minigame crop
+    elif setup == "extra_refs":      # a learned icon, an unknown popup crop
         import cv2
         import numpy as np
         noise = np.random.RandomState(0).randint(0, 255, (60, 60, 3), np.uint8)
         icon = np.full((66, 66, 3), 255, np.uint8)      # a white disc with a dark bar: the learned need (noise is mostly black once binarised, like a dark patch of scenery)
         cv2.line(icon, (10, 56), (56, 10), (0, 0, 0), 8)
-        for folder, name, image in (("needs", "zz_new_need", icon), ("popups", "zz_unknown_popup", noise), ("halloween", "zz_new_minigame", noise), ("overlays", "zz_overlay", noise)):
+        for folder, name, image in (("needs", "zz_new_need", icon), ("popups", "zz_unknown_popup", noise), ("overlays", "zz_overlay", noise)):
             cv2.imwrite(os.path.join(copy, "ref", folder, name + ".png"), image)
 
 

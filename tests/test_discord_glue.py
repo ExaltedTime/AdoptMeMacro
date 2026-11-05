@@ -1,4 +1,4 @@
-"""The Discord bot's glue (bot/discord_bot.py) run against fakes: a channel that records what is sent, and the macro's files in a temp folder. What the real
+"""The Discord bot's glue (scripts/discord_bot.py) run against fakes: a channel that records what is sent, and the macro's files in a temp folder. What the real
 Discord does with a message (rate limits, an expired interaction) is not here; what the bot decides to send, and when, is."""
 import asyncio
 import json
@@ -12,7 +12,7 @@ import pytest
 
 pytest.importorskip("discord")
 
-from bot import bot_lib, discord_bot  # noqa: E402
+from scripts import bot_lib, discord_bot  # noqa: E402
 
 REAL_POST = discord_bot.post                      # (the `watch` fixture replaces it with a recorder)
 

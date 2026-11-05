@@ -3,6 +3,7 @@ import os
 import types
 
 import pytest
+import numpy as np
 
 
 @pytest.fixture
@@ -109,16 +110,14 @@ def test_a_pet_that_stands_still_is_found_by_its_name_bar_in_a_real_frame_and_no
     assert macro.find_pet_bar(tall)[0] == (1218, 693)
 
 
-def test_a_lying_pet_close_to_the_camera_in_a_dark_house_is_found_by_its_bar_and_the_choose_button_by_its_disc(macro):
+def test_a_lying_pet_close_to_the_camera_in_a_dark_house_is_found_by_its_bar_and_the_need_bars_own_icon_is_not_the_choose_disc(macro):
     import cv2
-    frame = cv2.imread(os.path.join(os.path.dirname(__file__), "popups", "choose_pet_lying_in_house.png"))          # run 57: "no name bar either" and "no purple disc found either"
+    frame = cv2.imread(os.path.join(os.path.dirname(__file__), "popups", "choose_pet_lying_in_house.png"))          # run 57: "no name bar either"
     points = macro.find_pet_bar(frame)
     assert len(points) == len(macro.cfg.PET_BAR_BELOW_STEPS) and all(abs(x - 1142) <= 3 for x, _ in points)
     assert any(900 <= y <= 1010 for _, y in points)                                          # one of them is on the panda (its body is 890-1015 down)
-    assert macro.find_exact_color(frame, macro.cfg.CHOOSE_BUTTON_COLOR) is None              # (the disc's shading had moved off the exact colour)
-    x, y = macro.find_choose_disc(frame)
-    assert abs(x - 960) <= 4 and abs(y - 124) <= 4                                           # the "?" disc, 56 px across
-    assert macro.find_choose_disc(cv2.imread(os.path.join(os.path.dirname(__file__), "popups", "pet_with_bar_not_moving.png"))) == pytest.approx((892, 124), abs=4)       # (that frame has the disc too)
+    assert macro.find_exact_color(frame, macro.cfg.CHOOSE_BUTTON_COLOR) is None
+    assert macro.find_choose_disc(frame) is None                                             # (the "?" at the top is the choose need's icon in the need bar, 56 px: not the button, which is about 180 px under the focused pet)
 
 
 def test_focus_pet_clicks_under_the_name_bar_when_nothing_moves_and_when_what_moved_was_not_the_pet(macro, monkeypatch):
@@ -172,18 +171,18 @@ def disc_screen(macro, outline=True, glyph=True, exact=False):
     import cv2
     import numpy as np
     img = np.full((1080, 1920, 3), 30, np.uint8)
-    disc = np.zeros((62, 62, 3), np.uint8)
-    for row in range(62):                                                                        # (the shading: purple (170, 30, 254) at the top to magenta (230, 20, 200) at the bottom, as RGB)
-        t = row / 61
+    disc = np.zeros((180, 180, 3), np.uint8)
+    for row in range(180):                                                                       # (the shading: purple (170, 30, 254) at the top to magenta (230, 20, 200) at the bottom, as RGB)
+        t = row / 179
         disc[row, :] = (round(254 - 54 * t), round(30 - 10 * t), round(170 + 60 * t))            # BGR
-    mask = np.zeros((62, 62), np.uint8)
-    cv2.circle(mask, (31, 31), 30, 255, -1)
-    region = img[704:766, 609:671]                                                               # (56 px across on a real frame: the disc at the top of the screen)
+    mask = np.zeros((180, 180), np.uint8)
+    cv2.circle(mask, (90, 90), 88, 255, -1)
+    region = img[645:825, 550:730]
     region[mask > 0] = disc[mask > 0]
     if glyph:
-        cv2.putText(img, "?", (629, 752), cv2.FONT_HERSHEY_SIMPLEX, 1.3, (255, 255, 255), 5, cv2.LINE_AA)
+        cv2.putText(img, "?", (606, 780), cv2.FONT_HERSHEY_SIMPLEX, 3.5, (255, 255, 255), 14, cv2.LINE_AA)
     if outline:
-        cv2.circle(img, (640, 735), 32, (255, 255, 255), 3)
+        cv2.circle(img, (640, 735), 90, (255, 255, 255), 4)
     img[80:150, 445:645] = (120, 41, 237)                                                       # BACK: pink (BGR), wide
     cv2.circle(img, (628, 132), 18, (254, 90, 140), -1)                                          # the E badge: small, purple
     img[300:340, 1000:1500] = (254, 40, 150)                                                     # a wide purple bar
@@ -437,19 +436,6 @@ def test_two_pictures_of_the_panel_are_the_same_when_their_grey_levels_hardly_di
 
 # --- leaving a minigame ---
 
-def exit_screen(macro, left="red", right="grey", overlay=True):
-    """A 1920x1080 frame with the dialog's two buttons in the colours given (BGR drawn from the HSV the detector reads) and, if `overlay`, a marker for the minigame."""
-    import numpy as np
-    img = np.full((macro.cfg.REFERENCE_HEIGHT, macro.cfg.REFERENCE_WIDTH, 3), 235, np.uint8)         # (a pale scene)
-    colours = {"red": (60, 40, 216), "grey": (70, 65, 62), "green": (85, 198, 74)}                         # BGR
-    title = macro.load_templates(macro.cfg.STRAY_WINDOW_DIR)["exit_game"]
-    left_, top_, *_ = macro.cfg.POPUP_TEMPLATES["exit_game"]["box"]
-    img[top_ + 20:top_ + 20 + title.shape[0], left_ + 20:left_ + 20 + title.shape[1]] = title
-    for box, name in ((macro.cfg.EXIT_DIALOG_CANCEL_BOX, left), (macro.cfg.EXIT_DIALOG_RIGHT_BOX, right)):
-        if name:
-            l, t, r, b = box
-            img[t:b, l:r] = colours[name]
-    return img
 
 
 def real_frame(name):
@@ -457,23 +443,8 @@ def real_frame(name):
     return cv2.imread(os.path.join(os.path.dirname(__file__), "exit_hub", name + ".png"))
 
 
-def test_real_screenshots_the_exit_dialog_is_found_in_both_states_the_exit_button_marks_a_minigame_and_the_hub_is_told_from_the_rest(macro):
-    counting, ready = real_frame("exit_dialog_counting"), real_frame("exit_dialog_ready")
-    assert macro.detect_exit_dialog(counting) == "counting" and macro.detect_exit_dialog(ready) == "ready"
-    button, hub, hub2 = real_frame("exit_minigame_button"), real_frame("trading_hub_island"), real_frame("trading_hub_island_2")
-    assert macro.detect_exit_dialog(button) is None and macro.detect_exit_dialog(hub) is None
-    assert all(macro.in_minigame(frame) for frame in (counting, ready, button)) and not macro.in_minigame(hub)
-    assert macro.in_trading_hub(hub) and macro.in_trading_hub(hub2)
-    assert macro.popup_visible(hub, "backpack_button") and macro.popup_visible(hub2, "backpack_button") and not macro.popup_visible(button, "backpack_button")
-    assert not any(macro.in_trading_hub(frame) for frame in (counting, ready, button))
 
 
-def test_the_exit_dialog_is_found_by_the_colours_of_its_buttons_and_says_whether_it_is_still_counting(macro):
-    assert macro.detect_exit_dialog(exit_screen(macro, "red", "grey")) == "counting"
-    assert macro.detect_exit_dialog(exit_screen(macro, "red", "green")) == "ready"
-    assert macro.detect_exit_dialog(exit_screen(macro, None, "green")) is None                              # no Cancel
-    assert macro.detect_exit_dialog(exit_screen(macro, "red", None)) is None                                # nothing at its right
-    assert macro.detect_exit_dialog(exit_screen(macro, "green", "green")) is None and macro.detect_exit_dialog(exit_screen(macro, None, None)) is None
 
 
 @pytest.fixture
@@ -491,59 +462,14 @@ def leaving(macro, monkeypatch):
     return types.SimpleNamespace(log=log, frames=frames, in_minigame=[True])
 
 
-def test_a_minigame_is_left_by_the_button_the_dialog_and_its_green_button_and_nothing_is_clicked_in_the_house(macro, leaving, monkeypatch):
-    cfg = macro.cfg
-    plain = exit_screen(macro, None, None)
-    leaving.frames.extend([plain, plain, exit_screen(macro, "red", "grey"), exit_screen(macro, "red", "grey"), exit_screen(macro, "red", "green"), plain])
-    state_of = iter([True, False])                                                                           # (in a minigame at first; the overlay is gone after the click)
-    monkeypatch.setattr(macro, "in_minigame", lambda img: next(state_of, False))
-    assert macro.exit_minigame() is True
-    assert leaving.log == [cfg.EXIT_MINIGAME_POS, cfg.EXIT_GAME_POS, "minigame exited"]
-    leaving.log.clear()
-    leaving.frames[:] = [plain]
-    monkeypatch.setattr(macro, "in_minigame", lambda img: False)                                             # not in one (Exit Home is in the same place): nothing clicked
-    assert macro.exit_minigame() is True and leaving.log == []
 
 
-def test_a_dialog_that_is_up_already_is_not_opened_again_and_a_step_that_does_not_happen_is_said(macro, leaving, monkeypatch):
-    cfg = macro.cfg
-    plain = exit_screen(macro, None, None)
-    ready = exit_screen(macro, "red", "green")
-    leaving.frames[:] = [ready, ready, ready, plain]                                                           # (the first look, the wait for the dialog, for the green, and then it is gone)
-    monkeypatch.setattr(macro, "in_minigame", lambda img: False)                                             # (no overlay under the dialog is not needed to go on)
-    assert macro.exit_minigame() is True and leaving.log == [cfg.EXIT_GAME_POS, "minigame exited"]
-    leaving.log.clear()
-    leaving.frames[:] = [plain]                                                                              # the button is clicked and no dialog comes
-    monkeypatch.setattr(macro, "in_minigame", lambda img: True)
-    assert macro.exit_minigame() is False and leaving.log == [cfg.EXIT_MINIGAME_POS, "exit minigame: the dialog did not come up"]
-    leaving.log.clear()
-    leaving.frames[:] = [exit_screen(macro, "red", "grey")]                                                  # it counts for ever
-    assert macro.exit_minigame() is False and leaving.log == ["exit minigame: the Exit Game button did not turn green"]
-    leaving.log.clear()
-    leaving.frames[:] = [exit_screen(macro, "red", "green")]                                                 # the minigame stays
-    assert macro.exit_minigame() is False and leaving.log == [cfg.EXIT_GAME_POS, "exit minigame: the minigame is still there"]
 
 
-def test_sloop_leaves_the_hub_and_a_minigame_before_setup_and_one_that_cannot_be_left_is_an_error_with_no_setup(macro, monkeypatch):
-    order = []
-    monkeypatch.setattr(macro, "leave_hub_if_in", lambda: order.append("hub") or True)
-    monkeypatch.setattr(macro, "exit_minigame", lambda: order.append("exit") or True)
-    monkeypatch.setattr(macro, "setup_game", lambda: order.append("setup") or True)
-    assert macro.exit_minigame_and_setup() is True and order == ["hub", "exit", "setup"]
-    order.clear()
-    monkeypatch.setattr(macro, "exit_minigame", lambda: order.append("exit") or False)
-    with pytest.raises(RuntimeError, match="could not leave the minigame"):
-        macro.exit_minigame_and_setup()
-    assert order == ["hub", "exit"]
-    order.clear()
-    monkeypatch.setattr(macro, "leave_hub_if_in", lambda: order.append("hub") or False)
-    with pytest.raises(RuntimeError, match="could not leave the Trading Hub"):
-        macro.exit_minigame_and_setup()
-    assert order == ["hub"]
 
 
 def test_the_trading_hub_is_left_by_its_button_and_waited_for_until_the_regular_server_has_loaded(macro, leaving, monkeypatch):
-    hub, plain = real_frame("trading_hub_island"), exit_screen(macro, None, None)
+    hub, plain = real_frame("trading_hub_island"), np.zeros((1080, 1920, 3), np.uint8)
     world = plain.copy()                                                                                     # the normal UI: the backpack button
     button = macro.load_templates(macro.cfg.STRAY_WINDOW_DIR)["backpack_button"]
     left_, top_, *_ = macro.cfg.POPUP_TEMPLATES["backpack_button"]["box"]
@@ -565,38 +491,56 @@ def test_the_trading_hub_is_left_by_its_button_and_waited_for_until_the_regular_
     assert macro.leave_hub_if_in() is False
 
 
-def test_an_exit_dialog_outside_a_minigame_is_stayed_on_in_either_state_and_nothing_else_with_such_buttons_is(macro, monkeypatch):
-    clicks = []
-    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: clicks.append((x, y)))
-    monkeypatch.setattr(macro.time, "sleep", lambda s: None)
-    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
-    monkeypatch.setattr(macro, "in_minigame", lambda img: False)
-    counting, ready = exit_screen(macro, "red", "grey"), exit_screen(macro, "red", "green")
-    monkeypatch.setattr(macro, "grab_screen", lambda: counting)
-    assert macro.dismiss_stray_windows() == "exit_dialog" and clicks == [macro.cfg.EXIT_STAY_POS]
-    clicks.clear()
-    monkeypatch.setattr(macro, "grab_screen", lambda: ready)
-    assert macro.dismiss_stray_windows() == "exit_dialog" and clicks == [macro.cfg.EXIT_STAY_POS]
-    clicks.clear()
-    untitled = exit_screen(macro, "red", "green")                                                            # the same buttons without the title (the teleport's Yes / No): not ours to cancel
-    left_, top_, right_, bottom_ = macro.cfg.POPUP_TEMPLATES["exit_game"]["box"]
-    untitled[top_:bottom_, left_:right_] = 235
-    monkeypatch.setattr(macro, "grab_screen", lambda: untitled)
-    assert macro.dismiss_stray_windows() is None and clicks == []
-    monkeypatch.setattr(macro, "grab_screen", lambda: counting)
-    monkeypatch.setattr(macro, "in_minigame", lambda img: True)                                              # in a minigame: its own exit, not a stray window
-    assert macro.dismiss_stray_windows() is None and clicks == []
-    monkeypatch.setattr(macro, "in_minigame", lambda img: False)
-    macro.state.exit_dialog_wanted = True                                                                    # the macro is leaving on purpose
-    assert macro.dismiss_stray_windows() is None and clicks == []
-    macro.state.exit_dialog_wanted = False
 
 
-def test_leaving_a_minigame_on_purpose_keeps_the_stray_window_check_off_the_dialog_and_lets_go_after(macro, leaving, monkeypatch):
-    seen = []
-    monkeypatch.setattr(macro, "_exit_minigame", lambda: seen.append(macro.state.exit_dialog_wanted) or True)
-    assert macro.exit_minigame() is True and seen == [True] and macro.state.exit_dialog_wanted is False
-    monkeypatch.setattr(macro, "_exit_minigame", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-    with pytest.raises(RuntimeError):
-        macro.exit_minigame()
-    assert macro.state.exit_dialog_wanted is False
+
+
+# --- the pulse of the icon of a need that is being done (tests/pulse/: the need bar of a capture, the icon idle and at its palest) ---
+
+def pulse_strip(name):
+    import cv2
+    return cv2.imread(os.path.join(os.path.dirname(__file__), "pulse", name + ".png"))
+
+
+@pytest.mark.parametrize("need", ["dirty", "thirsty", "sleepy"])
+def test_the_saturation_of_an_icon_drops_when_it_pulses(macro, monkeypatch, need):
+    levels = {}
+    monkeypatch.setattr(macro, "check_running", lambda: None)
+    for state in ("idle", "pale"):
+        strip = pulse_strip(f"{need}_{state}")
+        monkeypatch.setattr(macro, "grab_screen_region", lambda x, y, w, h, strip=strip: strip[y:y + h, x:x + w])
+        macro._NEED_STRIP_CACHE.update(strip=None, found=[], reuses=0)
+        found, img = macro.detect_need_icons(fresh=True)
+        levels[state] = [macro.icon_saturation(icon) for _, icon, name, _ in macro.identify_icons(found, img) if name == need]
+    assert len(levels["idle"]) == 1 and len(levels["pale"]) == 1
+    assert levels["idle"][0] - levels["pale"][0] >= macro.cfg.PULSE_MIN_SWING * 2
+
+
+def test_a_need_is_judged_by_its_pulse_only_when_the_pulse_is_known_and_late(macro):
+    watch = macro.PulseWatch("dirty")
+    watch.levels = [160.0, 160.5, 159.0]
+    watch.waited = macro.cfg.PULSE_START_WAIT - 1
+    assert not watch.pulsing() and not watch.overdue()                         # (not yet time)
+    watch.waited = macro.cfg.PULSE_START_WAIT
+    assert watch.overdue()
+    watch.levels.append(160.0 - macro.cfg.PULSE_MIN_SWING)
+    assert watch.pulsing() and not watch.overdue()
+    other = macro.PulseWatch("hungry")                                         # (a need whose pulse was never seen is not judged)
+    other.waited = 10 * macro.cfg.PULSE_START_WAIT
+    assert not other.overdue()
+
+
+def test_a_wait_for_a_need_that_never_pulses_ends_early_as_a_failure_and_one_that_pulses_goes_on(macro, monkeypatch):
+    failures, events = [], []
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: failures.append(reason))
+    monkeypatch.setattr(macro, "log_run_event", events.append)
+    monkeypatch.setattr(macro, "scan_needs", lambda fresh=False: ["dirty"])
+    monkeypatch.setattr(macro.PulseWatch, "look", lambda self: self.levels.append(160.0))      # (a constant icon)
+    macro.wait_until_need_gone("dirty", max_wait=75)
+    assert len(failures) == 1 and "not being done" in failures[0] and macro.state.need_cleared is False
+    failures.clear()
+    level = iter(range(10 ** 6))
+    monkeypatch.setattr(macro.PulseWatch, "look", lambda self: self.levels.append(160.0 - 5 * (next(level) % 4)))      # (one that moves)
+    macro.wait_until_need_gone("dirty", max_wait=30)
+    assert len(failures) == 1 and "still showing after 30" in failures[0]                    # (it ran its course instead)

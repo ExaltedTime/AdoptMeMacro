@@ -1,4 +1,4 @@
-"""The Discord bot's logic (bot/bot_lib.py): the config, who is obeyed, and the messages made from what the macro writes. Nothing here needs
+"""The Discord bot's logic (scripts/bot_lib.py): the config, who is obeyed, and the messages made from what the macro writes. Nothing here needs
 Discord; the macro's own writers (write_status(), record_minigame_result()) make the files the bot reads, so a change in what is written breaks
 here and not at the PC."""
 import json
@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from bot import bot_lib
+from scripts import bot_lib
 
 NOW = datetime(2026, 10, 15, 12, 0, 0)
 
@@ -115,32 +115,6 @@ def test_counts_and_ages_are_written_short():
     assert bot_lib.age_text(3) == "3 s" and bot_lib.age_text(120) == "2 min" and bot_lib.age_text(7500) == "2 h 05 min" and bot_lib.age_text(-5) == "0 s"
 
 
-# --- /results ---
-
-def test_results_are_read_skipping_what_is_not_a_result(macro, tmp_path):
-    path = tmp_path / "results.jsonl"
-    path.write_text('{"minigame": "ghost_gallery", "earned": 3000}\nnot json\n[1]\n{"no": "minigame"}\n{"minigame": "hauntlet_2", "earned": null}\n')
-    assert [entry["minigame"] for entry in bot_lib.read_results(str(path))] == ["ghost_gallery", "hauntlet_2"]
-    assert bot_lib.read_results(str(tmp_path / "missing.jsonl")) == []
-
-
-def test_the_results_message_has_best_worst_average_unread_room_and_latest_per_minigame(macro):
-    runs = [{"minigame": "ghost_gallery", "earned": 3000, "time": "t1"}, {"minigame": "ghost_gallery", "earned": 4000, "time": "t2"},
-            {"minigame": "ghost_gallery", "earned": None, "time": "t3"},
-            {"minigame": "hauntlet_2", "earned": 2520, "room": 6, "time": "t4"}, {"minigame": "hauntlet_2", "earned": 5460, "room": 13, "time": "t5"}]
-    lines = bot_lib.results_text(runs).splitlines()
-    assert lines[0] == "Ghost Gallery: 3 runs, best 4000, worst 3000, average 3500 candy corn (1 not read); latest not read at t3"
-    assert lines[1] == "Hauntlet 2: 2 runs, best 5460, worst 2520, average 3990 candy corn; deepest room 13; latest 5460 at t5"
-    assert bot_lib.results_text([]) == "No minigame results yet."
-    assert "not read in any" in bot_lib.results_text([{"minigame": "hauntlet_2", "earned": None, "time": "t"}])
-
-
-def test_what_the_macro_records_is_what_the_bot_reads(macro):
-    macro.state.run_number = 5
-    macro.record_minigame_result({"minigame": "ghost_gallery", "earned": 3102, "time": "2026-10-15 16:35:50"})
-    macro.record_minigame_result({"minigame": "hauntlet_2", "earned": 3360, "room": 8, "time": "2026-10-15 16:25:10"})
-    text = bot_lib.results_text(bot_lib.read_results(bot_lib.results_path()))
-    assert "Ghost Gallery: 1 runs, best 3102" in text and "Hauntlet 2: 1 runs, best 3360, worst 3360, average 3360 candy corn; deepest room 8" in text
 
 
 # --- /log, /report, /screenshot ---
@@ -176,7 +150,7 @@ def test_a_blank_grab_is_told_from_a_real_one():
 
 def test_the_macro_is_told_from_the_bot_in_a_process_list():
     assert bot_lib.main_py_in(["C:\\Python\\python.exe C:\\AdoptMeMacro\\main.py"]) and bot_lib.main_py_in(["python", "python main.py --loop"])
-    assert not bot_lib.main_py_in(["python bot/discord_bot.py main.py-config"]) and not bot_lib.main_py_in([])
+    assert not bot_lib.main_py_in(["python scripts/discord_bot.py main.py-config"]) and not bot_lib.main_py_in([])
 
 
 # --- alerts ---
@@ -625,7 +599,7 @@ def test_answers_nobody_read_are_cleared_by_the_next_command(tmp_path):
 
 
 def test_the_macro_is_found_among_the_processes_but_not_the_bot_or_other_scripts():
-    processes = [(10, "python bot/discord_bot.py bot_config.json"), (11, "python C:/repo/main.py --loop"), (12, "python other.py"),
+    processes = [(10, "python scripts/discord_bot.py bot_config.json"), (11, "python C:/repo/main.py --loop"), (12, "python other.py"),
                  (13, "C:/Python/python.exe main.py"), (14, "")]
     assert bot_lib.macro_pids(processes) == [11, 13]
     assert bot_lib.parse_process_lines("11 python main.py --loop\n\nnot a pid line\n12 \n 13 python x.py") == [(11, "python main.py --loop"), (12, ""), (13, "python x.py")]
@@ -688,9 +662,9 @@ def test_a_set_command_carries_its_switch_and_only_for_one_that_exists(tmp_path)
     folder = str(tmp_path / "commands")
     name = bot_lib.write_command(folder, "set", 5.0, **bot_lib.switch_command("need", "sick", False))
     assert json.load(open(os.path.join(folder, name + ".json"))) == {"command": "set", "time": 5.0, "kind": "need", "name": "sick", "value": False}
-    assert bot_lib.switch_command("option", "play_stitches_spotlight", True)["name"] == "play_stitches_spotlight"
+    assert bot_lib.switch_command("option", "level_growing_pet", True)["name"] == "level_growing_pet"
     assert bot_lib.switch_command("option", "show_debug_lines", True)["value"] is True
-    for kind, name in (("need", "play_ghost_gallery"), ("option", "sick"), ("secret", "sick"), ("option", "private_server_link")):
+    for kind, name in (("need", "new_need_hotkey"), ("option", "sick"), ("secret", "sick"), ("option", "private_server_link")):
         with pytest.raises(ValueError):
             bot_lib.switch_command(kind, name, True)
 
@@ -699,14 +673,14 @@ def test_the_switches_are_read_from_the_game_config_with_the_defaults_for_what_i
     on_by_default = bot_lib.cfg.ENABLED_NEEDS
     states = bot_lib.switch_states(None)
     assert states["option:use_private_server"] is True and states["option:blackout_hotkey"] is True and states["option:record_next_run"] is False       # (on unless the config says otherwise)
-    assert states["option:side_quest"] is True and states["option:play_hauntlet_2"] is False and states["need:hungry"] is ("hungry" in on_by_default)
+    assert states["option:side_quest"] is True and states["option:level_growing_pet"] is True and states["need:hungry"] is ("hungry" in on_by_default)
     assert set(states) == {f"need:{n}" for n in bot_lib.cfg.NEED_NAMES} | {f"option:{n}" for n in bot_lib.cfg.OPTION_SWITCHES}
-    states = bot_lib.switch_states({"needs_enabled": {"hungry": False, "beach": True}, "side_quest_enabled": False, "ghost_gallery_enabled": True})
+    states = bot_lib.switch_states({"needs_enabled": {"hungry": False, "beach": True}, "side_quest_enabled": False, "level_growing_pet": False})
     assert states["need:hungry"] is False and states["need:beach"] is True and states["need:sick"] is ("sick" in on_by_default)
-    assert states["option:side_quest"] is False and states["option:play_ghost_gallery"] is True
+    assert states["option:side_quest"] is False and states["option:level_growing_pet"] is False
     assert bot_lib.switch_states({"needs_enabled": "x"})["need:hungry"] is ("hungry" in on_by_default)                                  # (a bad config is the defaults)
     text = bot_lib.options_text(bot_lib.switch_states({"needs_enabled": {name: name != "hungry" for name in bot_lib.cfg.NEED_NAMES}}))
-    assert "side_quest on" in text and "play_stitches_spotlight off" in text and text.splitlines()[1] == "Needs off: hungry"
+    assert "side_quest on" in text and "level_growing_pet on" in text and text.splitlines()[1] == "Needs off: hungry"
 
 
 # --- update and rollback ---
@@ -735,7 +709,7 @@ def repos(tmp_path):
     up = git_in(upstream)
     assert up(["init", "-q", "-b", "main"])[0] == 0
     commit(up, upstream, "main.py", "one", "first")
-    commit(up, upstream, "bot/discord_bot.py", "bot one", "second")
+    commit(up, upstream, "scripts/discord_bot.py", "bot one", "second")
     assert subprocess.run(["git", "clone", "-q", str(upstream), str(pc)], capture_output=True).returncode == 0
     return types.SimpleNamespace(up=up, upstream=upstream, pc=git_in(pc), pc_dir=pc)
 
@@ -754,7 +728,7 @@ def test_the_update_plan_goes_ahead_only_over_a_clean_copy_and_only_forward():
 
 
 def test_python_changes_count_only_python_files_and_binary_files_as_none():
-    numstat = "10\t2\tmain.py\n3\t0\tbot/bot_lib.py\n5\t5\tdocs/notes.md\n-\t-\ttests/fixture.png\n-\t-\tlogo.py"
+    numstat = "10\t2\tmain.py\n3\t0\tscripts/bot_lib.py\n5\t5\tdocs/notes.md\n-\t-\ttests/fixture.png\n-\t-\tlogo.py"
     assert bot_lib.python_changes(numstat) == (3, 13, 2)
     assert bot_lib.python_changes("") == (0, 0, 0)
     assert bot_lib.python_changes_text((3, 13, 2)) == "15 lines changed in 3 Python files (+13 / -2)."
@@ -778,10 +752,10 @@ def test_the_rollback_plan_goes_back_only_to_a_known_commit_over_a_clean_copy():
 
 def test_what_changed_says_whether_the_packages_and_the_bot_need_attention():
     assert bot_lib.needs_pip(["main.py", "requirements.txt"]) and not bot_lib.needs_pip(["main.py"])
-    for restarts in (["bot/bot_lib.py"], ["magic_numbers.py"], ["requirements.txt"], ["main.py", "bot/discord_bot.py"]):
+    for restarts in (["scripts/bot_lib.py"], ["magic_numbers.py"], ["requirements.txt"], ["main.py", "scripts/discord_bot.py"]):
         assert bot_lib.needs_bot_restart(restarts)
     assert not bot_lib.needs_bot_restart(["main.py", "docs/ARCHITECTURE.md", "tests/test_bot.py", "robot/x.py"])
-    assert bot_lib.dirty_files(" M main.py\nM  bot/a.py\nR  old.py -> new.py\n") == ["main.py", "bot/a.py", "new.py"]
+    assert bot_lib.dirty_files(" M main.py\nM  scripts/a.py\nR  old.py -> new.py\n") == ["main.py", "scripts/a.py", "new.py"]
 
 
 def test_with_real_git_an_update_is_planned_and_done_only_forward_over_a_clean_copy(repos):
@@ -851,10 +825,10 @@ def test_sizes_are_said_in_megabytes_or_from_a_gigabyte_in_gigabytes_and_the_tot
 def test_every_slash_command_has_a_name_and_descriptions_discord_accepts():
     """Discord refuses the whole upload (and the bot never gets its commands) for a description over 100 characters or a bad name."""
     import re
-    source = (pathlib.Path(__file__).parent.parent / "bot" / "discord_bot.py").read_text(encoding="utf-8")
+    source = (pathlib.Path(__file__).parent.parent / "scripts" / "discord_bot.py").read_text(encoding="utf-8")
     commands = re.findall(r'@command\("([^"]+)", "((?:[^"\\]|\\.)*)"\)', source)
     names = {name for name, _ in commands}
-    assert {"status", "screenshot", "rview", "log", "report", "results", "pull", "start", "loop", "stop", "exit", "rejoin", "setup", "refresh_debug",
+    assert {"status", "screenshot", "rview", "log", "report", "pull", "start", "loop", "stop", "exit", "rejoin", "setup", "refresh_debug",
             "trade_hub", "leave_trade_hub", "inventory", "recenter", "sloop", "blank", "update", "restart", "rollback", "need", "option", "options"} <= names
     for name, description in commands:
         assert re.fullmatch(r"[a-z0-9_-]{1,32}", name) and 1 <= len(description) <= 100, name

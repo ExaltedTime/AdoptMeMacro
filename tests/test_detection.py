@@ -210,11 +210,31 @@ def test_each_stray_window_is_told_from_the_others_in_a_real_screenshot_and_clos
     assert {k for k in macro.cfg.STRAY_WINDOWS if macro.popup_visible(screen, k)} == {name}
 
 
-def test_the_finish_screens_of_both_minigames_are_recognised_in_real_screenshots_and_nothing_else_is(macro):
-    for name in ("finish_screen_ghost_gallery", "finish_screen_hauntlet_2", "game_over"):            # (the second has the next game's countdown over the banner's top)
-        assert macro.detect_minigame_finished(screenshot(name)) is True, name
-    for name in ("trading_hub", "task_board_alerts", "star_rewards", "star_rewards_claim", "hauntlet_house", "ghost_house", "paycheck", "backpack_open"):
-        assert macro.detect_minigame_finished(screenshot(name)) is False, name
+def test_a_trade_request_is_declined_never_accepted_and_an_expired_one_is_okayed_by_buttons_found_by_their_colour(macro, monkeypatch):
+    """Real screenshots of the two cards (the name in them changes: both are known by the pin, and the buttons are found, not clicked at fixed places)."""
+    monkeypatch.setattr(macro.time, "sleep", lambda s: None)
+    request = cv2.imread(os.path.join(os.path.dirname(__file__), "popups", "trade_request.png"))
+    expired = cv2.imread(os.path.join(os.path.dirname(__file__), "popups", "trade_request_expired.png"))
+    monkeypatch.setattr(macro, "grab_screen", lambda: request)
+    assert macro.dismiss_stray_windows() == "trade_request"
+    x, y = macro.clicks[-1]
+    assert abs(x - 870) <= 6 and abs(y - 660) <= 6 and abs(x - 1048) > 100                      # (Decline, the red one: Accept is the green one to its right)
+    macro.clicks.clear()
+    monkeypatch.setattr(macro, "grab_screen", lambda: expired)
+    assert macro.dismiss_stray_windows() == "trade_request_expired"
+    x, y = macro.clicks[-1]
+    assert abs(x - 961) <= 6 and abs(y - 660) <= 6                                              # (Okay, the wide green one)
+    macro.clicks.clear()
+    moved = request.copy()                                                                      # a shorter name: the card has a line less and the buttons are higher
+    moved[540:700, 640:1260] = request[568:728, 640:1260]
+    monkeypatch.setattr(macro, "grab_screen", lambda: moved)
+    assert macro.dismiss_stray_windows() == "trade_request" and abs(macro.clicks[-1][1] - 632) <= 8
+    macro.clicks.clear()
+    for name in ("teleport_nursery", "teleport_dealership", "cant_spawn_vehicle", "backpack_open", "trading_hub", "task_board_alerts", "paycheck", "star_rewards_claim"):
+        monkeypatch.setattr(macro, "grab_screen", lambda name=name: screenshot(name))
+        assert not any(macro.popup_visible(screenshot(name), key) for key in ("trade_request", "trade_request_expired")), name        # (no other dialog is taken for one)
+
+
 
 
 def test_an_empty_screen_has_no_stray_window(macro, monkeypatch):
@@ -258,7 +278,7 @@ def test_setup_is_never_aborted_by_the_popup(macro, monkeypatch):
     monkeypatch.setattr(macro, "rejoin_game", lambda kinds=None: False)
     monkeypatch.setattr(macro, "close_backpack_if_stuck", lambda in_task: False)
     monkeypatch.setattr(macro, "detect_paycheck", lambda: False)
-    assert macro.unscrew(in_task=True, play_minigames=False) is None
+    assert macro.unscrew(in_task=True, interruptible=False) is None
     assert macro.cfg.STRAY_WINDOWS["cant_spawn_vehicle"]["close_pos"] in macro.clicks
 
 
@@ -273,28 +293,8 @@ def with_popup_text(macro, img):
     return put(img, reference(macro, "minigame_popup"), macro.cfg.POPUP_TEMPLATES["minigame_popup"]["box"])
 
 
-def test_minigame_popup_is_a_green_yes_with_a_red_no_beside_it_under_its_teleport_text(macro):
-    yes, no = macro.cfg.GREEN_BUTTON_COLOR, macro.cfg.MINIGAME_POPUP_NO_COLOR
-    img = with_popup_text(macro, blank())
-    img[600:640, 1000:1140] = yes[::-1]          # the colours are RGB, the image BGR
-    assert not macro.detect_minigame_popup(img)  # Yes alone (a paycheck's button, say) isn't one
-    img[600:640, 800:940] = no[::-1]
-    assert macro.detect_minigame_popup(img)
-    elsewhere = blank()                          # another dialog with the same two colours and no "Teleport there now?": not the popup
-    elsewhere[600:640, 1000:1140] = yes[::-1]
-    elsewhere[600:640, 800:940] = no[::-1]
-    assert not macro.detect_minigame_popup(elsewhere)
 
 
-def test_sick_dialog_is_not_a_minigame_popup(macro):
-    """The doctor's Yes/No dialog has the same two colours, but it is the sick handler's to answer."""
-    yes, no = macro.cfg.GREEN_BUTTON_COLOR, macro.cfg.MINIGAME_POPUP_NO_COLOR
-    screen = with_popup_text(macro, blank())
-    screen[600:640, 1000:1140] = yes[::-1]
-    screen[600:640, 800:940] = no[::-1]
-    assert macro.detect_minigame_popup(screen)                          # without the dialog's title it is a popup...
-    put(screen, reference(macro, "sick_dialog"), macro.cfg.POPUP_TEMPLATES["sick_dialog"]["box"])
-    assert not macro.detect_minigame_popup(screen)                      # ...with it, it is ignored
 
 
 def test_the_learned_need_icons_load_from_ref_needs(macro):
@@ -304,9 +304,24 @@ def test_the_learned_need_icons_load_from_ref_needs(macro):
     assert {"diving", "puddle"} <= names                       # the subfolder (ref/needs/weather/) is searched too
 
 
+def test_a_folder_is_not_even_listed_again_within_the_recheck_interval(macro, tmp_path, monkeypatch):
+    folder = tmp_path / "crops"
+    folder.mkdir()
+    cv2.imwrite(str(folder / "a.png"), np.full((4, 4, 3), 10, np.uint8))
+    clock = [100.0]
+    monkeypatch.setattr(macro.time, "monotonic", lambda: clock[0])
+    assert list(macro.load_templates(str(folder))) == ["a"]
+    cv2.imwrite(str(folder / "b.png"), np.full((4, 4, 3), 20, np.uint8))
+    clock[0] += macro.cfg.TEMPLATE_RECHECK_INTERVAL / 2
+    assert list(macro.load_templates(str(folder))) == ["a"]                       # (too soon)
+    clock[0] += macro.cfg.TEMPLATE_RECHECK_INTERVAL
+    assert sorted(macro.load_templates(str(folder))) == ["a", "b"]
+
+
 def test_templates_are_read_once_and_reread_when_a_file_changes(macro, tmp_path, monkeypatch):
     folder = tmp_path / "crops"
     folder.mkdir()
+    monkeypatch.setattr(macro.cfg, "TEMPLATE_RECHECK_INTERVAL", 0)                 # (the folder is looked at every time here)
     cv2.imwrite(str(folder / "A.png"), np.full((4, 4, 3), 10, np.uint8))
     reads = []
     real = macro.cv2.imread
@@ -431,13 +446,6 @@ POPUP_SCREENSHOTS = {                    # real screenshots of a 1920x1080 windo
 }
 
 
-def test_minigame_popups_are_found_and_named_in_real_screenshots_and_other_green_buttons_are_not(macro):
-    import cv2
-    for name, (popup, which) in POPUP_SCREENSHOTS.items():
-        img = cv2.imread(os.path.join(os.path.dirname(__file__), "popups", f"{name}.png"))
-        assert macro.detect_minigame_popup(img) is popup, name
-        if popup:
-            assert macro.identify_minigame(img) == which, name
 
 
 def screenshot(name):
@@ -445,14 +453,6 @@ def screenshot(name):
     return cv2.imread(os.path.join(os.path.dirname(__file__), "popups", f"{name}.png"))
 
 
-def test_the_disconnected_dialog_ends_a_minigame_watch_and_its_clean_screens_do_not(macro):
-    """Real frame of Hauntlet 2's start (Error Code 277): the dialog stayed up for 90 s, the minigame not noticing."""
-    watch = macro.MinigameWatch("hauntlet_2")
-    for name in ("backpack_open", "game_over", "paycheck"):
-        watch.update(screenshot(name))
-    assert watch.problem is None and not watch.disconnected
-    watch.update(screenshot("disconnected_error_277"))
-    assert watch.disconnected and watch.problem == "disconnected from the game"
 
 
 def test_the_big_friend_pill_under_the_cafe_banner_is_no_backpack_but_a_purple_frame_with_a_white_grid_is(macro):
@@ -469,10 +469,6 @@ def test_the_big_friend_pill_under_the_cafe_banner_is_no_backpack_but_a_purple_f
     assert not macro.detect_backpack_normal(blob)
 
 
-def test_an_open_backpack_is_seen_in_a_real_screenshot(macro):
-    assert macro.detect_backpack_open(screenshot("backpack_open"))
-    for name in ("teleport_nursery", "teleport_dealership", "cant_spawn_vehicle"):          # (these have the backpack's expanded grid behind them: the dialog is over it)
-        assert macro.detect_minigame_popup(screenshot(name)) is False
 
 
 def test_the_cant_spawn_a_vehicle_window_is_closed_where_its_okay_is(macro, monkeypatch):
@@ -487,3 +483,29 @@ def test_the_cant_spawn_a_vehicle_window_is_closed_where_its_okay_is(macro, monk
         monkeypatch.setattr(macro, "grab_screen", lambda name=name: screenshot(name))
         assert macro.dismiss_stray_windows() is None
     assert clicks == []
+
+
+def test_all_the_variants_are_scored_against_all_the_saved_icons_at_once_to_the_scores_of_one_by_one(macro):
+    rng = np.random.default_rng(3)
+    size = macro.cfg.ICON_COMPARE_SIZE
+    shape = (size[1], size[0] // 2)                                                         # (a signature is the left half)
+    live = [rng.random(shape).astype(np.float32) for _ in range(5)]
+    saved = [rng.random(shape).astype(np.float32) for _ in range(4)]
+    mask = macro.icon_match_mask(size, macro.cfg.ICON_MATCH_RADIUS_FRACTION)
+    scores = macro.score_variants(live, saved)
+    assert scores.shape == (5, 4)
+    for i, a in enumerate(live):
+        for j, b in enumerate(saved):
+            assert scores[i, j] == pytest.approx(1.0 - float(np.sum(((a - b) ** 2) * mask) / np.count_nonzero(mask)), abs=1e-6)
+
+
+def test_a_white_screen_is_told_by_every_channel_being_light_over_most_of_the_picture(macro):
+    white = np.full((100, 100, 3), 255, np.uint8)
+    assert macro.detect_white_screen(white) is True
+    mostly = white.copy()
+    mostly[:, :20] = 0                                                                      # (80 % light)
+    assert macro.detect_white_screen(mostly) is (0.8 >= macro.cfg.WHITE_SCREEN_MIN_FRACTION)
+    tinted = white.copy()
+    tinted[:, :, 0] = 200                                                                   # (one channel under the level: not white)
+    assert macro.detect_white_screen(tinted) is False
+    assert macro.detect_white_screen(np.zeros((100, 100, 3), np.uint8)) is False

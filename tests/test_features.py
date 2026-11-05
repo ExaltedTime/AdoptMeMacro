@@ -103,17 +103,6 @@ def handlers(macro, *results):
     return made, calls
 
 
-def test_minigame_popups_are_declined_not_played_while_testing_every_need(macro, monkeypatch):
-    seen = []
-    monkeypatch.setattr(macro, "respawn_character", lambda: None)
-    monkeypatch.setattr(macro, "check_focus", lambda: None)
-
-    class Handler:
-        def handle(self):
-            seen.append(macro.state.task_play_minigames)
-            return True
-    macro.run_all_need_handlers({"a": Handler})
-    assert seen == [False]                                   # the in-task checks only decline an offered minigame
 
 
 def test_every_handler_runs_once_in_order_with_a_respawn_after_each(macro, monkeypatch):
@@ -195,95 +184,22 @@ def fixture(name):
 
 # --- the minigame finish screen, closed whenever it is up ------------------------------------------------
 
-@pytest.fixture
-def winner(macro, monkeypatch):
-    """A screen showing the minigame finish screen (banner and NICE! button), with the things unscrew() does around it stubbed."""
-    screen = bright_screen()
-    cfg = macro.cfg
-    for box, color in ((cfg.MINIGAME_FINISH_BANNER_BOX, cfg.MINIGAME_FINISH_BANNER_COLOR), (cfg.MINIGAME_FINISH_BUTTON_BOX, cfg.GREEN_BUTTON_COLOR)):
-        left, top, right, bottom = box
-        screen[top:bottom, left:right] = color[::-1]
-    state = {"screen": screen, "sticky": 0}      # "sticky": clicks the finish screen survives
-    respawns = []
-
-    def click(x, y, duration=0):
-        macro.clicks.append((x, y))
-        if state["sticky"] > 0:
-            state["sticky"] -= 1
-        else:
-            state["screen"] = bright_screen()
-
-    monkeypatch.setattr(macro, "hover_click", click)
-    monkeypatch.setattr(macro, "grab_screen", lambda: state["screen"])
-    monkeypatch.setattr(macro, "respawn_character", lambda: respawns.append(1))
-    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
-    monkeypatch.setattr(macro, "rejoin_game", lambda kinds=None: False)
-    monkeypatch.setattr(macro, "close_backpack_if_stuck", lambda in_task: False)
-    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: None)
-    monkeypatch.setattr(macro, "detect_paycheck", lambda: False)
-    monkeypatch.setattr(macro.cfg, "HALLOWEEN", True)
-    state["respawns"] = respawns
-    return state
 
 
-def test_a_finish_screen_is_closed_and_the_character_respawned(macro, winner):
-    assert macro.close_minigame_finish_screen() is True
-    assert macro.cfg.MINIGAME_FINISH_BUTTON_POS in macro.clicks and winner["respawns"] == [1]
-    assert "minigame finish screen closed" in open(macro.cfg.RUN_LOG_PATH).read()
-    assert macro.state.last_progress is not None
 
 
-def test_a_click_that_missed_is_repeated(macro, winner, monkeypatch):
-    monkeypatch.setattr(macro.cfg, "MINIGAME_FINISH_CLICK_TRIES", 3)
-    winner["sticky"] = 1
-    assert macro.close_minigame_finish_screen() is True
-    assert macro.clicks.count(macro.cfg.MINIGAME_FINISH_BUTTON_POS) == 2 and winner["respawns"] == [1]
 
 
-def test_a_finish_screen_that_will_not_close_is_retried_then_reported(macro, winner):
-    winner["sticky"] = 99
-    macro.close_minigame_finish_screen()
-    assert macro.clicks.count(macro.cfg.MINIGAME_FINISH_BUTTON_POS) == macro.cfg.MINIGAME_FINISH_CLICK_TRIES
-    assert "would not close" in open(macro.cfg.RUN_LOG_PATH).read()
 
 
-def test_the_real_finish_screen_is_recognised(macro):
-    screen = bright_screen()
-    for box, name in ((macro.cfg.MINIGAME_FINISH_BANNER_BOX, "finish_banner.png"), (macro.cfg.MINIGAME_FINISH_BUTTON_BOX, "finish_button.png")):
-        crop = fixture(name)                                                     # (relative to this file, not the working directory)
-        left, top, right, bottom = box
-        screen[top:top + crop.shape[0], left:left + crop.shape[1]] = crop
-    assert macro.detect_minigame_finished(screen) is True
 
 
-def test_no_finish_screen_means_nothing_happens(macro, winner):
-    winner["screen"] = bright_screen()
-    assert macro.close_minigame_finish_screen() is False
-    assert not macro.clicks and winner["respawns"] == []
 
 
-def test_the_green_button_alone_is_not_a_finish_screen(macro, winner):
-    screen = bright_screen()
-    left, top, right, bottom = macro.cfg.MINIGAME_FINISH_BUTTON_BOX
-    screen[top:bottom, left:right] = macro.cfg.GREEN_BUTTON_COLOR[::-1]
-    winner["screen"] = screen                                    # a popup's Yes, an Okay: the banner rules them out
-    assert macro.close_minigame_finish_screen() is False
 
 
-def test_every_cycle_checks_for_the_finish_screen_and_abandons_the_task(macro, winner):
-    assert macro.unscrew() == "played"
-    assert macro.cfg.MINIGAME_FINISH_BUTTON_POS in macro.clicks and winner["respawns"] == [1]
 
 
-def test_setup_only_clicks_nice_and_carries_on(macro, winner, monkeypatch):
-    monkeypatch.setattr(macro, "minigame_popup", lambda play=True: None)
-    assert macro.unscrew(in_task=True, play_minigames=False) is None
-    assert macro.cfg.MINIGAME_FINISH_BUTTON_POS in macro.clicks and winner["respawns"] == []
-
-
-def test_the_finish_screen_is_only_looked_for_while_halloween_is_on(macro, winner, monkeypatch):
-    monkeypatch.setattr(macro.cfg, "HALLOWEEN", False)
-    assert macro.unscrew() is None and not macro.clicks
 
 
 def test_a_scheduled_rejoin_comes_once_the_interval_has_passed(macro, monkeypatch):
@@ -306,7 +222,6 @@ def quiet_screen(macro, monkeypatch):
     monkeypatch.setattr(macro, "rejoin_game", lambda kinds=None: False)
     monkeypatch.setattr(macro, "close_backpack_if_stuck", lambda in_task: False)
     monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: None)
-    monkeypatch.setattr(macro.cfg, "HALLOWEEN", False)
 
 
 def test_a_paycheck_mid_task_aborts_the_task(macro, quiet_screen, monkeypatch):
@@ -321,7 +236,7 @@ def test_a_paycheck_at_the_top_of_a_cycle_does_not_abort(macro, quiet_screen, mo
 
 def test_setup_is_not_aborted_by_a_paycheck(macro, quiet_screen, monkeypatch):
     monkeypatch.setattr(macro, "detect_paycheck", lambda: True)
-    assert macro.unscrew(in_task=True, play_minigames=False) is None
+    assert macro.unscrew(in_task=True, interruptible=False) is None
 
 
 def scans(monkeypatch, macro, *results):

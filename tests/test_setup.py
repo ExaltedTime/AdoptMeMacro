@@ -260,7 +260,6 @@ def test_setup_from_outside_is_an_error_when_a_step_did_not_take(macro, monkeypa
         macro.setup_or_fail()
     with pytest.raises(RuntimeError, match="setup did not take"):                                # (and the setup of /sloop, whose loop must not start on it)
         monkeypatch.setattr(macro, "leave_hub_if_in", lambda: True)
-        monkeypatch.setattr(macro, "exit_minigame", lambda: True)
-        macro.exit_minigame_and_setup()
+        macro.leave_hub_and_setup()
     monkeypatch.setattr(macro, "setup_game", lambda: True)
     assert macro.setup_or_fail() is True

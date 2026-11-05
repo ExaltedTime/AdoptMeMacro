@@ -115,32 +115,6 @@ def test_counts_and_ages_are_written_short():
     assert bot_lib.age_text(3) == "3 s" and bot_lib.age_text(120) == "2 min" and bot_lib.age_text(7500) == "2 h 05 min" and bot_lib.age_text(-5) == "0 s"
 
 
-# --- /results ---
-
-def test_results_are_read_skipping_what_is_not_a_result(macro, tmp_path):
-    path = tmp_path / "results.jsonl"
-    path.write_text('{"minigame": "ghost_gallery", "earned": 3000}\nnot json\n[1]\n{"no": "minigame"}\n{"minigame": "hauntlet_2", "earned": null}\n')
-    assert [entry["minigame"] for entry in bot_lib.read_results(str(path))] == ["ghost_gallery", "hauntlet_2"]
-    assert bot_lib.read_results(str(tmp_path / "missing.jsonl")) == []
-
-
-def test_the_results_message_has_best_worst_average_unread_room_and_latest_per_minigame(macro):
-    runs = [{"minigame": "ghost_gallery", "earned": 3000, "time": "t1"}, {"minigame": "ghost_gallery", "earned": 4000, "time": "t2"},
-            {"minigame": "ghost_gallery", "earned": None, "time": "t3"},
-            {"minigame": "hauntlet_2", "earned": 2520, "room": 6, "time": "t4"}, {"minigame": "hauntlet_2", "earned": 5460, "room": 13, "time": "t5"}]
-    lines = bot_lib.results_text(runs).splitlines()
-    assert lines[0] == "Ghost Gallery: 3 runs, best 4000, worst 3000, average 3500 candy corn (1 not read); latest not read at t3"
-    assert lines[1] == "Hauntlet 2: 2 runs, best 5460, worst 2520, average 3990 candy corn; deepest room 13; latest 5460 at t5"
-    assert bot_lib.results_text([]) == "No minigame results yet."
-    assert "not read in any" in bot_lib.results_text([{"minigame": "hauntlet_2", "earned": None, "time": "t"}])
-
-
-def test_what_the_macro_records_is_what_the_bot_reads(macro):
-    macro.state.run_number = 5
-    macro.record_minigame_result({"minigame": "ghost_gallery", "earned": 3102, "time": "2026-10-15 16:35:50"})
-    macro.record_minigame_result({"minigame": "hauntlet_2", "earned": 3360, "room": 8, "time": "2026-10-15 16:25:10"})
-    text = bot_lib.results_text(bot_lib.read_results(bot_lib.results_path()))
-    assert "Ghost Gallery: 1 runs, best 3102" in text and "Hauntlet 2: 1 runs, best 3360, worst 3360, average 3360 candy corn; deepest room 8" in text
 
 
 # --- /log, /report, /screenshot ---
@@ -688,9 +662,9 @@ def test_a_set_command_carries_its_switch_and_only_for_one_that_exists(tmp_path)
     folder = str(tmp_path / "commands")
     name = bot_lib.write_command(folder, "set", 5.0, **bot_lib.switch_command("need", "sick", False))
     assert json.load(open(os.path.join(folder, name + ".json"))) == {"command": "set", "time": 5.0, "kind": "need", "name": "sick", "value": False}
-    assert bot_lib.switch_command("option", "play_stitches_spotlight", True)["name"] == "play_stitches_spotlight"
+    assert bot_lib.switch_command("option", "level_growing_pet", True)["name"] == "level_growing_pet"
     assert bot_lib.switch_command("option", "show_debug_lines", True)["value"] is True
-    for kind, name in (("need", "play_ghost_gallery"), ("option", "sick"), ("secret", "sick"), ("option", "private_server_link")):
+    for kind, name in (("need", "new_need_hotkey"), ("option", "sick"), ("secret", "sick"), ("option", "private_server_link")):
         with pytest.raises(ValueError):
             bot_lib.switch_command(kind, name, True)
 
@@ -699,14 +673,14 @@ def test_the_switches_are_read_from_the_game_config_with_the_defaults_for_what_i
     on_by_default = bot_lib.cfg.ENABLED_NEEDS
     states = bot_lib.switch_states(None)
     assert states["option:use_private_server"] is True and states["option:blackout_hotkey"] is True and states["option:record_next_run"] is False       # (on unless the config says otherwise)
-    assert states["option:side_quest"] is True and states["option:play_hauntlet_2"] is False and states["need:hungry"] is ("hungry" in on_by_default)
+    assert states["option:side_quest"] is True and states["option:level_growing_pet"] is True and states["need:hungry"] is ("hungry" in on_by_default)
     assert set(states) == {f"need:{n}" for n in bot_lib.cfg.NEED_NAMES} | {f"option:{n}" for n in bot_lib.cfg.OPTION_SWITCHES}
-    states = bot_lib.switch_states({"needs_enabled": {"hungry": False, "beach": True}, "side_quest_enabled": False, "ghost_gallery_enabled": True})
+    states = bot_lib.switch_states({"needs_enabled": {"hungry": False, "beach": True}, "side_quest_enabled": False, "level_growing_pet": False})
     assert states["need:hungry"] is False and states["need:beach"] is True and states["need:sick"] is ("sick" in on_by_default)
-    assert states["option:side_quest"] is False and states["option:play_ghost_gallery"] is True
+    assert states["option:side_quest"] is False and states["option:level_growing_pet"] is False
     assert bot_lib.switch_states({"needs_enabled": "x"})["need:hungry"] is ("hungry" in on_by_default)                                  # (a bad config is the defaults)
     text = bot_lib.options_text(bot_lib.switch_states({"needs_enabled": {name: name != "hungry" for name in bot_lib.cfg.NEED_NAMES}}))
-    assert "side_quest on" in text and "play_stitches_spotlight off" in text and text.splitlines()[1] == "Needs off: hungry"
+    assert "side_quest on" in text and "level_growing_pet on" in text and text.splitlines()[1] == "Needs off: hungry"
 
 
 # --- update and rollback ---
@@ -854,7 +828,7 @@ def test_every_slash_command_has_a_name_and_descriptions_discord_accepts():
     source = (pathlib.Path(__file__).parent.parent / "scripts" / "discord_bot.py").read_text(encoding="utf-8")
     commands = re.findall(r'@command\("([^"]+)", "((?:[^"\\]|\\.)*)"\)', source)
     names = {name for name, _ in commands}
-    assert {"status", "screenshot", "rview", "log", "report", "results", "pull", "start", "loop", "stop", "exit", "rejoin", "setup", "refresh_debug",
+    assert {"status", "screenshot", "rview", "log", "report", "pull", "start", "loop", "stop", "exit", "rejoin", "setup", "refresh_debug",
             "trade_hub", "leave_trade_hub", "inventory", "recenter", "sloop", "blank", "update", "restart", "rollback", "need", "option", "options"} <= names
     for name, description in commands:
         assert re.fullmatch(r"[a-z0-9_-]{1,32}", name) and 1 <= len(description) <= 100, name

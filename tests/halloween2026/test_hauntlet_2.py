@@ -6,6 +6,7 @@ import os
 import cv2
 import numpy as np
 import pytest
+from scripts import Halloween2026 as hw  # noqa: E402
 
 HERE = os.path.join(os.path.dirname(__file__), "hauntlet_2")
 PANEL_AT = (1060, 60)                      # where the room panel crops were cut from (left, top)
@@ -24,35 +25,35 @@ def panel(name):
 def test_every_room_of_the_real_run_is_read(macro):
     names = [os.path.basename(path) for path in sorted(glob.glob(os.path.join(HERE, "room_panels", "[0-9]*.png")))]
     assert len(names) == 29
-    assert {name: macro.read_hauntlet_room(panel(name)) for name in names} == {name: int(name[:2]) for name in names}   # (a mismatch names its room)
+    assert {name: hw.read_hauntlet_room(panel(name)) for name in names} == {name: int(name[:2]) for name in names}   # (a mismatch names its room)
 
 
 @pytest.mark.parametrize("name", ["none_transition.png", "none_lobby.png"])
 def test_a_screen_without_the_panel_reads_as_no_room(macro, name):
-    assert macro.read_hauntlet_room(panel(name)) is None
+    assert hw.read_hauntlet_room(panel(name)) is None
 
 
 def test_a_blank_screen_and_a_missing_digit_folder_read_as_no_room(macro, monkeypatch):
-    assert macro.read_hauntlet_room(np.zeros((1080, 1920, 3), np.uint8)) is None
-    monkeypatch.setattr(macro.cfg, "HAUNTLET_DIGIT_DIR", os.path.join(HERE, "no_such_folder"))
-    assert macro.read_hauntlet_room(panel("07.png")) is None
+    assert hw.read_hauntlet_room(np.zeros((1080, 1920, 3), np.uint8)) is None
+    monkeypatch.setattr(hw, "HAUNTLET_DIGIT_DIR", os.path.join(HERE, "no_such_folder"))
+    assert hw.read_hauntlet_room(panel("07.png")) is None
 
 
 def test_the_saved_digits_are_all_there_and_distinct(macro):
-    digits = macro.digit_templates()
+    digits = hw.digit_templates()
     assert sorted(digits) == list(range(10))
     for a in digits:
         for b in digits:
             if a < b:
-                assert np.abs(digits[a].astype(int) - digits[b].astype(int)).mean() > 2 * macro.cfg.HAUNTLET_DIGIT_MAX_DIFF   # no digit can match two
+                assert np.abs(digits[a].astype(int) - digits[b].astype(int)).mean() > 2 * hw.HAUNTLET_DIGIT_MAX_DIFF   # no digit can match two
 
 
 def test_a_digit_that_matches_none_of_them_is_not_guessed(macro):
     screen = panel("07.png")
-    left, top, right, bottom = macro.cfg.HAUNTLET_ROOM_BOX
+    left, top, right, bottom = hw.HAUNTLET_ROOM_BOX
     screen[top:bottom, left:right] = 0
     screen[top + 4:top + 24, left + 30:left + 44] = 255                          # a solid white block where a digit goes
-    assert macro.read_hauntlet_room(screen) is None
+    assert hw.read_hauntlet_room(screen) is None
 
 
 # --- the item slots ---
@@ -81,14 +82,14 @@ def bar(name):
 def test_the_items_and_counts_in_the_slots_are_read(macro):
     read = {}
     for name in bar_fixtures():
-        items = macro.read_hauntlet_items(bar(name))
+        items = hw.read_hauntlet_items(bar(name))
         assert [item.pos[0] for item in items] == sorted(item.pos[0] for item in items)     # left to right
         read[name] = [(item.name, item.count) for item in items]
     assert len(read) >= 10 and read == bar_fixtures()                                       # (a mismatch names its fixture)
 
 
 def test_slot_positions_are_where_the_slots_are(macro):
-    items = macro.read_hauntlet_items(bar(THREE_ITEMS_AND_PHONE))
+    items = hw.read_hauntlet_items(bar(THREE_ITEMS_AND_PHONE))
     assert [item.pos[0] for item in items] == pytest.approx([788, 903, 1018, 1133], abs=3)
     assert all(abs(item.pos[1] - 1012) <= 3 for item in items)
 
@@ -96,21 +97,21 @@ def test_slot_positions_are_where_the_slots_are(macro):
 def test_an_item_that_is_not_saved_is_unknown_and_nothing_is_saved(macro, monkeypatch, tmp_path):
     import shutil
     items_dir = tmp_path / "items"
-    shutil.copytree(macro.cfg.HAUNTLET_ITEM_DIR, items_dir)
+    shutil.copytree(hw.HAUNTLET_ITEM_DIR, items_dir)
     shutil.rmtree(items_dir / "phone")                                               # forget the phone
     before = sorted(os.listdir(items_dir))
-    monkeypatch.setattr(macro.cfg, "HAUNTLET_ITEM_DIR", str(items_dir))
-    assert [i.name for i in macro.read_hauntlet_items(bar(PHONE_KEY_HEART))] == ["unknown", "key", "heart_potion"]
+    monkeypatch.setattr(hw, "HAUNTLET_ITEM_DIR", str(items_dir))
+    assert [i.name for i in hw.read_hauntlet_items(bar(PHONE_KEY_HEART))] == ["unknown", "key", "heart_potion"]
     assert sorted(os.listdir(items_dir)) == before
 
 
 def test_a_badge_that_cannot_be_read_gives_no_count_not_a_guess(macro):
     screen = bar(THREE_ITEMS_AND_PHONE)
-    x, y = macro.find_item_slots(screen)[0][:2]
-    left, top, right, bottom = macro.cfg.HAUNTLET_BADGE_BOX
+    x, y = hw.find_item_slots(screen)[0][:2]
+    left, top, right, bottom = hw.HAUNTLET_BADGE_BOX
     screen[y + top:y + bottom, x + left:x + right] = 0                                         # wipe the badge
-    assert macro.read_item_count(screen, x, y) is None
-    assert macro.read_item_count(np.zeros((1080, 1920, 3), np.uint8), 10, 10) is None
+    assert hw.read_item_count(screen, x, y) is None
+    assert hw.read_item_count(np.zeros((1080, 1920, 3), np.uint8), 10, 10) is None
 
 
 # --- the hearts ---
@@ -121,13 +122,13 @@ def test_the_hearts_are_counted_red_and_black(macro):
         name = os.path.basename(path)
         parts = name[:-4].split("_")                              # <frame>_<left>_<top>_<red>_<black>  or  <frame>_<left>_<top>_none
         expected[name] = None if parts[3] == "none" else (int(parts[3]), int(parts[4]))
-        hearts = macro.read_hauntlet_hearts(screen_with(cv2.imread(path), (int(parts[1]), int(parts[2]))))
+        hearts = hw.read_hauntlet_hearts(screen_with(cv2.imread(path), (int(parts[1]), int(parts[2]))))
         read[name] = None if hearts is None else (hearts.red, hearts.black)
     assert len(read) >= 10 and read == expected                                              # (a mismatch names its frame)
 
 
 def test_no_pink_heart_on_a_blank_screen_reads_as_no_hearts(macro):
-    assert macro.read_hauntlet_hearts(np.zeros((1080, 1920, 3), np.uint8)) is None
+    assert hw.read_hauntlet_hearts(np.zeros((1080, 1920, 3), np.uint8)) is None
 
 
 def test_a_row_of_only_black_hearts_is_not_found_by_this_reader(macro):
@@ -135,7 +136,7 @@ def test_a_row_of_only_black_hearts_is_not_found_by_this_reader(macro):
     screen = np.full((1080, 1920, 3), 120, np.uint8)
     for k in range(4):
         screen[400:440, 880 + k * 52:880 + k * 52 + 40] = 0
-    assert macro.read_hauntlet_hearts(screen) is None
+    assert hw.read_hauntlet_hearts(screen) is None
 
 
 def test_the_row_is_the_one_nearest_the_middle_of_the_screen(macro):
@@ -147,11 +148,11 @@ def test_the_row_is_the_one_nearest_the_middle_of_the_screen(macro):
     screen[top:top + crop.shape[0], left:left + crop.shape[1]] = crop
     other = crop.copy()
     screen[top:top + crop.shape[0], left - 600:left - 600 + crop.shape[1]] = other[:, :]
-    hearts = macro.read_hauntlet_hearts(screen)
+    hearts = hw.read_hauntlet_hearts(screen)
     assert (hearts.red, hearts.black) == (3, 0) and abs(hearts.pos[0] - left) < 120
 
 
 def test_a_lone_pink_thing_is_not_a_row(macro):
     screen = np.zeros((1080, 1920, 3), np.uint8)
     screen[400:440, 900:940] = (130, 120, 250)                     # pink-ish square, nothing around it
-    assert macro.read_hauntlet_hearts(screen) is None
+    assert hw.read_hauntlet_hearts(screen) is None

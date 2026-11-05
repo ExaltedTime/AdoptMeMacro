@@ -235,11 +235,6 @@ def test_a_trade_request_is_declined_never_accepted_and_an_expired_one_is_okayed
         assert not any(macro.popup_visible(screenshot(name), key) for key in ("trade_request", "trade_request_expired")), name        # (no other dialog is taken for one)
 
 
-def test_the_finish_screens_of_both_minigames_are_recognised_in_real_screenshots_and_nothing_else_is(macro):
-    for name in ("finish_screen_ghost_gallery", "finish_screen_hauntlet_2", "game_over"):            # (the second has the next game's countdown over the banner's top)
-        assert macro.detect_minigame_finished(screenshot(name)) is True, name
-    for name in ("trading_hub", "task_board_alerts", "star_rewards", "star_rewards_claim", "hauntlet_house", "ghost_house", "paycheck", "backpack_open"):
-        assert macro.detect_minigame_finished(screenshot(name)) is False, name
 
 
 def test_an_empty_screen_has_no_stray_window(macro, monkeypatch):
@@ -283,7 +278,7 @@ def test_setup_is_never_aborted_by_the_popup(macro, monkeypatch):
     monkeypatch.setattr(macro, "rejoin_game", lambda kinds=None: False)
     monkeypatch.setattr(macro, "close_backpack_if_stuck", lambda in_task: False)
     monkeypatch.setattr(macro, "detect_paycheck", lambda: False)
-    assert macro.unscrew(in_task=True, play_minigames=False) is None
+    assert macro.unscrew(in_task=True, interruptible=False) is None
     assert macro.cfg.STRAY_WINDOWS["cant_spawn_vehicle"]["close_pos"] in macro.clicks
 
 
@@ -298,28 +293,8 @@ def with_popup_text(macro, img):
     return put(img, reference(macro, "minigame_popup"), macro.cfg.POPUP_TEMPLATES["minigame_popup"]["box"])
 
 
-def test_minigame_popup_is_a_green_yes_with_a_red_no_beside_it_under_its_teleport_text(macro):
-    yes, no = macro.cfg.GREEN_BUTTON_COLOR, macro.cfg.MINIGAME_POPUP_NO_COLOR
-    img = with_popup_text(macro, blank())
-    img[600:640, 1000:1140] = yes[::-1]          # the colours are RGB, the image BGR
-    assert not macro.detect_minigame_popup(img)  # Yes alone (a paycheck's button, say) isn't one
-    img[600:640, 800:940] = no[::-1]
-    assert macro.detect_minigame_popup(img)
-    elsewhere = blank()                          # another dialog with the same two colours and no "Teleport there now?": not the popup
-    elsewhere[600:640, 1000:1140] = yes[::-1]
-    elsewhere[600:640, 800:940] = no[::-1]
-    assert not macro.detect_minigame_popup(elsewhere)
 
 
-def test_sick_dialog_is_not_a_minigame_popup(macro):
-    """The doctor's Yes/No dialog has the same two colours, but it is the sick handler's to answer."""
-    yes, no = macro.cfg.GREEN_BUTTON_COLOR, macro.cfg.MINIGAME_POPUP_NO_COLOR
-    screen = with_popup_text(macro, blank())
-    screen[600:640, 1000:1140] = yes[::-1]
-    screen[600:640, 800:940] = no[::-1]
-    assert macro.detect_minigame_popup(screen)                          # without the dialog's title it is a popup...
-    put(screen, reference(macro, "sick_dialog"), macro.cfg.POPUP_TEMPLATES["sick_dialog"]["box"])
-    assert not macro.detect_minigame_popup(screen)                      # ...with it, it is ignored
 
 
 def test_the_learned_need_icons_load_from_ref_needs(macro):
@@ -456,13 +431,6 @@ POPUP_SCREENSHOTS = {                    # real screenshots of a 1920x1080 windo
 }
 
 
-def test_minigame_popups_are_found_and_named_in_real_screenshots_and_other_green_buttons_are_not(macro):
-    import cv2
-    for name, (popup, which) in POPUP_SCREENSHOTS.items():
-        img = cv2.imread(os.path.join(os.path.dirname(__file__), "popups", f"{name}.png"))
-        assert macro.detect_minigame_popup(img) is popup, name
-        if popup:
-            assert macro.identify_minigame(img) == which, name
 
 
 def screenshot(name):
@@ -470,14 +438,6 @@ def screenshot(name):
     return cv2.imread(os.path.join(os.path.dirname(__file__), "popups", f"{name}.png"))
 
 
-def test_the_disconnected_dialog_ends_a_minigame_watch_and_its_clean_screens_do_not(macro):
-    """Real frame of Hauntlet 2's start (Error Code 277): the dialog stayed up for 90 s, the minigame not noticing."""
-    watch = macro.MinigameWatch("hauntlet_2")
-    for name in ("backpack_open", "game_over", "paycheck"):
-        watch.update(screenshot(name))
-    assert watch.problem is None and not watch.disconnected
-    watch.update(screenshot("disconnected_error_277"))
-    assert watch.disconnected and watch.problem == "disconnected from the game"
 
 
 def test_the_big_friend_pill_under_the_cafe_banner_is_no_backpack_but_a_purple_frame_with_a_white_grid_is(macro):
@@ -494,10 +454,6 @@ def test_the_big_friend_pill_under_the_cafe_banner_is_no_backpack_but_a_purple_f
     assert not macro.detect_backpack_normal(blob)
 
 
-def test_an_open_backpack_is_seen_in_a_real_screenshot(macro):
-    assert macro.detect_backpack_open(screenshot("backpack_open"))
-    for name in ("teleport_nursery", "teleport_dealership", "cant_spawn_vehicle"):          # (these have the backpack's expanded grid behind them: the dialog is over it)
-        assert macro.detect_minigame_popup(screenshot(name)) is False
 
 
 def test_the_cant_spawn_a_vehicle_window_is_closed_where_its_okay_is(macro, monkeypatch):

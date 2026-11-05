@@ -1,4 +1,4 @@
-"""The Discord bot: ask the macro's PC how it is doing from anywhere, and control it: /status, /screenshot, /log, /report, /results, /pull, the
+"""The Discord bot: ask the macro's PC how it is doing from anywhere, and control it: /status, /screenshot, /log, /report, /pull, the
 commands that start, stop and change the macro, and /update and /rollback. It runs on the PC the macro runs on, in the same logged-in desktop session (it reads the macro's files and grabs its screen),
 and connects out to Discord, so no port needs opening. Only one user, in one channel, is obeyed (bot_config.json).
 
@@ -750,11 +750,6 @@ def build(config: bot_lib.Config) -> discord.Client:
         else:
             await say(interaction, os.path.basename(path), file=discord.File(path))
 
-    @command("results", "Best, worst and average candy corn of each minigame")
-    async def results(interaction: discord.Interaction) -> None:
-        await interaction.response.defer(thinking=True)
-        await say(interaction, f"```\n{bot_lib.results_text(bot_lib.read_results(bot_lib.results_path()))}\n```")
-
     def remember(desired: str) -> None:
         state = client.bot_state  # type: ignore[attr-defined]
         state.desired_state, state.crash_reported = desired, False
@@ -1087,7 +1082,7 @@ def build(config: bot_lib.Config) -> discord.Client:
     async def need_command(interaction: discord.Interaction, need: app_commands.Choice[str], on: bool) -> None:
         await change_switch(interaction, "need", need.value, on)
 
-    @command("option", "Switch an option on or off (side quest, minigames, recording, debug lines in the output...)")
+    @command("option", "Switch an option on or off (side quest, recording, hotkeys, debug lines in the output...)")
     @app_commands.choices(option=option_choices)
     async def option_command(interaction: discord.Interaction, option: app_commands.Choice[str], on: bool) -> None:
         await change_switch(interaction, "option", option.value, on)

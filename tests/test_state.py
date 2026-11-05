@@ -783,15 +783,6 @@ def test_the_rejoin_is_booked_before_the_respawn_that_can_lose_focus(macro, monk
     assert time.time() - macro.state.last_rejoin < 5 and time.time() - macro.state.last_progress < 5
 
 
-def test_a_dismissed_minigame_popup_does_not_lose_the_abort(macro, monkeypatch):
-    monkeypatch.setattr(macro, "rejoin_game", lambda kinds=None: False)
-    monkeypatch.setattr(macro, "close_backpack_if_stuck", lambda in_task: False)
-    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: "cant_spawn_vehicle")     # flagged abort_task
-    monkeypatch.setattr(macro, "close_minigame_finish_screen", lambda abandon=True: False)
-    monkeypatch.setattr(macro, "minigame_popup", lambda play=True: "dismissed")
-    monkeypatch.setattr(macro, "detect_paycheck", lambda: False)
-    monkeypatch.setattr(macro.cfg, "HALLOWEEN", True)
-    assert macro.unscrew(in_task=True) == "aborted"
 
 
 def test_setup_keeps_its_backpack_open_without_the_in_task_check_closing_it(macro, monkeypatch):
@@ -803,8 +794,7 @@ def test_setup_keeps_its_backpack_open_without_the_in_task_check_closing_it(macr
     monkeypatch.setattr(macro, "close_backpack_if_stuck", stuck_check)
     monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: None)
     monkeypatch.setattr(macro, "detect_paycheck", lambda: False)
-    monkeypatch.setattr(macro.cfg, "HALLOWEEN", False)
-    assert macro.unscrew(in_task=True, play_minigames=False) is None
+    assert macro.unscrew(in_task=True, interruptible=False) is None
 
 
 def test_the_in_task_check_closes_a_backpack_seen_open_twice_but_not_one_a_handler_has_open_on_purpose(macro, monkeypatch):
@@ -857,7 +847,6 @@ def test_an_equip_sequence_is_not_closed_in_the_middle_by_the_in_task_check(macr
     monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: now.__setitem__(0, now[0] + 1.0))
     monkeypatch.setattr(macro, "detect_paycheck", lambda: False)
     monkeypatch.setattr(macro, "log_run_event", logged.append)
-    monkeypatch.setattr(macro.cfg, "HALLOWEEN", False)
     with macro.task_unscrew():
         macro.state.last_task_unscrew = now[0] - 100                                       # a check is due at once
         macro.state.backpack_strikes = 1                                                   # and one sighting is already counted
@@ -865,40 +854,8 @@ def test_an_equip_sequence_is_not_closed_in_the_middle_by_the_in_task_check(macr
     assert presses == [True, False] and logged == []                                       # opened once, closed once, nothing closed it in between
 
 
-def test_the_teleport_and_the_toy_sequences_are_exempt_only_while_their_backpack_is_open(macro, monkeypatch):
-    wanted = []
-    note = lambda what: wanted.append((what, macro.state.backpack_wanted))
-    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
-    monkeypatch.setattr(macro, "select_backpack_tab", lambda pos: note("tab"))
-    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: note("click"))
-    monkeypatch.setattr(macro, "close_backpack", lambda step: note("close"))
-    monkeypatch.setattr(macro, "hold_key", lambda key, duration: note("hold"))
-    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: note("wait"))
-    monkeypatch.setattr(macro, "grab_screen", lambda: None)
-    monkeypatch.setattr(macro, "minigame_teleported", lambda before: True)
-    macro.teleport_to((100, 100))
-    assert [n for n, w in wanted if w] == ["wait", "click", "wait", "click", "wait", "click"]           # opening it, the category, the teleport: exempt
-    assert [w for n, w in wanted[6:]] == [0] * len(wanted[6:])                                          # the long wait after the teleport and the walk back: not
-    wanted.clear()
-    assert macro.CatchNeedHandler().handle() is True
-    assert [w for n, w in wanted if n in ("tab", "close")] == [1, 1] and wanted[-1][1] == 0 and macro.state.backpack_wanted == 0
 
 
-def test_the_teleport_dialogs_yes_is_clicked_again_when_nothing_teleported(macro, monkeypatch):
-    clicks, logged = [], []
-    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: clicks.append((x, y)))
-    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
-    monkeypatch.setattr(macro, "grab_screen", lambda: None)
-    monkeypatch.setattr(macro, "hold_key", lambda key, duration: None)
-    monkeypatch.setattr(macro, "log_run_event", logged.append)
-    took = iter([False, True])
-    monkeypatch.setattr(macro, "minigame_teleported", lambda before: next(took))
-    macro.teleport_to((100, 100))
-    assert clicks.count(macro.cfg.GENERAL_TELEPORT_POS_3) == 2 and logged == []             # the first click was lost, the second took
-    clicks.clear()
-    monkeypatch.setattr(macro, "minigame_teleported", lambda before: False)
-    macro.teleport_to((100, 100))
-    assert clicks.count(macro.cfg.GENERAL_TELEPORT_POS_3) == macro.cfg.TELEPORT_YES_TRIES and len(logged) == 1      # never: tried as often as allowed, said so, went on
 
 
 def test_the_recorder_does_not_spin_while_no_frame_can_be_grabbed(macro, monkeypatch):
@@ -1263,69 +1220,16 @@ def test_the_real_white_transition_is_white_and_no_other_real_screenshot_is(macr
     assert [name.split("__")[0] for name in white] == ["white_screen"]
 
 
-def test_a_failed_minigame_does_not_count_as_progress_but_a_won_one_does(macro, monkeypatch):
-    stalled = time.time() - 100
-    monkeypatch.setattr(macro, "release_all_inputs", lambda: None)
-    monkeypatch.setattr(macro, "accept_minigame_popup", lambda: True)
-    monkeypatch.setattr(macro, "hover_click", lambda *a, **k: None)
-    monkeypatch.setattr(macro, "respawn_character", lambda: None)
-    monkeypatch.setattr(macro, "click_nice_until_gone", lambda: True)
-    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: None)
-    monkeypatch.setattr(macro, "read_candy_corn_settled", lambda tries=4: None)                  # (no screen to read the total off)
-    for finished in (False, True):
-        macro.state.last_progress = stalled
-        monkeypatch.setitem(macro.MINIGAME_PLAYERS, "ghost_gallery", lambda deadline, watch, finished=finished: finished)
-        assert macro.play_minigame("ghost_gallery") is finished
-        assert (macro.state.last_progress == stalled) is (not finished)
-        assert time.time() - macro.state.last_detection < 5                            # needs couldn't be seen meanwhile either way
 
 
-@pytest.fixture
-def popup_world(macro, world, monkeypatch):
-    """A screen that follows the clicks on the popup's Yes: `popup_world.after(n_clicks)` -> what the screen shows after that many
-    ('dark' = the same as before, 'white', 'other' = a different view); `.popup_up` says whether the popup is still on screen."""
-    import numpy as np
-    shown = {"dark": np.full((108, 192, 3), 30, np.uint8), "white": np.full((108, 192, 3), 255, np.uint8),     # (small: it is looked at hundreds of times)
-             "other": np.full((108, 192, 3), 200, np.uint8)}
-    scene = types.SimpleNamespace(after=lambda clicks: "dark", popup_up=lambda clicks: True)
-    monkeypatch.setattr(macro, "grab_screen", lambda: shown[scene.after(len(macro.clicks))])
-    monkeypatch.setattr(macro, "detect_minigame_popup", lambda img: scene.popup_up(len(macro.clicks)))
-    return scene
 
 
-def test_a_yes_that_teleports_is_clicked_once(macro, popup_world, world):
-    popup_world.after = lambda clicks: "white" if clicks else "dark"
-    assert macro.accept_minigame_popup() is True and len(macro.clicks) == 1
-    del macro.clicks[:]
-    popup_world.after = lambda clicks: "other" if clicks else "dark"                     # a teleport whose white screen was missed
-    assert macro.accept_minigame_popup() is True and len(macro.clicks) == 1
 
 
-def test_a_yes_that_did_not_take_is_clicked_again_while_the_popup_is_up(macro, popup_world, world):
-    popup_world.after = lambda clicks: "white" if clicks >= 2 else "dark"
-    assert macro.accept_minigame_popup() is True and len(macro.clicks) == 2
-    del macro.clicks[:]
-    popup_world.after = lambda clicks: "dark"                                              # never does
-    assert macro.accept_minigame_popup() is False and len(macro.clicks) == macro.cfg.MINIGAME_YES_TRIES
 
 
-def test_a_popup_that_is_gone_with_no_teleport_is_a_failed_start_at_once(macro, popup_world, world):
-    popup_world.popup_up = lambda clicks: False
-    start = world.clock.now
-    assert macro.accept_minigame_popup() is False and len(macro.clicks) == 1
-    assert world.clock.now - start < macro.cfg.MINIGAME_TELEPORT_WAIT + 2                  # one wait, not a minigame's start wait
 
 
-def test_a_minigame_whose_popup_did_not_teleport_is_not_played_but_logged(macro, monkeypatch):
-    events = []
-    monkeypatch.setattr(macro, "accept_minigame_popup", lambda: False)
-    monkeypatch.setattr(macro, "release_all_inputs", lambda: None)
-    monkeypatch.setattr(macro, "respawn_character", lambda: events.append("respawn"))
-    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: events.append(reason))
-    monkeypatch.setattr(macro, "start_run_capture", lambda label: events.append("capture"))
-    monkeypatch.setitem(macro.MINIGAME_PLAYERS, "ghost_gallery", lambda deadline, watch: events.append("played"))
-    assert macro.play_minigame("ghost_gallery") is False
-    assert len(events) == 2 and "could not be started" in events[0] and events[1] == "respawn"       # no capture, no play
 
 
 def test_a_hotkey_acts_on_a_new_press_only_when_its_conditions_hold(macro, monkeypatch):
@@ -1364,37 +1268,8 @@ def test_a_button_the_game_refuses_is_clicked_again_after_a_wait_and_refused_aga
     assert macro.click_need_button("potty") is True and macro.clicks.count((100, 200)) == 1 and waited == [("potty", None)]       # (the usual wait)
 
 
-def test_a_minigame_popup_waits_for_a_need_in_its_end_wait_but_not_for_ever(macro, world, monkeypatch):
-    played = []
-    monkeypatch.setattr(macro, "grab_screen", lambda: None)
-    monkeypatch.setattr(macro, "detect_minigame_popup", lambda img: True)
-    monkeypatch.setattr(macro, "identify_minigame", lambda img: "ghost_gallery")
-    monkeypatch.setattr(macro, "load_game_config", lambda: {"ghost_gallery_enabled": True})
-    monkeypatch.setattr(macro, "play_minigame", lambda name: played.append(name))
-    assert macro.minigame_popup() == "played" and played == ["ghost_gallery"]            # no need waiting: at once
-    played.clear()
-    with macro.end_wait("sick"):
-        assert macro.minigame_popup() == "waiting" and not played                        # held off while it waits...
-        world.clock.now += macro.cfg.MINIGAME_POPUP_END_WAIT - 1
-        assert macro.minigame_popup() == "waiting" and not played
-        world.clock.now += 2                                                             # ...but only so long
-        assert macro.minigame_popup() == "played" and played == ["ghost_gallery"]
-    assert macro.state.end_wait_need is None and macro.state.popup_held_since is None
 
 
-def test_the_end_wait_is_marked_while_a_need_is_waited_for_and_a_held_popup_is_not_taken_for_a_paycheck(macro, monkeypatch):
-    seen = []
-    monkeypatch.setattr(macro, "wait_interruptible", lambda duration: seen.append(macro.state.end_wait_need))
-    monkeypatch.setattr(macro, "_need_cleared", lambda name: True)
-    macro.wait_until_need_gone("potty")
-    assert seen == ["potty"] and macro.state.end_wait_need is None
-    checked = []
-    for name in ("rejoin_game", "close_backpack_if_stuck", "dismiss_stray_windows", "close_minigame_finish_screen"):
-        monkeypatch.setattr(macro, name, lambda *a, **k: False)
-    monkeypatch.setattr(macro, "minigame_popup", lambda play=True: "waiting")
-    monkeypatch.setattr(macro, "detect_paycheck", lambda: checked.append(1) or True)
-    monkeypatch.setattr(macro.cfg, "HALLOWEEN", True)
-    assert macro.unscrew(in_task=True) is None and checked == []                         # the paycheck check, which clicks, is skipped
 
 
 # --- commands from outside (the Discord bot): read_command_with_id(), poll_commands() ---
@@ -1605,11 +1480,11 @@ def test_stopping_on_purpose_is_written_to_the_status_and_a_new_run_clears_it(ma
 
 def test_a_set_command_is_only_read_for_a_switch_that_exists_with_a_true_or_false_value(macro, monkeypatch, tmp_path):
     monkeypatch.setattr(macro.cfg, "COMMANDS_DIR", str(tmp_path / "commands"))
-    good = [dict(kind="need", name="hungry", value=False), dict(kind="option", name="play_stitches_spotlight", value=True), dict(kind="option", name="show_debug_lines", value=False)]
+    good = [dict(kind="need", name="hungry", value=False), dict(kind="option", name="level_growing_pet", value=True), dict(kind="option", name="show_debug_lines", value=False)]
     for details in good:
         write_command(macro, "set", **details)
         assert macro.read_command_with_id()[1] == {"command": "set", "time": pytest.approx(time.time(), abs=5), **details}
-    for details in (dict(kind="need", name="play_ghost_gallery", value=True), dict(kind="option", name="hungry", value=True), dict(kind="need", name="hungry", value="off"),
+    for details in (dict(kind="need", name="new_need_hotkey", value=True), dict(kind="option", name="hungry", value=True), dict(kind="need", name="hungry", value="off"),
                     dict(kind="need", name="hungry"), dict(kind="other", name="hungry", value=True), dict(kind="option", name="private_server_link", value=True), {}):
         write_command(macro, "set", **details)
         assert macro.read_command_with_id()[1] is None, details
@@ -1620,17 +1495,17 @@ def test_a_set_command_changes_the_switch_and_its_checkbox(macro, monkeypatch, t
     class Var:
         def __init__(self): self.value = None
         def set(self, value): self.value = value
-    gui.need_vars, gui.config_flag_vars, gui.show_debug_var = {"hungry": Var()}, {"side_quest_enabled": Var(), "ghost_gallery_enabled": Var()}, Var()
+    gui.need_vars, gui.config_flag_vars, gui.show_debug_var = {"hungry": Var()}, {"side_quest_enabled": Var()}, Var()
     changes = []
     gui.set_need_enabled = lambda name, value: changes.append(("need", name, value))
     gui.set_config_flag = lambda key, value: changes.append((key, value))
     gui.set_debug_lines_shown = lambda: changes.append(("debug lines", gui.show_debug_var.value))
-    for kind, name, value in (("need", "hungry", False), ("option", "side_quest", False), ("option", "play_ghost_gallery", True), ("option", "show_debug_lines", False),
-                              ("option", "play_stitches_spotlight", True)):
+    for kind, name, value in (("need", "hungry", False), ("option", "side_quest", False), ("option", "show_debug_lines", False),
+                              ("option", "level_growing_pet", True)):
         write_command(macro, "set", kind=kind, name=name, value=value)
         gui.poll_commands()
-    assert changes == [("need", "hungry", False), ("side_quest_enabled", False), ("ghost_gallery_enabled", True), ("debug lines", False), ("stitches_spotlight_enabled", True)]
-    assert gui.need_vars["hungry"].value is False and gui.config_flag_vars["side_quest_enabled"].value is False and gui.config_flag_vars["ghost_gallery_enabled"].value is True
+    assert changes == [("need", "hungry", False), ("side_quest_enabled", False), ("debug lines", False), ("level_growing_pet", True)]
+    assert gui.need_vars["hungry"].value is False and gui.config_flag_vars["side_quest_enabled"].value is False
     assert gui.show_debug_var.value is False                                              # (a switch with no checkbox of its own, like the stitches one, is only persisted)
 
 
@@ -1678,34 +1553,8 @@ def test_the_need_names_a_command_may_switch_are_the_handlers_there_are(macro):
     assert set(macro.cfg.NEED_NAMES) == set(macro.NEED_HANDLER_CLASSES) and len(macro.cfg.NEED_NAMES) == len(set(macro.cfg.NEED_NAMES))
 
 
-def test_a_minigame_that_has_no_player_yet_is_declined_even_when_switched_on(macro, monkeypatch):
-    import cv2
-    monkeypatch.delitem(macro.MINIGAME_PLAYERS, "stitches_spotlight")                         # (one that is recognised but cannot be played)
-    clicks, played = [], []
-    monkeypatch.setattr(macro, "grab_screen", lambda: cv2.imread(os.path.join(os.path.dirname(__file__), "popups", "stitches_spotlight.png")))
-    monkeypatch.setattr(macro, "load_game_config", lambda: {"stitches_spotlight_enabled": True})
-    monkeypatch.setattr(macro, "play_minigame", lambda name: played.append(name))
-    monkeypatch.setattr(macro, "hover_click", lambda x, y, **k: clicks.append((x, y)))
-    monkeypatch.setattr(macro, "log_run_event", lambda message: None)
-    assert macro.identify_minigame(macro.grab_screen()) == "stitches_spotlight" and "stitches_spotlight" not in macro.MINIGAME_PLAYERS
-    assert macro.minigame_popup() == "dismissed" and played == [] and clicks[-1] == macro.cfg.MINIGAME_POPUP_NO_POS
 
 
-def test_the_start_wait_ends_when_the_overlay_shows_or_the_game_is_lost_not_only_when_it_runs_out(macro, monkeypatch):
-    looks = []
-    monkeypatch.setattr(macro, "minigame_wait", lambda duration, watch: looks.append(duration))
-    watch = macro.MinigameWatch("ghost_gallery")
-    watch.last_seen = time.time()                                                  # the overlay is up: no waiting at all
-    macro.wait_for_minigame_start(watch, "ghost_gallery")
-    assert looks == [] and watch.start_grace_from is not None
-    watch = macro.MinigameWatch("ghost_gallery")
-    watch.disconnected = True                                                      # a disconnect in the lobby: the rejoin should not wait for the whole start wait
-    macro.wait_for_minigame_start(watch, "ghost_gallery")
-    assert looks == []
-    watch = macro.MinigameWatch("ghost_gallery")                                   # nothing yet: it looks, at the interval, until the overlay shows
-    monkeypatch.setattr(macro, "minigame_wait", lambda duration, w: (looks.append(duration), setattr(w, "last_seen", time.time())))
-    macro.wait_for_minigame_start(watch, "ghost_gallery")
-    assert looks == [macro.cfg.MINIGAME_START_LOOK_INTERVAL]
 
 
 def test_release_all_inputs_lets_go_of_every_key_that_is_down_including_the_camera_arrows(macro, monkeypatch):
@@ -1920,7 +1769,7 @@ def test_sloop_runs_setup_and_then_the_loop_whether_or_not_one_was_running(macro
     idle._set_running_ui = lambda running, status=None: None
     idle.start_loop_from_outside = lambda: idle.calls.append(("start_loop",))
     idle.do_command("sloop", {"command": "sloop"}, "s1")
-    assert idle.calls == [("run_async", "exit_minigame_and_setup")] and idle.resume_loop is True
+    assert idle.calls == [("run_async", "leave_hub_and_setup")] and idle.resume_loop is True
     idle.running_stem, idle.running_loop, idle.is_running = "s1", False, True
     idle._finish_running("[DONE]")
     assert idle.calls[-1] == ("start_loop",) and done_text(macro, "s1") == "done"             # Setup done: the loop

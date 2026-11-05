@@ -1,13 +1,13 @@
 """Run the test suite against changed copies of the repo, to catch tests that only pass for today's setup.
 
-magic_numbers.py is the file that gets edited all the time (timings, routes, intervals, the event flag), and the
+magic_numbers.py is the file that gets edited all the time (timings, routes, intervals), and the
 machine the tests run on is never the one they were written on (another time zone, a debug/ folder full of real
 files, a different working directory). A test that only passes for today's values breaks the build for a harmless
 change. This copies the repo to a temporary folder once per variant, applies the variant's edits (to the copy of
 magic_numbers.py, the environment, the files around it, or the order the tests run in), and runs pytest there:
 
     python tools/retune_check.py            # every variant
-    python tools/retune_check.py halloween_off timings_x1.7
+    python tools/retune_check.py timings_x1.7 timings_x0.5
 
 Each variant should pass exactly as the unchanged repo does. A failure names a test that depends on a tuned value:
 give it a made-up entry or read the constant (see the `walker` fixture in tests/test_state.py) instead of pinning it.
@@ -148,18 +148,18 @@ def prepare(copy: str, setup: str) -> None:
         for sub in ("logs", "failures", "recordings"):
             os.makedirs(os.path.join(copy, "debug", sub), exist_ok=True)
         with open(os.path.join(copy, "debug", ".config"), "w") as f:
-            f.write('{"side_quest_enabled": false, "ghost_gallery_enabled": true, "hauntlet_2_enabled": true, "resume_on_focus_loss": true, "record_next_run": true, "private_server_link": "https://www.roblox.com/share?code=%s&type=Server", "money_collected": 99999}' % ("a" * 32))
+            f.write('{"side_quest_enabled": false, "resume_on_focus_loss": true, "record_next_run": true, "private_server_link": "https://www.roblox.com/share?code=%s&type=Server", "money_collected": 99999}' % ("a" * 32))
         with open(os.path.join(copy, "debug", "logs", "run_counter.txt"), "w") as f:
             f.write("41")
         with open(os.path.join(copy, "debug", "logs", "run_log.txt"), "w") as f:
             f.write("[2026-10-11 23:04:31] [RUN 40] LOOP started\\n")
-    elif setup == "extra_refs":      # a learned icon, an unknown popup crop, an unknown minigame crop
+    elif setup == "extra_refs":      # a learned icon, an unknown popup crop
         import cv2
         import numpy as np
         noise = np.random.RandomState(0).randint(0, 255, (60, 60, 3), np.uint8)
         icon = np.full((66, 66, 3), 255, np.uint8)      # a white disc with a dark bar: the learned need (noise is mostly black once binarised, like a dark patch of scenery)
         cv2.line(icon, (10, 56), (56, 10), (0, 0, 0), 8)
-        for folder, name, image in (("needs", "zz_new_need", icon), ("popups", "zz_unknown_popup", noise), ("halloween", "zz_new_minigame", noise), ("overlays", "zz_overlay", noise)):
+        for folder, name, image in (("needs", "zz_new_need", icon), ("popups", "zz_unknown_popup", noise), ("overlays", "zz_overlay", noise)):
             cv2.imwrite(os.path.join(copy, "ref", folder, name + ".png"), image)
 
 

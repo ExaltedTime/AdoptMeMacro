@@ -1,5 +1,5 @@
 """The logic of the Discord bot (discord_bot.py) that needs neither Discord nor Windows: reading the config, deciding who may give
-orders, and turning the files the macro writes (status.json, run_log.txt, results.jsonl, the run charts) into what is posted.
+orders, and turning the files the macro writes (status.json, run_log.txt, the run charts) into what is posted.
 Plain functions, so tests/test_bot.py can run them anywhere. See docs/ARCHITECTURE.md#discord-bot."""
 import contextlib
 import glob
@@ -114,10 +114,6 @@ def run_log_path() -> str:
     return cfg.RUN_LOG_PATH
 
 
-def results_path() -> str:
-    return os.path.join(cfg.RUNS_DIR, "results", "results.jsonl")
-
-
 def newest_report(runs_dir: str = "") -> Optional[str]:
     """The most recently written run chart (RUNS_DIR/run<N>.png), or None if there is none."""
     charts = glob.glob(os.path.join(runs_dir or cfg.RUNS_DIR, "run*.png"))
@@ -189,50 +185,6 @@ def status_text(status: Optional[dict[str, Any]], now: datetime, stale_minutes: 
                  f"focus resumes {status.get('focus_resumes', 0)}")
     if status.get("cpu_percent") is not None or status.get("memory_mb") is not None:
         lines.append(f"Script: CPU {status.get('cpu_percent')}%, memory {status.get('memory_mb')} MB")
-    return "\n".join(lines)
-
-
-# --- /results ---
-
-def read_results(path: str) -> list[dict[str, Any]]:
-    """The finished minigame runs in results.jsonl, oldest first; lines that aren't a JSON object are skipped."""
-    found = []
-    try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                try:
-                    entry = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(entry, dict) and entry.get("minigame"):
-                    found.append(entry)
-    except OSError:
-        pass
-    return found
-
-
-def results_text(results: list[dict[str, Any]]) -> str:
-    """The /results message: for each minigame its runs, the best, the worst and the average candy corn of those that were read (the number
-    not read is said), the latest, and for Hauntlet 2 the deepest room."""
-    if not results:
-        return "No minigame results yet."
-    lines = []
-    for name in sorted({entry["minigame"] for entry in results}):
-        runs = [entry for entry in results if entry["minigame"] == name]
-        earned = [entry["earned"] for entry in runs if isinstance(entry.get("earned"), int)]
-        label = cfg.MINIGAME_LABELS.get(name, name)
-        if earned:
-            line = f"{label}: {len(runs)} runs, best {max(earned)}, worst {min(earned)}, average {sum(earned) / len(earned):.0f} candy corn"
-        else:
-            line = f"{label}: {len(runs)} runs, candy corn not read in any"
-        if len(earned) < len(runs):
-            line += f" ({len(runs) - len(earned)} not read)"
-        rooms = [entry["room"] for entry in runs if isinstance(entry.get("room"), int)]
-        if rooms:
-            line += f"; deepest room {max(rooms)}"
-        latest = runs[-1]
-        line += f"; latest {latest['earned'] if isinstance(latest.get('earned'), int) else 'not read'} at {latest.get('time')}"
-        lines.append(line)
     return "\n".join(lines)
 
 
@@ -555,7 +507,7 @@ def resolve_pull(source: str, item: Optional[str]) -> tuple[str, str]:
 
 
 def pull_files(path: str, name: str) -> list[tuple[str, str]]:
-    """(file on this PC, path inside the destination folder) for everything `path` is: a file; a folder's files, all of them - except a minigame
+    """(file on this PC, path inside the destination folder) for everything `path` is: a file; a folder's files, all of them - except a capture
     capture (a folder with a zips/ folder, where the frames are the same again as the zips, and the first zip holds info.json and events.jsonl): its zips
     alone, wherever in the folder it is."""
     if os.path.isfile(path):
@@ -600,7 +552,7 @@ def copy_pull(files: list[tuple[str, str]], onedrive_dir: str, source: str, max_
     made: list[str] = []                                  # what this copy made, to take away again if it fails half-way
     try:
         for src, relative in files:
-            relative = relative.removeprefix(source + os.sep)                               # (a whole folder is named after its source: not minigame_captures\minigame_captures\...)
+            relative = relative.removeprefix(source + os.sep)                               # (a whole folder is named after its source: not captures\captures\...)
             target = long_path(os.path.join(onedrive_dir, source, relative))
             os.makedirs(os.path.dirname(target), exist_ok=True)
             existed = os.path.exists(target)

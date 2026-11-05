@@ -22,105 +22,19 @@ ENABLED_NEEDS = {
     "cafe", "salon", "sick", "pizza", "school", "beach", "camping", "bored",  # teleport-walk needs
 }
 
-# ============================================================================
-# EVENT FLAGS
-# ============================================================================
-# While HALLOWEEN is on, unscrew() also runs minigame_popup() (the event's routes are in scripts/Halloween2026.py).
-HALLOWEEN = True
-
-# The "Ghost Gallery / Hauntlet 2 is starting soon! Teleport there now?" popups (one layout) are recognised by their
-# Yes button (green) with its No button (red) close to the left - see detect_minigame_popup().
-# Dismissing it ticks "Do not show again this session", then clicks No.
 # The green of Adopt Me's buttons (a popup's Yes, NICE!, Okay, Play, the paycheck's Cash Out): every green button is found by this
 # colour, within GREEN_BUTTON_TOLERANCE per channel (the popup's Yes by the exact colour) in case of compression/scaling.
 GREEN_BUTTON_COLOR = (74, 198, 85)
 GREEN_BUTTON_TOLERANCE = 3
-MINIGAME_POPUP_NO_COLOR = (216, 42, 63)
-MINIGAME_POPUP_MIN_BUTTON_PIXELS = 1000     # a button is ~5000 exact-color px; fewer is noise
-MINIGAME_POPUP_NO_MAX_DX = 300              # No button must be within this many px left of Yes...
-MINIGAME_POPUP_NO_MAX_DY = 40               # ...and this many px above/below it
-MINIGAME_POPUP_DONT_SHOW_POS = (826, 666)
-MINIGAME_POPUP_NO_POS = (879, 618)
-MINIGAME_POPUP_YES_POS = (1049, 612)
 
-# Which minigame a popup is for: the first line of its title ("Ghost Gallery", "Hauntlet 2") is matched
-# against the crops in MINIGAME_TEMPLATE_DIR, searched for within MINIGAME_TITLE_BOX. A minigame is the
-# lower-cased file name (ghost_gallery.png, hauntlet_2.png -> "ghost_gallery", "hauntlet_2"); each one has an on/off switch in the game
-# config ("<name>_enabled", off by default) - an off one is dismissed, an on one is played.
-MINIGAME_TITLE_BOX = (730, 410, 1200, 510)   # left, top, right, bottom
-MINIGAME_TITLE_MATCH_THRESHOLD = 0.85
-MINIGAME_LABELS = {"hauntlet_2": "Hauntlet 2", "ghost_gallery": "Ghost Gallery", "stitches_spotlight": "Stitches' Spotlight"}   # for the GUI and the logs
-
-# Playing one. Each ends on the game over screen (a red "GAME OVER!" banner over a green NICE! button), which
-# is looked for on every look at the screen, then the button is clicked.
-MINIGAME_FINISH_BANNER_COLOR = (255, 45, 89)
-MINIGAME_FINISH_BANNER_TOLERANCE = 4
-MINIGAME_FINISH_BANNER_BOX = (740, 255, 1190, 370)
-MINIGAME_FINISH_BANNER_MIN_PIXELS = 3000
-MINIGAME_FINISH_BUTTON_BOX = (860, 725, 1060, 800)
-MINIGAME_FINISH_BUTTON_MIN_PIXELS = 2000
-MINIGAME_FINISH_BUTTON_POS = (966, 762)
-# While one runs it has its own overlay along the top of the screen (Hauntlet 2: the ROOM counter beside the
-# timer and monitor; Ghost Gallery: the TIME LEFT / GHOST GALLERY / Score banner; Stitches' Spotlight: TIME LEFT / STITCHES' SPOTLIGHT / Candy Corn). Crops of each overlay (ref/overlays/<minigame>.png, found within its box here, at least
-# MINIGAME_OVERLAY_THRESHOLD) say whether the game is on: one that was seen and then isn't, for
-# MINIGAME_OVERLAY_LOST_TIMEOUT seconds, was left (game over, kicked out) - and one never seen within
-# MINIGAME_OVERLAY_START_GRACE seconds after its start wait never started.
-MINIGAME_OVERLAYS = {"hauntlet_2": (1040, 40, 1210, 135), "ghost_gallery": (840, 25, 1080, 120), "stitches_spotlight": (860, 25, 1065, 125)}   # name: search box
-MINIGAME_OVERLAY_THRESHOLD = 0.7
-MINIGAME_OVERLAY_LOST_TIMEOUT = 10.0
-MINIGAME_OVERLAY_START_GRACE = 60.0
-MINIGAME_POPUP_CHECK_INTERVAL = 4.0   # the popup checks (stray windows, paycheck) run this often while a minigame is played
-MINIGAME_POPUP_END_WAIT = 30.0        # a popup of a minigame to be played waits this long, at most, while a need is in its end wait (the need can clear first)
-# The candy corn total in the HUD (top right, red digits on a white flag, shown in the lobby and in the world - not at home - and in the
-# game over screen) is read by read_candy_corn(): the red pixels (CANDY_CORN_RED, BGR) of CANDY_CORN_BOX that make up pieces CANDY_CORN_DIGIT_HEIGHT
-# tall (the commas are about half that) are the digits, each shrunk to CANDY_CORN_DIGIT_SIZE and compared with the saved ones; the best must differ
-# by less than CANDY_CORN_MAX_DIFF (0-255; the closest two saved digits differ by 50, and a digit not seen before by 11 at most in a leave-one-out test).
-# A piece that is as tall as a digit but wider, or digits further apart than CANDY_CORN_PITCH, mean something is in the way: not read.
-CANDY_CORN_BOX = (1495, 58, 1635, 88)
-CANDY_CORN_RED = ((0, 0, 180), (110, 110, 255))
-CANDY_CORN_DIGIT_HEIGHT = (15, 25)
-CANDY_CORN_DIGIT_MAX_WIDTH = 16
-CANDY_CORN_PITCH = (12, 26)                  # px between the left edges of two digits next to each other (15, 23-24 across a comma): more means one is missing
-CANDY_CORN_DIGIT_SIZE = (12, 20)
-CANDY_CORN_MAX_DIFF = 25
-CANDY_CORN_MAX_DIGITS = 9
-CANDY_CORN_BEFORE_TRIES = 12                 # looks (CANDY_CORN_SETTLE apart) at most for the total before a run: the lobby shows after the white screen of the teleport
-CANDY_CORN_SETTLE = 0.5                      # seconds between the looks of read_candy_corn_settled(): two in a row must agree
-MINIGAME_RESULT_BOX = (450, 130, 1500, 880)  # the GAME OVER! screen: the card with the candy corn earned (seen: x3606 for a Ghost Gallery score of 61600, x7560 for Hauntlet 2's room 18) and the score or the room
-MAX_RESULT_SHOTS = 200                      # the newest this many result screens are kept in RUNS_DIR/results
-MINIGAME_YES_TRIES = 3              # the popup's Yes is clicked this often at most, if it did not teleport the character...
-MINIGAME_TELEPORT_WAIT = 6.0        # ...which is looked for this long after each click: a white screen, or the whole view changing
-MINIGAME_TELEPORT_POLL = 0.1
 SCREEN_CHANGE_SIZE = (80, 45)         # screen_changed() compares the two screens shrunk to this many pixels (grey)
-MINIGAME_TELEPORT_CHANGE = 25       # mean grey-level difference (0-255, over the whole screen, shrunk) from before the click that counts as a changed view
-MINIGAME_MAX_DURATION = 600.0       # gives up (and logs a failure) if the minigame hasn't finished by then
-MINIGAME_ZOOM_OUT_DURATION = 3.0    # Hauntlet 2 and Ghost Gallery hold KEYS["zoom_out"] this long when they begin (Hauntlet 2 again where it can't find the doors, if HAUNTLET_SEARCH_TURNS allows)
-MINIGAME_FINISH_WAIT = 5.0          # after clicking NICE!, before carrying on
-# Leaving a minigame (exit_minigame(), the start of the bot's /sloop): the red Exit Minigame button at the bottom left (POPUP_TEMPLATES["exit_minigame"]; the house has an
-# Exit Home one in the same place), then "Do you want to exit this game?" (POPUP_TEMPLATES["exit_game"]) with a red Cancel and, at its right, a grey button counting down
-# that turns green as Exit Game. Positions and crops from three screenshots of a minigame at 1920x1080 (tests/exit_hub/); the state is told by the colours of the two
-# buttons (HSV ranges, OpenCV's: hue 0-179), which are wide.
-EXIT_MINIGAME_POS = (100, 1040)
-EXIT_DIALOG_CANCEL_BOX = (782, 635, 956, 685)                   # the red button
-EXIT_DIALOG_RIGHT_BOX = (962, 635, 1136, 685)                   # grey while it counts down, then green
-EXIT_GAME_POS = (1048, 660)
-EXIT_STAY_POS = (869, 660)                                      # the red button at the left: Cancel, which stays (clicked on a dialog that is up outside a minigame)
-EXIT_DIALOG_MIN_FRACTION = 0.4                                  # of a box that is its button's colour (the button's text takes some of it)
-EXIT_RED_HSV = ((0, 150, 150), (8, 255, 255))                   # (low, high); red is also at the other end of the hue circle
-EXIT_RED_HSV_HIGH = ((172, 150, 150), (179, 255, 255))
-EXIT_GREEN_HSV = ((45, 110, 130), (80, 255, 255))
-EXIT_GREY_HSV = ((0, 0, 40), (179, 60, 120))
-EXIT_DIALOG_WAIT = 4.0                                          # seconds the dialog is waited for after the button is clicked
-EXIT_COUNTDOWN_WAIT = 8.0                                       # and then the right button's countdown, until it is green
+TELEPORT_CHANGE = 25                  # mean grey-level difference (0-255, over the whole screen, shrunk) from before a teleport dialog's Yes that counts as a changed view
+TELEPORT_WAIT_FOR_VIEW = 6.0          # seconds teleport_took() looks after each Yes: a white screen, or the whole view changing
+TELEPORT_VIEW_POLL = 0.1
+EXIT_STAY_POS = (869, 660)                                      # the red button at the left of a dialog ("Are you sure?"): Cancel, which stays (the trade phone's decline dialog has it in the same place)
+HUB_POLL = 0.25                                                 # seconds between looks while the Trading Hub is waited to be gone and the regular server to be back
 HUB_LEAVE_WAIT = 20.0                                           # seconds the Trading Hub is waited to be gone after leaving it...
 HUB_LOAD_WAIT = 90.0                                            # ...and then the regular server to have loaded (the backpack button back)
-EXIT_LEAVE_WAIT = 12.0                                          # and then the minigame's overlay to be gone
-EXIT_POLL = 0.25                                                # seconds between looks
-MINIGAME_FINISH_CLICK_TRIES = 3      # NICE! clicks before giving up on the finish screen closing
-MINIGAME_START_LOOK_INTERVAL = 0.5     # how often each minigame looks for its overlay while waiting for the game to begin
-MINIGAME_START_WAIT = 90.0          # each minigame waits for its overlay (the game has begun: the lobby's countdown to a round that starts at a fixed time) and act
-                                    # when it shows - this is the most they wait for it, a limit that must outlast the longest queue (the overlay came 50.5 s after the Yes in one run;
-                                    # the Yes comes 12-52 s before the round, and a need's end wait holds it back by up to MINIGAME_POPUP_END_WAIT)
 
 # ============================================================================
 # STRAY WINDOWS
@@ -174,19 +88,13 @@ DIALOG_BUTTONS = {                              # the buttons of those cards (me
 POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     # The paycheck popup's bank-card header ("BANK of Adopt Me!").
     "paycheck":        {"box": (740, 400, 1180, 490), "threshold": 0.8},
-    # The minigame popup's "Teleport there now?" line (the same in every minigame's popup; the popup is always in the same place).
-    "minigame_popup":  {"box": (780, 515, 1160, 585), "threshold": 0.8},
     # The sick need's Yes/No dialog.
     "sick_dialog":     {"box": (700, 400, 1220, 700), "threshold": 0.8},
     "doctor_prompt":   {"box": (880, 420, 1050, 580), "threshold": 0.8},
     # The normal backpack's "BACKPACK" title, and the expanded one's BACK button.
     "backpack_normal": {"box": (700, 600, 1000, 690), "threshold": 0.8},
     "backpack_back":   {"box": (700, 80, 1000, 200), "threshold": 0.8},
-    # The exit dialog's "Do you want to exit this game?" title (the same with its right button grey or green; the teleport's Yes / No dialogs
-    # have the same buttons and another title), the red "Exit Minigame" button at the bottom left of every minigame, and the "GO HOME" text under
-    # the button at the top of the Trading Hub island (the crop is the text alone: what is around the button is the island).
-    "exit_game":       {"box": (760, 445, 1160, 605), "threshold": 0.8},
-    "exit_minigame":   {"box": (0, 1000, 220, 1078), "threshold": 0.8},
+    # The "GO HOME" text under the button at the top of the Trading Hub island (the crop is the text alone: what is around the button is the island).
     "go_home":         {"box": (1280, 60, 1460, 140), "threshold": 0.8},
     # The purple backpack button at the bottom centre: the game's normal UI, there in the world and the Trading Hub and not on a loading screen.
     "backpack_button": {"box": (880, 950, 1040, 1075), "threshold": 0.8},
@@ -227,9 +135,7 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "phone_icon":         {"box": (850, 690, 950, 790), "threshold": 0.8},
     "phone_card":         {"box": (850, 700, 1250, 900), "threshold": 0.85},   # (the box is where the card's name can be: with the item in the first slot or the second)
 }
-# The sick need's own "Ask Doctor Heart to heal your family?" Yes/No dialog (POPUP_TEMPLATES["sick_dialog"]) has the
-# same Yes green + No red as a minigame popup; it is the sick handler's to answer (SICK_FINAL_CLICK_POS is its Yes),
-# so detect_minigame_popup() ignores it.
+# The sick need's own "Ask Doctor Heart to heal your family?" Yes/No dialog (POPUP_TEMPLATES["sick_dialog"]); it is the sick handler's to answer (SICK_FINAL_CLICK_POS is its Yes).
 # "Only Pets, Babies, and Dolls can use this." - the game's answer to a need button clicked while the pet is too far from it (or
 # otherwise not taken). The text is found by the white of its letters (>= ONLY_PETS_WHITE in every channel) matched against the same of
 # the crop ref/popups/only_pets.png, whatever is behind it: a score of at least ONLY_PETS_THRESHOLD within ONLY_PETS_BOX. A need
@@ -258,14 +164,8 @@ UNSCREW_TASK_INTERVAL = 4.0
 # PATHS
 # ============================================================================
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-MINIGAME_TEMPLATE_DIR = os.path.join(SCRIPT_DIR, "ref", "halloween")
 STRAY_WINDOW_DIR = os.path.join(SCRIPT_DIR, "ref", "popups")
-MINIGAME_OVERLAY_DIR = os.path.join(SCRIPT_DIR, "ref", "overlays")
 NEEDS_DIR = os.path.join(SCRIPT_DIR, "ref", "needs")      # the learned need icons - the one folder in ref/ the macro also writes to (see prompt_rename_need())
-HAUNTLET_DIGIT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "digits")   # 0.png ... 9.png: the digits of the ROOM panel, see read_hauntlet_room()
-HAUNTLET_ITEM_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "items")      # a folder per item (phone/, key/, ...) of pictures of its slot; see read_hauntlet_items()
-HAUNTLET_COUNT_DIR = os.path.join(SCRIPT_DIR, "ref", "hauntlet_2", "counts")    # x/, 1/, 2/: the glyphs of an item's "x2" badge
-CANDY_CORN_DIGIT_DIR = os.path.join(SCRIPT_DIR, "ref", "candy_corn_digits")      # 0.png ... 9.png: the digits of the candy corn total in the HUD, see read_candy_corn()
 DEBUG_DIR = os.path.join(SCRIPT_DIR, "debug")
 # debug/ holds failures/ (a folder per failure), logs/ for every text and json file, runs/ for
 # what belongs to one run (its log lines, run<N>.txt, and its chart, run<N>.png) and recordings/ for the run videos - plus
@@ -281,8 +181,7 @@ COMMANDS_DIR = os.path.join(DEBUG_DIR, "commands")          # the commands for t
 COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus", "blackout", "test", "reset_config", "server_link", "trades", "decline", "capture", "recenter")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, travel to / leave the Trading Hub, take pictures of the backpack's pets tab, or run Setup and then the loop (`sloop`), bring the Roblox window to the front (`focus`), blank / show the screen (`blackout`), run one need handler on its own or every teleport one (`test`, what the Debug tab's Test buttons do), reset the config (`reset_config`), save the private server link (`server_link`), take pictures of the offers on the two trade listings (`trades`), decline one of them (`decline`), or start the input capture (the capture hotkey's) and stop it again (`capture`), or close what is open and respawn (`recenter`)
 NEED_NAMES = ("catch", "pet", "choose", "ride", "walk", "hungry", "thirsty", "dirty", "potty", "sleepy", "bored", "beach", "school", "cafe", "salon", "pizza", "camping", "sick")   # the Debug tab's need switches (the keys of main.py's NEED_HANDLER_CLASSES)
 OPTION_SWITCHES = {"side_quest": "side_quest_enabled", "resume_on_focus_loss": "resume_on_focus_loss", "record_next_run": "record_next_run",
-                   "use_private_server": "use_private_server", "blackout_hotkey": "blackout_hotkey_enabled", "new_need_hotkey": "new_need_hotkey_enabled", "level_growing_pet": "level_growing_pet",
-                   **{f"play_{name}": f"{name}_enabled" for name in MINIGAME_LABELS}}   # the other switches a command may change: name -> the game config's key ("show_debug_lines" too, which is only in the window)
+                   "use_private_server": "use_private_server", "blackout_hotkey": "blackout_hotkey_enabled", "new_need_hotkey": "new_need_hotkey_enabled", "level_growing_pet": "level_growing_pet"}   # the other switches a command may change: name -> the game config's key ("show_debug_lines" too, which is only in the window)
 SHOW_DEBUG_LINES_OPTION = "show_debug_lines"
 TEST_ALL_TELEPORTS = "teleports"                       # the `test` command's handler for the Debug tab's "Test every teleport handler" (the others are NEED_NAMES)
 COMMAND_POLL_MS = 1000                                      # how often the macro looks for one
@@ -359,341 +258,17 @@ CAPTURE_MOVE_INTERVAL = 0.03             # the mouse position is written at most
 CAPTURE_MAX_MINUTES = 15                 # a capture stops by itself after this long...
 CAPTURE_MIN_FREE_MB = 3000               # ...or when less than this much disk is free
 MAX_CAPTURES = 5                         # oldest captures are deleted beyond this many
-# Every minigame played is recorded the same way, automatically (MINIGAME_CAPTURE; not while a capture of the hotkey's is
-# running), into a folder of RUN_CAPTURES_DIR. Of each minigame the captures of its RUN_CAPTURES_BEST best runs (the most candy corn
-# earned), its RUN_CAPTURES_WORST worst, its latest and the latest RUN_CAPTURES_FAILED that failed are kept (prune_run_captures()). A lossless frame is 1-3 MB, so a run
-# is kept to RUN_CAPTURE_ZIPS zips of CAPTURE_ZIP_MB by thinning its frames out evenly (see InputCapture) - except frames of
-# when things went wrong: at a mark() (a walk that got nowhere, a failure, a stall...) a frame is saved at once and every look for
-# the next RUN_CAPTURE_BURST seconds, and a run that didn't finish keeps the frames of its last RUN_CAPTURE_TAIL seconds; such
-# frames are not thinned out (up to RUN_CAPTURE_PROTECTED of them, or they would use up the budget).
-MINIGAME_CAPTURE = True
-RUN_CAPTURES_DIR = os.path.join(DEBUG_DIR, "minigame_captures")
-RUN_CAPTURE_ZIPS = 5
 # What the Discord bot's /pull can copy into OneDrive: the folders of debug/ (not the game config, which holds the private server link).
-PULL_SOURCES = {"failures": FAILURE_DIR, "logs": LOGS_DIR, "runs": RUNS_DIR, "minigame_captures": RUN_CAPTURES_DIR, "captures": CAPTURES_DIR, "recordings": RECORDINGS_DIR, "screenshots": SCREENSHOTS_DIR}
-RUN_CAPTURES_BEST = 2
-RUN_CAPTURES_WORST = 2
-RUN_CAPTURES_FAILED = 5                   # the latest this many runs that failed (did not finish, or had a failure logged) are kept too
+PULL_SOURCES = {"failures": FAILURE_DIR, "logs": LOGS_DIR, "runs": RUNS_DIR, "captures": CAPTURES_DIR, "recordings": RECORDINGS_DIR, "screenshots": SCREENSHOTS_DIR}
 RUN_CAPTURE_BURST = 4.0
-RUN_CAPTURE_TAIL = 15.0
 RUN_CAPTURE_PROTECTED = 25
 CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into zips of at most this size (chat attachments are limited to 30 MB)
 
-# Playing Ghost Gallery (from a human's 162 s run). The ghosts and the boss are drawn in a translucent cyan, HSV (85, 140, 250) under the
-# cursor of a player holding the button on one: GHOST_COLOR (OpenCV HSV, low and high) finds it; a ghost is at least GHOST_MIN_AREA px
-# (880-7200 seen; the smaller bits are the character's glow and the score popups), the boss 9500-41000. Nothing counts in GHOST_IGNORE_BOXES
-# (left, top, right, bottom): the HUD along the top, the character's own glow and the bottom of the screen (a pet in the same cyan sits there). The boss phase begins about 1:08 before the end
-# and is told by the boss's health bar, a gold frame (15800-16800 gold pixels in GHOST_BOSS_BAR_BOX; 0-230 before). The player is aimed
-# with the mouse: the beam goes to the cursor. The ghost aimed at is followed while a ghost is within GHOST_STICK px of where it was.
-GHOST_COLOR = ((78, 90, 200), (100, 210, 255))
-# The ghosts of a view from afar (the hall seen from above, the character tiny) are small blue-cyan ovals, hue 92-99, and as saturated as 245-255 (the first version of
-# this range stopped at 240 and saw none of the ghosts of a run's first 100 s: its score stayed 0 until the camera was close). Hue from 90 keeps out the slime puddles
-# (hue 83-85, saturation 255, not as bright) and the haunted paintings' glow (hue 100 and over). The pet's cyan overlaps it (see GHOST_SKIP_TIME).
-GHOST_COLOR_FAR = ((90, 100, 235), (99, 255, 255))
-GHOST_CLOSE = 7
-# The white "!" over furniture a ghost hides in: a white bar (all channels at least GHOST_ALERT_WHITE) at least GHOST_ALERT_MIN_HEIGHT px high and GHOST_ALERT_ASPECT times
-# as high as wide, with a white dot under it (within half the bar's height); looked for in GHOST_ALERT_BAND's rows. The furniture is GHOST_ALERT_BELOW bar heights below it.
-GHOST_ALERT_WHITE = 235
-GHOST_ALERT_MIN_HEIGHT = 14
-GHOST_ALERT_ASPECT = 1.5
-GHOST_ALERT_BAND = (150, 860)
-GHOST_ALERT_BELOW = 4.0
-GHOST_ALERT_MIN_PIECE = 8                    # px of a white piece that can be the bar or the dot
-GHOST_ALERT_BAR_FILL = 0.55                  # of its bounding box a bar fills (a letter or a glow does not)
-GHOST_ALERT_DOT_GAP = 1.5                    # the dot's top is within this many bar heights of the bar's top...
-GHOST_ALERT_DOT_SHIFT = 0.8                  # ...its middle within this many bar widths of the bar's middle (and GHOST_ALERT_DOT_SLACK px more)...
-GHOST_ALERT_DOT_SLACK = 4
-GHOST_ALERT_DOT_WIDTH = (0.35, 1.6)          # ...its width within these bar widths...
-GHOST_ALERT_DOT_ASPECT = 1.6                 # ...at most this many times as high as wide (plus 2 px)...
-GHOST_ALERT_DOT_FILL = 0.5                   # ...and filling this much of its bounding box
-GHOST_BOSS_TRIAL = 6.0                       # the beam on the biggest blob of the boss phase for this long without a score: it is fog, not the boss
-# What the score says is no ghost is left alone - followed as it moves, not by where on the screen it was - for GHOST_SKIP_TIME seconds, then looked at again: the beam on
-# a blob scored nothing for GHOST_SPOT_TRIAL seconds, then on the furniture around it GHOST_HIDE_TRIES times (a pet is the same cyan as a ghost, and flies about wherever the camera is),
-# or in the boss phase for GHOST_BOSS_TRIAL seconds (fog, a light shaft). A skipped blob is one within GHOST_SKIP_RADIUS px or its own size (its area's square root) of the place.
-GHOST_SKIP_TIME = 45.0
-GHOST_HIDE_TRIES = 2
-GHOST_SKIP_RADIUS = 110
-GHOST_EMBLEM_HSV = ((140, 40, 200), (175, 255, 255))   # the pink glow of the emblem on the character's backpack: with the camera close it is 750-10000 px, far away there is none seen
-GHOST_EMBLEM_BOX = (500, 250, 1400, 950)
-GHOST_EMBLEM_MIN = 500
-GHOST_SELF_SCALE = (4.5, 3.5, 6.0)           # the character's box with the camera close, in units of the emblem's size: to each side, up, down (the pet sits below)
-GHOST_SELF_MIN_UNIT = 45
-GHOST_SMALL_MAX = 8500                       # in the shielded phase a blob bigger than this is no small ghost (the beam's glow was 9500, the boss's fog 400000)
-GHOST_BOSS_MIN = 6000                        # in the boss phase the boss is at least this big (9500-41000 seen); a smaller blob is a minion, or some fog
-GHOST_MIN_AREA = 250                         # ghosts from afar are 260-1500 px (their trails are white and don't count)
-GHOST_IGNORE_BOXES = ((0, 0, 1920, 150), (900, 520, 1020, 680), (0, 860, 1920, 1080))
-GHOST_CHARACTER = (960, 540)
-GHOST_STICK = 120
-GHOST_BOSS_BAR_BOX = (680, 150, 1240, 290)
-GHOST_BOSS_BAR_GOLD = ((15, 150, 160), (30, 255, 255))
-GHOST_BOSS_BAR_MIN = 3000
-GHOST_BOSS_BAR_IGNORE = (680, 150, 1240, 275)  # the bar itself, in the boss phase: its crest and its ghost icons are the same cyan
-GHOST_LOOK_INTERVAL = 0.06
-STITCHES_CENTER_INTERVAL = 0.5               # between looks at the ring's edge line, to turn the camera towards the middle
-STITCHES_LINE_BOX = (500, 560, 1500, 1010)   # where the ring walkway's gold edge line is looked for (below the horizon, round the character)
-STITCHES_LINE_HUE = (26, 40)                 # the line's dim olive-gold (OpenCV hue), with the saturation and value below (candy corn is brighter and more orange)
-STITCHES_LINE_MIN_SATURATION = 110
-STITCHES_LINE_VALUE = (85, 175)
-STITCHES_LINE_MIN_PIXELS = 3500              # less of it than this is not a line to go by
-STITCHES_LINE_DEADBAND = 12.0                # degrees from straight across that need no turn
-STITCHES_TURN_MIN_HOLD = 0.03               # a turn shorter than this (seconds) is not made
-STITCHES_TURN_BIAS_GAIN = 0.002             # how fast the steady turn is learned: share of the time the turn key is held, per degree off, per second
-STITCHES_TURN_BIAS_MAX = 0.6                # the most of the time the turn key is held for that
-STITCHES_LOST_AFTER = 4.0                   # seconds without the ring's line, turning at the learned rate, before the camera is swept round to find it
-STITCHES_INTRO_MAX = 15.0                   # the most seconds waited at the start for the ring's line (the intro camera looks at the sky first)
-STITCHES_CALIBRATE_HOLD = 0.15              # seconds the test turn of the camera keys is held
-STITCHES_CALIBRATE_MIN = 3.0                # degrees the ring's line must move in it to tell which way the keys turn
-STITCHES_BOOST_INTERVAL = 2.0
-STITCHES_TURN_HOLD_MAX = 0.2                 # seconds a turn key is held for a line 90 degrees off, less for less
-GHOST_INTRO_WAIT = 6.0                       # after its overlay shows, the game's own intro camera (a look at the ceiling) runs this long; the zoom and tilt come after, or are undone
-# The boss can't be hurt while its bar shows two or three ghost icons instead of its health: the bar's cyan fill (BGR (255, 222, 0),
-# 500-20000 px in GHOST_BOSS_BAR_BOX) is gone then (0 px), the boss is dim - too dim for GHOST_COLOR, so only the small ghosts that fly in
-# are found - and it is those the beam goes on (a human's run: three such phases, 6-7 s each).
-GHOST_BOSS_FILL = ((86, 230, 230), (96, 255, 255))
-GHOST_BOSS_FILL_MIN = 200
-# Before the boss, with no ghost in sight, the beam is held on a random place in GHOST_FURNITURE_BOX (ghosts hide in the furniture; a new
-# place every GHOST_FURNITURE_PERIOD seconds) and the camera is turned every GHOST_CAMERA_PERIOD seconds with nothing to aim at: the right
-# button held while the mouse is dragged GHOST_CAMERA_DRAG px (a random way, and up to GHOST_CAMERA_TILT px up or down). The character jumps
-# every GHOST_JUMP_MIN-GHOST_JUMP_MAX seconds.
-GHOST_FURNITURE_BOX = (100, 120, 1820, 880)
-GHOST_FURNITURE_MIN_DISTANCE = 300           # px: the place is at least this far from the character
-GHOST_FURNITURE_PERIOD = 1.0
-GHOST_CAMERA_PERIOD = 1.5
-GHOST_CAMERA_DRAG = (150, 450)
-GHOST_CAMERA_TILT = 0                        # px up or down in a turn of the camera: none - the pitch was a random walk, and ended on the ceiling, the floor, a wall (the start's tilt sets it)
-GHOST_CAMERA_DRAG_DURATION = 0.15
-GHOST_CAMERA_DRAG_STEPS = 6
-GHOST_START_TILT = 200                       # px of mouse drag down, right button held, at the start (after zooming out): a view from above
-GHOST_MOVE_PERIOD = 4.0                      # the character walks a step (a random MOVE_KEY held GHOST_MOVE_STEP_MIN-MAX seconds) this often
-GHOST_MOVE_STEP_MIN = 0.4
-GHOST_MOVE_STEP_MAX = 1.2
-GHOST_BOSS_TURN_DRAG = (150, 250)             # in the boss phase, with nothing in sight, the camera is turned (one way, until something is) by this many px of drag at a time
-GHOST_FURNITURE_PROBES = 6                   # places tried in GHOST_FURNITURE_BOX for one that gets the white outline of furniture that can be hovered...
-GHOST_OUTLINE_RADIUS = 160                   # ...looking within this many px of the mouse...
-GHOST_OUTLINE_WHITE = 190                    # ...for newly pale pixels (all channels at least this: the outline measured 190-230, in a 1920x1080 screenshot)...
-GHOST_OUTLINE_MIN = 150                      # ...at least this many
-GHOST_OUTLINE_WAIT = 0.12                    # seconds after moving the mouse, before looking
-GHOST_REGRAB_PERIOD = 3.0                   # the beam is let go of and pressed again this often: a player knocked down loses it and the game wants it pressed afresh
-GHOST_START_FORWARD = 3.0                    # seconds of W after the camera is set up: out of the doorway and into the middle of the hall
-GHOST_TOWARD_MARGIN = 130                    # px: a ghost or the boss farther than this from the character (GHOST_CHARACTER) on an axis is walked towards along it, the key held until it is nearer
-GHOST_JUMP_MIN = 3.0
-GHOST_JUMP_MAX = 7.0
-# Score feedback. The score (the purple pill of the banner, GHOST_SCORE_BOX, its colour GHOST_SCORE_PILL, at least GHOST_SCORE_PILL_MIN px of it when the banner is
-# there) says whether what the beam is held on is a ghost: its white digits (every channel at least GHOST_SCORE_WHITE) change by GHOST_SCORE_CHANGE px or more when it
-# moves (unchanged digits differ by 0 px, a changed score by 160 and more). Before the boss, a spot the beam has been on for GHOST_SPOT_TRIAL seconds without a score is
-# no use: furniture is put aside (places within GHOST_BAD_SPOT_RADIUS px of it aren't tried for GHOST_BAD_SPOT_TIME seconds) and another looked for; a ghost in sight
-# that scores nothing is hiding in furniture, which is looked for GHOST_RING px (nearest, farthest) around it. No score at all for GHOST_STALL seconds (a view blocked by a
-# pillar, a beam on the floor) is a stall: the beam is let go of, a random key held GHOST_STALL_WALK seconds, a jump, and the camera turned by GHOST_STALL_TURN px of drag.
-GHOST_SCORE_BOX = (1050, 56, 1170, 88)
-GHOST_SCORE_PILL = ((128, 150, 240), (134, 200, 255))
-GHOST_SCORE_PILL_MIN = 1500
-GHOST_SCORE_WHITE = 230
-GHOST_SCORE_CHANGE = 60
-GHOST_SPOT_TRIAL = 3.0
-GHOST_BAD_SPOT_RADIUS = 150
-GHOST_BAD_SPOT_TIME = 20.0
-GHOST_RING = (60, 220)
-GHOST_STALL = 12.0
-GHOST_STALL_WALK = 1.0
-GHOST_STALL_TURN = (450, 700)
 
-# Hauntlet 2, read from the screen (see the HAUNTLET 2 READER section of main.py).
-# The ROOM panel's number: white digits on a dark panel, always in the same place, at most HAUNTLET_ROOM_MAX_DIGITS long.
-# Each digit is cut out, shrunk to HAUNTLET_DIGIT_SIZE and compared with the saved ones; the mean difference (0-255) of the
-# best must be under HAUNTLET_DIGIT_MAX_DIFF. The panel is flat UI, so a digit matches its saved picture exactly (0.0 on
-# every frame of a 256-frame run) and the two most alike saved digits are 43.7 apart: under half of that, the best
-# match can't be mistaken for another digit.
-HAUNTLET_ROOM_BOX = (1086, 84, 1170, 116)    # left, top, right, bottom
-HAUNTLET_DIGIT_WHITE_LEVEL = 200             # a pixel is part of a digit when all its channels are at least this
-HAUNTLET_DIGIT_MIN_AREA = 25                 # px: smaller white specks are not digits
-HAUNTLET_DIGIT_SIZE = (14, 20)
-HAUNTLET_DIGIT_MAX_DIFF = 20
-HAUNTLET_ROOM_MAX_DIGITS = 3
 
-# The item slots along the bottom of the Hauntlet 2 screen: round white-ringed icons, about HAUNTLET_SLOT_PITCH apart,
-# centred on the screen, up to four. They are found as circles within HAUNTLET_SLOT_BAND (top, bottom). A slot's picture is
-# the HAUNTLET_ITEM_CROP px square around its centre, matched by correlation (0-1) with the pictures of each saved item;
-# the best must reach HAUNTLET_ITEM_MATCH or the item is unknown. These names are not items and are left out of the list.
-HAUNTLET_SLOT_BAND = (930, 1080)
-HAUNTLET_SLOT_RADIUS = (44, 58)
-HAUNTLET_SLOT_MIN_DISTANCE = 80
-HAUNTLET_ITEM_CROP = 60
-HAUNTLET_ITEM_MATCH = 0.75
-HAUNTLET_NOT_ITEMS = {"backpack"}          # the lobby's backpack button sits where the first slot would
-# The "x2" badge on a slot: purple, at the slot's top left. The "x" and each digit are white pieces on it, cut out, shrunk
-# to HAUNTLET_COUNT_SIZE and compared with the saved glyphs (mean difference, 0-255, under HAUNTLET_COUNT_MAX_DIFF).
-HAUNTLET_BADGE_BOX = (-62, -60, 12, -18)    # left, top, right, bottom, relative to the slot's centre
-HAUNTLET_BADGE_WIDTH = (40, 70)              # px: the badge is a purple piece this wide and tall; a bigger or smaller
-HAUNTLET_BADGE_HEIGHT = (16, 30)             # one is background of the same colour, not the badge
-HAUNTLET_COUNT_MIN_HEIGHT = 6                # px: a flatter white piece is a bit of the slot's ring, not a glyph
-HAUNTLET_COUNT_SIZE = (10, 14)
-HAUNTLET_COUNT_MAX_DIFF = 22
 
-# The hearts above the player's head: a row of heart icons, pink with a black outline, or solid black once lost. Found by
-# their pink (HSV, two ranges because red wraps round 0): pieces of the right shape and size, none higher up the screen
-# than HAUNTLET_HEART_MIN_Y (the room panel); the row nearest the middle of the screen is the player's. The row is then
-# followed along its line, one HAUNTLET_HEART_PITCH x a heart's width at a time: a cell with a pink heart is red, one
-# that is nearly all pure black (every channel at most HAUNTLET_HEART_BLACK_LEVEL) is black, anything else ends the row.
-HAUNTLET_HEART_PINK = (((0, 70, 190), (12, 175, 255)), ((168, 70, 190), (180, 175, 255)))
-HAUNTLET_HEART_MIN_WIDTH = 15
-HAUNTLET_HEART_MIN_Y = 110
-HAUNTLET_HEART_MIN_FILL = 0.45             # a heart piece fills this much of its bounding box (a bar or a ring doesn't)
-HAUNTLET_HEART_ASPECT = (0.8, 1.25)        # width / height of a heart piece
-HAUNTLET_HEART_PITCH = 1.3
-HAUNTLET_HEART_BLACK_LEVEL = 6
-HAUNTLET_HEART_BLACK_FRACTION = 0.55
-HAUNTLET_HEART_MAX_EACH_SIDE = 4
-HAUNTLET_HEART_PINK_FRACTION = 0.35           # a cell this pink is a heart even where no heart-shaped piece was found
-HAUNTLET_HEART_MIN = 2                     # a row shorter than this isn't one (every row seen had 3 or 4 hearts, lost ones included)
-HAUNTLET_HEART_MAX = 5                     # a row longer than this isn't a row of hearts (4 were seen at most)
 
-# The doors of a Hauntlet 2 room: each has a TV above it, its screen a light-cyan number (206, 255, 255 - the glow
-# saturates the green and blue channels). A room is a row of three such numbers (the same height, evenly spaced);
-# the TV spacing is the picture's scale (the camera zooms in and out), so the boxes below are in px at a spacing of
-# HAUNTLET_DOOR_SPACING and scaled to the spacing seen. The fork rooms have no TVs, just two doorways with signs.
-# The timer (white digits, top left of the ROOM panel) is hidden in a room's first moments and while the player passes
-# through a door: 950-1190 white pixels when shown, 0 when not - and a frame without the timer may still show the
-# last room's doors, so a room is only looked at while the timer shows.
-HAUNTLET_TIMER_BOX = (730, 55, 865, 122)     # left, top, right, bottom
-HAUNTLET_TIMER_WHITE_LEVEL = 215
-HAUNTLET_TIMER_MIN_WHITE = 500
-HAUNTLET_TV_GLOW = ((120, 215, 245), (240, 255, 255))   # (low, high) red, green, blue of the number's light: cyan, but in a red room (room 12) the digits were 140-240 red and 228-255 green on real frames, so the range stopped at 225 red and 248 green saw none of three
-HAUNTLET_TV_AREA = (80, 1200)                # px of one such number (a thin "1" is the smallest, a TV close to the camera the biggest)
-HAUNTLET_TV_HUD_BOX = (700, 0, 1220, 150)      # left, top, right, bottom: the room panel and timer; their glow is no TV
-HAUNTLET_TV_PAIR_GAP = (560, 1000)           # px between two TVs that are the outer two of three (900 with the camera close), when...
-HAUNTLET_TV_PAIR_OFF_CENTER = 150            # px: ...their middle is this close to the middle of the screen (neighbours with the third off screen are not), or...
-HAUNTLET_TV_PAIR_RATIO = 34                  # ...their gap is this many times the side of a number's blob (neighbours: about 21, the outer two: about 43; the middle TV is hidden, by a balloon say)
-HAUNTLET_TV_SPACING = (200, 500)             # px between neighbouring TVs
-HAUNTLET_TV_ROW_TOLERANCE = 15               # px: the TVs of a row are this level...
-HAUNTLET_TV_SPACING_TOLERANCE = 0.25         # ...and these spacings this close
-HAUNTLET_DOOR_SPACING = 360
-# What a door looks like, from the pixels below its TV, boxes (left, top, right, bottom) relative to the TV's number.
-# Told apart so far, from the 29 rooms of one captured run: a locked door (a red light above it, 40-99 pixels of it where
-# every other door has none), a "???" door (pale grey, mean brightness 180-203 where the others are at most 163), a
-# dark door (more than 40% of it near black, 44-74% where no other door has more than 37%), and of the rest a boarded
-# door from a plain one by its planks: the share of the door's pixels on a strong, near-horizontal edge (the planks'
-# edges; a plain door's edges are mostly the vertical frame and panel). It is 0.03-0.13 on plain doors (median 0.06) and
-# 0.11-0.24 on boarded ones (median 0.18); the threshold is the best one found on the doors of 25 rooms, 94% right on
-# rooms left out of the search, and wrong mostly on the third layer's spiked doors and on boarded doors half hidden by the player.
-HAUNTLET_LOCK_LIGHT_BOX = (-60, 20, 60, 70)
-HAUNTLET_LOCK_LIGHT_RED = 225                # the light is pure red, (255, 37, 37); the player's hearts, which can be under the door, have dark red outlines (204, 68, 54)
-HAUNTLET_LOCK_LIGHT_OTHER = 70
-HAUNTLET_LOCK_LIGHT_MIN = 25                 # px of a red patch that is the light (about 45)...
-HAUNTLET_LOCK_LIGHT_MAX = 200                # ...at most this many (a wall painted red is bigger)...
-HAUNTLET_LOCK_LIGHT_ROUND = 2                # ...and no longer than this many times its width (or the other way round)
-HAUNTLET_DOOR_BOX = (-45, 35, 45, 130)
-HAUNTLET_MYSTERY_BRIGHTNESS = 172
-HAUNTLET_DARK_LEVEL = 55
-HAUNTLET_DARK_FRACTION = 0.4
-HAUNTLET_PLANK_BOX = (-55, 35, 55, 140)
-HAUNTLET_PLANK_BLUR = 1.2                    # px: the picture's grain is smoothed out before looking for edges
-HAUNTLET_PLANK_EDGE = 20                     # Sobel strength (of the 0-255 grey picture) from which a pixel is on an edge
-HAUNTLET_PLANK_ANGLE = 35                    # degrees: an edge this close to horizontal is a plank's
-HAUNTLET_PLANK_FRACTION = 0.103
 
-# Playing Hauntlet 2: after the start wait the screen is read every HAUNTLET_LOOK_INTERVAL seconds. The room number
-# changes as the player passes through a door, while the last room's doors are still on screen (open, the camera
-# following the player), so a room is only looked at HAUNTLET_ROOM_SETTLE seconds after its number changed, with the
-# timer showing and the row of TVs still where it was on the look before (within HAUNTLET_TV_STABLE px: the camera
-# has stopped). Then a door is chosen and walked to - first A or D alone, to bring the player in front of the
-# door: HAUNTLET_STRAFE_DURATION seconds per door spacing (the distance between neighbouring doors) of distance, measured
-# from the player's hearts to the door's TV, no strafe under HAUNTLET_STRAFE_MIN spacings and never more than
-# HAUNTLET_STRAFE_MAX (a human's runs, from the middle: left door 1.0-1.1 s, right 0.9-1.3 s), then W (steered every HAUNTLET_STEER_EVERY seconds while the TVs are in sight, and unstuck by HAUNTLET_UNSTICK_* when the player is not moving) until the room number
-# changes, at most HAUNTLET_WALK_MAX seconds (a human's room: W held 3-4.8 s), and then HAUNTLET_WALK_PAST_DURATION longer: the
-# number changes with the player still in the doorway, the camera close on the door, and the next room's doors can't be seen from there. If the number still hasn't changed
-# HAUNTLET_RETRY_WAIT seconds after the walk, a door is chosen again (a walk that gets nowhere is followed by a step back, a different door and wiggling).
-# A room whose number is a multiple of HAUNTLET_FORK_EVERY (10 and 20 were seen) is a fork: no TVs, two doorways. A
-# room without a row of TVs is a single doorway ahead - at once for room 1, the entrance hall (its doorway leads into a room
-# with three doors that is still room 1), else HAUNTLET_DOORS_TIMEOUT seconds after its number changed - and is walked straight on.
-HAUNTLET_STRAFE_DURATION = 1.1
-HAUNTLET_STRAFE_MIN = 0.15
-HAUNTLET_STRAFE_MAX = 2.5
-HAUNTLET_WALK_MAX = 6.0
-# A door is only as wide as a fraction of the distance between two doors, so a player that is a bit off its door stands against the wall beside it and W gets it nowhere
-# (room 5 of the room 8 run and room 4 of the room 15 run: 10-30 s of the room's 30 s timer, the player 0.3-0.4 door spacings off, which the old limit for steering, 0.4,
-# never corrected). A strafe worked out in one go from where the doors were also ends a little short or long (the room 15 run's 2.4 s of A moved the doors 20-30 % more than
-# the strafe's 1.1 s per spacing says, and the player stood against the left wall, beside its door). So the player is aimed in steps with a fresh look at the doors before each:
-# first, up to HAUNTLET_AIM_STEPS of them, each a hold of the key towards the door for HAUNTLET_STEER_GAIN of the strafe (at most HAUNTLET_STEER_MAX seconds), until the door is within
-# HAUNTLET_STEER_MIN door spacings of the player; then, with W held, the same every HAUNTLET_STEER_EVERY seconds while the three TVs are in sight.
-HAUNTLET_STEER_EVERY = 0.3
-HAUNTLET_STEER_MIN = 0.15
-HAUNTLET_STEER_MAX = 0.8
-HAUNTLET_STEER_GAIN = 0.75
-HAUNTLET_AIM_STEPS = 8
-HAUNTLET_WALK_PAST_DURATION = 1.5            # more of W after the number changed (a human's: 1.0-2.0 s, median 1.4)
-HAUNTLET_START_DELAY = 1.5                    # after the view is set up, before the first step: the entrance hall's doors open on their own (a macro-played run that had not moved by the 45 s the room's timer gave it was thrown out)
-HAUNTLET_START_FORWARD = 1.4                  # the first step, forward (a human's: 1.3-1.5 s)
-HAUNTLET_LOOK_INTERVAL = 0.25
-HAUNTLET_ROOM_SETTLE = 2.0
-HAUNTLET_TV_STABLE = 4
-HAUNTLET_RETRY_WAIT = 1.0                    # after a walk that didn't change the room, this long before the doors are chosen from again
-HAUNTLET_VIEW_SIZE = (96, 54)                 # what the walk looks at to tell whether the view moves: the screen shrunk to this many pixels (grey)...
-HAUNTLET_VIEW_ROWS = (8, 45)                 # ...of which only these rows count (not the room panel at the top and the item bar at the bottom)
-HAUNTLET_SEARCH_TURNS = 0                    # times the camera is turned, in a room whose doors can't be found, before walking straight ahead (0: never - turning it changes where the keys take the player: in a captured fork the doorway was a step away until the camera was turned, and the player then stood against the wall for 20 s)
-HAUNTLET_CAMERA_DRAG = (200, 500)            # px of mouse drag (right button held) for such a turn
-HAUNTLET_BACKUP_DURATION = 0.5               # a walk after one that got nowhere begins with a step back this long
-HAUNTLET_STILL_LEVEL = 2.0                   # a walk whose view changes less than this (mean grey level of the shrunk view, 0-255) between two looks isn't moving: standing still read 0.1-1.1, walking 11-44 over 1.4 s
-HAUNTLET_STILL_AFTER = 0.8                   # seconds of that, forward held, before the player is taken to be caught on something...
-HAUNTLET_UNSTICK_STEP = 0.5                  # ...and steps sideways (towards its door) and jumps: this long, and this much longer at each try...
-HAUNTLET_UNSTICK_MAX = 2.0                   # ...up to this long
-HAUNTLET_UNSTICK_MARGIN = 40                 # px: a door's TV this far or more to a side of the player is the way to step
-HAUNTLET_CIRCLE_HSV = ((115, 60, 90), (145, 255, 255))   # the purple circles on the floor in front of the doors: stepping into one picks that door
-HAUNTLET_CIRCLE_WIDTH = (150, 520)           # px, of a ring's bounding box (the purple badges and labels are smaller)
-HAUNTLET_CIRCLE_HEIGHT = (60, 300)
-HAUNTLET_CIRCLE_MIN_AREA = 600
-HAUNTLET_CIRCLE_FILL = 0.5                   # a ring fills less than this of its box
-HAUNTLET_CIRCLE_BAND = (150, 900)            # rows of the screen the circles are looked for in (not the panel above, nor the item bar)
-HAUNTLET_IN_CIRCLE = 0.35                    # the player is in the circle it hides when it stands this close to where it would be (in circle spacings)
-HAUNTLET_CIRCLE_WAIT = 25.0                  # a walk that has stepped into a door's circle goes on this long for the room to change: it did 9-13 s after the step in real runs (the walk's HAUNTLET_WALK_MAX ended first, "got nowhere", and the player was jumped out of the circle)
-HAUNTLET_LOCK_WAIT = 3.0                     # after stepping into a circle the player can't move for a few moments: no unsticking for this long
-HAUNTLET_SHADOW_BOX = (-110, 20, 110, 200)   # where a shadow door's eyes are looked for, relative to its TV (scaled like the other boxes)
-HAUNTLET_SHADOW_WHITE = 225                  # the glowing eyes: all channels at least this...
-HAUNTLET_SHADOW_AREA = (6, 500)              # ...px each
-HAUNTLET_SHADOW_RING = 60                    # ...in dark smoke: the mean brightness of the ring around them at most this (screws and lights: 73 and more; the eyes: 46-49)
-HAUNTLET_FORK_EVERY = 10
-# A fork's doorways have no TV to find them by. Each opening is dark inside (grey, little colour: HAUNTLET_OPENING_HSV) and begins right
-# under the wall's pale stripes (HAUNTLET_WALL_HSV) - while everywhere else between the wall and the floor there is the gold wainscot, about
-# 60 px of it. So in each column of HAUNTLET_FORK_BAND (rows) the first dark pixel, of a run of HAUNTLET_OPENING_RUN rows, with at least
-# HAUNTLET_OPENING_WALL wall pixels HAUNTLET_OPENING_ABOVE rows (nearest, furthest) above it is a column of an opening; columns less than HAUNTLET_OPENING_JOIN px
-# apart are one opening. Two openings HAUNTLET_OPENING_WIDTH px wide and HAUNTLET_OPENING_GAP px apart (middle to middle) are the fork's doorways (seen with the
-# camera near the wall: 124-170 wide, 574-609 apart; from the room's entrance only one is seen, so the walk goes on until both are).
-HAUNTLET_FORK_BAND = (160, 850)
-HAUNTLET_WALL_HSV = ((0, 85, 205), (40, 145, 255))
-HAUNTLET_OPENING_HSV = ((0, 0, 70), (40, 104, 164))
-HAUNTLET_OPENING_RUN = 6
-HAUNTLET_OPENING_ABOVE = (4, 45)
-HAUNTLET_OPENING_WALL = 10
-HAUNTLET_OPENING_JOIN = 12
-HAUNTLET_OPENING_WIDTH = (100, 260)
-HAUNTLET_OPENING_GAP = (400, 800)
-# Seen at an angle, the far doorway may show only a narrow piece (HAUNTLET_OPENING_PIECE px wide: its inside is lit): one whole opening no wider than
-# HAUNTLET_OPENING_MAIN_MAX and exactly one such piece HAUNTLET_OPENING_PIECE_GAP px from it (middle to middle) are the two doorways.
-HAUNTLET_OPENING_PIECE = (40, 99)
-HAUNTLET_OPENING_MAIN_MAX = 200
-HAUNTLET_OPENING_PIECE_GAP = (420, 680)
-HAUNTLET_DOORS_TIMEOUT = 8.0
-# The items (their folder names in HAUNTLET_ITEM_DIR) and what each is for: the grey key opens a locked door; a cyan potion makes a heart
-# that lasts one room, for a boarded door; the red potion refills the hearts, used when only HAUNTLET_LOW_HEARTS or fewer are left; a
-# heart potion adds one and is used whenever there is one; the phone, used with a chance of HAUNTLET_PHONE_CHANCE at each choice
-# of a door, puts a red arrow over the door with a ghost behind it - a big red triangle (HAUNTLET_ARROW_RED, HSV; the area, width and
-# height in px it was seen with, in HAUNTLET_ARROW_BOX = left, top, right, bottom), over the TV of its door, no more than
-# HAUNTLET_ARROW_MAX_OFFSET door spacings off its middle - which is then not gone through. The arrow is looked for HAUNTLET_ARROW_LOOKS times.
-HAUNTLET_ITEM_KEY = "key"
-HAUNTLET_ITEM_BOARDED = "cyan_potion"
-HAUNTLET_ITEM_REFILL = "red_potion"
-HAUNTLET_ITEM_HEART = "heart_potion"
-HAUNTLET_ITEM_PHONE = "phone"
-HAUNTLET_LOW_HEARTS = 1
-HAUNTLET_PHONE_CHANCE = 0.35
-HAUNTLET_PHONE_CHANCE_LOW = 0.9              # the phone's chance when the hearts are down to HAUNTLET_LOW_HEARTS or fewer
-HAUNTLET_ITEM_WAIT = 0.6                     # seconds after clicking an item
-HAUNTLET_ARROW_RED = (((0, 200, 170), (8, 255, 255)), ((172, 200, 170), (180, 255, 255)))
-HAUNTLET_ARROW_BOX = (0, 90, 1780, 640)
-HAUNTLET_ARROW_AREA = (2200, 6000)
-HAUNTLET_ARROW_WIDTH = (100, 150)
-HAUNTLET_ARROW_HEIGHT = (45, 125)
-HAUNTLET_ARROW_MAX_OFFSET = 0.5
-HAUNTLET_ARROW_LOOKS = 4
 
 # ============================================================================
 # SCREEN / INPUT SETUP
@@ -933,7 +508,7 @@ RIDE_R_HOLD_DURATION = 1.5     # hold KEYS["helicopter"] this long after equippi
 # landing spot. Only the category tab differs per destination (passed into
 # teleport_to() as `category_pos`); everything else is always the same,
 # hence "general".
-TELEPORT_YES_TRIES = 2            # the teleport dialog's Yes is clicked this often at most, until the view changes or the screen goes white (as for a minigame popup)
+TELEPORT_YES_TRIES = 2            # the teleport dialog's Yes is clicked this often at most, until the view changes or the screen goes white 
 TELEPORT_WAIT = 5.0               # wait after the teleport click, for it to take effect
 TELEPORT_SETTLE_WAIT = 7.0         # wait after stepping back, for the landing to settle
 GENERAL_TELEPORT_POS_2 = (895, 705)

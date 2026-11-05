@@ -15,14 +15,13 @@ from __future__ import annotations
 #
 # See README.md for an explanation of how the code is organized and how it behaves.
 
-import math, os, re, sys, time, threading, json, subprocess, traceback, ctypes, queue, random, contextlib, shutil, zipfile
+import os, re, sys, time, threading, json, subprocess, traceback, ctypes, queue, contextlib, shutil, zipfile
 import datetime
 import logging
 import logging.handlers
-import itertools
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field, fields
-from typing import Collection, Any, Callable, ContextManager, Iterable, Iterator, Optional, Sequence, TypeAlias, Union
+from typing import Any, Callable, ContextManager, Iterable, Iterator, Optional, Sequence, TypeAlias, Union
 from abc import ABC, abstractmethod
 from functools import lru_cache, partial
 import tkinter as tk
@@ -43,7 +42,7 @@ Color = tuple[int, int, int]        # (R, G, B)
 import magic_numbers as cfg
 
 class TaskInterrupted(Exception):
-    """A minigame or a rejoin took over the character: the handler is abandoned and
+    """A rejoin or a popup took over the character: the handler is abandoned and
     process_needs() catches this. `reason` is for the log. See docs/ARCHITECTURE.md#stopping--focus-safety.
     """
     def __init__(self, reason: str = "something") -> None:
@@ -320,7 +319,7 @@ class State:
     # without any. None until the loop starts.
     last_progress: Optional[float] = None
     # When a need was last detected on screen (or the loop started, the game was
-    # rejoined or a minigame was played, or the need bar couldn't be read):
+    # rejoined, or the need bar couldn't be read):
     # respawn_if_no_detection() respawns after NO_DETECTION_RESPAWN_INTERVAL
     # without any. Separate from last_progress, so a respawn never delays the
     # NO_PROGRESS_REJOIN_INTERVAL rejoin. None until the loop starts.
@@ -353,8 +352,6 @@ class State:
     white_since: Optional[float] = None
     # The input capture that is running, if any (see toggle_input_capture()). A State field only so snapshot() sees it as text.
     capture: Optional[Any] = None
-    run_capture: Optional[Any] = None                    # the recording of the minigame being played, see start_run_capture()
-    minigame_detail: dict = field(default_factory=dict)  # what the player of the minigame being played says about it ("room")
     # The needs named by the last "detected:" line, and how many checks since then found exactly the same with no
     # handler run in between (not yet written to the run log - see note_repeat_check()).
     last_detected_body: Optional[str] = None
@@ -372,10 +369,10 @@ class State:
     # chance.
     disabled_needs: set = field(default_factory=set)
     # The in-task checks (see task_unscrew()): whether a need handler or setup
-    # is running and its thread, whether it may play a minigame, when the checks
+    # is running and its thread, whether it may be abandoned (setup may not), when the checks
     # last ran, and whether they are running now.
     task_active: bool = False
-    task_play_minigames: bool = True
+    task_interruptible: bool = True
     task_thread: Optional[int] = None
     last_task_unscrew: float = 0.0
     in_unscrew: bool = False
@@ -386,16 +383,9 @@ class State:
     backpack_wanted: int = 0
     # True while a handler that wants the pet focused runs (see wanting_pet_focus()).
     pet_focus_wanted: bool = False
-    exit_dialog_wanted: bool = False       # exit_minigame() is going on: dismiss_stray_windows() leaves the "exit this game?" dialog alone
     typing: bool = False                   # type_keys() is typing into a text box: the hotkeys (a letter each) are not acted on meanwhile
-    # When the minigame popup checks last ran, and how many "quiet:" lines have
-    # been logged for the current stretch with no need resolved.
-    last_minigame_popup_check: float = 0.0
+    # How many "quiet:" lines have been logged for the current stretch with no need resolved.
     quiet_reported: int = 0
-    # The need whose end wait (wait_until_need_gone(), walk_alternating() with a need) is running, and when a minigame popup
-    # that is being held off for it was first seen (see minigame_popup()).
-    end_wait_need: Optional[str] = None
-    popup_held_since: Optional[float] = None
 
     def snapshot(self) -> dict[str, Any]:
         """The state as a JSON-friendly dict (the GUI object left out), for
@@ -769,7 +759,6 @@ def log_failure(reason: str, screenshot: bool = True) -> None:
     """Record that something went wrong: print it, add it to the run log,
     save a screenshot of what was on screen, and note it in the status
     file. Doesn't change what the macro does next."""
-    mark_run_capture(f"failure: {reason}")
     shot = save_failure_report(reason) if screenshot else None
     detail = f"{reason}" + (f" (screenshot: failures/{shot})" if shot else "")
     logger.error(detail)
@@ -810,7 +799,6 @@ def _read_game_config() -> dict[str, Any]:
         "level_growing_pet": True,         # whether Setup filters the eggs and full-grown pets out of the backpack and equips the first pet left (off: the pet is left, the Alicorn equipped if none is out)
         "new_need_hotkey_enabled": True,   # whether HOTKEYS["new_need"] teaches the macro a need icon it does not know (off: that key can be typed in Roblox)
         "needs_enabled": {},        # {need: whether it is acted on}, the Debug tab's switches; a need not in it follows ENABLED_NEEDS (see need_is_enabled())
-        **{f"{name}_enabled": False for name in cfg.MINIGAME_LABELS},  # which Halloween minigames get played (see minigame_popup())
         "private_server_link": "",  # used by leave_and_rejoin(); kept here, not in the source, since it's a join key
         "use_private_server": True,   # whether a rejoin goes to that private server (off: a public one, with the link kept)
     }
@@ -819,8 +807,6 @@ def _read_game_config() -> dict[str, Any]:
             config = json.load(f)
     except (FileNotFoundError, ValueError):
         return defaults
-    if "hauntlet_enabled" in config:   # before it was called Hauntlet 2
-        config.setdefault("hauntlet_2_enabled", config.pop("hauntlet_enabled"))
     return {**defaults, **config}
 
 def load_game_config() -> dict[str, Any]:
@@ -1070,15 +1056,6 @@ def _need_cleared(need_name: str) -> bool:
             wait_interruptible(cfg.NEED_GONE_FLICKER_RECHECK_DELAY)
     return True
 
-@contextlib.contextmanager
-def end_wait(need_name: Optional[str]) -> Iterator[None]:
-    """Mark `need_name`'s end wait as running (state.end_wait_need), so that a minigame popup waits for it - see minigame_popup()."""
-    state.end_wait_need = need_name
-    try:
-        yield
-    finally:
-        state.end_wait_need = None
-
 def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAIT, poll_interval: float = cfg.NEED_GONE_POLL_INTERVAL) -> None:
     """Wait up to `max_wait` for `need_name` to clear, polling every `poll_interval`. A
     timeout is logged as a failure and sets state.need_cleared False.
@@ -1087,18 +1064,17 @@ def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAI
     logger.debug(f"Waiting up to {max_wait}s for {need_name} to clear...")
     state.need_cleared = True
     deadline = time.time() + max_wait
-    with end_wait(need_name):
-        while True:
-            remaining = deadline - time.time()
-            if remaining <= 0:
-                logger.debug(f"{need_name} still showing after {max_wait}s, moving on")
-                log_failure(f"{need_name} still showing after {max_wait}s")
-                state.need_cleared = False
-                return
-            wait_interruptible(min(poll_interval, remaining))
-            if _need_cleared(need_name):
-                logger.debug(f"{need_name} cleared")
-                return
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            logger.debug(f"{need_name} still showing after {max_wait}s, moving on")
+            log_failure(f"{need_name} still showing after {max_wait}s")
+            state.need_cleared = False
+            return
+        wait_interruptible(min(poll_interval, remaining))
+        if _need_cleared(need_name):
+            logger.debug(f"{need_name} cleared")
+            return
 
 def _watch_need_gone(need_name: str, cleared_event: threading.Event, stop_event: threading.Event, answers: Optional[list] = None) -> None:
     """Watcher-thread body for walk_alternating(): sets `cleared_event` when the need is
@@ -1151,45 +1127,42 @@ def hover_click(x: float, y: float, duration: float = cfg.CLICK_MOVE_DURATION) -
 
 # While a need handler (or setup) runs - see task_unscrew() - every
 # wait_interruptible() also runs the per-cycle checks (unscrew()) now and
-# then, so a popup, a stray window or a minigame doesn't wait for the handler
+# then, so a popup or a stray window doesn't wait for the handler
 # to finish. Only on the thread that started the task, and never from inside
 # unscrew() itself.
 
 @contextlib.contextmanager
-def task_unscrew(play_minigames: bool = True) -> Iterator[None]:
+def task_unscrew(interruptible: bool = True) -> Iterator[None]:
     """Within this block wait_interruptible() runs unscrew(in_task=True) every
-    UNSCREW_TASK_INTERVAL; `play_minigames` False (setup) only declines minigames.
+    UNSCREW_TASK_INTERVAL; `interruptible` False (setup) only declines minigames.
     See docs/ARCHITECTURE.md#need-handlers.
     """
-    previous = (state.task_active, state.task_play_minigames, state.task_thread)
-    state.task_active, state.task_play_minigames, state.task_thread = True, play_minigames, threading.get_ident()
+    previous = (state.task_active, state.task_interruptible, state.task_thread)
+    state.task_active, state.task_interruptible, state.task_thread = True, interruptible, threading.get_ident()
     state.last_task_unscrew = time.time()
     try:
         yield
     finally:
-        state.task_active, state.task_play_minigames, state.task_thread = previous
+        state.task_active, state.task_interruptible, state.task_thread = previous
 
 def task_unscrew_tick() -> None:
     """The hook in wait_interruptible(): run the in-task checks if one is due.
-    Raises TaskInterrupted if a minigame was played, the game was rejoined or a popup spoiled the task."""
+    Raises TaskInterrupted if the game was rejoined or a popup spoiled the task."""
     if (not state.task_active or state.in_unscrew or threading.get_ident() != state.task_thread
             or time.time() - state.last_task_unscrew < cfg.UNSCREW_TASK_INTERVAL):
         return
     state.in_unscrew = True
     try:
-        played = unscrew(in_task=True, play_minigames=state.task_play_minigames)
+        result = unscrew(in_task=True, interruptible=state.task_interruptible)
     finally:
         state.in_unscrew = False
         state.last_task_unscrew = time.time()
-    if played == "played":
-        release_all_inputs()
-        raise TaskInterrupted("a minigame")
-    if played == "rejoined":
+    if result == "rejoined":
         release_all_inputs()
         raise TaskInterrupted("a rejoin")
-    if played == "aborted":
+    if result == "aborted":
         release_all_inputs()
-        respawn_character()   # unlike a minigame or a rejoin this doesn't respawn by itself: start the retry from a known spot
+        respawn_character()   # unlike a rejoin this doesn't respawn by itself: start the retry from a known spot
         raise TaskInterrupted("a popup")
 
 def wait_interruptible(duration: float) -> None:
@@ -1496,16 +1469,14 @@ def close_open_windows() -> int:
     return closed
 
 def recenter() -> bool:
-    """The bot's /recenter: leave the minigame if one is being played (exit_minigame()), close what is open (close_open_windows()), respawn the character (it is back where it spawns),
-    and close what the respawn left. False (logged) if a minigame could not be left - the rest is done all the same."""
+    """The bot's /recenter: close what is open (close_open_windows()), respawn the character (it is back where it spawns), and close what the respawn left."""
     if not focus_roblox():
         return False
-    left = exit_minigame()
     closed = close_open_windows()
     respawn_character()
     closed += close_open_windows()
-    log_run_event(f"recenter: {closed} window(s) closed, respawned" + ("" if left else " (the minigame could not be left)"))
-    return left
+    log_run_event(f"recenter: {closed} window(s) closed, respawned")
+    return True
 
 def hold_key(key: str, duration: float) -> None:
     """Hold `key` down for `duration` seconds (interruptibly). Always
@@ -1549,8 +1520,6 @@ def walk_alternating(direction_pair: tuple[str, str], total_duration: float, ste
         direction_idx = 0
         elapsed = 0.0
         start_time = time.time()
-        state.end_wait_need = need_name
-
         while elapsed < total_duration and not cleared_event.is_set():
             direction = direction_pair[direction_idx % 2]
             logger.debug(f"Step {direction_idx + 1}: {direction} for {step_duration}s...")
@@ -1560,7 +1529,6 @@ def walk_alternating(direction_pair: tuple[str, str], total_duration: float, ste
             direction_idx += 1
             elapsed = time.time() - start_time
     finally:
-        state.end_wait_need = None
         stop_event.set()
         if watcher is not None:
             watcher.join(timeout=cfg.NEED_WATCH_JOIN_TIMEOUT)
@@ -1628,8 +1596,15 @@ def setup_game() -> bool:
     """Lock the house, filter the backpack to favorites and disable trades. Run on demand
     and after a rejoin, not in the cycle. See docs/ARCHITECTURE.md#side-actions.
     """
-    with task_unscrew(play_minigames=False):
+    with task_unscrew(interruptible=False):
         return _setup_steps()
+
+def leave_hub_and_setup() -> bool:
+    """The action of /sloop before the loop: leave the Trading Hub if the player is in it, then run Setup. A hub that cannot be left is an error (the status says so and the loop does not
+    start): Setup would click in it."""
+    if not leave_hub_if_in():
+        raise RuntimeError("could not leave the Trading Hub")
+    return setup_or_fail()
 
 def setup_or_fail() -> bool:
     """setup_game() for the commands from outside (the bot's /setup): a step that did not take is an error, so that the answer says so."""
@@ -3001,6 +2976,22 @@ class RideNeedHandler(SequenceNeedHandler):
         state.need_cleared = True
         return super().handle()
 
+def screen_changed(before: Image, after: Image) -> bool:
+    """Whether the view is a different one: the mean grey-level difference of the two (shrunk) screens is over TELEPORT_CHANGE."""
+    small = [cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), cfg.SCREEN_CHANGE_SIZE, interpolation=cv2.INTER_AREA).astype(np.int16) for img in (before, after)]
+    return bool(np.abs(small[0] - small[1]).mean() > cfg.TELEPORT_CHANGE)
+
+def teleport_took(before: Image) -> bool:
+    """Wait up to TELEPORT_WAIT_FOR_VIEW seconds for the character to be teleported after the dialog's Yes: the white screen of a teleport (detect_white_screen()) or a view changed from
+    `before` (the screen as it was at the click; screen_changed())."""
+    end = time.time() + cfg.TELEPORT_WAIT_FOR_VIEW
+    while time.time() < end:
+        wait_interruptible(cfg.TELEPORT_VIEW_POLL)
+        img = grab_screen()
+        if detect_white_screen(img) or screen_changed(before, img):
+            return True
+    return False
+
 def teleport_to(category_pos: Point) -> None:
     """Open the backpack, teleport via the category tab, walk back to clear the landing
     spot. Shared by the teleport-walk needs. See docs/ARCHITECTURE.md#need-handlers.
@@ -3018,7 +3009,7 @@ def teleport_to(category_pos: Point) -> None:
         for attempt in range(cfg.TELEPORT_YES_TRIES):            # the dialog's Yes: clicked again if nothing teleported (the click can be lost)
             before = grab_screen()
             hover_click(*cfg.GENERAL_TELEPORT_POS_3)
-            if minigame_teleported(before):
+            if teleport_took(before):
                 break
             logger.debug(f"The teleport did not take after click {attempt + 1}")
         else:
@@ -3467,26 +3458,6 @@ def look_until(find: Callable[[Image], Any], seconds: float) -> Any:
             return found or None
         wait_interruptible(cfg.SICK_LOOK_INTERVAL)
 
-def detect_minigame_popup(img: Image) -> bool:
-    """True if a Halloween minigame popup is on screen: a button of the Yes green (a piece of it of at least
-    MINIGAME_POPUP_MIN_BUTTON_PIXELS px) with the No red close to its left (neither colour is unique alone), under the popup's own "Teleport there now?" line (a crop,
-    POPUP_TEMPLATES["minigame_popup"]). Each green piece
-    is looked at on its own: a popup over the open backpack, whose buttons are green too, was missed when all the green on the
-    screen was taken together. See docs/ARCHITECTURE.md#need-handlers.
-    """
-    if detect_sick_dialog(img) or not popup_visible(img, "minigame_popup"):
-        return False                                                  # (another dialog with a green and a red button is not the popup: it has its "Teleport there now?")
-    green = (exact_color_mask(img, cfg.GREEN_BUTTON_COLOR) > 0).astype(np.uint8)
-    count, _, stats, centres = cv2.connectedComponentsWithStats(green)
-    for i in range(1, count):
-        if stats[i, cv2.CC_STAT_AREA] < cfg.MINIGAME_POPUP_MIN_BUTTON_PIXELS:
-            continue
-        yes_x, yes_y = int(centres[i][0]), int(centres[i][1])
-        near_no = img[max(0, yes_y - cfg.MINIGAME_POPUP_NO_MAX_DY):yes_y + cfg.MINIGAME_POPUP_NO_MAX_DY,
-                      max(0, yes_x - cfg.MINIGAME_POPUP_NO_MAX_DX):yes_x]
-        if int(np.count_nonzero(exact_color_mask(near_no, cfg.MINIGAME_POPUP_NO_COLOR))) >= cfg.MINIGAME_POPUP_MIN_BUTTON_PIXELS:
-            return True
-    return False
 
 # directory -> (the files' names and modification times, {name: image}) - see load_templates().
 _TEMPLATE_CACHE: dict[str, tuple[Any, dict[str, Image]]] = {}
@@ -3542,16 +3513,6 @@ def popup_visible(img: Image, name: str) -> bool:
     """True if the crop `name` is on screen in `img` (see popup_found())."""
     return popup_found(img, name) is not None
 
-def identify_minigame(img: Image) -> Optional[str]:
-    """Which minigame the popup in `img` is for: the name whose title crop
-    (MINIGAME_TEMPLATE_DIR) matches best within MINIGAME_TITLE_BOX, if that
-    match reaches MINIGAME_TITLE_MATCH_THRESHOLD - otherwise None."""
-    best_name, best_score = None, cfg.MINIGAME_TITLE_MATCH_THRESHOLD
-    for name, crop in load_templates(cfg.MINIGAME_TEMPLATE_DIR).items():
-        score = template_score(img, crop, cfg.MINIGAME_TITLE_BOX)
-        if score >= best_score:
-            best_name, best_score = name, score
-    return best_name
 
 # True while a handler that needs the pet focused (choose, pet) is running;
 # the "pet_focus" stray window is left alone then.
@@ -3566,14 +3527,6 @@ def wanting_pet_focus() -> Iterator[None]:
     finally:
         state.pet_focus_wanted = False
 
-@contextlib.contextmanager
-def wanting_exit_dialog() -> Iterator[None]:
-    """Within this block dismiss_stray_windows() does not stay (click Cancel) on the "exit this game?" dialog: the macro is leaving a minigame on purpose."""
-    state.exit_dialog_wanted = True
-    try:
-        yield
-    finally:
-        state.exit_dialog_wanted = False
 
 def find_dialog_button(img: Image, spec: dict[str, Any]) -> Optional[Point]:
     """The middle of the biggest blob of colour `spec` (DIALOG_BUTTONS: "box", "hsv" - one or two (low, high) ranges -, "size" - (width, height) ranges) in `img`, or None."""
@@ -3596,12 +3549,6 @@ def dismiss_stray_windows() -> Optional[str]:
     its name or None. See docs/ARCHITECTURE.md#need-handlers.
     """
     img = grab_screen()
-    if not state.exit_dialog_wanted and detect_exit_dialog(img) is not None and not in_minigame(img):
-        logger.debug("The exit dialog is up outside a minigame - staying")           # (opened by a click that was meant for something else)
-        log_run_event("stray window closed: exit dialog (stayed)")
-        hover_click(*cfg.EXIT_STAY_POS)
-        time.sleep(cfg.STRAY_CLOSE_SETTLE)
-        return "exit_dialog"
     for name, config in cfg.STRAY_WINDOWS.items():
         if not popup_visible(img, name):
             continue
@@ -3638,60 +3585,9 @@ def hsv_fraction(img: Image, box: Box, ranges: Sequence[tuple[Color, Color]]) ->
         mask |= cv2.inRange(hsv, np.array(low, np.uint8), np.array(high, np.uint8))
     return float(np.count_nonzero(mask)) / max(1, mask.size)
 
-def detect_exit_dialog(img: Image) -> Optional[str]:
-    """"Do you want to exit this game?" - its title (POPUP_TEMPLATES["exit_game"]: the teleport's Yes / No dialogs have the same buttons) and a red Cancel with, at its
-    right, a grey button (still counting down: "counting") or a green one (Exit Game: "ready"); None if it is not there."""
-    if not popup_visible(img, "exit_game"):
-        return None
-    if hsv_fraction(img, cfg.EXIT_DIALOG_CANCEL_BOX, (cfg.EXIT_RED_HSV, cfg.EXIT_RED_HSV_HIGH)) < cfg.EXIT_DIALOG_MIN_FRACTION:
-        return None
-    if hsv_fraction(img, cfg.EXIT_DIALOG_RIGHT_BOX, (cfg.EXIT_GREEN_HSV,)) >= cfg.EXIT_DIALOG_MIN_FRACTION:
-        return "ready"
-    if hsv_fraction(img, cfg.EXIT_DIALOG_RIGHT_BOX, (cfg.EXIT_GREY_HSV,)) >= cfg.EXIT_DIALOG_MIN_FRACTION:
-        return "counting"
-    return None
 
-def in_minigame(img: Image) -> bool:
-    """True if a minigame is being played: the red Exit Minigame button (every minigame has it) or the overlay of one the macro knows (MINIGAME_LABELS) is on screen."""
-    return popup_visible(img, "exit_minigame") or any(minigame_overlay_visible(img, name) for name in cfg.MINIGAME_LABELS)
 
-def exit_minigame() -> bool:
-    with wanting_exit_dialog():
-        return _exit_minigame()
 
-def _exit_minigame() -> bool:
-    """Leave the minigame being played, if one is (in_minigame()): click the Exit Minigame button (EXIT_MINIGAME_POS) - unless the "exit this game?" dialog is up
-    already - wait for the dialog, for its right button to turn from grey to green (EXIT_COUNTDOWN_WAIT), click it (EXIT_GAME_POS) and wait for the overlay to be gone
-    (EXIT_LEAVE_WAIT). True if there was none to leave or it was left; False (logged) if a step did not happen."""
-    if not focus_roblox():
-        return False
-    img = grab_screen()
-    if detect_exit_dialog(img) is None:
-        if not in_minigame(img):
-            return True
-        logger.info("In a minigame - exiting it")
-        hover_click(*cfg.EXIT_MINIGAME_POS)
-
-    def wait_for(condition: Callable[[Image], bool], seconds: float) -> bool:
-        deadline = time.time() + seconds
-        while True:
-            if condition(grab_screen()):
-                return True
-            if time.time() >= deadline:
-                return False
-            wait_interruptible(cfg.EXIT_POLL)
-    if not wait_for(lambda frame: detect_exit_dialog(frame) is not None, cfg.EXIT_DIALOG_WAIT):
-        log_run_event("exit minigame: the dialog did not come up")
-        return False
-    if not wait_for(lambda frame: detect_exit_dialog(frame) == "ready", cfg.EXIT_COUNTDOWN_WAIT):
-        log_run_event("exit minigame: the Exit Game button did not turn green")
-        return False
-    hover_click(*cfg.EXIT_GAME_POS)
-    if not wait_for(lambda frame: not in_minigame(frame), cfg.EXIT_LEAVE_WAIT):
-        log_run_event("exit minigame: the minigame is still there")
-        return False
-    log_run_event("minigame exited")
-    return True
 
 def in_trading_hub(img: Image) -> bool:
     """True if the Trading Hub island is on screen: its GO HOME button's text."""
@@ -3710,1264 +3606,91 @@ def leave_hub_if_in() -> bool:
         if time.time() >= deadline:
             log_run_event("leave the Trading Hub: it is still there")
             return False
-        wait_interruptible(cfg.EXIT_POLL)
+        wait_interruptible(cfg.HUB_POLL)
     deadline = time.time() + cfg.HUB_LOAD_WAIT                # the loading screen has no backpack button: the regular server is there once it is back
     while not popup_visible(grab_screen(), "backpack_button"):
         if time.time() >= deadline:
             log_run_event("leave the Trading Hub: the regular server did not load")
             return False
-        wait_interruptible(cfg.EXIT_POLL)
+        wait_interruptible(cfg.HUB_POLL)
     return True
 
-def exit_minigame_and_setup() -> bool:
-    """The action of /sloop before the loop: leave the Trading Hub if the player is in it and a minigame if one is being played, then run Setup. Neither that cannot be left
-    is an error (the status says so and the loop does not start): Setup would click in it."""
-    if not leave_hub_if_in():
-        raise RuntimeError("could not leave the Trading Hub")
-    if not exit_minigame():
-        raise RuntimeError("could not leave the minigame")
-    return setup_or_fail()
-
-def detect_minigame_finished(img: Image) -> bool:
-    """True if the minigame finish screen is on screen in `img`: the red
-    GAME OVER! banner and the green NICE! button, both by exact color (the
-    same green is the Yes button's, so the banner is what rules that out)."""
-    for color, tolerance, box, minimum in (
-            (cfg.MINIGAME_FINISH_BANNER_COLOR, cfg.MINIGAME_FINISH_BANNER_TOLERANCE,
-             cfg.MINIGAME_FINISH_BANNER_BOX, cfg.MINIGAME_FINISH_BANNER_MIN_PIXELS),
-            (cfg.GREEN_BUTTON_COLOR, cfg.GREEN_BUTTON_TOLERANCE,
-             cfg.MINIGAME_FINISH_BUTTON_BOX, cfg.MINIGAME_FINISH_BUTTON_MIN_PIXELS)):
-        if color_pixels(img, box, color, tolerance) < minimum:
-            return False
-    return True
-
-def minigame_overlay_visible(img: Image, name: str) -> bool:
-    """True if minigame `name`'s overlay (its crop in MINIGAME_OVERLAY_DIR, within its box in MINIGAME_OVERLAYS) is on screen in `img`, at least
-    MINIGAME_OVERLAY_THRESHOLD: one template match, not one per minigame, since this is asked at every look."""
-    crop = load_templates(cfg.MINIGAME_OVERLAY_DIR).get(name)
-    return crop is not None and name in cfg.MINIGAME_OVERLAYS and template_score(img, crop, cfg.MINIGAME_OVERLAYS[name]) >= cfg.MINIGAME_OVERLAY_THRESHOLD
-
-class MinigameWatch:
-    """Keeps track of whether the minigame being played is on screen (its
-    overlay - minigame_overlay_visible()) and whether the game disconnected
-    (detect_disconnect()), fed one screenshot at a time by minigame_look() and minigame_wait().
-    `problem` says why to stop, or None."""
-
-    def __init__(self, name: str) -> None:
-        self.name = name
-        self.last_seen: Optional[float] = None
-        self.start_grace_from: Optional[float] = None   # set once the start wait is over
-        self.disconnected = False                       # the "Disconnected" dialog has been seen
-
-    def update(self, img: Image) -> None:
-        if detect_disconnect(img):
-            self.disconnected = True
-        elif minigame_overlay_visible(img, self.name):
-            self.last_seen = time.time()
-
-    def start_wait_over(self) -> None:
-        self.start_grace_from = time.time()
-
-    @property
-    def problem(self) -> Optional[str]:
-        now = time.time()
-        if self.disconnected:
-            return "disconnected from the game"
-        if self.last_seen is not None and now - self.last_seen > cfg.MINIGAME_OVERLAY_LOST_TIMEOUT:
-            return f"left the minigame (its overlay was gone for {cfg.MINIGAME_OVERLAY_LOST_TIMEOUT:g}s)"
-        if (self.last_seen is None and self.start_grace_from is not None
-                and now - self.start_grace_from > cfg.MINIGAME_OVERLAY_START_GRACE):
-            return f"never started (no overlay within {cfg.MINIGAME_OVERLAY_START_GRACE:g}s of the start wait)"
-        return None
-
-
-def minigame_popup_checks() -> None:
-    """The popups that can turn up mid-minigame - stray windows and the
-    paycheck - checked at most every MINIGAME_POPUP_CHECK_INTERVAL. (The
-    in-task unscrew() can't run here: the minigame is itself played from it.)"""
-    if time.time() - state.last_minigame_popup_check < cfg.MINIGAME_POPUP_CHECK_INTERVAL:
-        return
-    state.last_minigame_popup_check = time.time()
-    if dismiss_stray_windows():
-        mark_run_capture("a stray window was closed")
-    elif detect_paycheck():
-        mark_run_capture("the paycheck popup was closed")
-
-def minigame_look(watch: MinigameWatch) -> Image:
-    """Run the popup checks if they're due, then take a fresh screenshot, which `watch` is told about."""
-    minigame_popup_checks()
-    img = grab_screen()
-    watch.update(img)
-    return img
-
-def zoom_out() -> None:
-    """Zoom the camera out (KEYS["zoom_out"] held MINIGAME_ZOOM_OUT_DURATION seconds) to see the whole room: close up, the TVs
-    over a Hauntlet 2 room's doors are cut off by the top of the screen."""
-    logger.debug("Zooming the camera out")
-    hold_key(cfg.KEYS["zoom_out"], cfg.MINIGAME_ZOOM_OUT_DURATION)
-
-def minigame_wait(duration: float, watch: MinigameWatch) -> None:
-    """wait_interruptible(), with the popup checks every
-    MINIGAME_POPUP_CHECK_INTERVAL and `watch` kept up to date - for the long
-    waits of a minigame. Ends early if the minigame is plainly over."""
-    end = time.time() + duration
-    while time.time() < end:
-        wait_interruptible(min(cfg.MINIGAME_POPUP_CHECK_INTERVAL, end - time.time()))
-        minigame_popup_checks()
-        watch.update(grab_screen())
-        if watch.problem:
-            return
-
-def wait_for_minigame_start(watch: MinigameWatch, name: str) -> None:
-    """Wait, looking every MINIGAME_START_LOOK_INTERVAL, until the minigame's overlay shows (the game has begun: the lobby's countdown to a round that starts
-    at a fixed time), for at most MINIGAME_START_WAIT, or until `watch` (the minigame `name`'s) has a problem (a disconnect); then tell `watch` the start wait is over."""
-    logger.debug(f"{cfg.MINIGAME_LABELS[name]}: waiting for it to start (at most {cfg.MINIGAME_START_WAIT:g}s)...")
-    waited_until = time.time() + cfg.MINIGAME_START_WAIT
-    while time.time() < waited_until and watch.last_seen is None and not watch.problem:
-        minigame_wait(cfg.MINIGAME_START_LOOK_INTERVAL, watch)
-    watch.start_wait_over()
-
-class HauntletRun:
-    """What play_hauntlet_2() knows about the room it is in: its number, when that changed, and the TVs of the last
-    look. look() says when the doors can be chosen from. See docs/ARCHITECTURE.md#playing-hauntlet-2."""
-
-    def __init__(self) -> None:
-        self.room: Optional[int] = None
-        self.since = 0.0                              # when the number changed
-        self.walked_at: Optional[float] = None        # when the last walk in this room ended
-        self.stuck = 0                                # walks in a row in this room that didn't change the room number
-        self.last_index: Optional[int] = None         # the door of the last of them
-        self.picked: Optional[int] = None             # the door whose circle the player has stepped into: that is the choice made, for good
-        self.turns = 0                                # times the camera was turned to find the doors, in this room
-        self.rooms = 0                                # numbers seen
-        self.tvs: Optional[list[tuple[int, int]]] = None   # of the last look: None if the timer was hidden
-        self.empty_looks = 0                          # looks in a row at a room without TVs
-        self.doors_missing_reported = False           # the failure for a room with no doors found has been logged
-        self.white = False                            # the last look was a white screen
-
-    @property
-    def fork(self) -> bool:
-        """Whether this room's number is one of the forks (HAUNTLET_FORK_EVERY)."""
-        return self.room is not None and self.room > 0 and self.room % cfg.HAUNTLET_FORK_EVERY == 0
-
-    def look(self, img: Image, now: float) -> Optional[list[HauntletDoor]]:
-        """Take in a screenshot. The doors to choose from - three, or a fork's two - if it is time to, else None."""
-        room = read_hauntlet_room(img)
-        if room is not None and room != self.room:
-            self.room, self.since, self.walked_at, self.rooms = room, now, None, self.rooms + 1
-            self.stuck, self.last_index, self.turns, self.picked = 0, None, 0, None
-            self.tvs, self.empty_looks = None, 0
-            logger.debug(f"Hauntlet 2: room {room}")
-        if self.room is None:
-            return None
-        if detect_white_screen(img):                  # a heart lost to a ghost, a death: the game whites the screen out and brings the player back to the room's start,
-            if not self.white:                        # so the room is looked at afresh from now - not taken for one with no doors because it was entered long ago
-                logger.debug("Hauntlet 2: the screen went white (a ghost, or a fall): the room starts again")
-            self.white, self.since, self.walked_at, self.tvs, self.empty_looks = True, now, None, None, 0
-            return None
-        self.white = False
-        age = now - self.since
-        before, self.tvs = self.tvs, (find_door_tvs(img) if hauntlet_timer_visible(img) else None)
-        if self.tvs is None or age < cfg.HAUNTLET_ROOM_SETTLE or (self.walked_at is not None and now < self.walked_at + cfg.HAUNTLET_RETRY_WAIT):
-            self.empty_looks = 0
-            return None
-        if self.tvs:
-            self.empty_looks = 0
-            steady = before is not None and len(before) == len(self.tvs) and all(
-                abs(a - b) <= cfg.HAUNTLET_TV_STABLE for old, new in zip(before, self.tvs) for a, b in zip(old, new))
-            return find_hauntlet_doors(img) if steady or age >= cfg.HAUNTLET_DOORS_TIMEOUT else None
-        self.empty_looks += 1
-        if self.fork and self.empty_looks >= 2:
-            return [HauntletDoor(0, 0, None), HauntletDoor(0, 0, None)]       # two doorways, not located
-        if not self.fork and (age >= cfg.HAUNTLET_DOORS_TIMEOUT or (self.room == 1 and self.empty_looks >= 2)):       # room 1 is the entrance hall (a fork waits for its second empty look: after a walk the looks start again, and a fork past the timeout was taken for one doorway and the camera was turned)
-            return [HauntletDoor(0, 0, None)]                                  # one doorway, straight ahead
-        return None
-
-def choose_hauntlet_door(doors: list[HauntletDoor], items: list[HauntletItem], avoid: Collection[int] = ()) -> int:
-    """The index in `doors` (left to right) of the door to go through: a random one, but none of `avoid` (the one the phone's
-    arrow is over, where a ghost is, and the one that just got the player stuck) and a locked one only when the grey key is
-    held - unless that leaves nothing, then whatever is left."""
-    has_key = any(item.name == cfg.HAUNTLET_ITEM_KEY for item in items)
-    allowed = [i for i in range(len(doors)) if i not in avoid]
-    options = [i for i in allowed if doors[i].kind != "locked" or has_key]
-    return random.choice(options or allowed or list(range(len(doors))))
-
-def hauntlet_items_for(door: HauntletDoor, hearts: Optional[HauntletHearts], items: list[HauntletItem]) -> list[str]:
-    """The items (names) to use before going through `door`, in the order to use them: the grey key for a locked door, a cyan potion
-    (a heart that lasts the room) for a boarded one, the red potion when the hearts are down to HAUNTLET_LOW_HEARTS or fewer, and a
-    heart potion whenever there is one. Only those held."""
-    held = {item.name for item in items}
-    wanted = []
-    if door.kind == "locked":
-        wanted.append(cfg.HAUNTLET_ITEM_KEY)
-    if door.kind == "boarded":
-        wanted.append(cfg.HAUNTLET_ITEM_BOARDED)
-    if hearts is not None and hearts.red <= cfg.HAUNTLET_LOW_HEARTS:
-        wanted.append(cfg.HAUNTLET_ITEM_REFILL)
-    wanted.append(cfg.HAUNTLET_ITEM_HEART)
-    return [name for name in wanted if name in held]
-
-def find_door_circles(img: Image) -> list[tuple[int, int, int, int]]:
-    """The purple circles on the floor in front of a room's doors - stepping into one picks that door - as (x, y, width, height)
-    of each one's middle, left to right: the ring-shaped pieces of HAUNTLET_CIRCLE_HSV of about the right size (HAUNTLET_CIRCLE_*), which
-    leaves out the purple badges and labels. One the player stands on is mostly hidden, so it can be missing."""
-    top, bottom = cfg.HAUNTLET_CIRCLE_BAND
-    mask = cv2.inRange(cv2.cvtColor(img[top:bottom], cv2.COLOR_BGR2HSV), cfg.HAUNTLET_CIRCLE_HSV[0], cfg.HAUNTLET_CIRCLE_HSV[1])
-    count, _, stats, _ = cv2.connectedComponentsWithStats(cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8)))
-    found = []
-    for i in range(1, count):
-        x, y, w, h, area = (int(v) for v in stats[i])
-        y += top
-        if (cfg.HAUNTLET_CIRCLE_WIDTH[0] <= w <= cfg.HAUNTLET_CIRCLE_WIDTH[1] and cfg.HAUNTLET_CIRCLE_HEIGHT[0] <= h <= cfg.HAUNTLET_CIRCLE_HEIGHT[1]
-                and cfg.HAUNTLET_CIRCLE_MIN_AREA <= area < cfg.HAUNTLET_CIRCLE_FILL * w * h):
-            found.append((x + w // 2, y + h // 2, w, h))
-    return sorted(found)
-
-def find_fork_doorways(img: Image) -> Optional[tuple[int, int]]:
-    """The x of the middle of a fork's two doorways, left and right, or None unless exactly two openings of the right size and
-    distance are seen (HAUNTLET_OPENING_*): each opening is dark inside and starts right under the wall's pale stripes, where the wall
-    elsewhere has the gold wainscot below it. Only seen with the camera near the wall - from the room's entrance one is, or none."""
-    top, bottom = cfg.HAUNTLET_FORK_BAND
-    hsv = cv2.cvtColor(img[top:bottom], cv2.COLOR_BGR2HSV)
-    wall = cv2.inRange(hsv, cfg.HAUNTLET_WALL_HSV[0], cfg.HAUNTLET_WALL_HSV[1]) > 0
-    dark = cv2.inRange(hsv, cfg.HAUNTLET_OPENING_HSV[0], cfg.HAUNTLET_OPENING_HSV[1]) > 0
-    run = dark.copy()
-    for rows in range(1, cfg.HAUNTLET_OPENING_RUN):                       # a row that starts a run of HAUNTLET_OPENING_RUN dark ones
-        run[:-rows] &= dark[rows:]
-    first = run.argmax(axis=0)                                            # the first such row of each column (0 if none)
-    near, far = cfg.HAUNTLET_OPENING_ABOVE
-    wall_above = np.vstack([np.zeros((1, wall.shape[1]), int), np.cumsum(wall, axis=0)])
-    columns = np.arange(wall.shape[1])
-    walled = wall_above[np.maximum(first - near, 0), columns] - wall_above[np.maximum(first - far, 0), columns]
-    openings = run.any(axis=0) & (walled >= cfg.HAUNTLET_OPENING_WALL)
-    spans: list[list[int]] = []
-    for x in np.flatnonzero(openings):
-        if spans and x - spans[-1][1] <= cfg.HAUNTLET_OPENING_JOIN:
-            spans[-1][1] = int(x)
-        else:
-            spans.append([int(x), int(x)])
-    whole = [span for span in spans if cfg.HAUNTLET_OPENING_WIDTH[0] <= span[1] - span[0] + 1 <= cfg.HAUNTLET_OPENING_WIDTH[1]]
-    if len(whole) == 2:
-        left, right = ((a + b) // 2 for a, b in whole)
-        return (left, right) if cfg.HAUNTLET_OPENING_GAP[0] <= right - left <= cfg.HAUNTLET_OPENING_GAP[1] else None
-    # Seen at an angle the second doorway shows only as a narrow piece (its far side is lit, not dark): one whole opening that isn't
-    # too wide, with exactly one narrow piece the distance away that the doorways are of each other, is the pair.
-    pairs = []
-    for opening in whole:
-        if opening[1] - opening[0] + 1 > cfg.HAUNTLET_OPENING_MAIN_MAX:
-            continue
-        for piece in spans:
-            if cfg.HAUNTLET_OPENING_PIECE[0] <= piece[1] - piece[0] + 1 <= cfg.HAUNTLET_OPENING_PIECE[1] and \
-                    cfg.HAUNTLET_OPENING_PIECE_GAP[0] <= abs((piece[0] + piece[1]) // 2 - (opening[0] + opening[1]) // 2) <= cfg.HAUNTLET_OPENING_PIECE_GAP[1]:
-                pairs.append(sorted(((opening[0] + opening[1]) // 2, (piece[0] + piece[1]) // 2)))
-    return (pairs[0][0], pairs[0][1]) if len(pairs) == 1 else None
-
-def player_in_circle(img: Image, circles: list[tuple[int, int, int, int]]) -> bool:
-    """Whether the player stands in one of the three circles - and so has picked that door, and is locked in place for a few moments:
-    two circles are seen, the third being hidden under the player, whose place (where the hearts are, else mid-screen) is where
-    the third one would be (the same distance from its neighbour as the other two are from each other, HAUNTLET_IN_CIRCLE of it)."""
-    if len(circles) != 2:
-        return False
-    hearts = read_hauntlet_hearts(img)
-    x = hearts.center_x if hearts else cfg.REFERENCE_CENTER_X
-    left, right = circles[0][0], circles[1][0]
-    gap = right - left
-    if left < x < right:                                   # between them: the middle one (they are two spacings apart)
-        return abs(x - (left + right) / 2) <= cfg.HAUNTLET_IN_CIRCLE * gap / 2
-    return abs(x - (left - gap if x < left else right + gap)) <= cfg.HAUNTLET_IN_CIRCLE * gap
-
-def hauntlet_strafe(img: Image, doors: list[HauntletDoor], index: int) -> tuple[Optional[str], float]:
-    """The key to strafe with, and for how long, to reach door `index` from where the player stands in `img`: the
-    distance to the door in door spacings (the TVs' spacing) times HAUNTLET_STRAFE_DURATION, or no strafe when that
-    is under HAUNTLET_STRAFE_MIN spacings. Where the player starts a room can depend on the door it came through, so
-    it is measured (the hearts above the head); not seen, it is taken to be in the middle of the screen (the camera follows the player; the
-    middle door is not always in front of it - in a captured room 3 the player stood 350 px right of the middle door, hearts unread, and walked into the wall). Doors that
-    aren't located have no distance to go: a fork's two doorways are the left key or the right one for one spacing, a
-    single doorway ahead (an entrance hall) none. A fork's doorways that were found (find_fork_doorways(): the two x are
-    in `doors`) are two door spacings apart, like a room's outer doors, and are walked to like a room's."""
-    spacing = (doors[-1].x - doors[0].x) / 2 if len(doors) in (2, 3) else 0
-    if spacing <= 0:
-        if len(doors) == 1 or (len(doors) == 3 and index == 1):
-            return None, 0.0
-        return (cfg.KEYS["left"] if index == 0 else cfg.KEYS["right"]), cfg.HAUNTLET_STRAFE_DURATION
-    hearts = read_hauntlet_hearts(img)
-    circles = find_door_circles(img)
-    target = circles[index][0] if len(circles) == len(doors) == 3 else doors[index].x       # the circle in front of the door, where it can be seen: it is what is to be stepped in
-    distance = (target - (hearts.center_x if hearts else cfg.REFERENCE_CENTER_X)) / spacing
-    if abs(distance) < cfg.HAUNTLET_STRAFE_MIN:
-        return None, 0.0
-    return (cfg.KEYS["right"] if distance > 0 else cfg.KEYS["left"]), min(abs(distance), cfg.HAUNTLET_STRAFE_MAX) * cfg.HAUNTLET_STRAFE_DURATION
-
-def hauntlet_use_item(name: str, watch: MinigameWatch) -> Optional[Image]:
-    """Click the slot of the item called `name` and give the game HAUNTLET_ITEM_WAIT seconds to use it. The slots move together
-    when an item is used up, so the slot is looked for on a fresh screenshot each time. The screenshot taken after the click,
-    or None if the item isn't there."""
-    item = next((i for i in read_hauntlet_items(minigame_look(watch)) if i.name == name), None)
-    if item is None:
-        return None
-    hover_click(*item.pos)
-    wait_interruptible(cfg.HAUNTLET_ITEM_WAIT)
-    return minigame_look(watch)
-
-def hauntlet_choose(img: Image, doors: list[HauntletDoor], run: HauntletRun, watch: MinigameWatch) -> tuple[int, Image]:
-    """Choose the door and use the items it calls for, logging the lot. With a chance of HAUNTLET_PHONE_CHANCE the phone is used first, and
-    the door its red arrow shows is not gone through. Returns the door's index and the latest screenshot."""
-    if run.picked is not None and run.picked < len(doors):
-        logger.debug(f"Hauntlet 2: room {run.room}, the door is picked already (its circle was stepped in): going to the same one")
-        return run.picked, img
-    hearts = read_hauntlet_hearts(img)
-    items = read_hauntlet_items(img)
-    names = {1: ("ahead",), 2: ("left", "right"), 3: ("left", "middle", "right")}[len(doors)]
-    ghost: Optional[int] = None
-    used: list[str] = []
-    low = hearts is not None and hearts.red <= cfg.HAUNTLET_LOW_HEARTS
-    chance = cfg.HAUNTLET_PHONE_CHANCE_LOW if low else cfg.HAUNTLET_PHONE_CHANCE                 # the phone shows where the ghost is: more use when hearts are few
-    if any(item.name == cfg.HAUNTLET_ITEM_PHONE for item in items) and random.random() < chance:
-        shown = hauntlet_use_item(cfg.HAUNTLET_ITEM_PHONE, watch)
-        if shown is not None:
-            used.append(cfg.HAUNTLET_ITEM_PHONE)
-            img = shown
-            for _ in range(cfg.HAUNTLET_ARROW_LOOKS):                           # the arrow takes a moment to show
-                ghost = find_ghost_door(img, doors)
-                if ghost is not None:
-                    break
-                wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
-                img = minigame_look(watch)
-            items = read_hauntlet_items(img)
-    avoid = {door for door in (ghost, run.last_index if run.stuck else None) if door is not None}      # the ghost's, and the one that got us stuck
-    index = choose_hauntlet_door(doors, items, avoid=avoid)
-    run.last_index = index
-    for name in hauntlet_items_for(doors[index], hearts, items):
-        shown = hauntlet_use_item(name, watch)
-        if shown is not None:
-            used.append(name)
-            img = shown
-    logger.debug(f"Hauntlet 2: room {run.room}, "
-          + (f"{hearts.red} hearts ({hearts.black} lost)" if hearts else "hearts not seen")
-          + f", items: {', '.join(f'{item.name} x{item.count or 1}' for item in items) or 'none'}"
-          + f", doors: {', '.join(door.kind or '-' for door in doors)}"
-          + (f", ghost behind the {names[ghost]} one" if ghost is not None else "")
-          + f", going {names[index]}" + (f", used {', '.join(used)}" if used else ""))
-    return index, img
-
-def hauntlet_view(img: Image) -> np.ndarray:
-    """`img` shrunk to a grey HAUNTLET_VIEW_SIZE, without the room panel at the top and the item bar at the bottom (HAUNTLET_VIEW_ROWS): what the walk looks at to
-    tell whether anything is moving (the camera follows the player, so a player who moves makes the whole view move)."""
-    small = cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), cfg.HAUNTLET_VIEW_SIZE, interpolation=cv2.INTER_AREA).astype(np.int16)
-    small[:cfg.HAUNTLET_VIEW_ROWS[0]] = 0
-    small[cfg.HAUNTLET_VIEW_ROWS[1]:] = 0
-    return small
-
-def hauntlet_unstick(img: Image, target_index: Optional[int], tries: int, last_key: Optional[str]) -> str:
-    """Get off whatever the player is caught on while holding forward: a step sideways (the forward key stays held, so it slides
-    along) and a jump. The way is towards the door being walked to (its TV against where the player stands, HAUNTLET_UNSTICK_MARGIN
-    px or more off), the other way each time after that, and when the way isn't known a random one first; the step is
-    HAUNTLET_UNSTICK_STEP seconds longer for each try, up to HAUNTLET_UNSTICK_MAX. The key used. In a fork the door's place is the doorway
-    (find_fork_doorways()), when both are in sight."""
-    tvs = find_door_tvs(img)
-    where = [x for x, _ in tvs] if len(tvs) == 3 else list(find_fork_doorways(img) or ())
-    key: Optional[str] = None
-    if last_key is not None:
-        key = cfg.KEYS["right"] if last_key == cfg.KEYS["left"] else cfg.KEYS["left"]
-    elif target_index is not None and target_index < len(where):
-        hearts = read_hauntlet_hearts(img)
-        dx = where[target_index] - (hearts.center_x if hearts else cfg.REFERENCE_CENTER_X)
-        if abs(dx) >= cfg.HAUNTLET_UNSTICK_MARGIN:
-            key = cfg.KEYS["right"] if dx > 0 else cfg.KEYS["left"]
-    if key is None:
-        key = random.choice((cfg.KEYS["left"], cfg.KEYS["right"]))
-    logger.debug(f"Hauntlet 2: not moving - a step {key}")
-    mark_run_capture("Hauntlet 2: not moving")
-    pydirectinput.press(cfg.KEYS["jump"])
-    hold_key(key, min(cfg.HAUNTLET_UNSTICK_STEP * (tries + 1), cfg.HAUNTLET_UNSTICK_MAX))
-    return key
-
-def hauntlet_steer(img: Image, target_index: int) -> Optional[tuple[str, float]]:
-    """While walking to door `target_index`: the key to strafe with and for how long, if the player has drifted off the door (as hauntlet_strafe()
-    measures it: the three TVs, the circle in front of the door, the hearts) by HAUNTLET_STEER_MIN door spacings or more, else None - also None when the
-    three TVs aren't all on screen (close to the doors they are cut off). HAUNTLET_STEER_GAIN of the strafe, at most HAUNTLET_STEER_MAX seconds."""
-    doors = find_hauntlet_doors(img)
-    if len(doors) != 3:
-        return None
-    key, seconds = hauntlet_strafe(img, doors, target_index)
-    if key is None or seconds < cfg.HAUNTLET_STEER_MIN * cfg.HAUNTLET_STRAFE_DURATION:
-        return None
-    return key, min(seconds * cfg.HAUNTLET_STEER_GAIN, cfg.HAUNTLET_STEER_MAX)
-
-def hauntlet_walk(direction: Optional[str], duration: float, run: HauntletRun, watch: MinigameWatch, until_doors: bool = False,
-                  target_index: Optional[int] = None, until_doorways: bool = False) -> bool:
-    """Walk to a door: first strafe, `direction` (a strafe key, or None) held for `duration` seconds on its own, then hold forward
-    until the room number changes (at most HAUNTLET_WALK_MAX seconds) and then HAUNTLET_WALK_PAST_DURATION longer, as
-    the number changes with the player still in the doorway - or, with `until_doors`, until a row of TVs is
-    on screen (a hall's doorway leads into a room whose number is the same), or, with `until_doorways`, until both of a
-    fork's doorways can be seen (find_fork_doorways()). The view is looked at every HAUNTLET_LOOK_INTERVAL
-    seconds: if it hasn't moved (hauntlet_view(), HAUNTLET_STILL_LEVEL) for HAUNTLET_STILL_AFTER seconds the player is caught
-    on something and hauntlet_unstick() steps sideways, towards door `target_index` of the three (or the fork's two). A walk that doesn't get
-    anywhere counts in `run.stuck`; the next one steps back first (HAUNTLET_BACKUP_DURATION). True if the minigame finished."""
-    run.walked_at = time.time()
-    if run.stuck > 0:
-        hold_key(cfg.KEYS["back"], cfg.HAUNTLET_BACKUP_DURATION)
-    aimed = False
-    if target_index is not None and not run.fork:                               # aimed in small steps, looking at the doors again before each (HAUNTLET_AIM_STEPS)
-        for _ in range(cfg.HAUNTLET_AIM_STEPS):
-            img = minigame_look(watch)
-            if detect_minigame_finished(img):
-                return True
-            steer = hauntlet_steer(img, target_index)
-            if steer is None:
-                break
-            hold_key(*steer)
-            aimed = True
-    if not aimed and direction and duration > 0:
-        hold_key(direction, duration)                                           # one key at a time: the strafe, then the walk (what couldn't be aimed is a strafe worked out in one go)
-    arrived = False
-    started = time.time()
-    key_down(cfg.KEYS["forward"])
-    try:
-        last_view: Optional[np.ndarray] = None
-        still_since: Optional[float] = None
-        tries, last_key = 0, None
-        locked_until, was_inside = 0.0, False
-        steer_at = started + cfg.HAUNTLET_STEER_EVERY
-        walk_until = started + cfg.HAUNTLET_WALK_MAX
-        inside = False
-        while time.time() < walk_until:
-            img = minigame_look(watch)
-            if detect_minigame_finished(img):
-                return True
-            room = read_hauntlet_room(img)
-            if room is not None and room != run.room:
-                arrived = True
-                wait_interruptible(cfg.HAUNTLET_WALK_PAST_DURATION)             # the number changes in the doorway: on into the room
-                break
-            if watch.problem:
-                break
-            if (until_doors and find_door_tvs(img)) or (until_doorways and find_fork_doorways(img)):
-                arrived = True
-                break
-            now = time.time()
-            inside = player_in_circle(img, find_door_circles(img))
-            if inside and not was_inside:                                       # just stepped in: the door is picked and the player is held for a moment
-                locked_until = now + cfg.HAUNTLET_LOCK_WAIT
-                walk_until = max(walk_until, now + cfg.HAUNTLET_CIRCLE_WAIT)            # (and the room only changes some seconds later: not a walk that got nowhere)
-                if run.picked is None and target_index is not None:
-                    run.picked = target_index
-                    logger.debug(f"Hauntlet 2: in the circle of door {target_index + 1} - picked")
-            was_inside = inside
-            if now < locked_until:
-                still_since, last_view = None, None
-                wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
-                continue
-            if target_index is not None and not run.fork and now >= steer_at:      # the way forward isn't always towards the door (a room seen at an angle): steer
-                steer_at = now + cfg.HAUNTLET_STEER_EVERY
-                steer = hauntlet_steer(img, target_index)
-                if steer is not None:
-                    logger.debug(f"Hauntlet 2: off the door - a step {steer[0]} for {steer[1]:.2f}s")
-                    key_up(cfg.KEYS["forward"])                # one key at a time
-                    hold_key(*steer)
-                    key_down(cfg.KEYS["forward"])
-                    still_since, last_view = None, None
-                    continue
-            view = hauntlet_view(img)
-            if last_view is not None and float(np.abs(view - last_view).mean()) < cfg.HAUNTLET_STILL_LEVEL:
-                still_since = now if still_since is None else still_since
-            else:
-                still_since = None
-            last_view = view
-            if still_since is not None and now - still_since >= cfg.HAUNTLET_STILL_AFTER and not inside:        # (standing in the door's circle is what is wanted: no jumping out of it)
-                last_key = hauntlet_unstick(img, target_index, tries, last_key)
-                tries += 1
-                still_since, last_view = None, None
-                continue
-            wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
-    finally:
-        key_up(cfg.KEYS["forward"])
-        run.walked_at = time.time()
-        run.stuck = 0 if arrived else run.stuck + 1
-    if not arrived:
-        mark_run_capture(f"Hauntlet 2: the walk in room {run.room} got nowhere")
-    return False
-
-def play_hauntlet_2(deadline: float, watch: MinigameWatch) -> bool:
-    """Hauntlet 2: wait for it to start, then room after room choose a door and walk to it (HauntletRun,
-    hauntlet_choose(), hauntlet_walk()) until the minigame finishes or the overlay says it's over. True if it
-    finished before `deadline`. See docs/ARCHITECTURE.md#playing-hauntlet-2.
-    """
-    wait_for_minigame_start(watch, "hauntlet_2")
-    zoom_out()
-    if cfg.HAUNTLET_START_FORWARD > 0:
-        wait_interruptible(cfg.HAUNTLET_START_DELAY)                   # the doors of the entrance hall open after a moment...
-        hold_key(cfg.KEYS["forward"], cfg.HAUNTLET_START_FORWARD)    # ...and the way out is a step or two ahead
-    run = HauntletRun()
-    try:
-        while time.time() < deadline and not watch.problem:
-            img = minigame_look(watch)
-            if detect_minigame_finished(img):
-                return True
-            doors = run.look(img, time.time())
-            if doors is None:
-                wait_interruptible(cfg.HAUNTLET_LOOK_INTERVAL)
-                continue
-            if len(doors) == 1 and run.room and run.room > 1 and not run.doors_missing_reported:   # not the entrance hall (room 1): keep the screenshot
-                run.doors_missing_reported = True
-                log_failure(f"Hauntlet 2: no doors found in room {run.room}")
-            if len(doors) == 1 and run.room and run.room > 1 and run.turns < cfg.HAUNTLET_SEARCH_TURNS:
-                if run.turns == 0:
-                    zoom_out()                                                  # perhaps the camera is too close to see the TVs...
-                rotate_camera(cfg.HAUNTLET_CAMERA_DRAG, 0)                      # ...or turned away from them: look around, then look again
-                run.turns += 1
-                continue
-            index, img = hauntlet_choose(img, doors, run, watch)
-            if len(doors) == 2:
-                doorways = find_fork_doorways(img)
-                if doorways is None:                                            # the doorways are too far to be seen from the entrance: walk on until both are
-                    if hauntlet_walk(None, 0.0, run, watch, until_doorways=True):
-                        return True
-                    img = minigame_look(watch)
-                    if read_hauntlet_room(img) not in (None, run.room):         # (the walk went through one)
-                        continue
-                    doorways = find_fork_doorways(img)
-                if doorways is not None:
-                    doors = [HauntletDoor(x, 0, None) for x in doorways]
-                else:
-                    mark_run_capture(f"Hauntlet 2: the fork's doorways of room {run.room} were not seen")
-            direction, duration = hauntlet_strafe(img, doors, index)
-            if hauntlet_walk(direction, duration, run, watch, until_doors=len(doors) == 1, target_index=index if len(doors) >= 2 else None):
-                return True
-            if len(doors) == 1:
-                run.walked_at = None                                            # whatever is past the doorway is looked at at once
-    finally:
-        if run.room is not None:
-            log_run_event(f"Hauntlet 2: got as far as room {run.room}")
-            state.minigame_detail["room"] = run.room
-    return False
-
-def ghost_character_box(hsv: Image) -> Optional[tuple[int, int, int, int]]:
-    """Where the character (and its pet, hoodie and beam) is when the camera is close to it - pulled in by a wall, as it is in the
-    dark of the boss fight - and its cyan clothes are blobs as big as ghosts: the glowing pink emblem of its backpack
-    (GHOST_EMBLEM_HSV, at least GHOST_EMBLEM_MIN px, in GHOST_EMBLEM_BOX) gives the place and, by its size, how close the camera is;
-    the box is GHOST_SELF_SCALE times the emblem's size (its side's square root, at least GHOST_SELF_MIN_UNIT) to the sides, up and down.
-    None when the emblem isn't seen: the camera is far, and GHOST_IGNORE_BOXES' small box does."""
-    left, top, right, bottom = cfg.GHOST_EMBLEM_BOX
-    mask = cv2.inRange(hsv[top:bottom, left:right], cfg.GHOST_EMBLEM_HSV[0], cfg.GHOST_EMBLEM_HSV[1])
-    count, _, stats, centres = cv2.connectedComponentsWithStats(mask)
-    best = max(range(1, count), key=lambda i: stats[i, cv2.CC_STAT_AREA], default=None)
-    if best is None or stats[best, cv2.CC_STAT_AREA] < cfg.GHOST_EMBLEM_MIN:
-        return None
-    x, y = left + int(centres[best][0]), top + int(centres[best][1])
-    unit = max(float(np.sqrt(stats[best, cv2.CC_STAT_AREA])), cfg.GHOST_SELF_MIN_UNIT)
-    side, up, down = cfg.GHOST_SELF_SCALE
-    return int(x - side * unit), int(y - up * unit), int(x + side * unit), int(y + down * unit)
-
-def find_ghost_blobs(img: Image, boss: bool = False) -> list[tuple[int, int, int]]:
-    """(x, y, area) of every ghost in `img`, biggest first: the connected pieces of the translucent cyan the ghosts and the
-    boss are drawn in (GHOST_COLOR), at least GHOST_MIN_AREA px, not in the HUD (GHOST_IGNORE_BOXES) or on the character -
-    and, in the boss phase (`boss`), not on the boss's health bar, whose crest and icons are cyan too."""
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    mask = cv2.bitwise_or(cv2.inRange(hsv, *cfg.GHOST_COLOR), cv2.inRange(hsv, *cfg.GHOST_COLOR_FAR))
-    closeup = ghost_character_box(hsv)
-    for left, top, right, bottom in cfg.GHOST_IGNORE_BOXES + ((cfg.GHOST_BOSS_BAR_IGNORE,) if boss else ()) + ((closeup,) if closeup else ()):
-        mask[max(0, top):bottom, max(0, left):right] = 0
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((cfg.GHOST_CLOSE, cfg.GHOST_CLOSE), np.uint8))
-    count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    blobs = [(int(centres[i][0]), int(centres[i][1]), int(stats[i, cv2.CC_STAT_AREA])) for i in range(1, count)
-             if stats[i, cv2.CC_STAT_AREA] >= cfg.GHOST_MIN_AREA]
-    return sorted(blobs, key=lambda blob: -blob[2])
-
-def find_ghost_alerts(img: Image) -> list[tuple[int, int, int]]:
-    """(x, y, height) of every white "!" in `img` - the mark over furniture a ghost hides in: a white bar with a white dot under it
-    (GHOST_ALERT_*), whatever the camera's distance, left to right."""
-    top, bottom = cfg.GHOST_ALERT_BAND
-    level = cfg.GHOST_ALERT_WHITE
-    white = cv2.inRange(img[top:bottom], (level, level, level), (255, 255, 255))
-    count, _, stats, _ = cv2.connectedComponentsWithStats(white, connectivity=8)
-    pieces = [tuple(int(v) for v in stats[i]) for i in range(1, count) if stats[i, cv2.CC_STAT_AREA] >= cfg.GHOST_ALERT_MIN_PIECE]
-    found = []
-    for x, y, w, h, area in pieces:
-        if h < cfg.GHOST_ALERT_ASPECT * w or h < cfg.GHOST_ALERT_MIN_HEIGHT or area < cfg.GHOST_ALERT_BAR_FILL * w * h:
-            continue                                                                   # not a bar
-        for x2, y2, w2, h2, area2 in pieces:
-            if (y + h < y2 <= y + cfg.GHOST_ALERT_DOT_GAP * h and abs((x2 + w2 / 2) - (x + w / 2)) <= cfg.GHOST_ALERT_DOT_SHIFT * w + cfg.GHOST_ALERT_DOT_SLACK
-                    and cfg.GHOST_ALERT_DOT_WIDTH[0] * w <= w2 <= cfg.GHOST_ALERT_DOT_WIDTH[1] * w
-                    and h2 <= cfg.GHOST_ALERT_DOT_ASPECT * w2 + 2 and area2 >= cfg.GHOST_ALERT_DOT_FILL * w2 * h2):                    # a dot under it
-                found.append((x + w // 2, top + y + h // 2, h))
-                break
-    return sorted(found)
-
-def ghost_boss_bar_visible(img: Image) -> bool:
-    """Whether the boss's health bar (a gold frame along the top, GHOST_BOSS_BAR_*) is on screen: the boss phase."""
-    left, top, right, bottom = cfg.GHOST_BOSS_BAR_BOX
-    low, high = cfg.GHOST_BOSS_BAR_GOLD
-    gold = cv2.inRange(cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV), low, high)
-    return int(np.count_nonzero(gold)) >= cfg.GHOST_BOSS_BAR_MIN
-
-def ghost_boss_shielded(img: Image) -> bool:
-    """Whether the boss, its bar being up, can't be hurt now: the bar shows two or three ghost icons instead of its
-    cyan health (no GHOST_BOSS_FILL pixels), the boss itself is dim and small ghosts fly in - they are what is
-    to be caught then. (The bar's health is down to a sliver at the very end, but not nothing.)"""
-    left, top, right, bottom = cfg.GHOST_BOSS_BAR_BOX
-    low, high = cfg.GHOST_BOSS_FILL
-    fill = cv2.inRange(cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV), low, high)
-    return int(np.count_nonzero(fill)) < cfg.GHOST_BOSS_FILL_MIN
-
-def choose_ghost_target(blobs: list[tuple[int, int, int]], boss: bool, previous: Optional[Point]) -> Optional[Point]:
-    """Where to aim, from `blobs` (find_ghost_blobs()): when the boss can be hurt (`boss`) the biggest one (the boss), else the
-    one that is still the one aimed at (`previous`, if a ghost is within GHOST_STICK px of it - they move, and aiming at
-    another each look would lose them all), else the one nearest the character (GHOST_CHARACTER). None if there are none."""
-    if not blobs:
-        return None
-    if boss:
-        return blobs[0][:2]
-    if previous is not None:
-        near = min(blobs, key=lambda b: (b[0] - previous[0]) ** 2 + (b[1] - previous[1]) ** 2)
-        if (near[0] - previous[0]) ** 2 + (near[1] - previous[1]) ** 2 <= cfg.GHOST_STICK ** 2:
-            return near[:2]
-    cx, cy = cfg.GHOST_CHARACTER
-    return min(blobs, key=lambda b: (b[0] - cx) ** 2 + (b[1] - cy) ** 2)[:2]
-
-def start_camera_drag() -> None:
-    """Move the mouse to the middle of the screen and press the right button there. The drag that follows moves the cursor by
-    hundreds of px, and a right button released over the window's border or title bar opens its menu and takes the focus from
-    the game - which is where the cursor was left by whatever had been aimed at before."""
-    pydirectinput.moveTo(*to_screen(cfg.REFERENCE_CENTER_X, cfg.REFERENCE_CENTER_Y))
-    mouse_down("right")
-
-def tilt_camera_down() -> None:
-    """Drag the mouse down with the right button held, GHOST_START_TILT px: the camera rises behind the character, for a view
-    from above, over GHOST_CAMERA_DRAG_DURATION seconds in GHOST_CAMERA_DRAG_STEPS moves."""
-    start_camera_drag()
-    try:
-        for _ in range(cfg.GHOST_CAMERA_DRAG_STEPS):
-            pydirectinput.moveRel(0, cfg.GHOST_START_TILT // cfg.GHOST_CAMERA_DRAG_STEPS, relative=True)
-            wait_interruptible(cfg.GHOST_CAMERA_DRAG_DURATION / cfg.GHOST_CAMERA_DRAG_STEPS)
-    finally:
-        pydirectinput.mouseUp(button="right")
-
-def far_from_character(box: tuple[int, int, int, int], minimum: float) -> Point:
-    """A random point in `box` at least `minimum` px from the character (GHOST_CHARACTER); the middle of the farthest corner if the box has none."""
-    left, top, right, bottom = box
-    cx, cy = cfg.GHOST_CHARACTER
-    for _ in range(50):
-        x, y = random.randint(left, right), random.randint(top, bottom)
-        if (x - cx) ** 2 + (y - cy) ** 2 >= minimum ** 2:
-            return x, y
-    return max(((left, top), (right, top), (left, bottom), (right, bottom)), key=lambda c: (c[0] - cx) ** 2 + (c[1] - cy) ** 2)
-
-def ghost_chase_key(target: Point) -> Optional[str]:
-    """The key to walk towards `target` with: W if it is above the character (GHOST_CHARACTER), S below, A/D left/right - along the
-    axis it is farther off on - or None when it is no more than GHOST_TOWARD_MARGIN px off on either: near enough for the beam."""
-    dx, dy = target[0] - cfg.GHOST_CHARACTER[0], target[1] - cfg.GHOST_CHARACTER[1]
-    if max(abs(dx), abs(dy)) <= cfg.GHOST_TOWARD_MARGIN:
-        return None
-    if abs(dx) > abs(dy):
-        return cfg.KEYS["right"] if dx > 0 else cfg.KEYS["left"]
-    return cfg.KEYS["back"] if dy > 0 else cfg.KEYS["forward"]
-
-def rotate_camera(drag: tuple[int, int] = cfg.GHOST_CAMERA_DRAG, tilt: int = cfg.GHOST_CAMERA_TILT, direction: Optional[int] = None) -> None:
-    """Turn the camera: hold the right mouse button and drag the mouse sideways (`direction` -1 or 1, else a random way; `drag` = least and most px, and
-    up to `tilt` px up or down too) over GHOST_CAMERA_DRAG_DURATION seconds, in GHOST_CAMERA_DRAG_STEPS moves, as Roblox wants a drag."""
-    dx = (direction or random.choice((-1, 1))) * random.randint(*drag)
-    dy = random.randint(-tilt, tilt)
-    start_camera_drag()
-    try:
-        for _ in range(cfg.GHOST_CAMERA_DRAG_STEPS):
-            pydirectinput.moveRel(dx // cfg.GHOST_CAMERA_DRAG_STEPS, dy // cfg.GHOST_CAMERA_DRAG_STEPS, relative=True)
-            wait_interruptible(cfg.GHOST_CAMERA_DRAG_DURATION / cfg.GHOST_CAMERA_DRAG_STEPS)
-    finally:
-        pydirectinput.mouseUp(button="right")
-
-def furniture_outlined(before: Image, after: Image, point: Point) -> bool:
-    """Whether the mouse, moved to `point` between the screenshots `before` and `after`, is over a piece of furniture the beam can
-    be held on, which is highlighted (a pale outline) near the mouse: at least GHOST_OUTLINE_MIN pixels within GHOST_OUTLINE_RADIUS px of `point`
-    have turned pale (every channel at least GHOST_OUTLINE_WHITE) that weren't, or weren't beside a pale pixel, before."""
-    x, y = point
-    r = cfg.GHOST_OUTLINE_RADIUS
-    top, left = max(0, y - r), max(0, x - r)
-    was = (before[top:y + r, left:x + r].min(axis=2) >= cfg.GHOST_OUTLINE_WHITE).astype(np.uint8)
-    now = after[top:y + r, left:x + r].min(axis=2) >= cfg.GHOST_OUTLINE_WHITE
-    new = now & (cv2.dilate(was, np.ones((5, 5), np.uint8)) == 0)
-    return int(np.count_nonzero(new)) >= cfg.GHOST_OUTLINE_MIN
-
-def ring_point(centre: Point, box: tuple[int, int, int, int], radii: tuple[int, int]) -> Point:
-    """A random point GHOST_RING-ish px (`radii`, nearest and farthest) from `centre`, pulled into `box`."""
-    angle, radius = random.uniform(0, 2 * np.pi), random.uniform(*radii)
-    left, top, right, bottom = box
-    return (min(max(int(centre[0] + radius * np.cos(angle)), left), right), min(max(int(centre[1] + radius * np.sin(angle)), top), bottom))
-
-def find_furniture(watch: MinigameWatch, around: Optional[Point] = None, avoid: Sequence[Point] = ()) -> Point:
-    """Somewhere the beam can be held on furniture: the mouse is moved to up to GHOST_FURNITURE_PROBES places - random ones in
-    GHOST_FURNITURE_BOX far from the character (far_from_character()), or, with `around`, ones in a ring of GHOST_RING px around that point
-    (a ghost that is hiding in furniture) - none within GHOST_BAD_SPOT_RADIUS px of any of `avoid`, a look at each (furniture_outlined()),
-    and the first one that gets the white outline is it; none did, the last place tried."""
-    def place() -> Point:
-        point = (0, 0)
-        for _ in range(50):
-            point = (ring_point(around, cfg.GHOST_FURNITURE_BOX, cfg.GHOST_RING) if around is not None
-                     else far_from_character(cfg.GHOST_FURNITURE_BOX, cfg.GHOST_FURNITURE_MIN_DISTANCE))
-            if all((point[0] - x) ** 2 + (point[1] - y) ** 2 >= cfg.GHOST_BAD_SPOT_RADIUS ** 2 for x, y in avoid):
-                break
-        return point
-    point = place()
-    before = minigame_look(watch)
-    for probe in range(cfg.GHOST_FURNITURE_PROBES):
-        if probe:
-            point = place()
-        pydirectinput.moveTo(*to_screen(*point))
-        wait_interruptible(cfg.GHOST_OUTLINE_WAIT)
-        after = minigame_look(watch)
-        if furniture_outlined(before, after, point):
-            return point
-        before = after
-    return point
-
-class GhostFeedback:
-    """What the score says about where the beam is held, fed one screenshot at a time (look()): the digits of the score pill, as a mask of
-    their white pixels, differ from the last look's when the score changed - which means the beam is on a ghost. Nothing is concluded
-    while the banner isn't on screen (`visible`). See docs/ARCHITECTURE.md#playing-ghost-gallery."""
-
-    def __init__(self, now: float) -> None:
-        self.digits: Optional[np.ndarray] = None            # the white pixels of the score at the last look; None if the banner wasn't there
-        self.visible = False
-        self.scored_at = now                                # the last time the score changed (or the start)
-        self.spot_since = now                               # since when the beam has been on what it is on
-        self.bad: list[tuple[Point, float]] = []            # places that scored nothing, and until when to keep away from them
-        self.skipped: list[list[float]] = []                # [x, y, until]: blobs the score says are no ghosts, where they were at the last look
-        self.hide_tries = 0                                 # furniture tried around the blob the beam is on, without a score
-
-    def look(self, img: Image, now: float) -> bool:
-        """Take in a screenshot. True if the score changed since the look before."""
-        left, top, right, bottom = cfg.GHOST_SCORE_BOX
-        box = img[top:bottom, left:right]
-        pill = cv2.inRange(cv2.cvtColor(box, cv2.COLOR_BGR2HSV), cfg.GHOST_SCORE_PILL[0], cfg.GHOST_SCORE_PILL[1])
-        self.visible = int(np.count_nonzero(pill)) >= cfg.GHOST_SCORE_PILL_MIN
-        if not self.visible:
-            self.digits = None
-            return False
-        digits = box.min(axis=2) >= cfg.GHOST_SCORE_WHITE
-        changed = self.digits is not None and int(np.count_nonzero(digits ^ self.digits)) >= cfg.GHOST_SCORE_CHANGE
-        self.digits = digits
-        if changed:
-            self.scored_at = self.spot_since = now
-            self.hide_tries = 0
-        return changed
-
-    def new_spot(self, now: float, new_target: bool = False) -> None:
-        """The beam goes somewhere else: it has a trial of its own (and with another blob - `new_target` - the furniture tried is counted afresh)."""
-        self.spot_since = now
-        if new_target:
-            self.hide_tries = 0
-
-    def skip(self, point: Point, now: float) -> None:
-        """What is at `point` is no ghost: left alone for GHOST_SKIP_TIME seconds, wherever it goes."""
-        self.skipped.append([float(point[0]), float(point[1]), now + cfg.GHOST_SKIP_TIME])
-        self.hide_tries = 0
-
-    def follow_skipped(self, blobs: list[tuple[int, int, int]], now: float) -> list[tuple[int, int, int]]:
-        """`blobs` without the skipped ones; each skipped one moves to the blob it has become (the nearest within GHOST_STICK px), so that a pet that
-        flies about stays skipped, and is dropped when its time is up."""
-        self.skipped = [entry for entry in self.skipped if entry[2] > now]
-        kept = []
-        for blob in blobs:
-            for entry in self.skipped:
-                reach = max(cfg.GHOST_SKIP_RADIUS, float(blob[2]) ** 0.5)
-                if (blob[0] - entry[0]) ** 2 + (blob[1] - entry[1]) ** 2 <= reach ** 2:
-                    entry[0], entry[1] = float(blob[0]), float(blob[1])
-                    break
-            else:
-                kept.append(blob)
-        return kept
-
-    def trial_over(self, now: float, trial: Optional[float] = None) -> bool:
-        """The beam has been where it is for GHOST_SPOT_TRIAL seconds (or `trial`) without a score."""
-        return self.visible and now - max(self.scored_at, self.spot_since) >= (cfg.GHOST_SPOT_TRIAL if trial is None else trial)
-
-    def stalled(self, now: float) -> bool:
-        """No score for GHOST_STALL seconds."""
-        return self.visible and now - self.scored_at >= cfg.GHOST_STALL
-
-    def mark_bad(self, point: Point, now: float) -> None:
-        self.bad.append((point, now + cfg.GHOST_BAD_SPOT_TIME))
-
-    def avoid(self, now: float) -> list[Point]:
-        """The places to keep away from for now."""
-        self.bad = [(point, until) for point, until in self.bad if until > now]
-        return [point for point, _ in self.bad]
-
-def play_ghost_gallery(deadline: float, watch: MinigameWatch) -> bool:
-    """Ghost Gallery: once its overlay shows (or the start wait is over), look at the screen every GHOST_LOOK_INTERVAL,
-    aim the mouse at a ghost (choose_ghost_target()) and hold the button down on it, until the minigame finishes or the
-    overlay says it's over. It begins by zooming the camera out and tilting it down for a better view. In the boss phase it is the boss, but while the boss's bar shows ghost icons it can't be hurt
-    (ghost_boss_shielded()) and the small ghosts are aimed at instead. With no ghost in sight, before the boss phase the beam
-    is held on random furniture (ghosts hide there), and the camera is turned every GHOST_CAMERA_PERIOD to find some;
-    it jumps now and then, and walks about a step at a time. The score is watched (GhostFeedback): a ghost the beam scores nothing on is
-    taken to hide, and the furniture around it is tried; no score for GHOST_STALL seconds moves the player and turns the camera.
-    True if the minigame finished before `deadline`. See docs/ARCHITECTURE.md#playing-ghost-gallery.
-    """
-    wait_for_minigame_start(watch, "ghost_gallery")
-    minigame_wait(cfg.GHOST_INTRO_WAIT, watch)
-    zoom_out()
-    tilt_camera_down()
-    hold_key(cfg.KEYS["forward"], cfg.GHOST_START_FORWARD)           # into the middle of the hall, from where the game puts the player
-    target: Optional[Point] = None
-    held = False
-    moving: Optional[str] = None                     # the key being held to walk, and until when
-    regrab_at = time.time() + cfg.GHOST_REGRAB_PERIOD   # when the beam is let go of and pressed again
-    chasing: Optional[str] = None                    # the key held to get to what is aimed at (a `moving` that has no end)
-    turn: Optional[int] = None                       # the way the camera is being turned to find the boss (-1 or 1)
-    move_until = 0.0
-    next_move = time.time() + cfg.GHOST_MOVE_PERIOD
-    phase = "ghosts"
-    furniture: Optional[Point] = None
-    furniture_until = 0.0
-    feedback = GhostFeedback(time.time())            # what the score says about where the beam is
-    hide_spot: Optional[Point] = None                # furniture near a ghost the score says is hiding, which the beam is held on until `hide_until`
-    hide_until = 0.0
-    last_target: Optional[Point] = None
-    last_turn = last_seen = time.time()
-    next_jump = time.time() + random.uniform(cfg.GHOST_JUMP_MIN, cfg.GHOST_JUMP_MAX)
-
-    def aim(point: Point) -> None:
-        nonlocal held
-        pydirectinput.moveTo(*to_screen(*point))
-        if not held:
-            mouse_down()
-            held = True
-
-    def let_go() -> None:
-        nonlocal held
-        if held:
-            pydirectinput.mouseUp()
-            held = False
-
-    def stop_walking() -> None:
-        nonlocal moving
-        if moving is not None:
-            key_up(moving)
-            moving = None
-
-    try:
-        while time.time() < deadline and not watch.problem:
-            img = minigame_look(watch)
-            if detect_minigame_finished(img):
-                return True
-            if feedback.look(img, time.time()):
-                hide_spot, hide_until = None, 0.0                           # it scored: whatever the beam is on is right
-            bar = ghost_boss_bar_visible(img)
-            if held and time.time() >= regrab_at:                           # knocked down, the player lets go of the beam and has to press again: do both now and then
-                let_go()
-                regrab_at = time.time() + cfg.GHOST_REGRAB_PERIOD
-            now_phase = ("shielded" if ghost_boss_shielded(img) else "boss") if bar else "ghosts"
-            if now_phase != phase:
-                logger.debug(f"Ghost Gallery: {dict(ghosts='the boss phase is over', boss='the boss can be hurt', shielded='the boss is shielded: after the small ghosts')[now_phase]}")
-                phase = now_phase
-            blobs = find_ghost_blobs(img, bar)
-            if phase == "shielded":                                         # only the small ghosts count: what is bigger is the beam's glow or the boss's fog
-                blobs = [blob for blob in blobs if blob[2] <= cfg.GHOST_SMALL_MAX]
-            if phase == "ghosts":
-                alerts = find_ghost_alerts(img)                             # a "!" is a ghost hiding in the furniture below it: that comes first
-                if alerts:
-                    blobs = [(x, y + int(cfg.GHOST_ALERT_BELOW * height), cfg.GHOST_MIN_AREA) for x, y, height in alerts]
-            blobs = feedback.follow_skipped(blobs, time.time())
-            target = choose_ghost_target(blobs, phase == "boss" and bool(blobs) and blobs[0][2] >= cfg.GHOST_BOSS_MIN, target)   # (the boss is a big one, else it's the ghosts that are there)
-            now = time.time()
-            if target is not None and (last_target is None or (target[0] - last_target[0]) ** 2 + (target[1] - last_target[1]) ** 2 > cfg.GHOST_STICK ** 2):
-                feedback.new_spot(now, True)                                # another ghost: it has a trial of its own
-            last_target = target
-            if phase == "ghosts" and feedback.stalled(now):                 # nothing has scored for a long time (a view blocked by a pillar, a beam on the floor): somewhere else, looking another way
-                logger.debug(f"Ghost Gallery: no score for {cfg.GHOST_STALL:g}s - moving and turning the camera")
-                mark_run_capture(f"Ghost Gallery: no score for {cfg.GHOST_STALL:g}s")
-                let_go()
-                stop_walking()
-                chasing = None
-                hold_key(random.choice(cfg.MOVE_KEYS), cfg.GHOST_STALL_WALK)
-                pydirectinput.press(cfg.KEYS["jump"])
-                rotate_camera(cfg.GHOST_STALL_TURN, 0, random.choice((-1, 1)))
-                feedback.scored_at = last_turn = time.time()
-                feedback.new_spot(last_turn)
-                furniture, hide_spot, hide_until = None, None, 0.0
-                now = time.time()
-            elif phase == "ghosts" and target is not None and feedback.trial_over(now):   # a ghost the beam on it doesn't score: it is hiding in furniture, which is somewhere around it
-                mark_run_capture("Ghost Gallery: the beam on a ghost scores nothing")
-                if hide_spot is not None:
-                    feedback.mark_bad(hide_spot, now)                       # (the furniture tried last scored nothing either)
-                    feedback.hide_tries += 1
-                if feedback.hide_tries >= cfg.GHOST_HIDE_TRIES:             # the blob and the furniture around it score nothing: no ghost (the pet)
-                    feedback.skip(target, now)
-                    hide_spot, hide_until, target, last_target = None, 0.0, None, None
-                    logger.debug("Ghost Gallery: what the beam is on scores nothing, furniture or not - left alone")
-                else:
-                    hide_spot = find_furniture(watch, around=target, avoid=feedback.avoid(now))
-                    hide_until = time.time() + cfg.GHOST_SPOT_TRIAL
-                    feedback.new_spot(time.time())
-                now = time.time()
-            elif phase == "boss" and target is not None and feedback.trial_over(now, cfg.GHOST_BOSS_TRIAL):
-                mark_run_capture("Ghost Gallery: the beam on what is taken for the boss scores nothing")
-                feedback.skip(target, now)                                  # fog, a light shaft: not the boss
-                logger.debug("Ghost Gallery: the biggest blob scores nothing - not the boss, left alone")
-                target, last_target = None, None
-                now = time.time()
-            if target is not None:
-                last_seen = now
-                aim(hide_spot if hide_spot is not None and now < hide_until else target)
-            elif phase == "ghosts":                                         # nothing to be seen before the boss: try the furniture
-                if furniture is None or now >= furniture_until:
-                    furniture = find_furniture(watch)                       # (the mouse is moved around with the beam down)
-                    furniture_until = time.time() + cfg.GHOST_FURNITURE_PERIOD
-                aim(furniture)
-            if target is not None:
-                turn = None                                                 # the next search for the boss turns a way of its own
-            elif phase != "ghosts":                                         # the boss, or the ghosts that shield it, out of sight: turn the camera until they are
-                turn = turn or random.choice((-1, 1))
-                rotate_camera(cfg.GHOST_BOSS_TURN_DRAG, 0, turn)
-                last_turn = time.time()
-            elif now - max(last_turn, last_seen) >= cfg.GHOST_CAMERA_PERIOD:
-                turn = turn or random.choice((-1, 1))                       # one way round, not back and forth: a sweep sees the whole hall
-                rotate_camera(direction=turn)
-                last_turn = time.time()
-            chase = ghost_chase_key(target) if target is not None else None   # always towards the ghost or the boss, until it is near
-            if chase != chasing:
-                stop_walking()
-                chasing = chase
-                if chase is not None:
-                    moving = chase
-                    key_down(chase)
-                move_until = now
-            if chasing is None and target is None and phase == "ghosts":     # nothing in sight: walking about, a step at a time, without stopping the aiming
-                if moving is not None and now >= move_until:
-                    stop_walking()
-                    next_move = now + cfg.GHOST_MOVE_PERIOD
-                elif moving is None and now >= next_move:
-                    moving = random.choice(cfg.MOVE_KEYS)
-                    key_down(moving)
-                    move_until = time.time() + random.uniform(cfg.GHOST_MOVE_STEP_MIN, cfg.GHOST_MOVE_STEP_MAX)      # (`now` is from before a search for furniture, which can take longer than a step)
-            elif chasing is None:
-                stop_walking()
-            if now >= next_jump:
-                pydirectinput.press(cfg.KEYS["jump"])
-                next_jump = now + random.uniform(cfg.GHOST_JUMP_MIN, cfg.GHOST_JUMP_MAX)
-            wait_interruptible(cfg.GHOST_LOOK_INTERVAL)
-    finally:
-        let_go()
-        stop_walking()
-    return False
-
-def stitches_ring_angle(img: Image) -> Optional[float]:
-    """The slope, in degrees, of the gold line along the ring walkway's inner edge in `img` (Stitches' Spotlight): 0 when it runs straight across the screen,
-    which it does when the camera looks at the middle of the ring; positive when it falls to the right (the middle is to the right), negative when it
-    rises. None when too little of it shows (STITCHES_LINE_MIN_PIXELS: it is not seen in the red of a searchlight, or with the camera turned from the ring)."""
-    left, top, right, bottom = cfg.STITCHES_LINE_BOX
-    hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
-    hue, saturation, value = hsv[..., 0], hsv[..., 1], hsv[..., 2]
-    mask = ((hue >= cfg.STITCHES_LINE_HUE[0]) & (hue <= cfg.STITCHES_LINE_HUE[1]) & (saturation >= cfg.STITCHES_LINE_MIN_SATURATION)
-            & (value >= cfg.STITCHES_LINE_VALUE[0]) & (value <= cfg.STITCHES_LINE_VALUE[1]))
-    ys, xs = np.nonzero(mask)
-    if len(xs) < cfg.STITCHES_LINE_MIN_PIXELS:
-        return None
-    dx, dy = cv2.fitLine(np.column_stack([xs, ys]).astype(np.float32), cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()[:2]
-    angle = math.degrees(math.atan2(dy, dx))
-    return angle - 180 if angle > 90 else angle + 180 if angle < -90 else angle
-
-class RingCamera:
-    """What turns the camera towards the middle of Stitches' Spotlight's ring, from the angle of the ring's edge line (stitches_ring_angle()). Walking
-    round the ring needs the camera turned all the time, at a steady rate, so besides the turn the angle asks for (proportional: up to STITCHES_TURN_HOLD_MAX
-    seconds of key for a line 90 degrees off) it learns that rate (`bias`: the share of the time the turn key is held, grown by STITCHES_TURN_BIAS_GAIN
-    per degree per second while the line is off by more than STITCHES_LINE_DEADBAND) and keeps turning at it while the line is out of sight, and after
-    STITCHES_LOST_AFTER seconds without it sweeps the camera round to find it. `keys` are the (left, right) arrow keys; swap_keys() when a test turn
-    shows they work the other way."""
-
-    def __init__(self) -> None:
-        self.keys = (cfg.KEYS["camera_left"], cfg.KEYS["camera_right"])
-        self.bias = 0.0
-        self.lost_since: Optional[float] = None
-
-    def swap_keys(self) -> None:
-        self.keys = (self.keys[1], self.keys[0])
-        self.bias = -self.bias
-
-    def decide(self, angle: Optional[float], now: float, interval: float) -> Optional[tuple[str, float]]:
-        """(key, seconds to hold it) for this look, or None. `angle` is None when the line is not in sight."""
-        if angle is None:
-            if self.lost_since is None:
-                self.lost_since = now
-            seconds = cfg.STITCHES_TURN_HOLD_MAX if now - self.lost_since > cfg.STITCHES_LOST_AFTER else self.bias * interval
-        else:
-            self.lost_since = None
-            error = angle if abs(angle) > cfg.STITCHES_LINE_DEADBAND else 0.0
-            self.bias = max(-cfg.STITCHES_TURN_BIAS_MAX, min(cfg.STITCHES_TURN_BIAS_MAX, self.bias + cfg.STITCHES_TURN_BIAS_GAIN * error * interval))
-            seconds = cfg.STITCHES_TURN_HOLD_MAX * max(-90.0, min(90.0, error)) / 90.0 + self.bias * interval
-        seconds = max(-cfg.STITCHES_TURN_HOLD_MAX, min(cfg.STITCHES_TURN_HOLD_MAX, seconds))
-        if abs(seconds) < cfg.STITCHES_TURN_MIN_HOLD:
-            return None
-        return self.keys[seconds > 0], abs(seconds)
-
-def calibrate_ring_camera(camera: RingCamera, watch: MinigameWatch) -> None:
-    """Find out which arrow key turns the camera which way, by turning with the right one for STITCHES_CALIBRATE_HOLD seconds and seeing the ring's line
-    move: turning right must make a line that falls to the right (positive angle) level. If it moved the other way the camera's keys are swapped. Too small a
-    move, or no line in sight before or after, is logged and the keys are left as they are."""
-    before = stitches_ring_angle(minigame_look(watch))
-    if before is None:
-        logger.debug("Stitches' Spotlight: no ring line in sight to test the camera keys against")
-        return
-    hold_key(camera.keys[1], cfg.STITCHES_CALIBRATE_HOLD)
-    minigame_wait(cfg.STITCHES_CALIBRATE_HOLD, watch)
-    after = stitches_ring_angle(minigame_look(watch))
-    if after is None or abs(after - before) < cfg.STITCHES_CALIBRATE_MIN:
-        logger.debug(f"Stitches' Spotlight: the camera keys test showed nothing clear (line {before:.0f} -> {'not seen' if after is None else f'{after:.0f}'} degrees)")
-        mark_run_capture("Stitches' Spotlight: the camera keys test was unclear")
-        return
-    if after > before:
-        camera.swap_keys()
-    logger.debug(f"Stitches' Spotlight: line {before:.0f} -> {after:.0f} degrees, the camera keys are {camera.keys}")
-
-def play_stitches_spotlight(deadline: float, watch: MinigameWatch) -> bool:
-    """Stitches' Spotlight: once its overlay shows, wait (at most STITCHES_INTRO_MAX seconds) for the ring's edge line - the game's intro camera looks at
-    the sky first - test which way the arrow keys turn the camera (calibrate_ring_camera()), then walk round the ring by holding KEYS["right"] and, every
-    STITCHES_CENTER_INTERVAL, turn the camera (RingCamera) until the line runs straight across the screen, i.e. the camera looks at the middle. KEYS["speed_boost"]
-    is pressed every STITCHES_BOOST_INTERVAL. Nothing is read or avoided: the candy corn on the way is picked up by walking over it.
-    True if the minigame finished before `deadline`. See docs/ARCHITECTURE.md#playing-stitches-spotlight."""
-    wait_for_minigame_start(watch, "stitches_spotlight")
-    intro_until = time.time() + cfg.STITCHES_INTRO_MAX
-    while time.time() < intro_until and not watch.problem and stitches_ring_angle(minigame_look(watch)) is None:
-        wait_interruptible(cfg.STITCHES_CENTER_INTERVAL)
-    camera = RingCamera()
-    calibrate_ring_camera(camera, watch)
-    next_boost = time.time()
-    key_down(cfg.KEYS["right"])
-    try:
-        while time.time() < deadline and not watch.problem:
-            img = minigame_look(watch)
-            if detect_minigame_finished(img):
-                return True
-            angle = stitches_ring_angle(img)
-            turn = camera.decide(angle, time.time(), cfg.STITCHES_CENTER_INTERVAL)
-            logger.debug(f"Stitches' Spotlight: ring line {'not seen' if angle is None else f'{angle:.0f} degrees'}, turn {turn if turn else 'none'}, bias {camera.bias:+.2f}")
-            if turn is not None:
-                hold_key(*turn)
-            if time.time() >= next_boost:
-                pydirectinput.press(cfg.KEYS["speed_boost"])
-                next_boost = time.time() + cfg.STITCHES_BOOST_INTERVAL
-            wait_interruptible(cfg.STITCHES_CENTER_INTERVAL)
-    finally:
-        key_up(cfg.KEYS["right"])
-    return False
-
-MINIGAME_PLAYERS = {"hauntlet_2": play_hauntlet_2, "ghost_gallery": play_ghost_gallery, "stitches_spotlight": play_stitches_spotlight}
-
-def click_nice_until_gone() -> bool:
-    """Click the finish screen's NICE! until it is gone (up to MINIGAME_FINISH_CLICK_TRIES).
-    Returns True if it is. See docs/ARCHITECTURE.md#need-handlers.
-    """
-    for attempt in range(cfg.MINIGAME_FINISH_CLICK_TRIES):
-        hover_click(*cfg.MINIGAME_FINISH_BUTTON_POS)
-        wait_interruptible(cfg.MINIGAME_FINISH_WAIT)
-        if not detect_minigame_finished(grab_screen()):
-            return True
-        logger.debug(f"Finish screen still up after click {attempt + 1}")
-    log_failure("minigame finish screen would not close")
-    return False
-
-def screen_changed(before: Image, after: Image) -> bool:
-    """Whether the view is a different one: the mean grey-level difference of the two (shrunk) screens is over MINIGAME_TELEPORT_CHANGE."""
-    small = [cv2.resize(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), cfg.SCREEN_CHANGE_SIZE, interpolation=cv2.INTER_AREA).astype(np.int16) for img in (before, after)]
-    return bool(np.abs(small[0] - small[1]).mean() > cfg.MINIGAME_TELEPORT_CHANGE)
-
-def minigame_teleported(before: Image) -> bool:
-    """Wait up to MINIGAME_TELEPORT_WAIT seconds for the character to be teleported after the popup's Yes: the white screen of a
-    teleport (detect_white_screen()) or a view changed from `before` (the screen as it was at the click; screen_changed())."""
-    end = time.time() + cfg.MINIGAME_TELEPORT_WAIT
-    while time.time() < end:
-        wait_interruptible(cfg.MINIGAME_TELEPORT_POLL)
-        img = grab_screen()
-        if detect_white_screen(img) or screen_changed(before, img):
-            return True
-    return False
-
-def accept_minigame_popup() -> bool:
-    """Click the popup's Yes and check that it teleported the character (minigame_teleported()). If not and the popup is still
-    up, the click didn't take: click again, up to MINIGAME_YES_TRIES clicks in all. False if it never did, or the popup is gone
-    without a teleport (it was gone before the click, or the click was lost). See docs/ARCHITECTURE.md#need-handlers."""
-    for attempt in range(cfg.MINIGAME_YES_TRIES):
-        before = grab_screen()
-        hover_click(*cfg.MINIGAME_POPUP_YES_POS)
-        if minigame_teleported(before):
-            return True
-        if not detect_minigame_popup(grab_screen()):
-            logger.debug("The minigame popup is gone and nothing teleported")
-            return False
-        logger.debug(f"The popup is still up after click {attempt + 1}")
-    return False
-
-def candy_corn_digit_templates() -> dict[int, Image]:
-    """{digit: picture} for the saved HUD digits (CANDY_CORN_DIGIT_DIR), re-read when the folder changes."""
-    directory = cfg.CANDY_CORN_DIGIT_DIR
-    return _digit_templates(directory, os.path.getmtime(directory)) if os.path.isdir(directory) else {}
-
-def read_candy_corn(img: Image) -> Optional[int]:
-    """The candy corn total in the HUD of `img`, or None when it isn't readable: no counter on screen (at home, in a minigame), or a
-    digit that matches none of the saved ones. See docs/ARCHITECTURE.md#candy-corn."""
-    left, top, right, bottom = cfg.CANDY_CORN_BOX
-    mask = cv2.inRange(img[top:bottom, left:right], cfg.CANDY_CORN_RED[0], cfg.CANDY_CORN_RED[1])
-    count, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    tall = sorted((int(stats[i, 0]), int(stats[i, 1]), int(stats[i, 2]), int(stats[i, 3])) for i in range(1, count)
-                  if cfg.CANDY_CORN_DIGIT_HEIGHT[0] <= stats[i, 3] <= cfg.CANDY_CORN_DIGIT_HEIGHT[1])
-    boxes = [box for box in tall if box[2] <= cfg.CANDY_CORN_DIGIT_MAX_WIDTH]
-    templates = candy_corn_digit_templates()
-    if not 1 <= len(boxes) <= cfg.CANDY_CORN_MAX_DIGITS or len(boxes) != len(tall) or not templates:
-        return None
-    if any(not cfg.CANDY_CORN_PITCH[0] <= b[0] - a[0] <= cfg.CANDY_CORN_PITCH[1] for a, b in zip(boxes, boxes[1:])):
-        return None                                                          # a digit is missing, or something is between them
-    total = 0
-    for x, y, w, h in boxes:
-        picture = cv2.resize(mask[y:y + h, x:x + w], cfg.CANDY_CORN_DIGIT_SIZE, interpolation=cv2.INTER_AREA)
-        diffs = {digit: float(np.abs(picture.astype(int) - template.astype(int)).mean()) for digit, template in templates.items()}
-        digit = min(diffs, key=lambda d: diffs[d])
-        if diffs[digit] > cfg.CANDY_CORN_MAX_DIFF:
-            return None
-        total = total * 10 + digit
-    return total
-
-def save_minigame_result(name: str) -> Optional[str]:
-    """Save the GAME OVER! screen of the minigame `name` (the card with what the run earned, in candy corn, and its score) as
-    RUNS_DIR/results/run<N>_<name>_<time>.png, the newest MAX_RESULT_SHOTS kept. The path, or None. Never raises."""
-    try:
-        folder = os.path.join(cfg.RUNS_DIR, "results")
-        os.makedirs(folder, exist_ok=True)
-        path = os.path.join(folder, f"run{state.run_number}_{name}_{time.strftime('%H%M%S')}.png")
-        left, top, right, bottom = cfg.MINIGAME_RESULT_BOX
-        if not cv2.imwrite(path, grab_screen()[top:bottom, left:right]):
-            return None
-        keep_newest_files(folder, cfg.MAX_RESULT_SHOTS, ".png")
-        return path
-    except Exception as error:
-        logger.warning(f"Couldn't save the result screen: {error}")
-        return None
-
-def play_minigame(name: str) -> bool:
-    """Take the popup's Yes, play `name` until its GAME OVER! screen (which every run ends on: what a run earned is the candy corn
-    on that screen, which is saved, see save_minigame_result()), click NICE!, respawn. Gives up (a logged failure) if the overlay shows it over or never
-    started, or after MINIGAME_MAX_DURATION. Counts as progress only if it ran to the end. See docs/ARCHITECTURE.md#need-handlers.
-    """
-    label = cfg.MINIGAME_LABELS.get(name, name)
-    logger.info(f"Playing {label}")
-    log_run_event(f"minigame started: {label}")
-    # The handler this interrupted may be holding a key or the mouse button
-    # down (hold_key(), the pet swipe); that must not carry into the minigame.
-    release_all_inputs()
-    if not accept_minigame_popup():
-        log_failure(f"{label} could not be started (the popup's Yes did not teleport the character)")
-        state.last_detection = time.time()
-        respawn_character()
-        return False
-    started = time.time()
-    failures_before = run_stats.failures
-    watch = MinigameWatch(name)
-    state.minigame_detail = {}
-    before = read_candy_corn_settled(cfg.CANDY_CORN_BEFORE_TRIES)      # in the lobby the total is on screen (after the white of the teleport): what the run earned is the difference
-    capture = start_run_capture(name)
-    outcome = "interrupted"
-    finished = False
-    after: Optional[int] = None
-    send_macro_window_to_back()                 # it covers part of the game's screen, and would be in the recording and the readers' way
-    try:
-        finished = MINIGAME_PLAYERS[name](started + cfg.MINIGAME_MAX_DURATION, watch)
-        outcome = "finished (the game over screen)" if finished else (watch.problem or "did not reach the game over screen in time")
-        after = read_candy_corn_settled()        # (the game over screen has the total too, counting up for a moment)
-    finally:
-        release_all_inputs()
-        bring_macro_window_to_front()
-        result = minigame_result(name, outcome, finished, time.time() - started, before, after, run_stats.failures - failures_before)
-        finish_run_capture(capture, outcome, result)
-    record_minigame_result(result)
-    if finished:
-        log_run_event(f"minigame finished: {label} ({time.time() - started:.0f}s)")
-        save_minigame_result(name)
-        click_nice_until_gone()
-    elif watch.disconnected:
-        log_run_event(f"{label} ended by a disconnect")      # (the failure is the rejoin's to log)
-        state.last_detection = time.time()
-        return False
-    else:
-        reason = watch.problem or f"did not finish within {cfg.MINIGAME_MAX_DURATION:g}s"
-        log_failure(f"{label} {reason}")
-    state.last_detection = time.time()      # no needs could be seen while it ran
-    if finished:
-        state.last_progress = time.time()   # a failed one (never started, left early) must not reset the no-progress rejoin
-    respawn_character()
-    return finished
-
-def close_minigame_finish_screen(abandon: bool = True) -> bool:
-    """If the finish screen is up, click NICE!; with `abandon` also count it as progress and
-    respawn. Returns True if it was there. See docs/ARCHITECTURE.md#need-handlers.
-    """
-    if not detect_minigame_finished(grab_screen()):
-        return False
-    logger.debug("Minigame finish screen is up, clicking NICE!...")
-    log_run_event("minigame finish screen closed")
-    click_nice_until_gone()
-    if abandon:
-        state.last_progress = state.last_detection = time.time()
-        respawn_character()
-    return True
-
-def minigame_popup(play: bool = True) -> Optional[str]:
-    """Halloween only: play a popup's minigame if it is switched on, else dismiss it.
-    Returns "played", "dismissed", "waiting" (a playable popup is held off while a need is in its end wait, at most MINIGAME_POPUP_END_WAIT
-    seconds) or None. See docs/ARCHITECTURE.md#need-handlers.
-    """
-    img = grab_screen()
-    if not detect_minigame_popup(img):
-        state.popup_held_since = None
-        return None
-    name = identify_minigame(img)
-    if name is not None and name in MINIGAME_PLAYERS and load_game_config().get(f"{name}_enabled", False):    # (one with no player yet is declined, switched on or not)
-        if play and state.end_wait_need is not None:
-            # A need is in its end wait: give it the time to clear (and count as resolved) before the minigame abandons it.
-            state.popup_held_since = state.popup_held_since or time.time()
-            if time.time() - state.popup_held_since < cfg.MINIGAME_POPUP_END_WAIT:
-                return "waiting"
-        state.popup_held_since = None
-        if play:
-            logger.debug(f"Minigame popup detected: playing {name}")
-            play_minigame(name)
-            return "played"
-        logger.debug(f"Minigame popup detected ({name}), declining it for now...")
-        hover_click(*cfg.MINIGAME_POPUP_NO_POS)
-        return "dismissed"
-    logger.debug(f"Minigame popup detected ({name or 'unknown'}), dismissing...")
-    log_run_event(f"minigame popup dismissed ({name or 'unknown'})")
-    hover_click(*cfg.MINIGAME_POPUP_DONT_SHOW_POS)   # "Do not show again this session"
-    hover_click(*cfg.MINIGAME_POPUP_NO_POS)
-    return "dismissed"
-
-def unscrew(in_task: bool = False, play_minigames: bool = True) -> Optional[str]:
-    """The per-cycle checks (at the top of every cycle; with `in_task` also during a task):
-    rejoin, backpack, stray windows, Halloween minigames, then the paycheck popup - in
-    that order, since the green buttons of the earlier ones look like CASH OUT. Returns
-    "played", "rejoined" or "aborted" (the callers abandon the task) or None. See docs/ARCHITECTURE.md#need-handlers.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def unscrew(in_task: bool = False, interruptible: bool = True) -> Optional[str]:
+    """The per-cycle checks (at the top of every cycle; with `in_task` also during a task): rejoin, backpack, stray windows, then the paycheck popup - in that order, since the green
+    buttons of the earlier ones look like CASH OUT. Returns "rejoined" or "aborted" (the callers abandon the task) or None. See docs/ARCHITECTURE.md#need-handlers.
     """
     if in_task:
         if rejoin_game(kinds=("disconnect", "white_screen")):
             return "rejoined"
     else:
         rejoin_game()
-    # Setup (play_minigames False) keeps the backpack open for ~8s on purpose - longer than the two checks that
+    # Setup (interruptible False) keeps the backpack open for ~8s on purpose - longer than the two checks that
     # count as stuck - and closes it itself at the end, so the check leaves it alone there.
-    backpack_open = False if (in_task and not play_minigames) else close_backpack_if_stuck(in_task)
+    backpack_open = False if (in_task and not interruptible) else close_backpack_if_stuck(in_task)
     closed = dismiss_stray_windows()
-    if cfg.HALLOWEEN and close_minigame_finish_screen(abandon=play_minigames):
-        if play_minigames:
-            return "played"    # back in the world somewhere unknown: the task is abandoned like after a minigame
-    played = minigame_popup(play=play_minigames) if cfg.HALLOWEEN else None
-    if played == "waiting":
-        return None                    # the popup is up for a few seconds more (its green Yes would be taken for a paycheck's button)
     paycheck = detect_paycheck() if not backpack_open else False
-    if in_task and play_minigames and played != "played" and (paycheck or (closed and cfg.STRAY_WINDOWS[closed].get("abort_task"))):
-        return "aborted"   # (not setup, which can't be abandoned halfway - that is `play_minigames` False)
-    return played
+    if in_task and interruptible and (paycheck or (closed and cfg.STRAY_WINDOWS[closed].get("abort_task"))):
+        return "aborted"   # (not setup, which can't be abandoned halfway - that is `interruptible` False)
+    return None
 
 def run_side_action(action: Callable[[], bool]) -> bool:
-    """Run lure_collect() / tree_collect() with the in-task checks on. False if a minigame
-    or rejoin took over. See docs/ARCHITECTURE.md#side-actions.
+    """Run lure_collect() / tree_collect() with the in-task checks on. False if a
+    rejoin took over. See docs/ARCHITECTURE.md#side-actions.
     """
     try:
         with task_unscrew():
@@ -5413,153 +4136,6 @@ def make_room_for_capture(directory: str, limit: int) -> None:
     for old in folders[:max(0, len(folders) - (limit - 1))]:
         shutil.rmtree(old, ignore_errors=True)
 
-def start_run_capture(label: str) -> Optional[InputCapture]:
-    """Start recording a minigame run (when MINIGAME_CAPTURE is on, and the hotkey's capture isn't running): a folder
-    in RUN_CAPTURES_DIR, its frames kept within RUN_CAPTURE_ZIPS zips. None if there is no capture. A capture that can't be
-    started is only a message: the minigame is played all the same."""
-    if not cfg.MINIGAME_CAPTURE or (state.capture is not None and state.capture.running):
-        return None
-    try:
-        os.makedirs(cfg.RUN_CAPTURES_DIR, exist_ok=True)
-        capture = InputCapture(os.path.join(cfg.RUN_CAPTURES_DIR, f"{label}_{time.strftime('%Y%m%d_%H%M%S')}"), max_zips=cfg.RUN_CAPTURE_ZIPS)
-        capture.start()
-    except Exception as error:
-        logger.warning(f"Couldn't start recording the minigame: {error}")
-        return None
-    state.run_capture = capture
-    logger.debug(f"Recording the minigame: {capture.folder}")
-    return capture
-
-def mark_run_capture(reason: str) -> None:
-    """Say to the recording of the minigame being played, if there is one, that something went wrong now (InputCapture.mark()): frames of
-    this moment are saved and kept. Never raises."""
-    capture = state.run_capture
-    if capture is None:
-        return
-    try:
-        capture.mark(reason)
-    except Exception as error:
-        logger.warning(f"Couldn't mark the recording: {error}")
-
-def run_capture_suffix(outcome: str, result: dict[str, Any]) -> str:
-    """What is added to a recording's folder name when the run is over, to tell it from the others: the candy corn earned (`_2105cc`, or
-    `_cc-unread`), the room reached in Hauntlet 2 (`_room10`), `_failed` for a run that did not finish and `_failures` for one that did
-    with failures logged on the way."""
-    earned = result.get("earned")
-    parts = [f"{earned}cc" if earned is not None else "cc-unread"]
-    if result.get("room") is not None:
-        parts.append(f"room{result['room']}")
-    if not outcome.startswith("finished"):
-        parts.append("failed")
-    elif result.get("failures"):
-        parts.append("failures")
-    return "_" + "_".join(parts)
-
-def finish_run_capture(capture: Optional[InputCapture], outcome: str, result: Optional[dict[str, Any]] = None) -> None:
-    """Stop a run capture (if there is one), note how the run ended in its info.json (with the fields of `result`, what the run earned, see
-    minigame_result()), and zip it for sending."""
-    if capture is None:
-        return
-    try:
-        state.run_capture = None                                # (one at a time)
-        if not outcome.startswith("finished"):
-            capture.protect_tail(cfg.RUN_CAPTURE_TAIL)          # a run that went wrong: its last moments are what shows why
-        capture.stopped_because = capture.stopped_because or "the minigame ended"
-        logger.debug(f"Minigame recording stopped: {capture.stop()}")
-        path = os.path.join(capture.folder, "info.json")
-        with open(path, encoding="utf-8") as f:
-            info = json.load(f)
-        info["outcome"] = outcome
-        info.update(result or {})
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(info, f, indent=1)
-        renamed = capture.folder + run_capture_suffix(outcome, result or {})
-        try:
-            os.rename(capture.folder, renamed)                      # (before the zips are made: they are named after the folder)
-            capture.folder = renamed
-        except OSError as error:
-            logger.warning(f"Couldn't rename the recording: {error}")
-        zip_capture_in_background(capture.folder)
-    except Exception as error:
-        logger.warning(f"Couldn't finish recording the minigame: {error}")
-
-def captures_to_keep(runs: list[tuple[str, Optional[int], float, bool]]) -> set[str]:
-    """Of the recordings of one minigame, `runs` = (folder, candy corn earned or None, when it started, whether it failed - did not finish
-    or had a failure logged), the ones to keep: the latest, the RUN_CAPTURES_FAILED latest that failed, the RUN_CAPTURES_BEST that earned
-    most and the RUN_CAPTURES_WORST that earned least (a run whose candy corn wasn't read counts as the worst)."""
-    if not runs:
-        return set()
-    def earned(run: tuple[str, Optional[int], float, bool]) -> tuple[int, float]:
-        return (-1 if run[1] is None else run[1], run[2])
-    ranked = sorted(runs, key=earned)
-    keep = {max(runs, key=lambda run: run[2])[0]}
-    failed = sorted((run for run in runs if run[3]), key=lambda run: run[2])
-    keep |= {run[0] for run in failed[max(0, len(failed) - cfg.RUN_CAPTURES_FAILED):]}
-    keep |= {run[0] for run in ranked[:cfg.RUN_CAPTURES_WORST]}
-    keep |= {run[0] for run in ranked[len(ranked) - cfg.RUN_CAPTURES_BEST:]}
-    return keep
-
-def prune_run_captures(label: str) -> None:
-    """Delete the recordings of minigame `label` in RUN_CAPTURES_DIR that captures_to_keep() doesn't keep, going by the `earned` and
-    `started` that record_minigame_result() wrote into each one's info.json. Never raises."""
-    try:
-        if not os.path.isdir(cfg.RUN_CAPTURES_DIR):
-            return                                                  # (recording is off, or nothing has been recorded yet)
-        runs = []
-        for name in os.listdir(cfg.RUN_CAPTURES_DIR):
-            folder = os.path.join(cfg.RUN_CAPTURES_DIR, name)
-            if not (name.startswith(label + "_") and os.path.isdir(folder)):
-                continue
-            try:
-                with open(os.path.join(folder, "info.json"), encoding="utf-8") as f:
-                    info = json.load(f)
-            except (OSError, ValueError):
-                info = {}
-            try:
-                started = time.mktime(time.strptime(name[len(label) + 1:][:15], "%Y%m%d_%H%M%S"))     # (the folder's name says when; its time changes as files go in and out)
-            except ValueError:
-                started = os.path.getmtime(folder)
-            failed = info.get("finished") is False or bool(info.get("failures"))
-            runs.append((folder, info.get("earned"), started, failed))
-        for folder in {run[0] for run in runs} - captures_to_keep(runs):
-            shutil.rmtree(folder, ignore_errors=True)
-    except Exception as error:
-        logger.warning(f"Couldn't tidy the recordings: {error}")
-
-def minigame_result(name: str, outcome: str, finished: bool, seconds: float, before: Optional[int], after: Optional[int], failures: int = 0) -> dict[str, Any]:
-    """What a minigame run came to: how it ended, and the candy corn it earned - the HUD total after less the total before, None when either
-    wasn't read - the `failures` logged while it ran, plus what its player noted (state.minigame_detail: the room reached in Hauntlet 2)."""
-    earned = after - before if before is not None and after is not None and after >= before else None
-    return {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "run": state.run_number, "minigame": name, "outcome": outcome, "finished": finished,
-            "seconds": round(seconds), "candy_corn_before": before, "candy_corn_after": after, "earned": earned, "failures": failures, **state.minigame_detail}
-
-def record_minigame_result(result: dict[str, Any]) -> None:
-    """Note a finished minigame run's `result` (minigame_result()): a line of RUNS_DIR/results/results.jsonl and one in the run log - then the
-    recordings of that minigame that are not among its best, its worst and its latest are deleted (prune_run_captures()). Never raises."""
-    try:
-        folder = os.path.join(cfg.RUNS_DIR, "results")
-        os.makedirs(folder, exist_ok=True)
-        with open(os.path.join(folder, "results.jsonl"), "a", encoding="utf-8") as f:
-            f.write(json.dumps(result) + "\n")
-        name, earned = result["minigame"], result["earned"]
-        extra = "".join(f", {key} {value}" for key, value in state.minigame_detail.items())
-        log_run_event(f"minigame result: {cfg.MINIGAME_LABELS.get(name, name)}: " + (f"{earned} candy corn" if earned is not None else "candy corn not read") + extra)
-        prune_run_captures(name)
-    except Exception as error:
-        logger.warning(f"Couldn't note the result: {error}")
-
-def read_candy_corn_settled(tries: int = 4) -> Optional[int]:
-    """read_candy_corn() of the screen once two looks half a second apart agree (the total counts up for a moment after a run); if they
-    never do, the last total read, and None if none was. Costs a second or so, up to `tries` looks of CANDY_CORN_SETTLE apart."""
-    seen: Optional[int] = None
-    for attempt in range(tries):
-        now = read_candy_corn(grab_screen())
-        if now is not None and now == seen:
-            return now
-        seen = now if now is not None else seen                     # (a look that reads nothing - a white flash - doesn't forget the one before)
-        if attempt < tries - 1:
-            wait_interruptible(cfg.CANDY_CORN_SETTLE)
-    return seen
 
 def toggle_input_capture() -> Optional[InputCapture]:
     """Start a capture (a fresh folder in CAPTURES_DIR, the oldest beyond MAX_CAPTURES deleted) or, if one is
@@ -5585,348 +4161,27 @@ def toggle_input_capture() -> Optional[InputCapture]:
 # What the Hauntlet 2 screen says, as plain values - no decisions and no input here. The room number first; see
 # docs/ARCHITECTURE.md#reading-hauntlet-2.
 
-def room_digit(mask: Image) -> Image:
-    """A digit's white pixels (`mask`, cropped to its bounding box), shrunk to HAUNTLET_DIGIT_SIZE, 0-255."""
-    return cv2.resize(mask * 255, cfg.HAUNTLET_DIGIT_SIZE, interpolation=cv2.INTER_AREA)
 
-@lru_cache(maxsize=None)
-def _digit_templates(directory: str, modified: float) -> dict[int, Image]:
-    found = {int(os.path.splitext(f)[0]): cv2.imread(os.path.join(directory, f), cv2.IMREAD_GRAYSCALE)
-             for f in os.listdir(directory) if f.endswith(".png") and os.path.splitext(f)[0].isdigit()}
-    return {digit: picture for digit, picture in found.items() if picture is not None}
 
-def digit_templates() -> dict[int, Image]:
-    """{digit: picture} for the saved room digits (HAUNTLET_DIGIT_DIR), re-read when the folder changes."""
-    directory = cfg.HAUNTLET_DIGIT_DIR
-    return _digit_templates(directory, os.path.getmtime(directory)) if os.path.isdir(directory) else {}
 
-def read_hauntlet_room(img: Image) -> Optional[int]:
-    """The room number on the ROOM panel of `img`, or None when it isn't readable (no panel - a transition, a
-    close-up of a door - or a digit that matches none of the saved ones)."""
-    left, top, right, bottom = cfg.HAUNTLET_ROOM_BOX
-    mask = (img[top:bottom, left:right].min(axis=2) >= cfg.HAUNTLET_DIGIT_WHITE_LEVEL).astype(np.uint8)
-    count, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    boxes = sorted((int(stats[i, 0]), int(stats[i, 1]), int(stats[i, 2]), int(stats[i, 3]))
-                   for i in range(1, count) if stats[i, cv2.CC_STAT_AREA] >= cfg.HAUNTLET_DIGIT_MIN_AREA)
-    templates = digit_templates()
-    if not 1 <= len(boxes) <= cfg.HAUNTLET_ROOM_MAX_DIGITS or not templates:
-        return None
-    number = 0
-    for x, y, w, h in boxes:
-        picture = room_digit(mask[y:y + h, x:x + w])
-        diffs = {digit: float(np.abs(picture.astype(int) - template.astype(int)).mean()) for digit, template in templates.items()}
-        digit = min(diffs, key=lambda d: diffs[d])
-        if diffs[digit] > cfg.HAUNTLET_DIGIT_MAX_DIFF:
-            return None
-        number = number * 10 + digit
-    return number
 
-@dataclass
-class HauntletItem:
-    """An item slot on the Hauntlet 2 screen: its `name` (a folder of HAUNTLET_ITEM_DIR, or "unknown"), the `count`
-    on its badge (None if the badge couldn't be read), and the slot's centre `pos`."""
-    name: str
-    count: Optional[int]
-    pos: Point
 
-def find_item_slots(img: Image) -> list[tuple[int, int, int]]:
-    """(x, y, radius) of every item slot along the bottom of `img`, left to right."""
-    top, bottom = cfg.HAUNTLET_SLOT_BAND
-    gray = cv2.medianBlur(cv2.cvtColor(img[top:bottom], cv2.COLOR_BGR2GRAY), 5)
-    circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, dp=1, minDist=cfg.HAUNTLET_SLOT_MIN_DISTANCE, param1=100, param2=30,
-                               minRadius=cfg.HAUNTLET_SLOT_RADIUS[0], maxRadius=cfg.HAUNTLET_SLOT_RADIUS[1])
-    return [] if circles is None else sorted((int(x), int(y) + top, int(r)) for x, y, r in circles[0])
 
-def _folder_stamp(directory: str) -> tuple[tuple[str, str, float], ...]:
-    """What is in a folder of folders and when each file changed - different when a file is added, changed, removed or
-    its folder renamed."""
-    return tuple(sorted((root, f, os.path.getmtime(os.path.join(root, f))) for root, _, files in os.walk(directory) for f in files))
 
-@lru_cache(maxsize=8)
-def _picture_folders(directory: str, stamp: tuple[tuple[str, str, float], ...], gray: bool) -> dict[str, list[Image]]:
-    found: dict[str, list[Image]] = {}
-    for name in sorted(os.listdir(directory)):
-        folder = os.path.join(directory, name)
-        if os.path.isdir(folder):
-            pictures = [cv2.imread(os.path.join(folder, f), cv2.IMREAD_GRAYSCALE if gray else cv2.IMREAD_COLOR)
-                        for f in sorted(os.listdir(folder)) if f.endswith(".png")]
-            found[name] = [p for p in pictures if p is not None]
-    return found
 
-def picture_folders(directory: str, gray: bool = True) -> dict[str, list[Image]]:
-    """{folder name: its pictures} for a folder of folders of .png files (the items, the badge glyphs), re-read when
-    anything in it changes; {} if it doesn't exist."""
-    return _picture_folders(directory, _folder_stamp(directory), gray) if os.path.isdir(directory) else {}
 
-def identify_item(crop: Image) -> tuple[Optional[str], float]:
-    """(name, score) of the saved item `crop` (the square around a slot's centre) matches best, name None if the best
-    score is under HAUNTLET_ITEM_MATCH. Compared as grey pictures: the slot's blue or dim teal background doesn't matter much."""
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    best_name, best = None, -1.0
-    for name, pictures in picture_folders(cfg.HAUNTLET_ITEM_DIR).items():
-        for picture in pictures:
-            if picture.shape == gray.shape:
-                score = float(cv2.matchTemplate(gray, picture, cv2.TM_CCOEFF_NORMED)[0][0])
-                if score > best:
-                    best_name, best = name, score
-    return (best_name if best >= cfg.HAUNTLET_ITEM_MATCH else None), best
 
-def read_item_count(img: Image, x: int, y: int) -> Optional[int]:
-    """The number on the "x2" badge of the slot centred at (x, y), or None if it can't be read (no badge, or a glyph
-    that matches none of the saved ones)."""
-    left, top, right, bottom = cfg.HAUNTLET_BADGE_BOX
-    region = img[max(0, y + top):y + bottom, max(0, x + left):x + right]
-    if region.size == 0:
-        return None
-    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-    purple = cv2.morphologyEx(cv2.inRange(hsv, (125, 100, 120), (150, 255, 255)), cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
-    count, labels, stats, _ = cv2.connectedComponentsWithStats(purple, connectivity=8)
-    if count < 2:
-        return None
-    shaped = [i for i in range(1, count) if cfg.HAUNTLET_BADGE_WIDTH[0] <= stats[i, cv2.CC_STAT_WIDTH] <= cfg.HAUNTLET_BADGE_WIDTH[1]
-              and cfg.HAUNTLET_BADGE_HEIGHT[0] <= stats[i, cv2.CC_STAT_HEIGHT] <= cfg.HAUNTLET_BADGE_HEIGHT[1]
-              and stats[i, cv2.CC_STAT_AREA] >= 300]
-    if not shaped:
-        return None
-    badge = max(shaped, key=lambda i: stats[i, cv2.CC_STAT_AREA])
-    bx, by, bw, bh, area = (int(v) for v in stats[badge])
-    white = ((region[by:by + bh, bx:bx + bw].min(axis=2) >= 225) & (labels[by:by + bh, bx:bx + bw] == badge)).astype(np.uint8)
-    pieces_count, _, piece_stats, _ = cv2.connectedComponentsWithStats(white, connectivity=8)
-    pieces = sorted((int(piece_stats[i, 0]), int(piece_stats[i, 1]), int(piece_stats[i, 2]), int(piece_stats[i, 3]))
-                    for i in range(1, pieces_count) if piece_stats[i, cv2.CC_STAT_AREA] >= 6 and piece_stats[i, cv2.CC_STAT_HEIGHT] >= cfg.HAUNTLET_COUNT_MIN_HEIGHT)
-    glyphs = picture_folders(cfg.HAUNTLET_COUNT_DIR)
-    if len(pieces) < 2 or "x" not in glyphs:
-        return None
-    text = ""
-    for px, py, pw, ph in pieces:
-        picture = cv2.resize(white[py:py + ph, px:px + pw] * 255, cfg.HAUNTLET_COUNT_SIZE, interpolation=cv2.INTER_AREA).astype(int)
-        diffs = {name: min(float(np.abs(picture - g.astype(int)).mean()) for g in pictures) for name, pictures in glyphs.items() if pictures}
-        name = min(diffs, key=lambda n: diffs[n])
-        if diffs[name] > cfg.HAUNTLET_COUNT_MAX_DIFF:
-            return None
-        text += name
-    return int(text[1:]) if text.startswith("x") and text[1:].isdigit() else None
 
-def read_hauntlet_items(img: Image) -> list[HauntletItem]:
-    """The items in the slots along the bottom of `img`, left to right: each one's name, count and position. An item
-    that matches none of the saved ones is named "unknown". Names in HAUNTLET_NOT_ITEMS (the lobby's backpack button) are left out."""
-    items = []
-    for x, y, radius in find_item_slots(img):
-        half = cfg.HAUNTLET_ITEM_CROP // 2
-        crop = img[y - half:y + half, x - half:x + half]
-        if crop.shape[:2] != (cfg.HAUNTLET_ITEM_CROP, cfg.HAUNTLET_ITEM_CROP):
-            continue
-        name, _ = identify_item(crop)
-        if name is None:
-            name = "unknown"
-        if name not in cfg.HAUNTLET_NOT_ITEMS:
-            items.append(HauntletItem(name, read_item_count(img, x, y), (x, y)))
-    return items
 
-@dataclass
-class HauntletHearts:
-    """The player's hearts: how many are `red` (left) and `black` (lost), one heart's `width` in px, and the row's
-    top-left `pos`."""
-    red: int
-    black: int
-    width: int
-    pos: Point
 
-    @property
-    def center_x(self) -> float:
-        """The middle of the row, in px - above the player's head, so where the player stands."""
-        return self.pos[0] + ((self.red + self.black - 1) * cfg.HAUNTLET_HEART_PITCH + 1) * self.width / 2
 
-def pink_heart_pieces(img: Image) -> list[tuple[int, int, int, int]]:
-    """(x, y, w, h) of every heart-shaped pink piece of `img` (HAUNTLET_HEART_*), nothing above HAUNTLET_HEART_MIN_Y."""
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    mask = cv2.bitwise_or(cv2.inRange(hsv, *cfg.HAUNTLET_HEART_PINK[0]), cv2.inRange(hsv, *cfg.HAUNTLET_HEART_PINK[1]))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
-    count, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    pieces = []
-    for i in range(1, count):
-        x, y, w, h, area = (int(v) for v in stats[i])
-        if (y >= cfg.HAUNTLET_HEART_MIN_Y and w >= cfg.HAUNTLET_HEART_MIN_WIDTH and area >= 150
-                and cfg.HAUNTLET_HEART_ASPECT[0] <= w / h <= cfg.HAUNTLET_HEART_ASPECT[1] and area / (w * h) >= cfg.HAUNTLET_HEART_MIN_FILL):
-            pieces.append((x, y, w, h))
-    return pieces
 
-def read_hauntlet_hearts(img: Image) -> Optional[HauntletHearts]:
-    """The player's hearts in `img`, or None when there are none to see (a close-up of a door, a transition, the lobby,
-    or all of them lost - a row of nothing but black hearts has no pink one to find it by). One frame can be wrong, a
-    heart hidden or a stray pink thing taken for one: a caller that acts on it should see the same on a few frames."""
-    pieces = pink_heart_pieces(img)
-    if not pieces:
-        return None
-    ax, ay, aw, ah = min(pieces, key=lambda p: abs(p[0] + p[2] / 2 - cfg.REFERENCE_CENTER_X))
-    pitch = cfg.HAUNTLET_HEART_PITCH * aw
-    black = img.max(axis=2) <= cfg.HAUNTLET_HEART_BLACK_LEVEL
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    pink = cv2.bitwise_or(cv2.inRange(hsv, *cfg.HAUNTLET_HEART_PINK[0]), cv2.inRange(hsv, *cfg.HAUNTLET_HEART_PINK[1])) > 0
 
-    def kind(step: int) -> Optional[str]:
-        centre = ax + aw / 2 + step * pitch
-        if any(abs(px + pw / 2 - centre) <= pitch / 2 and abs(py - ay) <= 0.4 * ah for px, py, pw, ph in pieces):
-            return "red"
-        columns = slice(max(0, int(centre - aw / 2)), int(centre + aw / 2))
-        if pink[ay:ay + ah, columns].mean() >= cfg.HAUNTLET_HEART_PINK_FRACTION:       # a heart the piece search missed (two touching, or part hidden)
-            return "red"
-        cell = black[ay:ay + ah, columns]
-        return "black" if cell.size and cell.mean() >= cfg.HAUNTLET_HEART_BLACK_FRACTION else None
 
-    row = {0: "red"}
-    for direction in (1, -1):
-        for n in range(1, cfg.HAUNTLET_HEART_MAX_EACH_SIDE + 1):
-            found = kind(direction * n)
-            if found is None:
-                break
-            row[direction * n] = found
-    kinds = list(row.values())
-    if not cfg.HAUNTLET_HEART_MIN <= len(kinds) <= cfg.HAUNTLET_HEART_MAX:
-        return None                     # not a row of hearts: one pink thing alone, or something pink next to the row counted too
-    return HauntletHearts(kinds.count("red"), kinds.count("black"), aw, (int(ax + min(row) * pitch), ay))
 
-def hauntlet_timer_visible(img: Image) -> bool:
-    """Whether the room's timer is shown (HAUNTLET_TIMER_*): it is hidden in a room's first moments and while the
-    player passes through a door, when the screen still shows the last room."""
-    left, top, right, bottom = cfg.HAUNTLET_TIMER_BOX
-    white = img[top:bottom, left:right].min(axis=2) >= cfg.HAUNTLET_TIMER_WHITE_LEVEL
-    return int(np.count_nonzero(white)) >= cfg.HAUNTLET_TIMER_MIN_WHITE
 
-@dataclass
-class HauntletDoor:
-    """A door of a Hauntlet 2 room: where its TV's number is on screen (`x`, `y`) and its `kind` - "locked", "mystery"
-    (the "???" door), "shadow" (smoke with glowing eyes), "dark", "boarded" or "plain"; None for a door that couldn't be looked at (or a fork's doorway,
-    which isn't looked for)."""
-    x: int
-    y: int
-    kind: Optional[str]
 
-def find_door_tvs(img: Image) -> list[tuple[int, int]]:
-    """The centre of the three TV numbers (HAUNTLET_TV_*) in `img`, left to right: the three above a room's doors, in
-    the row they make - [] when there isn't one (a fork's hall, a close-up, a transition). With the camera close the
-    middle TV can be off the top of the screen or behind the room panel: two TVs far enough apart to be the outer ones
-    (HAUNTLET_TV_PAIR_GAP) and centred on the screen (the player stands in front of the middle door) give the middle one
-    halfway between. Two neighbours high up (in the row of the room panel) with the third where the panel is give the third
-    there: the panel hides its glow. Two neighbours with the room for the third only off the screen's left or right edge give the third there (the
-    camera looks along a wall, the player against it: the doors run off the screen)."""
-    low, high = cfg.HAUNTLET_TV_GLOW
-    mask = cv2.inRange(img, (low[2], low[1], low[0]), (high[2], high[1], high[0]))   # BGR
-    left, top, right, bottom = cfg.HAUNTLET_TV_HUD_BOX
-    mask[top:bottom, left:right] = 0
-    count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    blobs = sorted((float(centres[i][0]), float(centres[i][1]), float(stats[i, cv2.CC_STAT_AREA])) for i in range(1, count)
-                   if cfg.HAUNTLET_TV_AREA[0] <= stats[i, cv2.CC_STAT_AREA] <= cfg.HAUNTLET_TV_AREA[1])
-    found = [(x, y) for x, y, _ in blobs]
-    for first, middle, last in itertools.combinations(found, 3):                   # (not only neighbours: a stray glow can sit between)
-        gaps = (middle[0] - first[0], last[0] - middle[0])
-        if (abs(first[1] - middle[1]) <= cfg.HAUNTLET_TV_ROW_TOLERANCE and abs(middle[1] - last[1]) <= cfg.HAUNTLET_TV_ROW_TOLERANCE
-                and all(cfg.HAUNTLET_TV_SPACING[0] <= gap <= cfg.HAUNTLET_TV_SPACING[1] for gap in gaps)
-                and abs(gaps[0] - gaps[1]) <= cfg.HAUNTLET_TV_SPACING_TOLERANCE * max(gaps)):
-            return [(int(x), int(y)) for x, y in (first, middle, last)]
-    for (first, last), size in ((((a[0], a[1]), (b[0], b[1])), ((a[2] + b[2]) / 2) ** 0.5) for a, b in itertools.combinations(blobs, 2)):       # (any two, not only neighbours: stray glows can sit between the outer two)
-        far_apart = last[0] - first[0] >= cfg.HAUNTLET_TV_PAIR_RATIO * size       # twice the neighbours' gap for the TVs' size
-        if (abs(first[1] - last[1]) <= cfg.HAUNTLET_TV_ROW_TOLERANCE
-                and cfg.HAUNTLET_TV_PAIR_GAP[0] <= last[0] - first[0] <= cfg.HAUNTLET_TV_PAIR_GAP[1]
-                and (far_apart or abs((first[0] + last[0]) / 2 - cfg.REFERENCE_CENTER_X) <= cfg.HAUNTLET_TV_PAIR_OFF_CENTER)):
-            return [(int(first[0]), int(first[1])), (int((first[0] + last[0]) / 2), int((first[1] + last[1]) / 2)), (int(last[0]), int(last[1]))]
-    hud_left, _, hud_right, hud_bottom = cfg.HAUNTLET_TV_HUD_BOX
-    for first, second in zip(found, found[1:]):                                  # two neighbours, the third behind the room panel
-        gap = second[0] - first[0]
-        if abs(first[1] - second[1]) > cfg.HAUNTLET_TV_ROW_TOLERANCE or not cfg.HAUNTLET_TV_SPACING[0] <= gap <= cfg.HAUNTLET_TV_SPACING[1] or second[1] > hud_bottom:
-            continue
-        for order in ((first, second, (second[0] + gap, second[1])), ((first[0] - gap, first[1]), first, second)):
-            if hud_left <= order[0][0] <= hud_right or hud_left <= order[2][0] <= hud_right:
-                return [(int(x), int(y)) for x, y in order]
-    for first, second in zip(found, found[1:]):                                  # two neighbours, the third off the screen (the camera looks along a wall)
-        gap = second[0] - first[0]
-        if abs(first[1] - second[1]) > cfg.HAUNTLET_TV_ROW_TOLERANCE or not cfg.HAUNTLET_TV_SPACING[0] <= gap <= cfg.HAUNTLET_TV_SPACING[1]:
-            continue
-        if first[0] - gap < 0:
-            return [(int(first[0] - gap), int(first[1])), (int(first[0]), int(first[1])), (int(second[0]), int(second[1]))]
-        if second[0] + gap >= cfg.REFERENCE_WIDTH:
-            return [(int(first[0]), int(first[1])), (int(second[0]), int(second[1])), (int(second[0] + gap), int(second[1]))]
-    return []
 
-def hauntlet_shadow_eyes(door: Image) -> bool:
-    """Whether the glowing eyes of a shadow door are in `door`: a small piece of near-white (HAUNTLET_SHADOW_WHITE, HAUNTLET_SHADOW_AREA px)
-    in the dark smoke - the ring around it no brighter than HAUNTLET_SHADOW_RING on average. (A door's screws, lights and the
-    white of the lock do not sit in the dark.)"""
-    if door.size == 0:
-        return False
-    white = (door.min(axis=2) >= cfg.HAUNTLET_SHADOW_WHITE).astype(np.uint8)
-    gray = door.mean(axis=2)
-    count, labels, stats, _ = cv2.connectedComponentsWithStats(white)
-    for i in range(1, count):
-        if not cfg.HAUNTLET_SHADOW_AREA[0] <= stats[i, cv2.CC_STAT_AREA] <= cfg.HAUNTLET_SHADOW_AREA[1]:
-            continue
-        blob = (labels == i).astype(np.uint8)
-        ring = cv2.dilate(blob, np.ones((15, 15), np.uint8)) - cv2.dilate(blob, np.ones((3, 3), np.uint8))
-        if ring.any() and gray[ring > 0].mean() <= cfg.HAUNTLET_SHADOW_RING:
-            return True
-    return False
-
-def hauntlet_door_kind(img: Image, x: int, y: int, scale: float) -> Optional[str]:
-    """What kind of door hangs below the TV number at (x, y), from its pixels (see HAUNTLET_LOCK_LIGHT_BOX); `scale`
-    is the picture's size against the one the boxes were measured at. None if the door is off the screen."""
-    def region(box: tuple[int, int, int, int]) -> Image:
-        left, top, right, bottom = box
-        return img[max(0, int(y + top * scale)):max(0, int(y + bottom * scale)), max(0, int(x + left * scale)):max(0, int(x + right * scale))]       # (not a negative stop, which counts from the far edge)
-    light = region(cfg.HAUNTLET_LOCK_LIGHT_BOX).astype(int)
-    if light.size:
-        red = ((light[..., 2] >= cfg.HAUNTLET_LOCK_LIGHT_RED) & (light[..., 1] <= cfg.HAUNTLET_LOCK_LIGHT_OTHER) & (light[..., 0] <= cfg.HAUNTLET_LOCK_LIGHT_OTHER)).astype(np.uint8)
-        for area, width, height in cv2.connectedComponentsWithStats(red)[2][1:, 2:5][:, [2, 0, 1]]:     # the light is a small round patch: a red wall is not
-            if (cfg.HAUNTLET_LOCK_LIGHT_MIN <= area <= cfg.HAUNTLET_LOCK_LIGHT_MAX
-                    and max(width, height) <= cfg.HAUNTLET_LOCK_LIGHT_ROUND * min(width, height)):
-                return "locked"
-    if hauntlet_shadow_eyes(region(cfg.HAUNTLET_SHADOW_BOX)):
-        return "shadow"
-    door = region(cfg.HAUNTLET_DOOR_BOX)
-    if door.size == 0:
-        return None
-    brightness = door.mean(axis=2)
-    if np.count_nonzero(brightness <= cfg.HAUNTLET_DARK_LEVEL) >= cfg.HAUNTLET_DARK_FRACTION * brightness.size:
-        return "dark"
-    if brightness.mean() >= cfg.HAUNTLET_MYSTERY_BRIGHTNESS:
-        return "mystery"
-    planks = region(cfg.HAUNTLET_PLANK_BOX)
-    if min(planks.shape[:2]) < 3:
-        return None
-    grey = cv2.GaussianBlur(cv2.cvtColor(planks, cv2.COLOR_BGR2GRAY).astype(np.float32), (0, 0), cfg.HAUNTLET_PLANK_BLUR)
-    dx, dy = cv2.Sobel(grey, cv2.CV_32F, 1, 0), cv2.Sobel(grey, cv2.CV_32F, 0, 1)
-    angle = np.degrees(np.arctan2(dy, dx)) % 180                # an edge's direction is square to its gradient: 90 is a horizontal edge
-    on_plank_edge = (np.hypot(dx, dy) > cfg.HAUNTLET_PLANK_EDGE) & (np.abs(angle - 90) < cfg.HAUNTLET_PLANK_ANGLE)
-    return "boarded" if np.count_nonzero(on_plank_edge) >= cfg.HAUNTLET_PLANK_FRACTION * on_plank_edge.size else "plain"
-
-def find_ghost_door(img: Image, doors: list[HauntletDoor]) -> Optional[int]:
-    """The index of the door with the phone's red arrow over it (the ghost's door), or None: a big red triangle with a ghost on
-    it (HAUNTLET_ARROW_*) just above the TV of the door it points at. Doors that weren't located can't be told."""
-    if len(doors) != 3 or not doors[0].x:
-        return None
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    mask = cv2.bitwise_or(cv2.inRange(hsv, *cfg.HAUNTLET_ARROW_RED[0]), cv2.inRange(hsv, *cfg.HAUNTLET_ARROW_RED[1]))
-    left, top, right, bottom = cfg.HAUNTLET_ARROW_BOX
-    box = np.zeros_like(mask)
-    box[top:bottom, left:right] = mask[top:bottom, left:right]
-    box = cv2.morphologyEx(box, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
-    count, _, stats, centres = cv2.connectedComponentsWithStats(box, connectivity=8)
-    spacing = (doors[2].x - doors[0].x) / 2
-    for i in range(1, count):
-        if (cfg.HAUNTLET_ARROW_AREA[0] <= stats[i, cv2.CC_STAT_AREA] <= cfg.HAUNTLET_ARROW_AREA[1]
-                and cfg.HAUNTLET_ARROW_WIDTH[0] <= stats[i, cv2.CC_STAT_WIDTH] <= cfg.HAUNTLET_ARROW_WIDTH[1]
-                and cfg.HAUNTLET_ARROW_HEIGHT[0] <= stats[i, cv2.CC_STAT_HEIGHT] <= cfg.HAUNTLET_ARROW_HEIGHT[1]):
-            nearest = min(range(3), key=lambda k: abs(doors[k].x - centres[i][0]))
-            if abs(doors[nearest].x - centres[i][0]) <= cfg.HAUNTLET_ARROW_MAX_OFFSET * spacing:
-                return nearest
-    return None
-
-def find_hauntlet_doors(img: Image) -> list[HauntletDoor]:
-    """The three doors of the room in `img`, left to right, with their kinds - [] if there is no row of TVs."""
-    tvs = find_door_tvs(img)
-    if not tvs:
-        return []
-    scale = (tvs[2][0] - tvs[0][0]) / 2 / cfg.HAUNTLET_DOOR_SPACING
-    return [HauntletDoor(x, y, hauntlet_door_kind(img, x, y, scale)) for x, y in tvs]
 
 # ============================================================================
 # WORKFLOWS
@@ -6184,8 +4439,6 @@ IDLE_CHECKS_RE = re.compile(r"^idle checks: (\d+) over (\d+)s$")
 SAME_CHECKS_RE = re.compile(r"^same checks: (\d+) over (\d+)s$")
 DISABLED_RE = re.compile(r"^disabled: (\S+)$")
 RESOURCES_RE = re.compile(r"^resources: cpu ([\d.]+)% mem (\d+)MB(?: pc ([\d.]+)%(?: pcmem (\d+)%)?)?$")
-RESULT_RE = re.compile(r"^minigame result: (.+?): (\d+) candy corn")
-MINIGAME_RE = re.compile(r"^minigame (started|finished): (.*?)(?: \(\d+s\))?$")
 
 TARGET_BUCKETS = 40
 # Nice bucket lengths (seconds), shortest first.
@@ -6213,7 +4466,7 @@ def parse_ts(text: str) -> float:
 
 def parse_run(log_path: str, run: Union[int, str]) -> Optional[dict[str, Any]]:
     """Everything the report needs from run `run` of the log, as a dict, or None if the run
-    isn't in it (keys: start, end, resolved, detected, failures, rejoins, disabled, results,
+    isn't in it (keys: start, end, resolved, detected, failures, rejoins, disabled,
     resources, events). "same checks: N" lines stand for N more of the detection above.
     See docs/ARCHITECTURE.md#debugging-an-unattended-run.
     """
@@ -6229,7 +4482,7 @@ def parse_run(log_path: str, run: Union[int, str]) -> Optional[dict[str, Any]]:
     if not lines:
         return None
     data: dict[str, Any] = {"start": lines[0][0], "end": lines[-1][0], "resolved": [], "detected": [],
-            "failures": [], "rejoins": [], "disabled": [], "resources": [], "results": [], "events": Counter()}
+            "failures": [], "rejoins": [], "disabled": [], "resources": [], "events": Counter()}
     for t, text in lines:
         if m := RESOLVED_RE.match(text):
             data["resolved"].append((t, m.group(1), int(m.group(2))))
@@ -6263,8 +4516,6 @@ def parse_run(log_path: str, run: Union[int, str]) -> Optional[dict[str, Any]]:
             data["failures"].append((t, text[len("FAILURE: "):]))
         elif text.startswith("white screen: "):
             data["events"]["white screens (rejoined)"] += 1
-        elif m := RESULT_RE.match(text):
-            data["results"].append((t, m.group(1), int(m.group(2))))
         elif text.startswith("recovery complete"):   # once per rejoin ("scheduled rejoin" is logged at its start too)
             data["rejoins"].append(t)
             data["events"]["rejoins"] += 1
@@ -6276,11 +4527,6 @@ def parse_run(log_path: str, run: Union[int, str]) -> Optional[dict[str, Any]]:
             data["events"]["stray windows closed"] += 1
         elif text.startswith("backpack was left open"):
             data["events"]["backpacks closed"] += 1
-        elif text.startswith("minigame popup dismissed"):
-            data["events"]["minigame popups declined"] += 1
-        elif m := MINIGAME_RE.match(text):
-            if m.group(1) == "finished":
-                data["events"]["minigames finished"] += 1
         elif " interrupted by " in text:
             data["events"]["needs interrupted"] += 1
     return data
@@ -6479,16 +4725,10 @@ def draw_report(data: dict[str, Any], run: Union[int, str], basic: set[str], tel
     else:
         draw_text(img, "nothing resolved", left, top + 44, 0.5)
 
-    # 4. counts (the minigames' best, worst and average candy corn first)
+    # 4. counts
     left, top = 820, 830
     draw_text(img, "Failures and events", left, top, 0.6, thick=2)
     y = top + 24
-    by_game: dict[str, list[int]] = defaultdict(list)
-    for _, game, earned in data["results"]:
-        by_game[game].append(earned)
-    for game, earned_list in sorted(by_game.items()):
-        draw_text(img, f"{game}: best {max(earned_list)}, worst {min(earned_list)}, average {sum(earned_list) / len(earned_list):.0f} candy corn ({len(earned_list)} runs)", left, y, 0.5)
-        y += 22
     kinds = Counter(failure_kind(t) for _, t in data["failures"])
     for kind, count in kinds.most_common(5):
         draw_text(img, f"{count:>4}  failure: {kind}", left, y, 0.5, COLOR_FAILURE)
@@ -6601,7 +4841,7 @@ def run_all_need_handlers(handlers: Optional[dict[str, Callable[[], NeedHandler]
         check_stop()
         logger.info(f"[TEST] ({i}/{len(handlers)}) {name}...")
         try:
-            with task_unscrew(play_minigames=False):    # a minigame popup is declined, not played
+            with task_unscrew(interruptible=False):    # (not abandoned by a popup: the test goes on)
                 results[name] = "done" if handler_cls().handle() else "failed"
         except TaskInterrupted as interruption:
             results[name] = f"interrupted by {interruption.reason}"
@@ -6676,7 +4916,7 @@ class DebugCapture(logging.Handler):
         self.text.insert(tk.END, line + "\n", level)
         self.at_line_start = True
 
-OUTSIDE_ACTIONS: dict[str, Callable[[], Any]] = {"rejoin": leave_and_rejoin, "setup": setup_or_fail, "trade_hub": travel_to_trade_hub, "leave_trade_hub": leave_trade_hub, "inventory": inventory_tour, "sloop": exit_minigame_and_setup,
+OUTSIDE_ACTIONS: dict[str, Callable[[], Any]] = {"rejoin": leave_and_rejoin, "setup": setup_or_fail, "trade_hub": travel_to_trade_hub, "leave_trade_hub": leave_trade_hub, "inventory": inventory_tour, "sloop": leave_hub_and_setup,
                                           "trades": trades_tour, "recenter": recenter,
                                           **{f"test:{name}": partial(test_need_handler, name) for name in (*DEBUG_HANDLERS, cfg.TEST_ALL_TELEPORTS)},
                                           **{f"decline:{listing}:{number}": partial(decline_offer, listing, number) for listing in cfg.TRADES_LISTINGS for number in range(1, cfg.TRADES_MAX_OFFERS + 1)},
@@ -6983,7 +5223,7 @@ class AdoptMeGUI:
         elif command == "focus":
             focus_roblox()                                                          # the window to the front (no click): after an update the macro's own window may be
         elif command == "sloop":
-            self.act_from_outside("sloop", stem, resume=True)                       # (leave a minigame and) Setup, and then the loop, whether or not one was running
+            self.act_from_outside("sloop", stem, resume=True)                       # (leave the Trading Hub and) Setup, and then the loop, whether or not one was running
         elif command == "test" and data:
             self.act_from_outside(f"test:{data['handler']}", stem)                   # (what the Test button of that handler does; the loop is stopped first and not resumed)
         elif command == "decline" and data:
@@ -7046,7 +5286,7 @@ class AdoptMeGUI:
 
     def refresh_debug_from_outside(self) -> None:
         """Empty the debug folder as the Refresh debug button does, without asking; not while something is running, which is writing there."""
-        if self.is_running or state.capture is not None or state.run_capture is not None:
+        if self.is_running or state.capture is not None:
             logger.warning("Refresh debug asked for, but the macro is running or recording - stop it first")
             return
         logger.debug(f"Debug folder refreshed ({refresh_debug()} entries removed)")
@@ -7256,8 +5496,7 @@ class AdoptMeGUI:
         config = load_game_config()
         self.config_flag_vars: dict[str, tk.BooleanVar] = {}
         for label, key in (("Run side quest", "side_quest_enabled"),
-                           ("Resume after focus loss", "resume_on_focus_loss"),
-                           *((f"Play {label}" + ("" if name in MINIGAME_PLAYERS else " (no player yet)"), f"{name}_enabled") for name, label in cfg.MINIGAME_LABELS.items())):
+                           ("Resume after focus loss", "resume_on_focus_loss")):
             self.add_config_checkbox(options_tab, label, key, config)
 
         self.add_config_checkbox(options_tab, "Rejoin the private server (off: a public one)", "use_private_server", config)
@@ -7525,7 +5764,7 @@ class AdoptMeGUI:
     def refresh_debug_folder(self) -> None:
         """Ask, then empty the debug folder (refresh_debug()). Not while a run
         is going - it's writing there."""
-        if self.is_running or state.capture is not None or state.run_capture is not None:
+        if self.is_running or state.capture is not None:
             logger.debug("Stop the run and the capture before refreshing the debug folder")
             return
         if messagebox.askyesno("Refresh debug", "Delete everything in the debug folder (logs, images, recordings)?\n"

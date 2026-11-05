@@ -36,7 +36,7 @@ Settings tab). A minigame that is recognised but has no player in `MINIGAME_PLAY
   no capture and no wait for a game that isn't there (run 6: Hauntlet 2's Yes clicked, the character still in the house 114 s later). Minigames are time-sensitive, so this also happens
   when the popup turns up while a handler is waiting in
   a handler's waits (see [Per-cycle checks while a task
-  runs](#need-handlers)): the minigame is played right
+  runs](ARCHITECTURE.md#need-handlers)): the minigame is played right
   then and the handler abandoned (`TaskInterrupted`). Every held key and the mouse button are released first - at the start of `play_minigame()`, since the handler may have been holding one (a walk, the pet swipe) when it was interrupted, and again as the interruption is raised. Where it left the
   character is unknown afterwards, and the next check sees what is still
   needed.

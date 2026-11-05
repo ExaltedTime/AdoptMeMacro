@@ -1673,6 +1673,7 @@ def _setup_steps() -> bool:
     if failed:
         log_failure("setup: " + "; ".join(failed))
         return False
+    update_game_config(lambda c: c.update(pet_repicked=time.time()))                # (the pet was picked just now: pet_repick() waits its interval from here)
     logger.info("Setup complete")
     log_run_event("setup: the house is locked, the backpack is filtered to favorites and trades are set to No One")
     return True

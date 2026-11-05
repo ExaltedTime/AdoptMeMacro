@@ -942,6 +942,8 @@ actually on disk (so an old config missing a newer key still works), and
 - **`tree_timer`** / **`lure_timer`** - the timestamps `tree_collect()` /
   `lure_collect()` are next due. Both default to "due immediately"
   (`time.time()`) when the config is fresh.
+- **`level_growing_pet`** - on/off (default on): Setup filters the eggs and full-grown pets out of the backpack and equips the first pet left, and `pet_repick()` does the same again every `PET_REPICK_INTERVAL` (`pet_repicked`: when it last did, a timestamp).
+- **`pet_pen_enabled`** - on/off (default on) for `pet_pen()` (`pet_pen_looked`: when it last opened the Task Board, a timestamp). Both are in [Side actions](#side-actions).
 - **`side_quest_enabled`** - on/off switch (default on) for
   `side_quest()`. It's a checkbox in the GUI, and can be flipped while a
   workflow runs.
@@ -1294,7 +1296,7 @@ the commands. It is started by hand, next to the macro: `python scripts/discord_
 | `/restart` | stops the macro as `/exit` does and starts it again as it was (with its loop only if the loop was going), then restarts the bot itself, as `/update` does but with no change of code; one at a time with `/update` and `/rollback`; a macro that was not running is not started |
 | `/rollback` | goes back to the commit the PC was on before the last `/update`, and restarts the macro the same way |
 | `/need <need> <on>` | switches a need on or off, as the Debug tab's checkbox does (the command goes through a command file; a macro that is not running is started first - see below); says what the game config shows a moment later |
-| `/option <option> <on>` | the other switches (every checkbox of the Settings tab and the Debug tab's Options subtab): `side_quest`, `resume_on_focus_loss`, `use_private_server`, `record_next_run`, `blackout_hotkey`, `new_need_hotkey`, `level_growing_pet` and `show_debug_lines` (the output's debug lines, which is only a checkbox and so is not confirmed) |
+| `/option <option> <on>` | the other switches (every checkbox of the Settings tab and the Debug tab's Options subtab): `side_quest`, `resume_on_focus_loss`, `use_private_server`, `record_next_run`, `blackout_hotkey`, `new_need_hotkey`, `level_growing_pet`, `pet_pen` and `show_debug_lines` (the output's debug lines, which is only a checkbox and so is not confirmed) |
 | `/test <handler>` | what the Debug tab's Test button of a need does (`test_need_handler()`), or `teleports` for its "Test every teleport handler" (`TEST_ALL_TELEPORTS`); the macro's loop is stopped first and not started again, and the channel is told how it ended (`test` command, queued as `test:<handler>` in `OUTSIDE_ACTIONS`) |
 | `/reset_config <sure>` | Reset Config (`reset_game_config()`: totals, timers and switches back to their defaults, the private server link kept), only with `sure` true and not while the macro runs anything (`reset_config` command: `.done` says `given up` if it did) |
 | `/server_link <link>` | saves the private server link a rejoin goes to, as the box in the Settings tab does; the macro drops a link `parse_server_link()` does not know and nothing says the link back, but the channel shows what was typed, as for any command (`server_link` command) |

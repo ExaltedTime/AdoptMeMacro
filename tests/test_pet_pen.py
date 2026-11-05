@@ -118,3 +118,13 @@ def test_picking_again_sets_the_filter_and_equips_and_respawns(macro, monkeypatc
     monkeypatch.setattr(macro, "set_backpack_filter", lambda: calls.append("filter") or True)
     monkeypatch.setattr(macro, "respawn_character", lambda: calls.append("respawn"))
     assert macro.repick_pet() is True and calls == ["filter", "respawn"]
+
+
+def test_a_finished_setup_counts_as_the_pick_of_the_pet(macro, monkeypatch):
+    for name in ("lock_house", "set_backpack_filter", "disable_trades"):
+        monkeypatch.setattr(macro, name, lambda: True)
+    monkeypatch.setattr(macro, "respawn_character", lambda: None)
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: None)
+    assert macro.load_game_config()["pet_repicked"] == 0.0
+    assert macro.setup_game() is True
+    assert macro.load_game_config()["pet_repicked"] > 0.0

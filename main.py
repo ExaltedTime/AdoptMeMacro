@@ -3812,9 +3812,17 @@ def side_quest() -> None:
         if run_side_action(lure_collect):
             update_game_config(lambda c: c.update(lure_timer=time.time() + cfg.LURE_RECOLLECT_INTERVAL))
 
+def find_task_board_button(img: Image) -> Optional[Point]:
+    """The middle of the Task Board's sign at the left edge of the screen (DIALOG_BUTTONS["task_board"]: found by the colour of its wood and its size), or None."""
+    return find_dialog_button(img, cfg.DIALOG_BUTTONS["task_board"])
+
 def task_board_badge(img: Image) -> bool:
-    """Whether the Task Board's button shows its red alert badge."""
-    left, top, right, bottom = cfg.TASK_BOARD_BADGE_BOX
+    """Whether the Task Board's button shows its red alert badge (looked for beside the sign, where it is found)."""
+    sign = find_task_board_button(img)
+    if sign is None:
+        return False
+    left, top, right, bottom = (sign[0] + cfg.TASK_BOARD_BADGE_BOX[0], sign[1] + cfg.TASK_BOARD_BADGE_BOX[1], sign[0] + cfg.TASK_BOARD_BADGE_BOX[2], sign[1] + cfg.TASK_BOARD_BADGE_BOX[3])
+    left, top = max(0, left), max(0, top)
     hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(hsv, *cfg.TASK_BOARD_BADGE_HSV[0])
     for extra in cfg.TASK_BOARD_BADGE_HSV[1:]:
@@ -3837,7 +3845,11 @@ def collect_pet_pen() -> bool:
         return False
     state.task_board_wanted = True
     try:
-        hover_click(*cfg.TASK_BOARD_BUTTON_POS)
+        sign = find_task_board_button(grab_screen())
+        if sign is None:
+            log_run_event("pet pen: the Task Board's sign was not seen")
+            return False
+        hover_click(*sign)
         if not wait_for_screen(lambda img: popup_visible(img, "task_board"), cfg.PET_PEN_UI_WAIT):
             log_run_event("pet pen: the Task Board did not open")
             return False

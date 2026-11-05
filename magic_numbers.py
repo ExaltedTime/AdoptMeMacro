@@ -78,7 +78,8 @@ STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     "trade_request": {"box": (700, 560, 1260, 800), "button": "decline"},
     "trade_request_expired": {"box": (700, 380, 1240, 560), "button": "okay"},
 }
-DIALOG_BUTTONS = {                              # (and the green NICE! of the Pet Pen's age-up screen: 270 x 67 on the capture)
+DIALOG_BUTTONS = {                              # (and the Task Board's wooden sign at the left edge - found by its wood brown, not by a crop: its background is the world - 100 x 60 to 110 x 80 on the captures; and the green NICE! of the Pet Pen's age-up screen: 270 x 67 on the capture)
+    "task_board": {"box": (0, 480, 200, 680), "hsv": (((5, 150, 90), (20, 255, 200)),), "size": ((90, 125), (45, 90))},
     "nice":    {"box": (800, 970, 1120, 1070), "hsv": (((45, 110, 130), (80, 255, 255)),), "size": ((240, 300), (50, 80))},                              # the buttons of those cards (measured on a real frame: Decline 174 x 47 and Accept 174 x 49 side by side, Okay 360 x 49)
     "decline": {"box": (700, 540, 1260, 790), "hsv": (((170, 150, 150), (180, 255, 255)), ((0, 150, 150), (5, 255, 255))), "size": ((150, 210), (30, 60))},
     "okay":    {"box": (700, 540, 1260, 790), "hsv": (((45, 110, 130), (80, 255, 255)),), "size": ((300, 420), (30, 60))},
@@ -623,8 +624,7 @@ MONEY_COLLECTED_TARGET = 200
 MONEY_RESET_HOUR = 17                  # the tree's money total starts again from 0 at this hour (0-23, local time) every day
 # The Pet Pen: its "ready to age up" notice is a card on the Task Board (the button at the left edge of the screen, with a red badge while there is an alert); the card opens the age-up
 # screen, which ends with a green NICE! - see pet_pen().
-TASK_BOARD_BUTTON_POS = (62, 565)         # the board sign at the left edge
-TASK_BOARD_BADGE_BOX = (0, 520, 140, 640) # where its red alert badge is (a speech bubble with a "!")
+TASK_BOARD_BADGE_BOX = (-62, -28, 78, 92) # where its red alert badge is (a speech bubble with a "!"), from the middle of the sign (found by find_task_board_button())
 TASK_BOARD_BADGE_HSV = (((0, 170, 170), (8, 255, 255)), ((172, 170, 170), (180, 255, 255)))
 TASK_BOARD_BADGE_MIN_PIXELS = 500         # red pixels there for a badge (about 1000 with it, under 100 without)
 PET_PEN_CHECK_INTERVAL = 15 * 60          # seconds between looks at the board when no badge shows

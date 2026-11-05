@@ -13,6 +13,14 @@ def shot(name):
     return cv2.imread(os.path.join(SHOTS, name + ".png"))
 
 
+def test_the_sign_is_found_on_every_background_and_not_in_a_scene_without_it(macro):
+    for name in ("badge", "no_badge", "world_after", "board_pet_pen_ready", "board_other_alerts"):
+        x, y = macro.find_task_board_button(shot(name))
+        assert 40 <= x <= 90 and 530 <= y <= 575, name
+    assert macro.find_task_board_button(shot("age_up_nice")) is None
+    assert macro.task_board_badge(shot("age_up_nice")) is False
+
+
 def test_the_badge_is_seen_only_while_the_board_shows_it(macro):
     assert macro.task_board_badge(shot("badge")) is True
     assert macro.task_board_badge(shot("no_badge")) is False
@@ -49,9 +57,9 @@ def screens(macro, monkeypatch):
 
 def test_a_ready_pet_pen_is_collected_through_the_card_and_the_nice_button(macro, screens):
     frames, log = screens
-    frames[:] = [shot("board_pet_pen_ready"), shot("board_pet_pen_ready"), shot("age_up_nice"), shot("world_after")]
+    frames[:] = [shot("world_after"), shot("board_pet_pen_ready"), shot("board_pet_pen_ready"), shot("age_up_nice"), shot("world_after")]
     assert macro.collect_pet_pen() is True
-    assert macro.clicks[0] == macro.cfg.TASK_BOARD_BUTTON_POS
+    assert 20 <= macro.clicks[0][0] <= 110 and 520 <= macro.clicks[0][1] <= 590                  # (the sign, found)
     assert 840 <= macro.clicks[1][0] <= 1080 and 440 <= macro.clicks[1][1] <= 500
     assert abs(macro.clicks[2][0] - 959) < 10 and log == ["pet pen: pets aged up"]
     assert macro.state.task_board_wanted is False
@@ -59,12 +67,15 @@ def test_a_ready_pet_pen_is_collected_through_the_card_and_the_nice_button(macro
 
 def test_a_board_without_the_card_is_closed_again_and_one_that_does_not_open_is_a_failure(macro, screens):
     frames, log = screens
-    frames[:] = [shot("board_other_alerts")]
+    frames[:] = [shot("world_after"), shot("board_other_alerts")]
     assert macro.collect_pet_pen() is True
     assert macro.clicks[-1] == macro.cfg.STRAY_WINDOWS["task_board"]["close_pos"]
     macro.clicks.clear()
     frames[:] = [shot("world_after")]
     assert macro.collect_pet_pen() is False and log == ["pet pen: the Task Board did not open"]
+    log.clear()
+    frames[:] = [shot("age_up_nice")]
+    assert macro.collect_pet_pen() is False and log == ["pet pen: the Task Board's sign was not seen"]
     assert macro.state.task_board_wanted is False
 
 

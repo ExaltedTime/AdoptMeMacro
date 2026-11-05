@@ -383,6 +383,7 @@ class State:
     backpack_wanted: int = 0
     # True while a handler that wants the pet focused runs (see wanting_pet_focus()).
     pet_focus_wanted: bool = False
+    task_board_wanted: bool = False
     typing: bool = False                   # type_keys() is typing into a text box: the hotkeys (a letter each) are not acted on meanwhile
     # How many "quiet:" lines have been logged for the current stretch with no need resolved.
     quiet_reported: int = 0
@@ -796,6 +797,8 @@ def _read_game_config() -> dict[str, Any]:
         "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
         "record_next_run": False,   # record the next run as a low quality video; cleared when that run starts
         "blackout_hotkey_enabled": True,   # whether HOTKEYS["blackout"] blanks the screen (off: that key can be typed in Roblox)
+        "pet_pen_enabled": True,           # whether pet_pen() collects the Pet Pen when the Task Board says it is ready
+        "pet_pen_looked": 0.0,             # when pet_pen() last opened the board
         "level_growing_pet": True,         # whether Setup filters the eggs and full-grown pets out of the backpack and equips the first pet left (off: the pet is left, the Alicorn equipped if none is out)
         "new_need_hotkey_enabled": True,   # whether HOTKEYS["new_need"] teaches the macro a need icon it does not know (off: that key can be typed in Roblox)
         "needs_enabled": {},        # {need: whether it is acted on}, the Debug tab's switches; a need not in it follows ENABLED_NEEDS (see need_is_enabled())
@@ -3552,6 +3555,8 @@ def dismiss_stray_windows() -> Optional[str]:
     for name, config in cfg.STRAY_WINDOWS.items():
         if not popup_visible(img, name):
             continue
+        if name == "task_board" and state.task_board_wanted:                    # (pet_pen() has it open)
+            continue
         if config.get("only_when_unwanted") and state.pet_focus_wanted:
             continue
         if "button" in config:                                              # (closed by a button of its own colour and size, found: the card's height follows its text)
@@ -3743,6 +3748,69 @@ def side_quest() -> None:
     if now >= config["lure_timer"]:
         if run_side_action(lure_collect):
             update_game_config(lambda c: c.update(lure_timer=time.time() + cfg.LURE_RECOLLECT_INTERVAL))
+
+def task_board_badge(img: Image) -> bool:
+    """Whether the Task Board's button shows its red alert badge."""
+    left, top, right, bottom = cfg.TASK_BOARD_BADGE_BOX
+    hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, *cfg.TASK_BOARD_BADGE_HSV[0])
+    for extra in cfg.TASK_BOARD_BADGE_HSV[1:]:
+        mask = cv2.bitwise_or(mask, cv2.inRange(hsv, *extra))
+    return int(cv2.countNonZero(mask)) >= cfg.TASK_BOARD_BADGE_MIN_PIXELS
+
+def wait_for_screen(look: Callable[[Image], Any], timeout: float) -> Any:
+    """What `look` (given a screenshot) returns once it is truthy, looking every PET_PEN_POLL seconds for `timeout`; None if it never is."""
+    deadline = time.time() + timeout
+    while True:
+        found = look(grab_screen())
+        if found or time.time() >= deadline:
+            return found or None
+        wait_interruptible(cfg.PET_PEN_POLL)
+
+def collect_pet_pen() -> bool:
+    """Open the Task Board and, when it has the "Pet Pen Ready" card, click it, wait out the age-up screen and click its NICE!. True once the board has been looked at (and the pets collected if they were
+    ready), False when the game was not in front or the NICE! never came."""
+    if not focus_roblox():
+        return False
+    state.task_board_wanted = True
+    try:
+        hover_click(*cfg.TASK_BOARD_BUTTON_POS)
+        if not wait_for_screen(lambda img: popup_visible(img, "task_board"), cfg.PET_PEN_UI_WAIT):
+            log_run_event("pet pen: the Task Board did not open")
+            return False
+        card = popup_found(grab_screen(), "pet_pen_ready")
+        if card is None:
+            hover_click(*cfg.STRAY_WINDOWS["task_board"]["close_pos"])
+            return True
+        hover_click(*card)
+        wait_interruptible(cfg.PET_PEN_ANIMATION_WAIT)
+        for _ in range(cfg.PET_PEN_NICE_TRIES):
+            button = wait_for_screen(lambda img: find_dialog_button(img, cfg.DIALOG_BUTTONS["nice"]), cfg.PET_PEN_NICE_WAIT)
+            if button is None:
+                break
+            hover_click(*button)
+            wait_interruptible(cfg.UI_SETTLE)
+            if find_dialog_button(grab_screen(), cfg.DIALOG_BUTTONS["nice"]) is None:
+                log_run_event("pet pen: pets aged up")
+                return True
+        log_run_event("pet pen: the NICE! button did not go")
+        return False
+    finally:
+        state.task_board_wanted = False
+
+def pet_pen() -> None:
+    """Once per cycle after side_quest(), unless the game config's pet_pen_enabled is off: when the Task Board button shows its alert badge (at most every PET_PEN_BADGE_INTERVAL) or
+    PET_PEN_CHECK_INTERVAL has passed since the last look (the badge was not on in the capture of the Pet Pen notice), collect the Pet Pen with collect_pet_pen()."""
+    config = load_game_config()
+    if not config["pet_pen_enabled"]:
+        return
+    since = time.time() - config["pet_pen_looked"]
+    if since < cfg.PET_PEN_BADGE_INTERVAL or (since < cfg.PET_PEN_CHECK_INTERVAL and not task_board_badge(grab_screen())):
+        return
+    done = run_side_action(collect_pet_pen)
+    update_game_config(lambda c: c.update(pet_pen_looked=time.time()))
+    if not done:
+        logger.debug("pet pen: not collected")
 
 # ============================================================================
 # RUN RECORDING
@@ -4337,6 +4405,7 @@ def run_full_cycle() -> None:
         write_status()
         unscrew()
         side_quest()
+        pet_pen()
         if process_needs():
             return
         respawn_if_no_detection()
@@ -5739,6 +5808,7 @@ class AdoptMeGUI:
         """Fill the Options subtab: record the next run, show the debug lines in the output or not, refresh the debug
         folder, reset the config."""
         self.add_config_checkbox(parent, "Record the next run (low quality video)", "record_next_run", load_game_config())
+        self.add_config_checkbox(parent, "Collect the Pet Pen when the Task Board says it is ready", "pet_pen_enabled", load_game_config())
         self.add_config_checkbox(parent, "Setup levels a pet that still grows (no eggs, none full grown)", "level_growing_pet", load_game_config())
         self.add_config_checkbox(parent, f"{cfg.HOTKEYS['blackout'].upper()} blanks the screen in Roblox (off: type it)", "blackout_hotkey_enabled", load_game_config())
         self.add_config_checkbox(parent, f"{cfg.HOTKEYS['new_need'].upper()} teaches a new need icon in Roblox (off: type it)", "new_need_hotkey_enabled", load_game_config())

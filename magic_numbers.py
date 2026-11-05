@@ -76,7 +76,8 @@ STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     "trade_request": {"box": (700, 560, 1260, 800), "button": "decline"},
     "trade_request_expired": {"box": (700, 380, 1240, 560), "button": "okay"},
 }
-DIALOG_BUTTONS = {                              # the buttons of those cards (measured on a real frame: Decline 174 x 47 and Accept 174 x 49 side by side, Okay 360 x 49)
+DIALOG_BUTTONS = {                              # (and the green NICE! of the Pet Pen's age-up screen: 270 x 67 on the capture)
+    "nice":    {"box": (800, 970, 1120, 1070), "hsv": (((45, 110, 130), (80, 255, 255)),), "size": ((240, 300), (50, 80))},                              # the buttons of those cards (measured on a real frame: Decline 174 x 47 and Accept 174 x 49 side by side, Okay 360 x 49)
     "decline": {"box": (700, 540, 1260, 790), "hsv": (((170, 150, 150), (180, 255, 255)), ((0, 150, 150), (5, 255, 255))), "size": ((150, 210), (30, 60))},
     "okay":    {"box": (700, 540, 1260, 790), "hsv": (((45, 110, 130), (80, 255, 255)),), "size": ((300, 420), (30, 60))},
 }
@@ -98,6 +99,8 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "go_home":         {"box": (1280, 60, 1460, 140), "threshold": 0.8},
     # The purple backpack button at the bottom centre: the game's normal UI, there in the world and the Trading Hub and not on a loading screen.
     "backpack_button": {"box": (880, 950, 1040, 1075), "threshold": 0.8},
+    # The "Pet Pen Ready" card of the Task Board's Alerts tab (its title line; the cards are listed one under the other, so it is looked for in the whole list).
+    "pet_pen_ready":   {"box": (836, 430, 1310, 720), "threshold": 0.8},
     # The Trading Hub Phone's screens (trades_tour(), decline_offer(); crops of tests/trades/): the phone's TRADE LISTINGS button, the "TRADING HUB" menu's title, the
     # "MY LISTINGS" title and the "1/2" / "2/2" of its "LISTING n/2", the "OFFERS" title (also there, dimmed, over an offer opened on its own), that offer's red DECLINE
     # button, the "Are you sure you want to decline this offer?" dialog, and the phone's icon in the hotbar (it is equipped: a click in the world uses it).
@@ -181,7 +184,7 @@ COMMANDS_DIR = os.path.join(DEBUG_DIR, "commands")          # the commands for t
 COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus", "blackout", "test", "reset_config", "server_link", "trades", "decline", "capture", "recenter")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, travel to / leave the Trading Hub, take pictures of the backpack's pets tab, or run Setup and then the loop (`sloop`), bring the Roblox window to the front (`focus`), blank / show the screen (`blackout`), run one need handler on its own or every teleport one (`test`, what the Debug tab's Test buttons do), reset the config (`reset_config`), save the private server link (`server_link`), take pictures of the offers on the two trade listings (`trades`), decline one of them (`decline`), or start the input capture (the capture hotkey's) and stop it again (`capture`), or close what is open and respawn (`recenter`)
 NEED_NAMES = ("catch", "pet", "choose", "ride", "walk", "hungry", "thirsty", "dirty", "potty", "sleepy", "bored", "beach", "school", "cafe", "salon", "pizza", "camping", "sick")   # the Debug tab's need switches (the keys of main.py's NEED_HANDLER_CLASSES)
 OPTION_SWITCHES = {"side_quest": "side_quest_enabled", "resume_on_focus_loss": "resume_on_focus_loss", "record_next_run": "record_next_run",
-                   "use_private_server": "use_private_server", "blackout_hotkey": "blackout_hotkey_enabled", "new_need_hotkey": "new_need_hotkey_enabled", "level_growing_pet": "level_growing_pet"}   # the other switches a command may change: name -> the game config's key ("show_debug_lines" too, which is only in the window)
+                   "use_private_server": "use_private_server", "pet_pen": "pet_pen_enabled", "blackout_hotkey": "blackout_hotkey_enabled", "new_need_hotkey": "new_need_hotkey_enabled", "level_growing_pet": "level_growing_pet"}   # the other switches a command may change: name -> the game config's key ("show_debug_lines" too, which is only in the window)
 SHOW_DEBUG_LINES_OPTION = "show_debug_lines"
 TEST_ALL_TELEPORTS = "teleports"                       # the `test` command's handler for the Debug tab's "Test every teleport handler" (the others are NEED_NAMES)
 COMMAND_POLL_MS = 1000                                      # how often the macro looks for one
@@ -609,6 +612,19 @@ TREE_HARVEST_YIELD = 16           # money_collected added to the persisted total
 # (local time - see side_quest()), or by the Debug tab's Reset Config.
 MONEY_COLLECTED_TARGET = 200
 MONEY_RESET_HOUR = 17                  # the tree's money total starts again from 0 at this hour (0-23, local time) every day
+# The Pet Pen: its "ready to age up" notice is a card on the Task Board (the button at the left edge of the screen, with a red badge while there is an alert); the card opens the age-up
+# screen, which ends with a green NICE! - see pet_pen().
+TASK_BOARD_BUTTON_POS = (62, 565)         # the board sign at the left edge
+TASK_BOARD_BADGE_BOX = (0, 520, 140, 640) # where its red alert badge is (a speech bubble with a "!")
+TASK_BOARD_BADGE_HSV = (((0, 170, 170), (8, 255, 255)), ((172, 170, 170), (180, 255, 255)))
+TASK_BOARD_BADGE_MIN_PIXELS = 500         # red pixels there for a badge (about 1000 with it, under 100 without)
+PET_PEN_CHECK_INTERVAL = 15 * 60          # seconds between looks at the board when no badge shows
+PET_PEN_BADGE_INTERVAL = 2 * 60           # seconds between looks at the board while a badge shows (it is there for the other alerts too)
+PET_PEN_UI_WAIT = 4.0                     # seconds for the board to open
+PET_PEN_POLL = 0.5                        # seconds between looks while waiting for it
+PET_PEN_ANIMATION_WAIT = 8.0              # seconds from the card's click to the age-up animation being over (the capture clicked NICE! 8 s after)
+PET_PEN_NICE_WAIT = 15.0                  # seconds to see the NICE! button in
+PET_PEN_NICE_TRIES = 3                    # clicks on it while it is still there
 TREE_CHECK_INTERVAL = 10 * 60          # seconds (10 minutes) between tree harvests
 LURE_RECOLLECT_INTERVAL = 4 * 60 * 60  # seconds (4 hours)
 

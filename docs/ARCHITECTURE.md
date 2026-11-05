@@ -721,6 +721,7 @@ button and from the automatic recovery, and nothing tracks whether it has
 run. The
 lure and tree actions are only reachable through `side_quest()`.
 
+- **`pet_pen()`** - once per cycle after `side_quest()` (the game config's `pet_pen_enabled`, a checkbox of the Options subtab and the `pet_pen` switch of `/option`): when the Task Board's button at the left edge of the screen shows its red alert badge (`task_board_badge()`, at most every `PET_PEN_BADGE_INTERVAL`; the badge is there for every alert) or `PET_PEN_CHECK_INTERVAL` has passed since the last look (the badge was not on in the capture of the Pet Pen notice), `collect_pet_pen()` opens the board and looks for the "Pet Pen Ready" card (`POPUP_TEMPLATES["pet_pen_ready"]`). With it: the card is clicked, `PET_PEN_ANIMATION_WAIT` waited, and the green NICE! (`DIALOG_BUTTONS["nice"]`) of the age-up screen clicked until it is gone. Without it the board is closed again. While it runs `state.task_board_wanted` stops `dismiss_stray_windows()` closing the board. It runs inside `run_side_action()`, so a rejoin or the stop key ends it. Tests: `tests/test_pet_pen.py` against the frames of `tests/pet_pen/`.
 - **`leave_and_rejoin()`** - the **Leave & rejoin** button, and what
   `rejoin_game()` calls to recover. Modelled on how Natro Macro (a Bee
   Swarm Simulator macro) reconnects: close the game properly, relaunch it
@@ -1388,6 +1389,7 @@ clicks instead of making them. They cover:
 - `test_loop.py` - the whole workflow loop run for a moment with the game stubbed out (idle respawns, the resource monitor starting and stopping, the report being written);
 - `test_capture.py` - the input capture against a made-up keyboard, mouse and screen (events, both coordinate systems, click frames, skipping unchanged frames, the summary, the zips, stopping by itself, the hotkey toggle and pruning, the frame budget, its thinning, the zip);
 - `test_need_handlers.py` - the catch, pet and ride needs as the game sees them (the order of keys, clicks and waits, with everything that touches the game recorded), that every constant and key their step tables name exists, and the inventory tour (its pictures, the end of the list, the limit, a backpack that does not open, a stop; the marker every time);
+- `test_pet_pen.py` - the Task Board's badge, the Pet Pen card and the NICE! button on real frames, and collecting the pen;
 - `test_features.py` - the daily money reset, the run-every-need sequence, and the like;
 - `test_config.py` - the real need tables in `magic_numbers.py`, without pinning any value: every entry is well formed (known keys, on-screen positions, movement keys, a `final_click` is on screen), has a handler, and the handler carries out exactly what the entry says (run over every need in the tables). The handler tests elsewhere use made-up entries; this is what keeps the real ones honest;
 - `test_report.py` - the run-report parser against the exact log wording the

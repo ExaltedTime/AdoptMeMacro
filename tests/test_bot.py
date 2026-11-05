@@ -1,4 +1,4 @@
-"""The Discord bot's logic (bot/bot_lib.py): the config, who is obeyed, and the messages made from what the macro writes. Nothing here needs
+"""The Discord bot's logic (scripts/bot_lib.py): the config, who is obeyed, and the messages made from what the macro writes. Nothing here needs
 Discord; the macro's own writers (write_status(), record_minigame_result()) make the files the bot reads, so a change in what is written breaks
 here and not at the PC."""
 import json
@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from bot import bot_lib
+from scripts import bot_lib
 
 NOW = datetime(2026, 10, 15, 12, 0, 0)
 
@@ -176,7 +176,7 @@ def test_a_blank_grab_is_told_from_a_real_one():
 
 def test_the_macro_is_told_from_the_bot_in_a_process_list():
     assert bot_lib.main_py_in(["C:\\Python\\python.exe C:\\AdoptMeMacro\\main.py"]) and bot_lib.main_py_in(["python", "python main.py --loop"])
-    assert not bot_lib.main_py_in(["python bot/discord_bot.py main.py-config"]) and not bot_lib.main_py_in([])
+    assert not bot_lib.main_py_in(["python scripts/discord_bot.py main.py-config"]) and not bot_lib.main_py_in([])
 
 
 # --- alerts ---
@@ -625,7 +625,7 @@ def test_answers_nobody_read_are_cleared_by_the_next_command(tmp_path):
 
 
 def test_the_macro_is_found_among_the_processes_but_not_the_bot_or_other_scripts():
-    processes = [(10, "python bot/discord_bot.py bot_config.json"), (11, "python C:/repo/main.py --loop"), (12, "python other.py"),
+    processes = [(10, "python scripts/discord_bot.py bot_config.json"), (11, "python C:/repo/main.py --loop"), (12, "python other.py"),
                  (13, "C:/Python/python.exe main.py"), (14, "")]
     assert bot_lib.macro_pids(processes) == [11, 13]
     assert bot_lib.parse_process_lines("11 python main.py --loop\n\nnot a pid line\n12 \n 13 python x.py") == [(11, "python main.py --loop"), (12, ""), (13, "python x.py")]
@@ -735,7 +735,7 @@ def repos(tmp_path):
     up = git_in(upstream)
     assert up(["init", "-q", "-b", "main"])[0] == 0
     commit(up, upstream, "main.py", "one", "first")
-    commit(up, upstream, "bot/discord_bot.py", "bot one", "second")
+    commit(up, upstream, "scripts/discord_bot.py", "bot one", "second")
     assert subprocess.run(["git", "clone", "-q", str(upstream), str(pc)], capture_output=True).returncode == 0
     return types.SimpleNamespace(up=up, upstream=upstream, pc=git_in(pc), pc_dir=pc)
 
@@ -754,7 +754,7 @@ def test_the_update_plan_goes_ahead_only_over_a_clean_copy_and_only_forward():
 
 
 def test_python_changes_count_only_python_files_and_binary_files_as_none():
-    numstat = "10\t2\tmain.py\n3\t0\tbot/bot_lib.py\n5\t5\tdocs/notes.md\n-\t-\ttests/fixture.png\n-\t-\tlogo.py"
+    numstat = "10\t2\tmain.py\n3\t0\tscripts/bot_lib.py\n5\t5\tdocs/notes.md\n-\t-\ttests/fixture.png\n-\t-\tlogo.py"
     assert bot_lib.python_changes(numstat) == (3, 13, 2)
     assert bot_lib.python_changes("") == (0, 0, 0)
     assert bot_lib.python_changes_text((3, 13, 2)) == "15 lines changed in 3 Python files (+13 / -2)."
@@ -778,10 +778,10 @@ def test_the_rollback_plan_goes_back_only_to_a_known_commit_over_a_clean_copy():
 
 def test_what_changed_says_whether_the_packages_and_the_bot_need_attention():
     assert bot_lib.needs_pip(["main.py", "requirements.txt"]) and not bot_lib.needs_pip(["main.py"])
-    for restarts in (["bot/bot_lib.py"], ["magic_numbers.py"], ["requirements.txt"], ["main.py", "bot/discord_bot.py"]):
+    for restarts in (["scripts/bot_lib.py"], ["magic_numbers.py"], ["requirements.txt"], ["main.py", "scripts/discord_bot.py"]):
         assert bot_lib.needs_bot_restart(restarts)
     assert not bot_lib.needs_bot_restart(["main.py", "docs/ARCHITECTURE.md", "tests/test_bot.py", "robot/x.py"])
-    assert bot_lib.dirty_files(" M main.py\nM  bot/a.py\nR  old.py -> new.py\n") == ["main.py", "bot/a.py", "new.py"]
+    assert bot_lib.dirty_files(" M main.py\nM  scripts/a.py\nR  old.py -> new.py\n") == ["main.py", "scripts/a.py", "new.py"]
 
 
 def test_with_real_git_an_update_is_planned_and_done_only_forward_over_a_clean_copy(repos):
@@ -851,7 +851,7 @@ def test_sizes_are_said_in_megabytes_or_from_a_gigabyte_in_gigabytes_and_the_tot
 def test_every_slash_command_has_a_name_and_descriptions_discord_accepts():
     """Discord refuses the whole upload (and the bot never gets its commands) for a description over 100 characters or a bad name."""
     import re
-    source = (pathlib.Path(__file__).parent.parent / "bot" / "discord_bot.py").read_text(encoding="utf-8")
+    source = (pathlib.Path(__file__).parent.parent / "scripts" / "discord_bot.py").read_text(encoding="utf-8")
     commands = re.findall(r'@command\("([^"]+)", "((?:[^"\\]|\\.)*)"\)', source)
     names = {name for name, _ in commands}
     assert {"status", "screenshot", "rview", "log", "report", "results", "pull", "start", "loop", "stop", "exit", "rejoin", "setup", "refresh_debug",

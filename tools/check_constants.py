@@ -1,9 +1,9 @@
 """Static checks pyflakes does not make. Fails (exit 1) on:
 
-- a `cfg.NAME` used by main.py or bot/ that magic_numbers.py doesn't define - a typo in a constant's name, which would otherwise only show when
+- a `cfg.NAME` used by main.py or scripts/ that magic_numbers.py doesn't define - a typo in a constant's name, which would otherwise only show when
   that line runs, possibly hours into a run;
-- a constant in magic_numbers.py that nothing uses (not main.py, bot/, tools/, tests/, nor another constant), or a function or method of main.py or
-  bot/ that nothing but tests calls: dead code, and the comments and docs that still describe it;
+- a constant in magic_numbers.py that nothing uses (not main.py, scripts/, tools/, tests/, nor another constant), or a function or method of main.py or
+  scripts/ that nothing but tests calls: dead code, and the comments and docs that still describe it;
 - a constant the docs name in backticks that no code file has;
 - a key table label (`cfg.KEYS["x"]`) that does not exist, or a key written as a letter where the code presses one;
 - a `pydirectinput.keyDown`/`keyUp` in main.py outside the wrappers that keep track of the keys held;
@@ -28,7 +28,7 @@ def files(pattern):
     return sorted(os.path.relpath(path, ROOT) for path in glob.glob(os.path.join(ROOT, pattern), recursive=True))
 
 
-CODE = ["main.py", *files("bot/*.py")]                                         # what uses the constants
+CODE = ["main.py", *files("scripts/*.py")]                                         # what uses the constants
 OTHER = [*files("tools/*.py"), *files("tests/*.py")]
 EXTERNAL_NAMES = {"TM_CCOEFF_NORMED", "SIGKILL", "HALLOWEEN", "WS_EX_TRANSPARENT", "WS_EX_NOACTIVATE", "WDA_EXCLUDEFROMCAPTURE", "HWND_TOPMOST", "MAX_PATH", "FETCH_HEAD"}                       # named in the docs, from a library or the OS
 ENTRY_POINTS = {"main", "build", "setup_hook", "on_ready", "on_error", "interaction_check", "on_timeout", "run", "emit"}   # called by a framework, not by name
@@ -108,7 +108,7 @@ def unused_constants(defined):
 
 
 def unused_functions():
-    """Functions and methods of main.py and bot/ whose name appears nowhere else in main.py or bot/ (a test that calls one does not count)."""
+    """Functions and methods of main.py and scripts/ whose name appears nowhere else in main.py or scripts/ (a test that calls one does not count)."""
     words = {}
     for path in CODE:
         names, strings = code_tokens(path)

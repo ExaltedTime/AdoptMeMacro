@@ -907,9 +907,12 @@ def needs_pip(changed: list[str]) -> bool:
     return "requirements.txt" in changed
 
 
+BOT_FILES = ("scripts/__init__.py", "scripts/bot_lib.py", "scripts/discord_bot.py")       # the bot's own files (the rest of scripts/ is not run by it)
+
+
 def needs_bot_restart(changed: list[str]) -> bool:
     """Whether the bot itself runs different code after this change: its own files, the constants it reads (magic_numbers.py) or the packages."""
-    return any(path.startswith("bot/") or path in ("magic_numbers.py", "requirements.txt") for path in changed)
+    return any(path in BOT_FILES or path in ("magic_numbers.py", "requirements.txt") for path in changed)
 
 
 GitRunner = Callable[[list[str]], tuple[int, str]]       # runs git with these arguments in the repository: (exit code, output)

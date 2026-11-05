@@ -221,6 +221,8 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "trading_no_one":              {"box": (990, 525, 1090, 570), "threshold": 0.85},
     "trading_option_no_one":       {"box": (960, 570, 1100, 640), "threshold": 0.85},
     "pet_alicorn":                 {"box": (900, 640, 1230, 900), "threshold": 0.8},
+    "age_egg":                     {"box": (800, 640, 1130, 880), "threshold": 0.85},       # the Age rows of the backpack's FILTERS panel: the text of Egg and of Full Grown (their boxes are found left of it)
+    "age_full_grown":              {"box": (800, 640, 1130, 880), "threshold": 0.85},
     "pet_unequip":                 {"box": (980, 780, 1215, 840), "threshold": 0.85},
     "phone_icon":         {"box": (850, 690, 950, 790), "threshold": 0.8},
     "phone_card":         {"box": (850, 700, 1250, 900), "threshold": 0.85},   # (the box is where the card's name can be: with the item in the first slot or the second)
@@ -279,7 +281,7 @@ COMMANDS_DIR = os.path.join(DEBUG_DIR, "commands")          # the commands for t
 COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus", "blackout", "test", "reset_config", "server_link", "trades", "decline", "capture", "recenter")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, travel to / leave the Trading Hub, take pictures of the backpack's pets tab, or run Setup and then the loop (`sloop`), bring the Roblox window to the front (`focus`), blank / show the screen (`blackout`), run one need handler on its own or every teleport one (`test`, what the Debug tab's Test buttons do), reset the config (`reset_config`), save the private server link (`server_link`), take pictures of the offers on the two trade listings (`trades`), decline one of them (`decline`), or start the input capture (the capture hotkey's) and stop it again (`capture`), or close what is open and respawn (`recenter`)
 NEED_NAMES = ("catch", "pet", "choose", "ride", "walk", "hungry", "thirsty", "dirty", "potty", "sleepy", "bored", "beach", "school", "cafe", "salon", "pizza", "camping", "sick")   # the Debug tab's need switches (the keys of main.py's NEED_HANDLER_CLASSES)
 OPTION_SWITCHES = {"side_quest": "side_quest_enabled", "resume_on_focus_loss": "resume_on_focus_loss", "record_next_run": "record_next_run",
-                   "use_private_server": "use_private_server", "blackout_hotkey": "blackout_hotkey_enabled", "new_need_hotkey": "new_need_hotkey_enabled",
+                   "use_private_server": "use_private_server", "blackout_hotkey": "blackout_hotkey_enabled", "new_need_hotkey": "new_need_hotkey_enabled", "level_growing_pet": "level_growing_pet",
                    **{f"play_{name}": f"{name}_enabled" for name in MINIGAME_LABELS}}   # the other switches a command may change: name -> the game config's key ("show_debug_lines" too, which is only in the window)
 SHOW_DEBUG_LINES_OPTION = "show_debug_lines"
 TEST_ALL_TELEPORTS = "teleports"                       # the `test` command's handler for the Debug tab's "Test every teleport handler" (the others are NEED_NAMES)
@@ -1041,6 +1043,14 @@ SETUP_LOCK_HOUSE_POS = (1112, 65)
 SETUP_BACKPACK_SETTINGS_POS = (977, 646)
 SETUP_SORT_MENU_POS = (1031, 680)
 SETUP_CONFIRM_POS = (1047, 908)
+PET_FIRST_ITEM_POS = (975, 707)                  # the pets tab's first pet, right of the green plus tile: the first of the list the filters leave
+AGE_LABELS = ("age_egg", "age_full_grown")        # the Age rows Setup unticks (POPUP_TEMPLATES): what is neither an egg nor full grown still grows
+AGE_CHECKBOX_DX = -17                             # px from where the text of a row starts to the middle of its box
+AGE_CHECKBOX_HALF = 12                            # half the side of the square looked at for a tick
+AGE_TICK_HSV = ((120, 100, 100), (150, 255, 255))   # a tick is purple (OpenCV's HSV); an unticked box has none
+AGE_TICK_MIN_PIXELS = 40                          # of that colour in the square (a tick is about 110, an empty box 0)
+FILTERS_SCROLL_POS = (1123, 760)                  # the wheel is turned over the FILTERS panel's scroll bar (over a row the description of an item pops up)
+FILTERS_SCROLL_TRIES = 8                          # notches at most to bring the Age rows into view
 SETUP_FILTER_CANCEL_POS = (874, 904)         # the FILTERS panel's Cancel: a panel that was only looked at is left as it was
 # Disabling trades: settings (gear) -> settings menu -> Interaction (found by its text) -> trading
 # setting -> "No One" (found by its text) -> close. Each is looked at first and left as it is when it is right. The macro window is sent to the back for this, since

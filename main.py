@@ -807,6 +807,7 @@ def _read_game_config() -> dict[str, Any]:
         "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
         "record_next_run": False,   # record the next run as a low quality video; cleared when that run starts
         "blackout_hotkey_enabled": True,   # whether HOTKEYS["blackout"] blanks the screen (off: that key can be typed in Roblox)
+        "level_growing_pet": True,         # whether Setup filters the eggs and full-grown pets out of the backpack and equips the first pet left (off: the pet is left, the Alicorn equipped if none is out)
         "new_need_hotkey_enabled": True,   # whether HOTKEYS["new_need"] teaches the macro a need icon it does not know (off: that key can be typed in Roblox)
         "needs_enabled": {},        # {need: whether it is acted on}, the Debug tab's switches; a need not in it follows ENABLED_NEEDS (see need_is_enabled())
         **{f"{name}_enabled": False for name in cfg.MINIGAME_LABELS},  # which Halloween minigames get played (see minigame_popup())
@@ -1701,60 +1702,120 @@ def open_filter_panel() -> bool:
     log_run_event("setup: the backpack's filters did not open")
     return False
 
-def pet_is_out(img: Image) -> bool:
-    """Whether the pet is out beside the character: its name bar is over it (find_pet_bar())."""
-    return bool(find_pet_bar(img))
-
 def sort_is_favorites() -> bool:
     """Whether the open FILTERS panel says Favorites on its sort button (its crop, looked for for SETUP_LOOK_WAIT seconds)."""
     return wait_for_any(("filter_sort_favorites",), cfg.SETUP_LOOK_WAIT) is not None
 
 def choose_sort_favorites() -> bool:
-    """In the open FILTERS panel, whose sort is not Favorites: open the sort menu, click Favorites where its text is, see the button say Favorites, and Confirm. The panel is cancelled
-    (nothing changed) and False (logged) if a step did not happen."""
+    """In the open FILTERS panel, whose sort is not Favorites: open the sort menu, click Favorites where its text is, and see the button say Favorites. False (logged) if a step did not happen."""
     logger.debug("Opening sort menu...")
     hover_click(*cfg.SETUP_SORT_MENU_POS)
     option = wait_for_template("filter_option_favorites")
     if option is None:
         log_run_event("setup: Favorites was not in the sort menu")
-    else:
-        hover_click(*option)
-        if sort_is_favorites():
-            hover_click(*cfg.SETUP_CONFIRM_POS)
-            wait_interruptible(cfg.UI_SETTLE)
-            return True
-        log_run_event("setup: the sort did not change to Favorites")
-    hover_click(*cfg.SETUP_FILTER_CANCEL_POS)
-    wait_interruptible(cfg.UI_SETTLE)
+        return False
+    hover_click(*option)
+    if sort_is_favorites():
+        return True
+    log_run_event("setup: the sort did not change to Favorites")
     return False
 
+def age_checkbox(img: Image, label: str) -> Optional[tuple[Point, bool]]:
+    """Where the checkbox of the Age filter's row `label` (POPUP_TEMPLATES: "age_egg", "age_full_grown" - the crop of its text) is, and whether it is ticked (a tick is purple, AGE_TICK_HSV,
+    at least AGE_TICK_MIN_PIXELS of the AGE_CHECKBOX_HALF square round its middle). None if the row is not in view."""
+    centre = popup_found(img, label)
+    if centre is None:
+        return None
+    x = centre[0] - load_templates(cfg.STRAY_WINDOW_DIR)[label].shape[1] // 2 + cfg.AGE_CHECKBOX_DX            # (the box is a fixed way left of where the text starts: the text's width differs)
+    half = cfg.AGE_CHECKBOX_HALF
+    patch = cv2.cvtColor(img[centre[1] - half:centre[1] + half, x - half:x + half], cv2.COLOR_BGR2HSV)
+    ticked = cv2.countNonZero(cv2.inRange(patch, *cfg.AGE_TICK_HSV)) >= cfg.AGE_TICK_MIN_PIXELS
+    return (x, centre[1]), ticked
+
+def scroll_filters_to_age() -> bool:
+    """In the open FILTERS panel: scroll its list (the wheel over its scroll bar, so that no item's description opens) until the Age rows are in view, FILTERS_SCROLL_TRIES notches at most. False if they never were."""
+    for _ in range(cfg.FILTERS_SCROLL_TRIES + 1):
+        img = grab_screen()
+        if all(age_checkbox(img, label) is not None for label in cfg.AGE_LABELS):
+            return True
+        hover_move(*cfg.FILTERS_SCROLL_POS)
+        scroll_down(1)
+        wait_interruptible(cfg.UI_SETTLE)
+    return False
+
+def age_filter_is_right() -> bool:
+    """In the open FILTERS panel, the Age rows in view: Egg and Full Grown are unticked (the pets the macro is to look after are the ones that are neither, and still grow)."""
+    states = [age_checkbox(grab_screen(), label) for label in cfg.AGE_LABELS]
+    return all(state is not None and not state[1] for state in states)
+
+def untick_egg_and_full_grown() -> Optional[bool]:
+    """In the open FILTERS panel: scroll to the Age rows and untick Egg and Full Grown where they are ticked (a box that is unticked already is left alone), looking at each after its click.
+    True if something was clicked (the panel is to be confirmed), False if both were unticked already, None (logged) if the rows were not found or a click did not take."""
+    if not scroll_filters_to_age():
+        log_run_event("setup: the filters' Age rows were not found")
+        return None
+    clicked = False
+    for label in cfg.AGE_LABELS:
+        found = age_checkbox(grab_screen(), label)
+        if found is None:
+            log_run_event(f"setup: the Age row {label} was not found")
+            return None
+        if not found[1]:
+            continue
+        hover_click(*found[0])
+        wait_interruptible(cfg.UI_SETTLE)
+        after = age_checkbox(grab_screen(), label)
+        if after is None or after[1]:
+            log_run_event(f"setup: the {label} box did not untick")
+            return None
+        clicked = True
+    return clicked
+
+def level_growing_pets() -> bool:
+    """Whether Setup is to leave the pets that cannot grow out of the backpack and equip the first that can (the game config's level_growing_pet, the Options subtab's checkbox)."""
+    return bool(load_game_config()["level_growing_pet"])
+
 def set_backpack_filter() -> bool:
-    """Filter the backpack to favorites: open it and its filters; the sort is left as it is when it says Favorites already (Cancel), else it is chosen (choose_sort_favorites()), and the
-    filters are opened again to see that it says Favorites. When the pet is not out (no name bar over the character before the backpack opened) the Alicorn is equipped too
-    (equip_favorite_pet()). Setup does it, and so does a ride that did not clear its need (when Setup did not run, the first vehicle was a car, not the helicopter).
-    True if the sort is Favorites at the end."""
-    pet_out = pet_is_out(grab_screen())
+    """Set the backpack's filters: open it and the FILTERS panel, with the sort Favorites (left alone when it says so, else chosen: choose_sort_favorites()) and, when level_growing_pets(), Egg and
+    Full Grown unticked in the Age rows (untick_egg_and_full_grown()); if anything was changed it is confirmed and the panel is opened again to see that both took, and the panel is
+    cancelled (one that was only looked at is left as it was). With level_growing_pets() the first pet of the pets tab - one that is neither an egg nor full grown, and so one to level up - is then
+    equipped (equip_pet()); without, the Alicorn is, if the pet is not out. Setup does it, and so does a ride that did not clear its need (when Setup did not run, the first vehicle was a car, not
+    the helicopter). True if the filters are as they should be at the end."""
+    pet_out = bool(find_pet_bar(grab_screen()))
+    growing = level_growing_pets()
     ok, panel_open = False, True
     with backpack_on_purpose():
         logger.debug("Opening backpack...")
         pydirectinput.press(cfg.KEYS["backpack"])
         wait_interruptible(cfg.UI_SETTLE)
         if open_filter_panel():
-            if sort_is_favorites():
-                log_run_event("setup: the backpack's sort is Favorites already")
+            changed, sound = False, True
+            if not sort_is_favorites():
+                sound = choose_sort_favorites()
+                changed = sound
+            if sound and growing:
+                aged = untick_egg_and_full_grown()
+                sound = aged is not None
+                changed = changed or bool(aged)
+            if not sound:
+                ok = False
+            elif not changed:
+                log_run_event("setup: the backpack's filters are as they should be already")
                 ok = True
-            elif choose_sort_favorites():
-                panel_open = open_filter_panel()                                                  # (looked at again: the Confirm took)
-                ok = panel_open and sort_is_favorites()
-                log_run_event("setup: the backpack is sorted by Favorites" if ok else "setup: the backpack's sort is not Favorites after Confirm")
             else:
-                panel_open = False
-            if panel_open:
-                hover_click(*cfg.SETUP_FILTER_CANCEL_POS)                                         # (a panel only looked at is left as it was)
+                hover_click(*cfg.SETUP_CONFIRM_POS)
                 wait_interruptible(cfg.UI_SETTLE)
-        if not pet_out:
+                panel_open = open_filter_panel()                                                  # (looked at again: the Confirm took)
+                ok = panel_open and sort_is_favorites() and (not growing or (scroll_filters_to_age() and age_filter_is_right()))
+                log_run_event("setup: the backpack's filters are set" if ok else "setup: the backpack's filters are not as set after Confirm")
+            if panel_open:
+                hover_click(*cfg.SETUP_FILTER_CANCEL_POS)                                         # (a panel only looked at - or one that could not be set - is left as it was)
+                wait_interruptible(cfg.UI_SETTLE)
+        if growing:
+            equip_pet("the first pet of the list", lambda: cfg.PET_FIRST_ITEM_POS)
+        elif not pet_out:
             log_run_event("setup: the pet is not out - equipping the Alicorn")
-            equip_favorite_pet()
+            equip_pet("the Alicorn", lambda: wait_for_template("pet_alicorn"))
         close_backpack("setup")
     return ok
 
@@ -1770,28 +1831,28 @@ def find_equip_button(img: Image) -> Optional[Point]:
             return left + int(centres[i][0]), top + int(centres[i][1])
     return None
 
-def equip_favorite_pet() -> bool:
-    """In the open backpack, when the pet is not out: the pets tab, the Alicorn found by its picture (POPUP_TEMPLATES["pet_alicorn"], wherever it is in the grid) and clicked, and its card's
-    Equip button, found by its colour (find_equip_button()). A card that says Unequip needs nothing. Looked at after: the card must say Unequip. True if the Alicorn is equipped."""
+def equip_pet(what: str, where: Callable[[], Optional[Point]]) -> bool:
+    """In the open backpack: the pets tab, the pet `what` (named in the log) clicked where `where()` says it is (None: not in view), and the Equip button of its card, found by its colour
+    (find_equip_button()). A card that says Unequip needs nothing. Looked at after: the card must say Unequip. True if the pet is equipped."""
     logger.debug("Opening the pets tab...")
     select_backpack_tab(cfg.INVENTORY_PETS_TAB_POS)
     wait_interruptible(cfg.UI_SETTLE)
-    alicorn = wait_for_template("pet_alicorn")
-    if alicorn is None:
-        log_run_event("setup: the Alicorn was not seen in the pets tab")
+    point = where()
+    if point is None:
+        log_run_event(f"setup: {what} was not seen in the pets tab")
         return False
-    hover_click(*alicorn)
+    hover_click(*point)
     wait_interruptible(cfg.UI_SETTLE)
     button = find_equip_button(grab_screen())
     if button is None:
         equipped = wait_for_template("pet_unequip", cfg.SETUP_LOOK_WAIT) is not None
-        log_run_event("setup: the Alicorn is equipped already" if equipped else "setup: the Alicorn's card has no Equip button and does not say Unequip")
+        log_run_event(f"setup: {what} is equipped already" if equipped else f"setup: the card of {what} has no Equip button and does not say Unequip (no pet there?)")
         return equipped
     logger.debug("Equipping the pet...")
     hover_click(*button)
     wait_interruptible(cfg.UI_SETTLE)
     equipped = wait_for_template("pet_unequip") is not None
-    log_run_event("setup: the Alicorn is equipped" if equipped else "setup: the Alicorn's card does not say Unequip after Equip")
+    log_run_event(f"setup: {what} is equipped" if equipped else f"setup: the card of {what} does not say Unequip after Equip")
     return equipped
 
 def send_macro_window_to_back() -> None:
@@ -7439,6 +7500,7 @@ class AdoptMeGUI:
         """Fill the Options subtab: record the next run, show the debug lines in the output or not, refresh the debug
         folder, reset the config."""
         self.add_config_checkbox(parent, "Record the next run (low quality video)", "record_next_run", load_game_config())
+        self.add_config_checkbox(parent, "Setup levels a pet that still grows (no eggs, none full grown)", "level_growing_pet", load_game_config())
         self.add_config_checkbox(parent, f"{cfg.HOTKEYS['blackout'].upper()} blanks the screen in Roblox (off: type it)", "blackout_hotkey_enabled", load_game_config())
         self.add_config_checkbox(parent, f"{cfg.HOTKEYS['new_need'].upper()} teaches a new need icon in Roblox (off: type it)", "new_need_hotkey_enabled", load_game_config())
         self.show_debug_var = tk.BooleanVar(value=True)

@@ -307,6 +307,8 @@ check is enough; each check looks twice, as described below - up to
 teleport-walk needs time out by themselves in the game, and camping was seen
 clearing ~66s after its walk) - or a teleport-walk entry's own `max_wait`.
 
+**The pulse.** The icon of a need that is being done pulses: its saturation swings towards white and back about every 2.5 s, deeper as it goes, until the need clears (the capture of dirty, thirsty and sleepy: it began 1 to 6 s after the click, and every other icon stayed constant; the match score of the paled icon was still 0.96, so matching is not disturbed). While it waits, `wait_until_need_gone()` looks at the icon every `PULSE_POLL` (`PulseWatch.look()`: a fresh circle search, the saturation inside the icon's circle, `icon_saturation()`) beside the checks above. A swing of `PULSE_MIN_SWING` between the highest and lowest look is a pulse (`PulseWatch.pulsing()`). For the needs in `PULSE_NEEDS` - the ones whose pulse has been seen - none within `PULSE_START_WAIT` seconds of the action means the game is not doing it: a failure is logged (`<need>: its icon has not pulsed ... - it is not being done`), `state.need_cleared` is False and the wait ends there, not at `NEED_GONE_MAX_WAIT`; the next cycle tries the need again like any other that is still showing. For the other needs a pulse is only logged (`<need>: its icon pulsed Ns after the action`), which tells whether it is worth adding them. Tests: `tests/test_need_handlers.py` against the strips of `tests/pulse/`.
+
 Each individual check goes through `_need_cleared()`, which re-samples
 once more, `NEED_GONE_FLICKER_RECHECK_DELAY` later, before a miss is
 allowed to count: the icon can drop out of a single detection pass for a

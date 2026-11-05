@@ -493,3 +493,54 @@ def test_the_trading_hub_is_left_by_its_button_and_waited_for_until_the_regular_
 
 
 
+
+
+# --- the pulse of the icon of a need that is being done (tests/pulse/: the need bar of a capture, the icon idle and at its palest) ---
+
+def pulse_strip(name):
+    import cv2
+    return cv2.imread(os.path.join(os.path.dirname(__file__), "pulse", name + ".png"))
+
+
+@pytest.mark.parametrize("need", ["dirty", "thirsty", "sleepy"])
+def test_the_saturation_of_an_icon_drops_when_it_pulses(macro, monkeypatch, need):
+    levels = {}
+    monkeypatch.setattr(macro, "check_running", lambda: None)
+    for state in ("idle", "pale"):
+        strip = pulse_strip(f"{need}_{state}")
+        monkeypatch.setattr(macro, "grab_screen_region", lambda x, y, w, h, strip=strip: strip[y:y + h, x:x + w])
+        macro._NEED_STRIP_CACHE.update(strip=None, found=[], reuses=0)
+        found, img = macro.detect_need_icons(fresh=True)
+        levels[state] = [macro.icon_saturation(icon) for _, icon, name, _ in macro.identify_icons(found, img) if name == need]
+    assert len(levels["idle"]) == 1 and len(levels["pale"]) == 1
+    assert levels["idle"][0] - levels["pale"][0] >= macro.cfg.PULSE_MIN_SWING * 2
+
+
+def test_a_need_is_judged_by_its_pulse_only_when_the_pulse_is_known_and_late(macro):
+    watch = macro.PulseWatch("dirty")
+    watch.levels = [160.0, 160.5, 159.0]
+    watch.waited = macro.cfg.PULSE_START_WAIT - 1
+    assert not watch.pulsing() and not watch.overdue()                         # (not yet time)
+    watch.waited = macro.cfg.PULSE_START_WAIT
+    assert watch.overdue()
+    watch.levels.append(160.0 - macro.cfg.PULSE_MIN_SWING)
+    assert watch.pulsing() and not watch.overdue()
+    other = macro.PulseWatch("hungry")                                         # (a need whose pulse was never seen is not judged)
+    other.waited = 10 * macro.cfg.PULSE_START_WAIT
+    assert not other.overdue()
+
+
+def test_a_wait_for_a_need_that_never_pulses_ends_early_as_a_failure_and_one_that_pulses_goes_on(macro, monkeypatch):
+    failures, events = [], []
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: failures.append(reason))
+    monkeypatch.setattr(macro, "log_run_event", events.append)
+    monkeypatch.setattr(macro, "scan_needs", lambda fresh=False: ["dirty"])
+    monkeypatch.setattr(macro.PulseWatch, "look", lambda self: self.levels.append(160.0))      # (a constant icon)
+    macro.wait_until_need_gone("dirty", max_wait=75)
+    assert len(failures) == 1 and "not being done" in failures[0] and macro.state.need_cleared is False
+    failures.clear()
+    level = iter(range(10 ** 6))
+    monkeypatch.setattr(macro.PulseWatch, "look", lambda self: self.levels.append(160.0 - 5 * (next(level) % 4)))      # (one that moves)
+    macro.wait_until_need_gone("dirty", max_wait=30)
+    assert len(failures) == 1 and "still showing after 30" in failures[0]                    # (it ran its course instead)

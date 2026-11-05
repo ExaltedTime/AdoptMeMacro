@@ -411,6 +411,7 @@ def need_gone(macro, monkeypatch):
     monkeypatch.setattr(macro, "wait_interruptible", lambda duration: log["waits"].append(round(duration, 2)))
     monkeypatch.setattr(macro, "check_focus", lambda: None)
     monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: log.setdefault("failures", []).append(reason))
+    monkeypatch.setattr(macro.PulseWatch, "look", lambda self: None)                      # (the pulse has its own tests)
 
     def script(*results):
         queue = list(results)
@@ -427,7 +428,7 @@ def test_the_wait_ends_at_the_first_check_that_finds_the_need_gone(need_gone, ma
     need_gone["script"](["hungry"], [], [])      # check 1: still there; check 2: gone on both looks
     macro.wait_until_need_gone("hungry", max_wait=60, poll_interval=POLL)
     assert need_gone["scans"] == [False, False, True]                      # the second look of the last check was a fresh search
-    assert [w for w in need_gone["waits"] if w > 1] == [POLL] * 2   # polled every poll_interval, no extra confirmations
+    assert round(sum(w for w in need_gone["waits"] if w != 0.3), 2) == POLL * 2   # polled every poll_interval (in steps of PULSE_POLL), no extra confirmations
     assert "failures" not in need_gone
 
 

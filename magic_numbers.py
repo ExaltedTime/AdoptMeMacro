@@ -593,6 +593,13 @@ NEED_GONE_MAX_WAIT = 75.0        # most any need is waited on to clear: wait_unt
                                   # needs; they time out by themselves in the game, and camping was seen clearing ~66s after its walk),
                                   # and the total duration of the walk/ride actions that end early once it has cleared
 NEED_GONE_POLL_INTERVAL = 3.5    # how often to check for the icon during that wait (and, while walking, from the watcher thread)
+# The icon of a need that is being done pulses: its saturation swings from the normal level towards white and back about every 2.5 s, deeper as it goes, until the need clears (a capture of
+# dirty, thirsty and sleepy: the other icons stay constant). wait_until_need_gone() watches for it - see PulseWatch.
+PULSE_NEEDS = ("dirty", "thirsty", "sleepy")   # the needs whose pulse has been seen (a need not in here is only watched and logged, never judged by it)
+PULSE_POLL = 0.5                 # seconds between looks at the icon while waiting for a need to clear (the pulse is about 2.5 s long)
+PULSE_MIN_SWING = 10             # the saturation (0-255) of the icon moves this much between its highest and lowest look: a pulse (the same icon idle varies by 1-2)
+PULSE_START_WAIT = 12.0          # seconds from the click within which the pulse must show (it showed 1 to 6 s after)
+PULSE_DISC_MARGIN = 6            # px: the icon's saturation is taken inside its crop's circle this much smaller than the crop, to leave the ring and what is behind it out
 NEED_GONE_FLICKER_RECHECK_DELAY = 0.3  # before counting any single miss, re-sample this soon after -
                                         # the icon can flash for a frame (or briefly drop out against a
                                         # busy background) without the need actually having cleared

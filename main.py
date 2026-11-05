@@ -1060,6 +1060,39 @@ def _need_cleared(need_name: str) -> bool:
             wait_interruptible(cfg.NEED_GONE_FLICKER_RECHECK_DELAY)
     return True
 
+def icon_saturation(icon_img: Image) -> float:
+    """The mean saturation (0-255) inside the circle of an icon's crop (extract_icon()), PULSE_DISC_MARGIN smaller than it."""
+    height, width = icon_img.shape[:2]
+    mask = np.zeros((height, width), np.uint8)
+    cv2.circle(mask, (width // 2, height // 2), max(1, min(height, width) // 2 - cfg.PULSE_DISC_MARGIN), 255, -1)
+    return float(cv2.mean(cv2.cvtColor(icon_img, cv2.COLOR_BGR2HSV)[..., 1], mask)[0])
+
+class PulseWatch:
+    """Looks at the icon of `need_name` now and then (look()) and tells whether it pulses (pulsing(): its saturation has moved PULSE_MIN_SWING between its highest and lowest look) - the sign that
+    the game is doing the need."""
+    def __init__(self, need_name: str) -> None:
+        self.need_name = need_name
+        self.waited = 0.0                 # seconds since the action, as wait_until_need_gone() counts them
+        self.levels: list[float] = []
+        self.first_seen: Optional[float] = None
+
+    def look(self) -> None:
+        """One look at the need bar (the circle search is made afresh, the icon may have moved along as others went): the saturation of this need's icon is noted if it is there."""
+        found, img = detect_need_icons(fresh=True)
+        for _, icon_img, name, _ in identify_icons(found, img):
+            if name == self.need_name:
+                self.levels.append(icon_saturation(icon_img))
+                if self.first_seen is None and self.pulsing():
+                    self.first_seen = self.waited
+                return
+
+    def pulsing(self) -> bool:
+        return len(self.levels) >= 2 and max(self.levels) - min(self.levels) >= cfg.PULSE_MIN_SWING
+
+    def overdue(self) -> bool:
+        """True if the need is one whose pulse is known (PULSE_NEEDS) and none has shown PULSE_START_WAIT seconds after the action."""
+        return self.need_name in cfg.PULSE_NEEDS and not self.pulsing() and self.waited >= cfg.PULSE_START_WAIT
+
 def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAIT, poll_interval: float = cfg.NEED_GONE_POLL_INTERVAL) -> None:
     """Wait up to `max_wait` for `need_name` to clear, polling every `poll_interval`. A
     timeout is logged as a failure and sets state.need_cleared False.
@@ -1067,17 +1100,29 @@ def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAI
     """
     logger.debug(f"Waiting up to {max_wait}s for {need_name} to clear...")
     state.need_cleared = True
-    deadline = time.time() + max_wait
+    pulse = PulseWatch(need_name)
+    next_check = poll_interval
     while True:
-        remaining = deadline - time.time()
+        remaining = max_wait - pulse.waited
         if remaining <= 0:
             logger.debug(f"{need_name} still showing after {max_wait}s, moving on")
             log_failure(f"{need_name} still showing after {max_wait}s")
             state.need_cleared = False
             return
-        wait_interruptible(min(poll_interval, remaining))
-        if _need_cleared(need_name):
-            logger.debug(f"{need_name} cleared")
+        step = min(cfg.PULSE_POLL, remaining)
+        wait_interruptible(step)
+        pulse.waited += step
+        pulse.look()
+        if pulse.waited >= next_check - 1e-9:
+            next_check += poll_interval
+            if _need_cleared(need_name):
+                logger.debug(f"{need_name} cleared")
+                if pulse.first_seen is not None:
+                    log_run_event(f"{need_name}: its icon pulsed {pulse.first_seen:.1f}s after the action")
+                return
+        if pulse.overdue():
+            log_failure(f"{need_name}: its icon has not pulsed {cfg.PULSE_START_WAIT}s after the action - it is not being done")
+            state.need_cleared = False
             return
 
 def _watch_need_gone(need_name: str, cleared_event: threading.Event, stop_event: threading.Event, answers: Optional[list] = None) -> None:

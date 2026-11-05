@@ -798,6 +798,7 @@ def _read_game_config() -> dict[str, Any]:
         "record_next_run": False,   # record the next run as a low quality video; cleared when that run starts
         "blackout_hotkey_enabled": True,   # whether HOTKEYS["blackout"] blanks the screen (off: that key can be typed in Roblox)
         "pet_pen_enabled": True,           # whether pet_pen() collects the Pet Pen when the Task Board says it is ready
+        "pet_repicked": 0.0,               # when pet_repick() last picked the pet to level
         "pet_pen_looked": 0.0,             # when pet_pen() last opened the board
         "level_growing_pet": True,         # whether Setup filters the eggs and full-grown pets out of the backpack and equips the first pet left (off: the pet is left, the Alicorn equipped if none is out)
         "new_need_hotkey_enabled": True,   # whether HOTKEYS["new_need"] teaches the macro a need icon it does not know (off: that key can be typed in Roblox)
@@ -3798,6 +3799,24 @@ def collect_pet_pen() -> bool:
     finally:
         state.task_board_wanted = False
 
+def repick_pet() -> bool:
+    """Open the backpack and equip the first pet of the filtered list (set_backpack_filter() with the filters already right does no more), then respawn: a pet that has become full grown is
+    not in the list any more, so the first one is another that still grows. True if the filters and the pet are as they should be."""
+    if not focus_roblox():
+        return False
+    ok = set_backpack_filter()
+    respawn_character()
+    return ok
+
+def pet_repick() -> None:
+    """Once per cycle after pet_pen(), when the game config's level_growing_pet is on: every PET_REPICK_INTERVAL seconds repick_pet() puts out the first pet that is neither an egg nor full grown. The
+    macro has no way yet to tell that the pet out has grown up (no capture of it), so it asks the list instead."""
+    config = load_game_config()
+    if not config["level_growing_pet"] or time.time() - config["pet_repicked"] < cfg.PET_REPICK_INTERVAL:
+        return
+    run_side_action(repick_pet)
+    update_game_config(lambda c: c.update(pet_repicked=time.time()))
+
 def pet_pen() -> None:
     """Once per cycle after side_quest(), unless the game config's pet_pen_enabled is off: when the Task Board button shows its alert badge (at most every PET_PEN_BADGE_INTERVAL) or
     PET_PEN_CHECK_INTERVAL has passed since the last look (the badge was not on in the capture of the Pet Pen notice), collect the Pet Pen with collect_pet_pen()."""
@@ -4406,6 +4425,7 @@ def run_full_cycle() -> None:
         unscrew()
         side_quest()
         pet_pen()
+        pet_repick()
         if process_needs():
             return
         respawn_if_no_detection()

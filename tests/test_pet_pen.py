@@ -95,3 +95,26 @@ def test_the_task_board_is_not_closed_as_a_stray_window_while_the_pet_pen_has_it
     assert macro.dismiss_stray_windows() is None
     macro.state.task_board_wanted = False
     assert macro.dismiss_stray_windows() == "task_board"
+
+
+def test_the_pet_to_level_is_picked_again_every_interval_when_the_option_is_on(macro, monkeypatch):
+    picked = []
+    monkeypatch.setattr(macro, "run_side_action", lambda action: picked.append(action.__name__) or True)
+    macro.pet_repick()
+    assert picked == ["repick_pet"]                                                   # (never done: due)
+    macro.pet_repick()
+    assert picked == ["repick_pet"]                                                   # (just done)
+    macro.update_game_config(lambda c: c.update(pet_repicked=macro.time.time() - macro.cfg.PET_REPICK_INTERVAL - 1))
+    macro.pet_repick()
+    assert len(picked) == 2
+    macro.update_game_config(lambda c: c.update(level_growing_pet=False, pet_repicked=0.0))
+    macro.pet_repick()
+    assert len(picked) == 2
+
+
+def test_picking_again_sets_the_filter_and_equips_and_respawns(macro, monkeypatch):
+    calls = []
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "set_backpack_filter", lambda: calls.append("filter") or True)
+    monkeypatch.setattr(macro, "respawn_character", lambda: calls.append("respawn"))
+    assert macro.repick_pet() is True and calls == ["filter", "respawn"]

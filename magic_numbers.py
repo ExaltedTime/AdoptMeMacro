@@ -400,6 +400,16 @@ PET_BAR_AREA = (500, 20000)
 PET_BAR_ASPECT = (1.8, 4.0)
 PET_BAR_WHITE_LEVEL = 225
 PET_BAR_WHITE_FRACTION = 0.15
+PET_PILL_HSV = (((122, 110, 200), (138, 215, 255)), ((126, 140, 60), (138, 215, 125)))     # the name pill as a whole: its filled part is bright purple and the rest dark purple (the pet's age progress), the text white over both
+PET_PILL_MIN_Y = 130                      # px: pills higher than this are the game's buttons (Edit House, My Homes, Lock), not a pet's
+PET_PILL_CLOSE = 11                       # px: the text's white strokes are closed over so that the pill is one blob
+PET_PILL_AREA = (800, 20000)
+PET_PILL_ASPECT = (2.0, 7.0)              # width / height
+PET_PILL_FILL = 0.6                       # of its box the blob fills (a pill nearly does)
+PET_FOCUS_TRIES = 3                       # tries at focusing the pet (the clicks, then the E key that opens its menu when the player is by it) before choose gives up
+PET_FOCUS_VIEW_WAIT = 2.5                 # seconds the view is waited for after each try (the first three chooses of a run clicked the pet and looked at once: the view came 20 s later)
+PET_FOCUS_POLL = 0.25
+CHOOSE_FIND_WAIT = 3.0                    # seconds the button is looked for in the view once it is up (it moves in)
 PET_BAR_BELOW_STEPS = (3.5, 1.5, 2.5)                          # bar heights under the bar's bottom edge to click, in turn until the pet is focused
 # The choose button when no pixel is CHOOSE_BUTTON_COLOR (twice in run 34 it was in plain sight: a purple-to-magenta disc with a "?" and, not always, a white outline, under the
 # focused pet): the biggest roundish blob of this hue (OpenCV's HSV: purple 141, magenta 154; the pink BACK button is 167, the backpack's purple is 130 and paler), at least

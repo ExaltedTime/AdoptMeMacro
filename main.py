@@ -2731,6 +2731,22 @@ def focus_pet(click_duration: float = cfg.CLICK_MOVE_DURATION) -> bool:
             focus_pet_by_bar(grab_screen(), click_duration)
     return True
 
+def focus_pet_reliably(click_duration: float = cfg.CLICK_MOVE_DURATION) -> bool:
+    """focus_pet() and then the pet's view is waited for (PET_FOCUS_VIEW_WAIT: the first three chooses of a run clicked the pet and looked at once, found no button, and the view came a few seconds
+    after); when it does not come the E key is pressed - the pet's own prompt, which opens its menu when the player is by it, whatever the pet is and wherever its name pill is - and the whole is tried
+    again, PET_FOCUS_TRIES times. True once the view is up."""
+    for attempt in range(1, cfg.PET_FOCUS_TRIES + 1):
+        if detect_pet_focus(grab_screen()):
+            return True
+        if focus_pet(click_duration) and look_until(detect_pet_focus, cfg.PET_FOCUS_VIEW_WAIT, cfg.PET_FOCUS_POLL) is not None:
+            return True
+        pydirectinput.press(cfg.KEYS["interact"])
+        if look_until(detect_pet_focus, cfg.PET_FOCUS_VIEW_WAIT, cfg.PET_FOCUS_POLL) is not None:
+            log_run_event("pet: focused with the E key")
+            return True
+        log_run_event(f"pet: not focused (try {attempt} of {cfg.PET_FOCUS_TRIES})")
+    return False
+
 def find_pet_bar(img: Image) -> list[Point]:
     """Where to click the pet by the name bar over it, for a pet that stands still (nothing moves for focus_pet() to find): the purple part of the bar by its hue (PET_BAR_HSV), a wide
     short blob (PET_BAR_ASPECT, PET_BAR_AREA) with white at its right (PET_BAR_WHITE_*), whatever its words and outline. The pet is a different number of bar heights under the bar's bottom
@@ -2750,9 +2766,30 @@ def find_pet_bar(img: Image) -> list[Point]:
             best = (area, [(x + w, int(y + h + below * h)) for below in cfg.PET_BAR_BELOW_STEPS])
     return best[1] if best is not None else []
 
+def find_pet_pill(img: Image, ignore: Optional[Box] = None) -> list[Point]:
+    """Where to click the pet by its name pill, whatever the pet and however much it has grown: the pill is bright purple where it is filled and dark purple beyond (PET_PILL_HSV, the white text
+    closed over, PET_PILL_CLOSE), a wide short blob (PET_PILL_ASPECT, PET_PILL_AREA, PET_PILL_FILL) below the game's own buttons (PET_PILL_MIN_Y) and outside `ignore` (the macro's window). The pet is
+    centred under it, PET_BAR_BELOW_STEPS pill heights below its bottom edge (the biggest pill first). No points if there is none."""
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    mask = cv2.bitwise_or(cv2.inRange(hsv, *cfg.PET_PILL_HSV[0]), cv2.inRange(hsv, *cfg.PET_PILL_HSV[1]))
+    mask[:cfg.PET_PILL_MIN_Y] = 0
+    if ignore is not None:
+        left, top, right, bottom = ignore
+        mask[top:bottom, left:right] = 0
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((cfg.PET_PILL_CLOSE, cfg.PET_PILL_CLOSE), np.uint8))
+    count, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    best: Optional[tuple[int, list[Point]]] = None
+    for i in range(1, count):
+        x, y, w, h, area = (int(v) for v in stats[i])
+        if not cfg.PET_PILL_AREA[0] <= area <= cfg.PET_PILL_AREA[1] or not cfg.PET_PILL_ASPECT[0] <= w / h <= cfg.PET_PILL_ASPECT[1] or area < cfg.PET_PILL_FILL * w * h:
+            continue
+        if best is None or area > best[0]:
+            best = (area, [(x + w // 2, int(y + h + below * h)) for below in cfg.PET_BAR_BELOW_STEPS])
+    return best[1] if best is not None else []
+
 def focus_pet_by_bar(img: Image, click_duration: float = cfg.CLICK_MOVE_DURATION) -> bool:
-    """Click the pet by the name bar over it (find_pet_bar(), each place in turn) and say whether that focused it (detect_pet_focus())."""
-    points = find_pet_bar(img)
+    """Click the pet by the name bar over it (find_pet_bar(), or find_pet_pill() when that finds none, each place in turn) and say whether that focused it (detect_pet_focus())."""
+    points = find_pet_bar(img) or find_pet_pill(img, macro_window_reference_rect())
     if not points:
         logger.debug("Focus_pet: no name bar either")
         return False
@@ -2995,22 +3032,32 @@ class ChooseNeedHandler(NeedHandler):
             dismiss_stray_windows()                          # (a choose that failed left the pet in focus, where the next need's walk goes nowhere: backed out of now)
         return done
 
+    @staticmethod
+    def _find_button(img: Image) -> Optional[tuple[Point, bool]]:
+        """(where the button is, whether its exact colour was how it was found) - the colour first, then the purple disc - or None."""
+        point = find_exact_color(img, cfg.CHOOSE_BUTTON_COLOR)
+        if point is not None:
+            return point, True
+        point = find_choose_disc(img)
+        return (point, False) if point is not None else None
+
     def _choose(self) -> bool:
-        if not focus_pet():
+        if not focus_pet_reliably():
+            log_run_event("choose: the pet's view did not come up")
             return False
         wait_interruptible(cfg.UI_SETTLE)
 
         logger.debug(f"Searching screen for color {cfg.CHOOSE_BUTTON_COLOR}...")
-        img = grab_screen()
-        match = find_exact_color(img, cfg.CHOOSE_BUTTON_COLOR)
-        if match is None:
-            logger.warning(f"No pixel matching {cfg.CHOOSE_BUTTON_COLOR} found on screen - looking for the purple disc")
-            match = find_choose_disc(img)
-            if match is None:
-                logger.warning("No purple disc found either")
-                shot = save_failure_report("choose: no button in the focused view")          # (the failure screenshot taken after this is of the pet focus closed: the button is in this one)
-                log_run_event(f"choose: no button found - the focused view is in failures/{shot}")
-                return False
+        found = look_until(self._find_button, cfg.CHOOSE_FIND_WAIT, cfg.PET_FOCUS_POLL)             # (the button moves in with the view: looked for for a few seconds, not once)
+        if found is None:
+            logger.warning("No choose button found, by colour or by shape")
+            shot = save_failure_report("choose: no button in the focused view")          # (the failure screenshot taken after this is of the pet focus closed: the button is in this view)
+            log_run_event(f"choose: no button found - the focused view is in failures/{shot}")
+            return False
+        match: Point
+        by_colour: bool
+        match, by_colour = found
+        if not by_colour:
             logger.info(f"The choose button was found as a purple disc at {match}")
             log_run_event("choose: the button was found by its shape and hue, not its exact colour")
         logger.debug(f"Found at {match}, moving there slowly...")

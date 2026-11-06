@@ -1335,6 +1335,7 @@ async def watch_once(channel: discord.abc.Messageable, config: bot_lib.Config, s
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
+    logging.getLogger("discord.client").addFilter(lambda record: "PyNaCl" not in record.getMessage())       # (the bot has no voice: that warning says nothing to act on)
     path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "bot_config.json")
     try:
         config = bot_lib.load_config(path)

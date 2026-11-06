@@ -1,7 +1,9 @@
 """The Pet Pen: the Task Board's alert badge, its "Pet Pen Ready" card and the NICE! button of the age-up screen, against real frames (tests/pet_pen/), and the walk through them."""
 import os
+import time
 
 import cv2
+import numpy as np
 import pytest
 
 import conftest
@@ -151,3 +153,97 @@ def test_the_friend_pill_of_a_pet_that_has_grown_up_is_found_with_its_place_and_
     for name in ("age_up_nice", "earned_nice", "board_pet_pen_ready", "world_after"):
         assert macro.note_pet_friend(shot(name)) is False, name
     assert log == []
+
+
+# --- switching a full-grown pet out of the pen (real frames of a person doing it: the pen with a "Full grown!" pet, after taking it out, the small backpack, after putting a pet in) ---
+
+def test_the_pens_full_grown_pet_the_free_place_and_the_small_backpack_are_found_on_the_real_frames(macro):
+    assert macro.full_grown_slots(shot("pen_full_grown")) == [0]
+    assert macro.full_grown_slots(shot("pen_add_pet")) == [] and macro.full_grown_slots(shot("pen_after_add")) == []
+    assert macro.popup_visible(shot("pen_full_grown"), "pet_pen_title") and not macro.popup_visible(shot("age_up_nice"), "pet_pen_title")
+    x, y = macro.popup_found(shot("pen_add_pet"), "pet_pen_add")
+    assert abs(x - 857) < 10 and abs(y - 584) < 10
+    assert macro.popup_visible(shot("pen_backpack"), "pet_backpack_title") and not macro.popup_visible(shot("pen_add_pet"), "pet_backpack_title")
+
+
+def test_a_pet_fits_unless_it_is_grey_in_a_trade_listing_or_has_the_green_edge_of_the_equipped_one_and_the_empty_cells_do_not(macro):
+    frame = shot("pen_backpack")
+    assert [macro.pen_cell_fits(frame, 0, column) for column in range(4)] == [False, False, False, False]       # (the equipped pet, then three in listings)
+    assert [macro.pen_cell_fits(frame, 1, column) for column in range(4)] == [False, False, True, True]
+    assert macro.first_fitting_cell(frame) == (1055, 787)                                                       # (what the person clicked)
+    flat = frame.copy()
+    flat[630:910, 850:1190] = 255                                                                               # (a list that has ended: nothing in the cells)
+    assert macro.first_fitting_cell(flat) is None
+
+
+def test_the_list_is_scrolled_while_no_pet_fits_and_given_up_when_a_scroll_changes_nothing(macro, monkeypatch):
+    frames = [np.full((1080, 1920, 3), 5, np.uint8)]
+    monkeypatch.setattr(macro, "grab_screen", lambda: frames[0])
+    monkeypatch.setattr(macro, "hover_move", lambda *a, **k: None)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    scrolls = []
+    monkeypatch.setattr(macro, "scroll_down", lambda n: scrolls.append(n))
+    assert macro.choose_pen_pet() is None and scrolls == [1]                                                    # (nothing fits, one scroll moved nothing: the end)
+    scrolls.clear()
+    moving = iter(range(1, 100))
+    monkeypatch.setattr(macro, "scroll_down", lambda n: (scrolls.append(n), frames.__setitem__(0, np.full((1080, 1920, 3), next(moving) % 250, np.uint8)))[0])
+    monkeypatch.setattr(macro, "first_fitting_cell", lambda img: (1, 2) if len(scrolls) == 3 else None)
+    assert macro.choose_pen_pet() == (1, 2) and scrolls == [1, 1, 1]
+    scrolls.clear()
+    monkeypatch.setattr(macro, "first_fitting_cell", lambda img: None)
+    assert macro.choose_pen_pet() is None and len(scrolls) == macro.cfg.PET_PEN_SCROLL_MAX + 1
+
+
+def test_a_full_grown_pet_is_taken_out_and_the_first_pet_that_fits_is_put_in(macro, monkeypatch):
+    stage = ["pen"]
+    frames = {"pen": "pen_full_grown", "out": "pen_add_pet", "backpack": "pen_backpack", "in": "pen_after_add"}
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "open_pet_pen", lambda: True)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "grab_screen", lambda: shot(frames[stage[0]]))
+    log = []
+    monkeypatch.setattr(macro, "log_run_event", log.append)
+    x_button = (macro.cfg.PET_PEN_SLOTS[0][0] + macro.cfg.PET_PEN_X_OFFSET[0], macro.cfg.PET_PEN_SLOTS[0][1] + macro.cfg.PET_PEN_X_OFFSET[1])
+
+    def click(x, y, duration=0):
+        macro.clicks.append((x, y))
+        if (x, y) == x_button:
+            stage[0] = "out"
+        elif stage[0] == "out" and abs(x - 857) < 15:
+            stage[0] = "backpack"
+        elif stage[0] == "backpack" and (x, y) == (1055, 787):
+            stage[0] = "in"
+    monkeypatch.setattr(macro, "hover_click", click)
+    assert macro.switch_pen_pets() is True
+    assert macro.clicks[0] == x_button and abs(macro.clicks[1][0] - 857) < 15 and macro.clicks[2] == (1055, 787) and macro.clicks[-1] == macro.cfg.PET_PEN_CLOSE_POS
+    assert log == ["pet pen: 1 full-grown pet(s) switched"]
+
+
+def test_a_pen_with_no_full_grown_pet_is_closed_again_and_a_pet_that_does_not_come_out_is_a_failure(macro, monkeypatch):
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "open_pet_pen", lambda: True)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    log, failures = [], []
+    monkeypatch.setattr(macro, "log_run_event", log.append)
+    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: failures.append(reason))
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: macro.clicks.append((x, y)))
+    monkeypatch.setattr(macro, "grab_screen", lambda: shot("pen_add_pet"))
+    assert macro.switch_pen_pets() is True and macro.clicks == [macro.cfg.PET_PEN_CLOSE_POS] and log == ["pet pen: no pet in it is full grown"]
+    macro.clicks.clear()
+    monkeypatch.setattr(macro, "grab_screen", lambda: shot("pen_full_grown"))                                   # (the click changes nothing)
+    assert macro.switch_pen_pets() is False and failures == ["pet pen: a full-grown pet did not go out of the pen"]
+
+
+def test_nothing_fits_the_pet_stays_out_and_a_swap_is_asked_for_by_friend_and_tried_again_later(macro, monkeypatch):
+    macro.update_game_config(lambda c: c.update(pet_pen_swap=False))
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    assert macro.note_pet_friend(shot("age_up_friend")) is True and macro.load_game_config()["pet_pen_swap"] is True
+    tried = []
+    monkeypatch.setattr(macro, "run_side_action", lambda action: tried.append(action.__name__) or False)
+    macro.pet_pen_swap_due()
+    macro.pet_pen_swap_due()
+    assert tried == ["switch_pen_pets"] and macro.load_game_config()["pet_pen_swap"] is True                  # (failed: asked for again, but not at once)
+    macro.update_game_config(lambda c: c.update(pet_pen_swap_tried=time.time() - macro.cfg.PET_PEN_SWAP_RETRY - 1))
+    monkeypatch.setattr(macro, "run_side_action", lambda action: tried.append(action.__name__) or True)
+    macro.pet_pen_swap_due()
+    assert len(tried) == 2 and macro.load_game_config()["pet_pen_swap"] is False

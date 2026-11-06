@@ -106,6 +106,12 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     # The age-up screen's purple pill that says Friend (a pet of the pen has grown as far as it does: it is to be switched out; the crop is the word, the pill has a gold edge and a heart count). Four pills sit
     # over the four pets, two above and two below; the one in the top left was the one in the capture.
     "pet_friend":      {"box": (560, 60, 1360, 620), "threshold": 0.8},
+    # The Pet Pen's own screen (opened at the pen in the yard): its title, the "Full grown!" sign a pet of it carries when it has grown as far as it does, the green Add Pet tile of the first free place, and the
+    # small BACKPACK that Add Pet opens (a panel over the pen, with the pets in a grid of four columns).
+    "pet_pen_title":      {"box": (700, 240, 1000, 360), "threshold": 0.8},
+    "pet_pen_full_grown": {"box": (760, 330, 1330, 660), "threshold": 0.8},
+    "pet_pen_add":        {"box": (760, 330, 1330, 660), "threshold": 0.8},
+    "pet_backpack_title": {"box": (700, 600, 1000, 700), "threshold": 0.8},
     "pet_pen_ready":   {"box": (836, 430, 1310, 720), "threshold": 0.8},
     # The Trading Hub Phone's screens (trades_tour(), decline_offer(); crops of tests/trades/): the phone's TRADE LISTINGS button, the "TRADING HUB" menu's title, the
     # "MY LISTINGS" title and the "1/2" / "2/2" of its "LISTING n/2", the "OFFERS" title (also there, dimmed, over an offer opened on its own), that offer's red DECLINE
@@ -645,6 +651,23 @@ PET_PEN_POLL = 0.5                        # seconds between looks while waiting 
 PET_PEN_ANIMATION_WAIT = 8.0              # seconds from the card's click to the age-up animation being over (the capture clicked NICE! 8 s after)
 PET_PEN_NICE_WAIT = 15.0                  # seconds to see the NICE! button in
 PET_PEN_NICE_TRIES = 3                    # clicks on it while it is still there
+PET_PEN_ROUTE = (("hold", "back", 0.7), ("press", "interact", 0), ("wait", "exit", 5.0), ("hold", "left", 2.23), ("hold", "back", 0.3), ("hold", "left", 0.18), ("press", "interact", 0))      # from the respawn in the house to the pen: out of the house (E at the door, the yard loads), then along the fence to the pen; the second E opens it (the capture of a person doing it)
+PET_PEN_OPEN_WAIT = 4.0                   # seconds for the pen's screen to come up after that E
+PET_PEN_SLOTS = ((855, 415), (1045, 415), (855, 580), (1045, 580))      # the middles of the pen's four places (two above, two below)
+PET_PEN_SLOT_HALF = (95, 80)              # half the width and height of the box a place is looked at in
+PET_PEN_X_OFFSET = (77, -60)              # the red X that takes a pet out is this far from its place's middle
+PET_PEN_CLOSE_POS = (1187, 300)           # the red X of the pen's screen
+PET_PEN_GRID_X = (895, 975, 1055, 1135)   # the middles of the cells of the small backpack's grid, by column...
+PET_PEN_GRID_Y = (706, 787, 867)          # ...and by row (three rows show)
+PET_PEN_CELL_HALF = 36                    # half the size of a cell
+PET_PEN_LOCKED_MAX_V = 200                # a cell whose corners are darker than this (brightness 0-255) is grey: a pet that is in a trade listing (white cells are 250 and more, grey ones 160)
+PET_PEN_GREEN_BORDER_MIN = 0.05           # a cell whose edge is this green (share of its pixels) is the equipped pet (0.25 on the capture)
+PET_PEN_CONTENT_MIN_STD = 8.0             # a cell with a pet in it has a picture (grey levels vary this much); an empty one is flat
+PET_PEN_SCROLL_POS = (1193, 760)          # the mouse is put on the grid's scroll bar to turn the wheel (over a pet it would open its card)
+PET_PEN_SCROLL_MAX = 40                   # most scrolls looking for a pet that fits
+PET_PEN_BACKPACK_CLOSE_POS = (1188, 640)  # the small backpack's red X (from the picture; not clicked in the capture)
+PET_PEN_UI_SETTLE = 1.5                   # seconds after a click in the pen's screens
+PET_PEN_SWAP_RETRY = 10 * 60              # seconds before a swap that did not come through is tried again
 PET_REPICK_INTERVAL = 10 * 60            # seconds between the loop's picks of the pet to level (see pet_repick(): a pet that has grown up is no longer in the filtered list)
 TREE_CHECK_INTERVAL = 10 * 60          # seconds (10 minutes) between tree harvests
 LURE_RECOLLECT_INTERVAL = 4 * 60 * 60  # seconds (4 hours)

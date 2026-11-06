@@ -820,7 +820,9 @@ def _read_game_config() -> dict[str, Any]:
         "keep_moments": True,              # whether the loop captures the run's moments (start_moments()), kept when the run lasted MOMENTS_MIN_RUN seconds or more
         "pet_pen_enabled": True,           # whether pet_pen() collects the Pet Pen when the Task Board says it is ready
         "pet_repicked": 0.0,               # when pet_repick() last picked the pet to level
-        "pet_pen_looked": 0.0,             # when pet_pen() last opened the board
+        "pet_pen_looked": 0.0,
+        "pet_pen_swap": False,             # a pet of the pen reached Friend: pet_pen_swap_due() switches the full-grown ones out
+        "pet_pen_swap_tried": 0.0,         # when it last tried             # when pet_pen() last opened the board
         "level_growing_pet": True,         # whether Setup filters the eggs and full-grown pets out of the backpack and equips the first pet left (off: the pet is left, the Alicorn equipped if none is out)
         "new_need_hotkey_enabled": True,   # whether HOTKEYS["new_need"] teaches the macro a need icon it does not know (off: that key can be typed in Roblox)
         "needs_enabled": {},        # {need: whether it is acted on}, the Debug tab's switches; a need not in it follows ENABLED_NEEDS (see need_is_enabled())
@@ -3810,7 +3812,8 @@ def note_pet_friend(img: Image) -> bool:
     found = popup_found(img, "pet_friend")
     if found is None:
         return False
-    log_run_event(f"pet pen: a pet reached Friend ({'top' if found[1] < img.shape[0] // 2 else 'bottom'} {'left' if found[0] < img.shape[1] // 2 else 'right'}) - it is to be switched out of the pen (not done by the macro yet)")
+    log_run_event(f"pet pen: a pet reached Friend ({'top' if found[1] < img.shape[0] // 2 else 'bottom'} {'left' if found[0] < img.shape[1] // 2 else 'right'}) - it is to be switched out of the pen")
+    update_game_config(lambda c: c.update(pet_pen_swap=True))
     return True
 
 def collect_pet_pen() -> bool:
@@ -3866,6 +3869,138 @@ def pet_repick() -> None:
         return
     run_side_action(repick_pet)
     update_game_config(lambda c: c.update(pet_repicked=time.time()))
+
+def slot_has(img: Image, name: str, slot: int) -> bool:
+    """Whether the crop `name` is in the box of the pen's place number `slot`."""
+    crop = load_templates(cfg.STRAY_WINDOW_DIR).get(name)
+    centre_x, centre_y = cfg.PET_PEN_SLOTS[slot]
+    half_x, half_y = cfg.PET_PEN_SLOT_HALF
+    return crop is not None and find_template(img, crop, (centre_x - half_x, centre_y - half_y, centre_x + half_x, centre_y + half_y))[0] >= cfg.POPUP_TEMPLATES[name]["threshold"]
+
+def full_grown_slots(img: Image) -> list[int]:
+    """The pen's places whose pet carries the "Full grown!" sign."""
+    return [slot for slot in range(len(cfg.PET_PEN_SLOTS)) if slot_has(img, "pet_pen_full_grown", slot)]
+
+def pen_cell_fits(img: Image, row: int, column: int) -> bool:
+    """Whether the cell of the small backpack's grid has a pet that can go in the pen: one (a picture in it), not grey (in a trade listing: its corners are dark) and with no green edge (the equipped one)."""
+    x, y, half = cfg.PET_PEN_GRID_X[column], cfg.PET_PEN_GRID_Y[row], cfg.PET_PEN_CELL_HALF
+    cell = img[y - half:y + half, x - half:x + half]
+    if cell.shape[0] < 2 * half or cell.shape[1] < 2 * half:
+        return False
+    hsv = cv2.cvtColor(cell, cv2.COLOR_BGR2HSV)
+    corners = np.concatenate([hsv[2:10, 2:10].reshape(-1, 3), hsv[2:10, -10:-2].reshape(-1, 3)])
+    edge = np.concatenate([cell[0:3, :].reshape(-1, 3), cell[-3:, :].reshape(-1, 3), cell[:, 0:3].reshape(-1, 3), cell[:, -3:].reshape(-1, 3)]).astype(int)
+    green = float(((edge[:, 1] > 150) & (edge[:, 2] < 120) & (edge[:, 0] < 120)).mean())
+    return bool(corners[:, 2].mean() >= cfg.PET_PEN_LOCKED_MAX_V and green < cfg.PET_PEN_GREEN_BORDER_MIN and float(cv2.cvtColor(cell, cv2.COLOR_BGR2GRAY).std()) >= cfg.PET_PEN_CONTENT_MIN_STD)
+
+def first_fitting_cell(img: Image) -> Optional[Point]:
+    """The middle of the first cell (rows from the top, left to right) of the small backpack's grid that pen_cell_fits(), or None."""
+    for row in range(len(cfg.PET_PEN_GRID_Y)):
+        for column in range(len(cfg.PET_PEN_GRID_X)):
+            if pen_cell_fits(img, row, column):
+                return cfg.PET_PEN_GRID_X[column], cfg.PET_PEN_GRID_Y[row]
+    return None
+
+def choose_pen_pet() -> Optional[Point]:
+    """In the small backpack: the first pet that fits (first_fitting_cell()), scrolling the list down (the wheel on its scroll bar) a notch at a time while none does, until a scroll changes nothing (the end of the list) or
+    PET_PEN_SCROLL_MAX scrolls. None if none fits."""
+    grid_box = (cfg.PET_PEN_GRID_X[0] - cfg.PET_PEN_CELL_HALF, cfg.PET_PEN_GRID_Y[0] - cfg.PET_PEN_CELL_HALF, cfg.PET_PEN_GRID_X[-1] + cfg.PET_PEN_CELL_HALF, cfg.PET_PEN_GRID_Y[-1] + cfg.PET_PEN_CELL_HALF)
+
+    def grid(img: Image) -> Image:
+        left, top, right, bottom = grid_box
+        return img[top:bottom, left:right]
+    img = grab_screen()
+    for _ in range(cfg.PET_PEN_SCROLL_MAX + 1):
+        found = first_fitting_cell(img)
+        if found is not None:
+            return found
+        hover_move(*cfg.PET_PEN_SCROLL_POS)
+        scroll_down(1)
+        wait_interruptible(cfg.PET_PEN_UI_SETTLE)
+        after = grab_screen()
+        if np.array_equal(grid(after), grid(img)):
+            return None                                                      # (nothing moved: that was the end of the list)
+        img = after
+    return None
+
+def open_pet_pen() -> bool:
+    """From a respawn (in the house) to the pen's screen: PET_PEN_ROUTE, then the pen's title is waited for. True if it is up."""
+    respawn_character()
+    for kind, what, amount in cfg.PET_PEN_ROUTE:
+        if kind == "hold":
+            hold_key(cfg.KEYS[what], amount)
+        elif kind == "press":
+            pydirectinput.press(cfg.KEYS[what])
+        else:
+            wait_interruptible(amount)
+    return look_until(lambda img: popup_visible(img, "pet_pen_title"), cfg.PET_PEN_OPEN_WAIT, cfg.PET_PEN_POLL) is not None
+
+def put_a_pet_in_the_pen() -> bool:
+    """The pen's first free place: Add Pet clicked, the small backpack waited for, the first pet that fits clicked (choose_pen_pet()). False, with the backpack closed again, when there is no free place, the backpack did
+    not come up or no pet fits."""
+    add = popup_found(grab_screen(), "pet_pen_add")
+    if add is None:
+        log_run_event("pet pen: no free place to put a pet in")
+        return False
+    hover_click(*add)
+    if look_until(lambda img: popup_visible(img, "pet_backpack_title"), cfg.PET_PEN_OPEN_WAIT, cfg.PET_PEN_POLL) is None:
+        log_run_event("pet pen: the backpack did not come up after Add Pet")
+        return False
+    pet = choose_pen_pet()
+    if pet is None:
+        log_run_event("pet pen: no pet fits (all in a trade listing, equipped or none left)")
+        hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
+        wait_interruptible(cfg.PET_PEN_UI_SETTLE)
+        return False
+    hover_click(*pet)
+    wait_interruptible(cfg.PET_PEN_UI_SETTLE)
+    if popup_visible(grab_screen(), "pet_backpack_title"):
+        log_run_event("pet pen: the pet clicked did not go in")
+        hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
+        return False
+    return True
+
+def switch_pen_pets() -> bool:
+    """The pen's full-grown pets out and others in: the pen opened (open_pet_pen()), the red X of each place with the "Full grown!" sign clicked (the rest move up, so each time it is looked at again), then a pet that fits put in
+    for each. A pen with none full grown is closed again and counts as done; a pet that cannot be put in is left out and said (the place stays free). True when the pen is as it should be, False when it could not be opened or a pet
+    could not be taken out."""
+    if not focus_roblox():
+        return False
+    if not open_pet_pen():
+        log_run_event("pet pen: it did not open")
+        return False
+    out = 0
+    for _ in range(len(cfg.PET_PEN_SLOTS)):
+        grown = full_grown_slots(grab_screen())
+        if not grown:
+            break
+        x, y = cfg.PET_PEN_SLOTS[grown[0]]
+        hover_click(x + cfg.PET_PEN_X_OFFSET[0], y + cfg.PET_PEN_X_OFFSET[1])
+        wait_interruptible(cfg.PET_PEN_UI_SETTLE)
+        if len(full_grown_slots(grab_screen())) >= len(grown):
+            log_failure("pet pen: a full-grown pet did not go out of the pen")
+            return False
+        out += 1
+    if out == 0:
+        log_run_event("pet pen: no pet in it is full grown")
+    for _ in range(out):
+        if not put_a_pet_in_the_pen():
+            break
+    else:
+        if out:
+            log_run_event(f"pet pen: {out} full-grown pet(s) switched")
+    hover_click(*cfg.PET_PEN_CLOSE_POS)
+    wait_interruptible(cfg.PET_PEN_UI_SETTLE)
+    return True
+
+def pet_pen_swap_due() -> None:
+    """Once per cycle after pet_pen(): when the age-up screen showed a pet that reached Friend (the game config's pet_pen_swap) and PET_PEN_SWAP_RETRY seconds have passed since the last try, switch_pen_pets(); the flag is cleared
+    once it came through."""
+    config = load_game_config()
+    if not config["pet_pen_enabled"] or not config["pet_pen_swap"] or time.time() - config["pet_pen_swap_tried"] < cfg.PET_PEN_SWAP_RETRY:
+        return
+    done = run_side_action(switch_pen_pets)
+    update_game_config(lambda c: c.update(pet_pen_swap_tried=time.time(), **({"pet_pen_swap": False} if done else {})))
 
 def pet_pen() -> None:
     """Once per cycle after side_quest(), unless the game config's pet_pen_enabled is off: when the Task Board button shows its alert badge (at most every PET_PEN_BADGE_INTERVAL) or
@@ -4632,6 +4767,7 @@ def run_full_cycle() -> None:
         unscrew()
         side_quest()
         pet_pen()
+        pet_pen_swap_due()
         pet_repick()
         if process_needs():
             return

@@ -71,22 +71,6 @@ def test_a_run_log_that_cannot_be_read_is_said_once_and_again_when_it_can(watch,
     assert len(watch.channel.sent) == 2 and "can be read again" in watch.channel.sent[1]
 
 
-def test_a_chart_that_is_gone_is_forgotten_so_a_new_run_with_its_number_is_posted(watch, monkeypatch):
-    monkeypatch.setattr(discord_bot.cfg, "BOT_FILE_SETTLE", 0)
-    chart = watch.folder / "runs" / "run1.png"
-    chart.write_bytes(b"png")
-    watch.once()
-    assert [text for text, _ in watch.posted] == ["Run chart run1.png"] and watch.state.charts == ["run1.png"]
-    watch.once()
-    assert len(watch.posted) == 1                                          # (not twice)
-    chart.unlink()                                                         # Refresh debug
-    watch.once()
-    assert watch.state.charts == []
-    chart.write_bytes(b"png")
-    watch.once()
-    assert len(watch.posted) == 2
-
-
 @pytest.mark.parametrize("desired, with_loop", [("running", True), ("open", False)])
 def test_a_crashed_macro_comes_back_with_its_loop_only_if_the_loop_was_wanted(watch, monkeypatch, desired, with_loop):
     launched = []
@@ -201,25 +185,18 @@ def test_a_picture_that_is_gone_is_left_out_and_the_text_still_goes(tmp_path):
     assert len(channel.sent) == 1 and channel.sent[0].startswith("A failure") and "picture could not be sent" in channel.sent[0]
 
 
-def test_a_post_that_fails_is_tried_again_at_the_next_look_and_does_not_stop_the_rest(watch, monkeypatch):
-    monkeypatch.setattr(discord_bot.cfg, "BOT_FILE_SETTLE", 0)
-    (watch.folder / "runs" / "run1.png").write_bytes(b"png")
-    broken = {"on": True}
+def test_a_post_that_fails_does_not_stop_the_rest_of_the_look(watch, monkeypatch):
+    with open(watch.folder / "run_log.txt", "a") as log:
+        log.write("[2026-11-05 10:00:00] [RUN 1] FAILURE: hungry still showing after 75s\n")
 
     async def post(channel, text, path=None):
-        if broken["on"]:
-            raise RuntimeError("Discord is having a bad day")
-        watch.posted.append((text, path))
+        raise RuntimeError("Discord is having a bad day")
     monkeypatch.setattr(discord_bot, "post", post)
     (watch.folder / "status.json").write_text(json.dumps({"updated": "2000-01-01 00:00:00", "running": True}))
     watch.state.last_heartbeat = None
     watch.config = bot_lib.load_config(_config(watch.folder, heartbeat_hours=1))
     watch.once()
-    assert watch.state.charts == []                                           # (not recorded as posted)
     assert any(text.startswith("Heartbeat") for text in watch.channel.sent) and watch.state.last_heartbeat is not None     # (the rest of the look went on)
-    broken["on"] = False
-    watch.once()
-    assert watch.state.charts == ["run1.png"] and [text for text, _ in watch.posted] == ["Run chart run1.png"]
 
 
 def test_a_restart_that_fails_is_not_counted_against_the_hourly_limit_and_is_said(watch, monkeypatch):

@@ -248,6 +248,15 @@ def grab_full_screen() -> Image:
         shot = np.array(sct.grab(sct.monitors[1]))
     return cv2.cvtColor(shot, cv2.COLOR_BGRA2BGR)
 
+def grab_roblox_native() -> Optional[Image]:
+    """The Roblox window as it is on screen (not scaled), or None when there is no window or it is minimised: a picture that is kept and sent on (a failure's) is of the game only, not of whatever
+    else is on the monitor."""
+    window = roblox_window()
+    if window is None or window.isMinimized:
+        return None
+    left, top, width, height = roblox_rect()
+    return grab_full_screen()[top:top + height, left:left + width]
+
 def grab_screen() -> Image:
     """Screenshot of the Roblox window as a BGR array scaled to the reference size, so
     every detection works on the same pixels whatever the window.
@@ -352,6 +361,9 @@ class State:
     white_since: Optional[float] = None
     # The input capture that is running, if any (see toggle_input_capture()). A State field only so snapshot() sees it as text.
     capture: Optional[Any] = None
+    moments: Optional[Any] = None               # the capture of the run's moments (start_moments()), None when there is none
+    moments_log: Optional[Any] = None           # its MomentsLog
+    moments_marked: float = 0.0                 # when mark_moment() last marked it
     # The needs named by the last "detected:" line, and how many checks since then found exactly the same with no
     # handler run in between (not yet written to the run log - see note_repeat_check()).
     last_detected_body: Optional[str] = None
@@ -384,6 +396,8 @@ class State:
     # True while a handler that wants the pet focused runs (see wanting_pet_focus()).
     pet_focus_wanted: bool = False
     task_board_wanted: bool = False
+    activity: str = ""                     # what the macro is doing now (task_unscrew(what=...)): a need handler, a side action, setup; "" between them
+    moments_notes: list = field(default_factory=list)       # (seconds into the run, the log line) of the moments start_moments() marked
     typing: bool = False                   # type_keys() is typing into a text box: the hotkeys (a letter each) are not acted on meanwhile
     # How many "quiet:" lines have been logged for the current stretch with no need resolved.
     quiet_reported: int = 0
@@ -537,6 +551,9 @@ def read_command_with_id() -> tuple[str, Optional[dict[str, Any]]]:
     if data["command"] == "test" and data.get("handler") not in (*DEBUG_HANDLERS, cfg.TEST_ALL_TELEPORTS):
         dropped(f"test {data.get('handler')} is not a handler the macro has")
         return stem, None
+    if data["command"] == "report" and "run" in data and (not isinstance(data["run"], int) or isinstance(data["run"], bool) or data["run"] < 1):
+        dropped("report is asked for with the number of a run, or none")
+        return stem, None
     if data["command"] == "capture" and "value" in data and not isinstance(data["value"], bool):
         dropped("capture is asked for with a true or false value, or none")
         return stem, None
@@ -619,6 +636,7 @@ def log_run_event(message: str) -> None:
                 f.write(line)
         except OSError:
             pass   # the combined log above has it
+    note_moment(message)
 
 # What the macro knows about how this run is going, written to STATUS_PATH by
 # write_status() so it can be checked without opening the GUI.
@@ -712,7 +730,9 @@ def save_failure_report(reason: str) -> Optional[str]:
         name = f"{time.strftime('%Y%m%d_%H%M%S')}_run{state.run_number}_{slug}"
         folder = os.path.join(cfg.FAILURE_DIR, name)
         os.makedirs(folder, exist_ok=True)
-        cv2.imwrite(os.path.join(folder, "screen.png"), grab_full_screen())
+        game = grab_roblox_native()                                       # (the game's window: the rest of the monitor is nobody's business, and this goes to Discord)
+        if game is not None:
+            cv2.imwrite(os.path.join(folder, "screen.png"), game)
         try:
             cv2.imwrite(os.path.join(folder, "need_icons.png"), need_icon_strip(grab_screen()))
         except Exception:
@@ -728,7 +748,7 @@ def save_failure_report(reason: str) -> Optional[str]:
         for old in sorted(os.listdir(cfg.FAILURE_DIR))[:-cfg.MAX_FAILURE_FOLDERS]:
             path = os.path.join(cfg.FAILURE_DIR, old)
             shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
-        return f"{name}/screen.png"
+        return f"{name}/screen.png" if game is not None else None
     except Exception as e:
         logger.warning(f"Couldn't save a failure report: {e}")
         return None
@@ -783,7 +803,7 @@ def reset_run_stats() -> None:
 # read and write this file, so every access goes through the functions below,
 # each holding this one lock - a reader can never see a half-written file (it
 # would read as "no config" and silently give the defaults: the private server
-# link gone, the minigames switched off).
+# link gone).
 GAME_CONFIG_LOCK = threading.Lock()
 
 def _read_game_config() -> dict[str, Any]:
@@ -797,9 +817,12 @@ def _read_game_config() -> dict[str, Any]:
         "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
         "record_next_run": False,   # record the next run as a low quality video; cleared when that run starts
         "blackout_hotkey_enabled": True,   # whether HOTKEYS["blackout"] blanks the screen (off: that key can be typed in Roblox)
+        "keep_moments": True,              # whether the loop captures the run's moments (start_moments()), kept when the run lasted MOMENTS_MIN_RUN seconds or more
         "pet_pen_enabled": True,           # whether pet_pen() collects the Pet Pen when the Task Board says it is ready
         "pet_repicked": 0.0,               # when pet_repick() last picked the pet to level
-        "pet_pen_looked": 0.0,             # when pet_pen() last opened the board
+        "pet_pen_looked": 0.0,
+        "pet_pen_swap": False,             # a pet of the pen reached Friend: pet_pen_swap_due() switches the full-grown ones out
+        "pet_pen_swap_tried": 0.0,         # when it last tried             # when pet_pen() last opened the board
         "level_growing_pet": True,         # whether Setup filters the eggs and full-grown pets out of the backpack and equips the first pet left (off: the pet is left, the Alicorn equipped if none is out)
         "new_need_hotkey_enabled": True,   # whether HOTKEYS["new_need"] teaches the macro a need icon it does not know (off: that key can be typed in Roblox)
         "needs_enabled": {},        # {need: whether it is acted on}, the Debug tab's switches; a need not in it follows ENABLED_NEEDS (see need_is_enabled())
@@ -1181,18 +1204,19 @@ def hover_click(x: float, y: float, duration: float = cfg.CLICK_MOVE_DURATION) -
 # unscrew() itself.
 
 @contextlib.contextmanager
-def task_unscrew(interruptible: bool = True) -> Iterator[None]:
+def task_unscrew(interruptible: bool = True, what: str = "") -> Iterator[None]:
     """Within this block wait_interruptible() runs unscrew(in_task=True) every
-    UNSCREW_TASK_INTERVAL; `interruptible` False (setup) only declines minigames.
+    UNSCREW_TASK_INTERVAL; `interruptible` False (setup) is never abandoned because of a popup; `what` is noted as state.activity meanwhile (the moments capture says it with every frame).
     See docs/ARCHITECTURE.md#need-handlers.
     """
-    previous = (state.task_active, state.task_interruptible, state.task_thread)
+    previous = (state.task_active, state.task_interruptible, state.task_thread, state.activity)
     state.task_active, state.task_interruptible, state.task_thread = True, interruptible, threading.get_ident()
+    state.activity = what or state.activity
     state.last_task_unscrew = time.time()
     try:
         yield
     finally:
-        state.task_active, state.task_interruptible, state.task_thread = previous
+        state.task_active, state.task_interruptible, state.task_thread, state.activity = previous
 
 def task_unscrew_tick() -> None:
     """The hook in wait_interruptible(): run the in-task checks if one is due.
@@ -1645,7 +1669,7 @@ def setup_game() -> bool:
     """Lock the house, filter the backpack to favorites and disable trades. Run on demand
     and after a rejoin, not in the cycle. See docs/ARCHITECTURE.md#side-actions.
     """
-    with task_unscrew(interruptible=False):
+    with task_unscrew(interruptible=False, what="setup"):
         return _setup_steps()
 
 def leave_hub_and_setup() -> bool:
@@ -1678,26 +1702,23 @@ def _setup_steps() -> bool:
     log_run_event("setup: the house is locked, the backpack is filtered to favorites and trades are set to No One")
     return True
 
-def wait_for_any(names: Sequence[str], seconds: float = cfg.SETUP_UI_WAIT) -> Optional[str]:
-    """The first of the crops `names` (POPUP_TEMPLATES) seen on screen, within `seconds`; None if none was."""
+def look_until(find: Callable[[Image], Any], seconds: float, poll: float = cfg.SETUP_POLL) -> Any:
+    """What `find` returns for a screenshot - one is taken every `poll` seconds - as soon as that is something (not None or False), else None once `seconds` have gone by (there is always at least one
+    look). The one waiting loop of the setup, the trades, the sick need and the Pet Pen."""
     deadline = time.time() + seconds
     while True:
-        img = grab_screen()
-        for name in names:
-            if popup_visible(img, name):
-                return name
-        if time.time() >= deadline:
-            return None
-        wait_interruptible(cfg.SETUP_POLL)
+        found = find(grab_screen())
+        if found or time.time() >= deadline:
+            return found or None
+        wait_interruptible(poll)
+
+def wait_for_any(names: Sequence[str], seconds: float = cfg.SETUP_UI_WAIT) -> Optional[str]:
+    """The first of the crops `names` (POPUP_TEMPLATES) seen on screen, within `seconds`; None if none was."""
+    return look_until(lambda img: next((name for name in names if popup_visible(img, name)), None), seconds)
 
 def wait_for_template(name: str, seconds: float = cfg.SETUP_UI_WAIT) -> Optional[Point]:
     """Where the crop `name` is, once it is on screen (within `seconds`); None if it did not come."""
-    deadline = time.time() + seconds
-    while True:
-        found = popup_found(grab_screen(), name)
-        if found is not None or time.time() >= deadline:
-            return found
-        wait_interruptible(cfg.SETUP_POLL)
+    return look_until(lambda img: popup_found(img, name), seconds)
 
 def lock_house() -> bool:
     """The house's lock button (top of the screen, in the house after the respawn): its Unlock label means it is locked already and nothing is clicked; its Lock label is clicked, and the
@@ -1717,11 +1738,11 @@ def lock_house() -> bool:
     log_run_event("setup: the house is locked")
     return True
 
-def open_filter_panel() -> bool:
-    """In the open backpack: its settings button, and the FILTERS panel that comes up (tried twice). False (logged) if it did not."""
+def open_filter_panel(button: Point = cfg.SETUP_BACKPACK_SETTINGS_POS) -> bool:
+    """In the open backpack: its settings button (`button`: the big backpack's, or the pen's small one), and the FILTERS panel that comes up (tried twice). False (logged) if it did not."""
     for _ in range(2):
         logger.debug("Opening the filters...")
-        hover_click(*cfg.SETUP_BACKPACK_SETTINGS_POS)
+        hover_click(*button)
         if wait_for_template("filter_panel") is not None:
             return True
     log_run_event("setup: the backpack's filters did not open")
@@ -1748,10 +1769,13 @@ def choose_sort_favorites() -> bool:
 def age_checkbox(img: Image, label: str) -> Optional[tuple[Point, bool]]:
     """Where the checkbox of the Age filter's row `label` (POPUP_TEMPLATES: "age_egg", "age_full_grown" - the crop of its text) is, and whether it is ticked (a tick is purple, AGE_TICK_HSV,
     at least AGE_TICK_MIN_PIXELS of the AGE_CHECKBOX_HALF square round its middle). None if the row is not in view."""
-    centre = popup_found(img, label)
-    if centre is None:
+    for name in (label, *cfg.AGE_ALTERNATES.get(label, ())):
+        centre = popup_found(img, name)
+        if centre is not None:
+            break
+    else:
         return None
-    x = centre[0] - load_templates(cfg.STRAY_WINDOW_DIR)[label].shape[1] // 2 + cfg.AGE_CHECKBOX_DX            # (the box is a fixed way left of where the text starts: the text's width differs)
+    x = centre[0] - load_templates(cfg.STRAY_WINDOW_DIR)[name].shape[1] // 2 + cfg.AGE_CHECKBOX_DX            # (the box is a fixed way left of where the text starts: the text's width differs)
     half = cfg.AGE_CHECKBOX_HALF
     patch = cv2.cvtColor(img[centre[1] - half:centre[1] + half, x - half:x + half], cv2.COLOR_BGR2HSV)
     ticked = cv2.countNonZero(cv2.inRange(patch, *cfg.AGE_TICK_HSV)) >= cfg.AGE_TICK_MIN_PIXELS
@@ -2081,24 +2105,12 @@ def trade_screen(img: Image) -> Optional[str]:
 
 def wait_trade_screen(*screens: str) -> bool:
     """Wait up to TRADES_SCREEN_WAIT seconds for one of `screens` to be up (trade_screen())."""
-    deadline = time.time() + cfg.TRADES_SCREEN_WAIT
-    while True:
-        if trade_screen(grab_screen()) in screens:
-            return True
-        if time.time() >= deadline:
-            return False
-        wait_interruptible(cfg.TRADES_POLL)
+    return bool(look_until(lambda img: trade_screen(img) in screens, cfg.TRADES_SCREEN_WAIT, cfg.TRADES_POLL))
 
 def wait_for_phone_first() -> bool:
     """Wait up to TRADES_SEARCH_MAX_WAIT seconds for the backpack's list to be the search's: the phone's picture in the first slot (POPUP_TEMPLATES["phone_icon"]; in the unfiltered list it
     is in the second, behind the badge). In a capture the list followed the typed text by about two seconds."""
-    deadline = time.time() + cfg.TRADES_SEARCH_MAX_WAIT
-    while True:
-        if popup_visible(grab_screen(), "phone_icon"):
-            return True
-        if time.time() >= deadline:
-            return False
-        wait_interruptible(cfg.TRADES_POLL)
+    return bool(look_until(lambda img: popup_visible(img, "phone_icon"), cfg.TRADES_SEARCH_MAX_WAIT, cfg.TRADES_POLL))
 
 def focus_search_box() -> bool:
     """Click the backpack's search box, empty it and type the first letter of TRADES_SEARCH_TEXT, which is only left in it if the box has the focus: its placeholder
@@ -2507,10 +2519,10 @@ def parse_server_link(link: str) -> Optional[tuple[str, str]]:
     """Turn a private server link (share or older form) into (type, code), or None.
     See docs/ARCHITECTURE.md#side-actions.
     """
-    match = re.search(r"privateServerLinkCode=(\w{32})", link, re.I)
+    match = re.search(r"privateServerLinkCode=([0-9A-Za-z]{32})", link, re.I)
     if match:
         return "LinkCode", match.group(1)
-    match = re.search(r"share\?code=(\w{32})&type=Server", link, re.I)
+    match = re.search(r"share\?code=([0-9A-Za-z]{32})&type=Server", link, re.I)
     if match:
         return "ShareCode", match.group(1)
     return None
@@ -3128,13 +3140,13 @@ class TeleportWalkNeedHandler(NeedHandler):
         if detect_pet_focus(grab_screen()):                      # (it hides the prompt)
             log_run_event(f"{self.name}: the pet view is open - backing out of it")
             dismiss_stray_windows()
-        prompt = look_until(find_doctor_prompt, cfg.SICK_PROMPT_LOOK)
+        prompt = look_until(find_doctor_prompt, cfg.SICK_PROMPT_LOOK, cfg.SICK_LOOK_INTERVAL)
         if prompt is None:
             log_run_event(f"{self.name}: the doctor's prompt is not on screen")
             return False
         logger.debug(f"Clicking the {self.name} prompt at {prompt}...")
         hover_click(*prompt)
-        if look_until(detect_sick_dialog, cfg.SICK_CONFIRM_WAIT) is None:
+        if look_until(detect_sick_dialog, cfg.SICK_CONFIRM_WAIT, cfg.SICK_LOOK_INTERVAL) is None:
             log_run_event(f"{self.name}: no dialog after the prompt was clicked")
             return False
         return True
@@ -3248,10 +3260,10 @@ def process_needs() -> bool:
             state.need_cleared = True
             started = time.time()
             try:
-                with task_unscrew():
+                with task_unscrew(what=f"need handler: {need_name}"):
                     handled = handler.handle()
             except TaskInterrupted as interruption:
-                # A minigame or a rejoin took over (both respawn): not
+                # A rejoin took over (it respawns): not
                 # resolved, and not a failed attempt either - the next check
                 # sees what's still on screen. A popup that spoiled it (the
                 # character was respawned by task_unscrew_tick()) does count
@@ -3474,7 +3486,12 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
         run_stats.recoveries += 1
         if kind == "disconnect":
             run_stats.disconnects += 1
-    if not leave_and_rejoin(clean_leave=(kind != "disconnect")):
+    previous_activity, state.activity = state.activity, f"rejoin ({kind})"
+    try:
+        rejoined = leave_and_rejoin(clean_leave=(kind != "disconnect"))
+    finally:
+        state.activity = previous_activity
+    if not rejoined:
         log_failure("recovery: rejoin failed, will try again next cycle")
         return False
     try:
@@ -3497,17 +3514,6 @@ def detect_sick_dialog(img: Image) -> bool:
 def find_doctor_prompt(img: Image) -> Optional[Point]:
     """Where the hand button over the player's head is (its centre) when the player stands in front of Doctor Heart, else None."""
     return popup_found(img, "doctor_prompt")
-
-def look_until(find: Callable[[Image], Any], seconds: float) -> Any:
-    """What `find` returns for a screenshot - one is taken every SICK_LOOK_INTERVAL - as soon as that is something (not None or False),
-    else None once `seconds` have gone by (there is always at least one look)."""
-    deadline = time.time() + seconds
-    while True:
-        found = find(grab_screen())
-        if found or time.time() >= deadline:
-            return found or None
-        wait_interruptible(cfg.SICK_LOOK_INTERVAL)
-
 
 # directory -> (the files' names and modification times, {name: image}) - see load_templates().
 _TEMPLATE_CACHE: dict[str, tuple[Any, dict[str, Image]]] = {}
@@ -3534,15 +3540,6 @@ def load_templates(directory: str) -> dict[str, Image]:
                 templates[os.path.splitext(f)[0].lower()] = crop
         cached = _TEMPLATE_CACHE[directory] = (key, templates)
     return dict(cached[1])
-
-def template_score(img: Image, crop: Image, box: Box) -> float:
-    """How well `crop` matches anywhere within `box` (left, top, right,
-    bottom) of `img`: 0-1, 1 = identical (cv2.matchTemplate)."""
-    left, top, right, bottom = box
-    band = img[top:bottom, left:right]
-    if crop.shape[0] > band.shape[0] or crop.shape[1] > band.shape[1]:
-        return 0.0
-    return float(cv2.minMaxLoc(cv2.matchTemplate(band, crop, cv2.TM_CCOEFF_NORMED))[1])
 
 def find_template(img: Image, crop: Image, box: Box) -> tuple[float, Optional[Point]]:
     """Like template_score(), but also where: (score, (x, y) of the match's
@@ -3640,22 +3637,6 @@ def dismiss_stray_windows() -> Optional[str]:
         time.sleep(cfg.STRAY_CLOSE_SETTLE)
         return name
     return None
-
-def hsv_fraction(img: Image, box: Box, ranges: Sequence[tuple[Color, Color]]) -> float:
-    """The share (0-1) of `box` of `img` whose HSV colour (OpenCV's) is within any of the (low, high) `ranges`."""
-    left, top, right, bottom = box
-    region = img[top:bottom, left:right]
-    if region.size == 0:                                      # (a frame too small to have the box)
-        return 0.0
-    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-    mask = np.zeros(hsv.shape[:2], np.uint8)
-    for low, high in ranges:
-        mask |= cv2.inRange(hsv, np.array(low, np.uint8), np.array(high, np.uint8))
-    return float(np.count_nonzero(mask)) / max(1, mask.size)
-
-
-
-
 
 def in_trading_hub(img: Image) -> bool:
     """True if the Trading Hub island is on screen: its GO HOME button's text."""
@@ -3761,7 +3742,7 @@ def run_side_action(action: Callable[[], bool]) -> bool:
     rejoin took over. See docs/ARCHITECTURE.md#side-actions.
     """
     try:
-        with task_unscrew():
+        with task_unscrew(what=f"side action: {action.__name__}"):
             return action()
     except TaskInterrupted as interruption:
         logger.debug(f"{action.__name__} interrupted by {interruption.reason}")
@@ -3829,14 +3810,14 @@ def task_board_badge(img: Image) -> bool:
         mask = cv2.bitwise_or(mask, cv2.inRange(hsv, *extra))
     return int(cv2.countNonZero(mask)) >= cfg.TASK_BOARD_BADGE_MIN_PIXELS
 
-def wait_for_screen(look: Callable[[Image], Any], timeout: float) -> Any:
-    """What `look` (given a screenshot) returns once it is truthy, looking every PET_PEN_POLL seconds for `timeout`; None if it never is."""
-    deadline = time.time() + timeout
-    while True:
-        found = look(grab_screen())
-        if found or time.time() >= deadline:
-            return found or None
-        wait_interruptible(cfg.PET_PEN_POLL)
+def note_pet_friend(img: Image) -> bool:
+    """On the age-up screen: say in the run log if a pet shows the Friend pill (it is to be switched out of the pen), and where it is. True if one does."""
+    found = popup_found(img, "pet_friend")
+    if found is None:
+        return False
+    log_run_event(f"pet pen: a pet reached Friend ({'top' if found[1] < img.shape[0] // 2 else 'bottom'} {'left' if found[0] < img.shape[1] // 2 else 'right'}) - it is to be switched out of the pen")
+    update_game_config(lambda c: c.update(pet_pen_swap=True))
+    return True
 
 def collect_pet_pen() -> bool:
     """Open the Task Board and, when it has the "Pet Pen Ready" card, click it, wait out the age-up screen and click its NICE!. True once the board has been looked at (and the pets collected if they were
@@ -3850,7 +3831,7 @@ def collect_pet_pen() -> bool:
             log_run_event("pet pen: the Task Board's sign was not seen")
             return False
         hover_click(*sign)
-        if not wait_for_screen(lambda img: popup_visible(img, "task_board"), cfg.PET_PEN_UI_WAIT):
+        if not look_until(lambda img: popup_visible(img, "task_board"), cfg.PET_PEN_UI_WAIT, cfg.PET_PEN_POLL):
             log_run_event("pet pen: the Task Board did not open")
             return False
         card = popup_found(grab_screen(), "pet_pen_ready")
@@ -3860,9 +3841,10 @@ def collect_pet_pen() -> bool:
         hover_click(*card)
         wait_interruptible(cfg.PET_PEN_ANIMATION_WAIT)
         for _ in range(cfg.PET_PEN_NICE_TRIES):
-            button = wait_for_screen(lambda img: find_dialog_button(img, cfg.DIALOG_BUTTONS["nice"]), cfg.PET_PEN_NICE_WAIT)
+            button = look_until(lambda img: find_dialog_button(img, cfg.DIALOG_BUTTONS["nice"]), cfg.PET_PEN_NICE_WAIT, cfg.PET_PEN_POLL)
             if button is None:
                 break
+            note_pet_friend(grab_screen())
             hover_click(*button)
             wait_interruptible(cfg.UI_SETTLE)
             if find_dialog_button(grab_screen(), cfg.DIALOG_BUTTONS["nice"]) is None:
@@ -3890,6 +3872,165 @@ def pet_repick() -> None:
         return
     run_side_action(repick_pet)
     update_game_config(lambda c: c.update(pet_repicked=time.time()))
+
+def slot_has(img: Image, name: str, slot: int) -> bool:
+    """Whether the crop `name` is in the box of the pen's place number `slot`."""
+    crop = load_templates(cfg.STRAY_WINDOW_DIR).get(name)
+    centre_x, centre_y = cfg.PET_PEN_SLOTS[slot]
+    half_x, half_y = cfg.PET_PEN_SLOT_HALF
+    return crop is not None and find_template(img, crop, (centre_x - half_x, centre_y - half_y, centre_x + half_x, centre_y + half_y))[0] >= cfg.POPUP_TEMPLATES[name]["threshold"]
+
+def full_grown_slots(img: Image) -> list[int]:
+    """The pen's places whose pet carries the "Full grown!" sign."""
+    return [slot for slot in range(len(cfg.PET_PEN_SLOTS)) if slot_has(img, "pet_pen_full_grown", slot)]
+
+def pen_cell_fits(img: Image, row: int, column: int) -> bool:
+    """Whether the cell of the small backpack's grid has a pet that can go in the pen: one (a picture in it), not grey (in a trade listing: its corners are dark) and with no green edge (the equipped one)."""
+    x, y, half = cfg.PET_PEN_GRID_X[column], cfg.PET_PEN_GRID_Y[row], cfg.PET_PEN_CELL_HALF
+    cell = img[y - half:y + half, x - half:x + half]
+    if cell.shape[0] < 2 * half or cell.shape[1] < 2 * half:
+        return False
+    hsv = cv2.cvtColor(cell, cv2.COLOR_BGR2HSV)
+    corners = np.concatenate([hsv[2:10, 2:10].reshape(-1, 3), hsv[2:10, -10:-2].reshape(-1, 3)])
+    edge = np.concatenate([cell[0:3, :].reshape(-1, 3), cell[-3:, :].reshape(-1, 3), cell[:, 0:3].reshape(-1, 3), cell[:, -3:].reshape(-1, 3)]).astype(int)
+    green = float(((edge[:, 1] > 150) & (edge[:, 2] < 120) & (edge[:, 0] < 120)).mean())
+    return bool(corners[:, 2].mean() >= cfg.PET_PEN_LOCKED_MAX_V and green < cfg.PET_PEN_GREEN_BORDER_MIN and float(cv2.cvtColor(cell, cv2.COLOR_BGR2GRAY).std()) >= cfg.PET_PEN_CONTENT_MIN_STD)
+
+def first_fitting_cell(img: Image) -> Optional[Point]:
+    """The middle of the first cell (rows from the top, left to right) of the small backpack's grid that pen_cell_fits(), or None."""
+    for row in range(len(cfg.PET_PEN_GRID_Y)):
+        for column in range(len(cfg.PET_PEN_GRID_X)):
+            if pen_cell_fits(img, row, column):
+                return cfg.PET_PEN_GRID_X[column], cfg.PET_PEN_GRID_Y[row]
+    return None
+
+def choose_pen_pet() -> Optional[Point]:
+    """In the small backpack: the first pet that fits (first_fitting_cell()), scrolling the list down (the wheel on its scroll bar) a notch at a time while none does, until a scroll changes nothing (the end of the list) or
+    PET_PEN_SCROLL_MAX scrolls. None if none fits."""
+    grid_box = (cfg.PET_PEN_GRID_X[0] - cfg.PET_PEN_CELL_HALF, cfg.PET_PEN_GRID_Y[0] - cfg.PET_PEN_CELL_HALF, cfg.PET_PEN_GRID_X[-1] + cfg.PET_PEN_CELL_HALF, cfg.PET_PEN_GRID_Y[-1] + cfg.PET_PEN_CELL_HALF)
+
+    def grid(img: Image) -> Image:
+        left, top, right, bottom = grid_box
+        return img[top:bottom, left:right]
+    img = grab_screen()
+    for _ in range(cfg.PET_PEN_SCROLL_MAX + 1):
+        found = first_fitting_cell(img)
+        if found is not None:
+            return found
+        hover_move(*cfg.PET_PEN_SCROLL_POS)
+        scroll_down(1)
+        wait_interruptible(cfg.PET_PEN_UI_SETTLE)
+        after = grab_screen()
+        if np.array_equal(grid(after), grid(img)):
+            return None                                                      # (nothing moved: that was the end of the list)
+        img = after
+    return None
+
+def open_pet_pen() -> bool:
+    """From a respawn (in the house) to the pen's screen: PET_PEN_ROUTE, then the pen's title is waited for. True if it is up."""
+    respawn_character()
+    for kind, what, amount in cfg.PET_PEN_ROUTE:
+        if kind == "hold":
+            hold_key(cfg.KEYS[what], amount)
+        elif kind == "press":
+            pydirectinput.press(cfg.KEYS[what])
+        else:
+            wait_interruptible(amount)
+    return look_until(lambda img: popup_visible(img, "pet_pen_title"), cfg.PET_PEN_OPEN_WAIT, cfg.PET_PEN_POLL) is not None
+
+def ensure_pen_age_filter() -> bool:
+    """In the pen's small backpack: the Age filter without Egg and Full Grown, which the game keeps from one opening to the next. The FILTERS panel is opened, the two boxes looked at first and only a ticked one clicked
+    (untick_egg_and_full_grown()); a panel that was only looked at is cancelled and one that was changed confirmed, opened again and looked at (the same panel and positions as Setup's). False (logged) if it did not come up, the
+    rows were not found or the change did not take."""
+    if not open_filter_panel(cfg.PET_PEN_FILTER_BUTTON_POS):
+        return False
+    changed = untick_egg_and_full_grown()
+    if changed is None:
+        hover_click(*cfg.SETUP_FILTER_CANCEL_POS)
+        wait_interruptible(cfg.UI_SETTLE)
+        return False
+    if not changed:
+        hover_click(*cfg.SETUP_FILTER_CANCEL_POS)                                      # (already as it should be: left as it is)
+        wait_interruptible(cfg.UI_SETTLE)
+        return True
+    hover_click(*cfg.SETUP_CONFIRM_POS)
+    wait_interruptible(cfg.UI_SETTLE)
+    ok = open_filter_panel(cfg.PET_PEN_FILTER_BUTTON_POS) and scroll_filters_to_age() and age_filter_is_right()
+    log_run_event("pet pen: the backpack's Age filter is set" if ok else "pet pen: the backpack's Age filter did not take")
+    hover_click(*cfg.SETUP_FILTER_CANCEL_POS)
+    wait_interruptible(cfg.UI_SETTLE)
+    return ok
+
+def put_a_pet_in_the_pen() -> bool:
+    """The pen's first free place: Add Pet clicked, the small backpack waited for, the first pet that fits clicked (choose_pen_pet()). False, with the backpack closed again, when there is no free place, the backpack did
+    not come up or no pet fits."""
+    add = popup_found(grab_screen(), "pet_pen_add")
+    if add is None:
+        log_run_event("pet pen: no free place to put a pet in")
+        return False
+    hover_click(*add)
+    if look_until(lambda img: popup_visible(img, "pet_backpack_title"), cfg.PET_PEN_OPEN_WAIT, cfg.PET_PEN_POLL) is None:
+        log_run_event("pet pen: the backpack did not come up after Add Pet")
+        return False
+    if not ensure_pen_age_filter():
+        hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
+        wait_interruptible(cfg.PET_PEN_UI_SETTLE)
+        return False
+    pet = choose_pen_pet()
+    if pet is None:
+        log_run_event("pet pen: no pet fits (all in a trade listing, equipped or none left)")
+        hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
+        wait_interruptible(cfg.PET_PEN_UI_SETTLE)
+        return False
+    hover_click(*pet)
+    wait_interruptible(cfg.PET_PEN_UI_SETTLE)
+    if popup_visible(grab_screen(), "pet_backpack_title"):
+        log_run_event("pet pen: the pet clicked did not go in")
+        hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
+        return False
+    return True
+
+def switch_pen_pets() -> bool:
+    """The pen's full-grown pets out and others in: the pen opened (open_pet_pen()), the red X of each place with the "Full grown!" sign clicked (the rest move up, so each time it is looked at again), then a pet that fits put in
+    for each. A pen with none full grown is closed again and counts as done; a pet that cannot be put in is left out and said (the place stays free). True when the pen is as it should be, False when it could not be opened or a pet
+    could not be taken out."""
+    if not focus_roblox():
+        return False
+    if not open_pet_pen():
+        log_run_event("pet pen: it did not open")
+        return False
+    out = 0
+    for _ in range(len(cfg.PET_PEN_SLOTS)):
+        grown = full_grown_slots(grab_screen())
+        if not grown:
+            break
+        x, y = cfg.PET_PEN_SLOTS[grown[0]]
+        hover_click(x + cfg.PET_PEN_X_OFFSET[0], y + cfg.PET_PEN_X_OFFSET[1])
+        wait_interruptible(cfg.PET_PEN_UI_SETTLE)
+        if len(full_grown_slots(grab_screen())) >= len(grown):
+            log_failure("pet pen: a full-grown pet did not go out of the pen")
+            return False
+        out += 1
+    if out == 0:
+        log_run_event("pet pen: no pet in it is full grown")
+    for _ in range(out):
+        if not put_a_pet_in_the_pen():
+            break
+    else:
+        if out:
+            log_run_event(f"pet pen: {out} full-grown pet(s) switched")
+    hover_click(*cfg.PET_PEN_CLOSE_POS)
+    wait_interruptible(cfg.PET_PEN_UI_SETTLE)
+    return True
+
+def pet_pen_swap_due() -> None:
+    """Once per cycle after pet_pen(): when the age-up screen showed a pet that reached Friend (the game config's pet_pen_swap) and PET_PEN_SWAP_RETRY seconds have passed since the last try, switch_pen_pets(); the flag is cleared
+    once it came through."""
+    config = load_game_config()
+    if not config["pet_pen_enabled"] or not config["pet_pen_swap"] or time.time() - config["pet_pen_swap_tried"] < cfg.PET_PEN_SWAP_RETRY:
+        return
+    done = run_side_action(switch_pen_pets)
+    update_game_config(lambda c: c.update(pet_pen_swap_tried=time.time(), **({"pet_pen_swap": False} if done else {})))
 
 def pet_pen() -> None:
     """Once per cycle after side_quest(), unless the game config's pet_pen_enabled is off: when the Task Board button shows its alert badge (at most every PET_PEN_BADGE_INTERVAL) or
@@ -4004,7 +4145,7 @@ def start_recording_if_requested() -> Optional[RunRecorder]:
 # INPUT CAPTURE
 # ============================================================================
 # Press HOTKEYS["capture"] (any window) to start recording what is on screen and every key, mouse button and mouse
-# movement; press it again to stop. For working out how something is played by hand (the Hauntlet 2 rooms, say):
+# movement; press it again to stop. For working out how something is done by hand (a walk to a need's place, say):
 # the frames are lossless PNGs and the events carry the same clock. See docs/ARCHITECTURE.md#input-capture.
 
 # Windows virtual-key codes the capture looks at, by the name written in the events.
@@ -4052,12 +4193,22 @@ class InputCapture:
     included) however long it runs: when it would need more, every other saved frame is deleted (the newest stays) and
     frames are then saved twice as far apart, so what is left is spread evenly over the whole run. See docs/ARCHITECTURE.md#input-capture."""
 
-    def __init__(self, folder: str, max_zips: Optional[int] = None) -> None:
+    def __init__(self, folder: str, max_zips: Optional[int] = None, interval: Optional[float] = None, protected_max: Optional[int] = None,
+                 max_minutes: Optional[float] = None, inputs: bool = True, context: Optional[Callable[[], dict[str, Any]]] = None, reserve_bytes: int = 0) -> None:
+        """`interval`: seconds between looks (CAPTURE_FRAME_INTERVAL); `protected_max`: most frames mark() and protect_tail() keep from being thinned (RUN_CAPTURE_PROTECTED); `max_minutes`: when it stops
+        by itself (CAPTURE_MAX_MINUTES); `inputs` False: no keys and mouse are recorded (the run's moments, see start_moments()); `context`: called for every frame saved, its dict goes into the frame's line of
+        events.jsonl (what the macro was doing); `reserve_bytes`: room in the first zip for files that are added to the folder when it ends."""
         self.folder = folder
         self.max_zips = max_zips
+        self.interval = interval or cfg.CAPTURE_FRAME_INTERVAL
+        self.protected_max = protected_max or cfg.RUN_CAPTURE_PROTECTED
+        self.max_minutes = max_minutes or cfg.CAPTURE_MAX_MINUTES
+        self.inputs = inputs
+        self.context = context
+        self.reserve_bytes = reserve_bytes
         self.dropped = 0
         self._kept: list[tuple[str, int]] = []          # the frames on disk, oldest first, with their sizes
-        self._gap = cfg.CAPTURE_FRAME_INTERVAL if max_zips else 0.0     # least seconds between two saved frames
+        self._gap = self.interval if max_zips else 0.0     # least seconds between two saved frames
         self.protected: set[str] = set()                # frames the thinning leaves alone: saved around a mark(), or in the tail of a run that went wrong
         self._burst_until = 0.0                         # until then every look saves a frame, however far apart the thinning has put them
         self.stop_event = threading.Event()
@@ -4082,9 +4233,9 @@ class InputCapture:
         with open(os.path.join(self.folder, "info.json"), "w", encoding="utf-8") as f:
             json.dump({"started": time.strftime("%Y-%m-%d %H:%M:%S"), "screen": list(pyautogui.size()),
                        "roblox_rect": [left, top, width, height], "reference": [cfg.REFERENCE_WIDTH, cfg.REFERENCE_HEIGHT],
-                       "frame_interval": cfg.CAPTURE_FRAME_INTERVAL, "max_zips": self.max_zips}, f, indent=1)
+                       "frame_interval": self.interval, "max_zips": self.max_zips}, f, indent=1)
         self._file = open(os.path.join(self.folder, "events.jsonl"), "w", encoding="utf-8")
-        self._threads = [threading.Thread(target=self._poll, daemon=True), threading.Thread(target=self._shots, daemon=True)]
+        self._threads = [threading.Thread(target=self._shots, daemon=True)] + ([threading.Thread(target=self._poll, daemon=True)] if self.inputs else [])
         for thread in self._threads:
             thread.start()
 
@@ -4124,12 +4275,22 @@ class InputCapture:
         self._burst_until = time.time() + cfg.RUN_CAPTURE_BURST
         self.shot_now.set()
 
+    def note(self, text: str) -> None:
+        """A line of the run's log into events.jsonl (a "log" line), so that the frames and what the macro was doing are on one clock."""
+        self._emit("log", text=text)
+
     def protect_tail(self, seconds: float) -> None:
         """Keep the frames of the last `seconds` of the run from being thinned out - where a run that went wrong shows why."""
         horizon = time.time() - self.started - seconds
         for name, _ in self._kept:
-            if len(self.protected) < cfg.RUN_CAPTURE_PROTECTED and float(name[:-len(".png")].rsplit("_", 1)[1]) >= horizon:
+            if len(self.protected) < self.protected_max and float(name[:-len(".png")].rsplit("_", 1)[1]) >= horizon:
                 self.protected.add(name)
+
+    def _context(self) -> dict[str, Any]:
+        try:
+            return self.context() if self.context is not None else {}
+        except Exception:
+            return {}
 
     def _emit(self, kind: str, **fields: Any) -> None:
         line = json.dumps({"t": round(time.time() - self.started, 3), "type": kind, **fields})
@@ -4181,8 +4342,8 @@ class InputCapture:
             clicked = self.shot_now.is_set()
             self.shot_now.clear()
             try:
-                if time.time() - self.started >= cfg.CAPTURE_MAX_MINUTES * 60:
-                    self._give_up(f"{cfg.CAPTURE_MAX_MINUTES:g} minutes")
+                if time.time() - self.started >= self.max_minutes * 60:
+                    self._give_up(f"{self.max_minutes:g} minutes")
                     return
                 if shutil.disk_usage(self.folder).free < cfg.CAPTURE_MIN_FREE_MB * 1024 * 1024:
                     self._give_up("the disk is nearly full")
@@ -4190,14 +4351,14 @@ class InputCapture:
                 seconds = time.time() - self.started
                 screen = grab_screen()
                 small = cv2.resize(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY), (320, 180), interpolation=cv2.INTER_AREA)
-                bursting = time.time() < self._burst_until and len(self.protected) < cfg.RUN_CAPTURE_PROTECTED     # (around a mark(): every look)
+                bursting = time.time() < self._burst_until and len(self.protected) < self.protected_max     # (around a mark(): every look)
                 if bursting or seconds - last_saved >= self._gap and (
                         clicked or last_small is None or seconds - last_saved >= max(cfg.CAPTURE_MAX_SKIP, self._gap)
                         or np.count_nonzero(cv2.absdiff(small, last_small) > cfg.CAPTURE_CHANGE_LEVEL) / small.size >= cfg.CAPTURE_CHANGE_FRACTION):
                     name = f"frame_{self.frames + 1:06d}_{seconds:.3f}.png"
                     if cv2.imwrite(os.path.join(self.folder, name), screen, [cv2.IMWRITE_PNG_COMPRESSION, 1]):
                         self.frames += 1
-                        self._emit("frame", file=name)
+                        self._emit("frame", file=name, **self._context())
                         last_small, last_saved = small, seconds
                         self._kept.append((name, os.path.getsize(os.path.join(self.folder, name))))
                         if bursting:
@@ -4207,7 +4368,7 @@ class InputCapture:
                     self.skipped += 1
             except Exception as error:
                 logger.warning(f"Input capture: couldn't save a frame: {error}")
-            self.shot_now.wait(cfg.CAPTURE_FRAME_INTERVAL)
+            self.shot_now.wait(cfg.CAPTURE_FRAME_INTERVAL if time.time() < self._burst_until else self.interval)
             if self.shot_now.is_set():
                 self.stop_event.wait(0.02)      # let the click land on screen before looking
 
@@ -4216,7 +4377,7 @@ class InputCapture:
         far apart from now on - until the zips needed are few enough."""
         events = os.path.join(self.folder, "events.jsonl")
         while self.max_zips and len(self._kept) > 1 and len(plan_zip_parts(
-                [size for _, size in self._kept], os.path.getsize(events) if os.path.exists(events) else 0)) > self.max_zips:
+                [size for _, size in self._kept], (os.path.getsize(events) if os.path.exists(events) else 0) + self.reserve_bytes)) > self.max_zips:
             keep = [frame for i, frame in enumerate(self._kept) if i % 2 == 0 or i == len(self._kept) - 1 or frame[0] in self.protected]
             if len(keep) == len(self._kept):            # nothing went: the oldest frame that isn't protected (or the newest) goes
                 loose = [frame for frame in self._kept[:-1] if frame[0] not in self.protected]
@@ -4255,24 +4416,27 @@ def plan_zip_parts(frame_sizes: list[int], head: int = 0) -> list[list[int]]:
 
 def zip_capture(folder: str) -> list[str]:
     """Split a capture's files into zips of at most CAPTURE_ZIP_MB each, in <folder>/zips/ as
-    <name>_part01.zip, _part02.zip, ... (stored, not compressed: PNGs don't shrink). The first part also holds
+    <name>_part01.zip, _part02.zip, ... (the PNGs stored, not compressed: they don't shrink; the text files deflated). The first part also holds
     events.jsonl and info.json, which are small; the frames go in time order, none twice. Returns the zip paths."""
     out = os.path.join(folder, "zips")
     building = out + ".partial"                                                                  # (the zips are only in zips/ once all are made: /pull and OneDrive must not take half of them)
     shutil.rmtree(building, ignore_errors=True)
     os.makedirs(building)
     frames = sorted(f for f in os.listdir(folder) if f.startswith("frame_") and f.endswith(".png"))
-    head = sum(os.path.getsize(os.path.join(folder, f)) for f in ("info.json", "events.jsonl") if os.path.exists(os.path.join(folder, f)))
+    first = ["README.txt", "info.json", "events.jsonl"]                                           # (what a reader opens first)
+    heads = [f for f in first if os.path.exists(os.path.join(folder, f))] + sorted(
+        f for f in os.listdir(folder) if f not in first and not f.startswith("frame_") and os.path.isfile(os.path.join(folder, f)))
+    head = sum(os.path.getsize(os.path.join(folder, f)) for f in heads)
     plan = plan_zip_parts([os.path.getsize(os.path.join(folder, name)) for name in frames], head)
     parts = [[frames[i] for i in positions] for positions in plan]
-    parts[0] = ["info.json", "events.jsonl"] + parts[0]
+    parts[0] = heads + parts[0]
     paths = []
     for number, names in enumerate(parts, 1):
         path = os.path.join(out, f"{os.path.basename(folder)}_part{number:02d}.zip")
         with zipfile.ZipFile(os.path.join(building, os.path.basename(path)), "w", zipfile.ZIP_STORED) as z:
             for name in names:
                 if os.path.exists(os.path.join(folder, name)):
-                    z.write(os.path.join(folder, name), name)
+                    z.write(os.path.join(folder, name), name, compress_type=zipfile.ZIP_STORED if name.endswith(".png") else zipfile.ZIP_DEFLATED)
         paths.append(path)
     shutil.rmtree(out, ignore_errors=True)                                                       # (the zips of an earlier stop of the same folder)
     os.replace(building, out)
@@ -4309,6 +4473,7 @@ def toggle_input_capture() -> Optional[InputCapture]:
         zip_capture_in_background(current.folder)
         if was_running:
             return None            # (one that had stopped by itself is only tidied up here: this press starts a new one)
+    finish_moments()                                                                      # (the capture of the run's moments is not kept beside this one)
     make_room_for_capture(cfg.CAPTURES_DIR, cfg.MAX_CAPTURES)
     capture = InputCapture(os.path.join(cfg.CAPTURES_DIR, "capture_" + time.strftime("%Y%m%d_%H%M%S")))
     capture.start()
@@ -4316,33 +4481,166 @@ def toggle_input_capture() -> Optional[InputCapture]:
     logger.info(f"Capture started (press {cfg.HOTKEYS['capture'].upper()} again to stop): {capture.folder}")
     return capture
 
-# ============================================================================
-# HAUNTLET 2 READER
-# ============================================================================
-# What the Hauntlet 2 screen says, as plain values - no decisions and no input here. The room number first; see
-# docs/ARCHITECTURE.md#reading-hauntlet-2.
+# The moments of a run: a capture of the whole run kept to MOMENTS_ZIPS zips however long it goes (InputCapture with a budget: it thins itself out, so what is left is spread over the run), with the
+# frames of failures, rejoins and disabled needs kept first (note_moment() marks them) and the last MOMENTS_TAIL seconds. A run shorter than MOMENTS_MIN_RUN leaves nothing; a longer one is zipped
+# into MOMENTS_DIR, to be sent for improving the macro. The game config's keep_moments switches it off.
 
+class MomentsLog(logging.Handler):
+    """Every line the macro prints or logs (the debug ones too), into output.log of the run's moments capture: two files of at most MOMENTS_LOG_MB / 2 each, so that the end of a long run is there."""
+    def __init__(self, folder: str) -> None:
+        super().__init__(logging.DEBUG)
+        self.files = logging.handlers.RotatingFileHandler(os.path.join(folder, "output.log"), maxBytes=int(cfg.MOMENTS_LOG_MB * 1024 * 1024 / 2), backupCount=1, encoding="utf-8")
+        self.files.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
 
+    def emit(self, record: logging.LogRecord) -> None:
+        self.files.emit(record)
 
+    def close(self) -> None:
+        self.files.close()
+        super().close()
 
+def moments_context() -> dict[str, Any]:
+    """What the macro is doing, for every frame of the moments capture: its activity, the needs it last saw and how the run is going."""
+    return {"activity": state.activity or "waiting for needs", "detected": list(run_stats.last_detected), "cycles": run_stats.cycles, "resolved": sum(run_stats.resolved.values()),
+            "failures": run_stats.failures, "disabled": sorted(state.disabled_needs), "task": state.task_active}
 
+def start_moments() -> None:
+    """Start the capture of the run's moments (the loop starts it), unless keep_moments is off or the hotkey's capture is running (two recorders would only get in each other's way). Never raises."""
+    finish_moments()                                                   # (one left over from a loop that did not end properly)
+    if not load_game_config()["keep_moments"] or (state.capture is not None and state.capture.running):
+        return
+    try:
+        make_room_for_capture(cfg.MOMENTS_DIR, cfg.MOMENTS_KEEP)
+        capture = InputCapture(os.path.join(cfg.MOMENTS_DIR, f"run{state.run_number}_{time.strftime('%Y%m%d_%H%M%S')}"), max_zips=cfg.MOMENTS_ZIPS, interval=cfg.MOMENTS_FRAME_INTERVAL,
+                               protected_max=cfg.MOMENTS_PROTECTED, max_minutes=cfg.MOMENTS_MAX_HOURS * 60, inputs=False, context=moments_context,
+                               reserve_bytes=int(cfg.MOMENTS_RESERVE_MB * 1024 * 1024))
+        capture.start()
+        state.moments, state.moments_marked, state.moments_notes = capture, 0.0, []
+        state.moments_log = MomentsLog(capture.folder)
+        logger.addHandler(state.moments_log)
+    except Exception as error:
+        logger.warning(f"Couldn't start the capture of the run's moments: {error}")
 
+def note_moment(message: str) -> None:
+    """A line of the run log for the moments capture (log_run_event() calls it); one that starts as MOMENTS_MARK_PREFIXES says is also a moment to keep (at most one every MOMENTS_MARK_GAP seconds). Never raises."""
+    capture = state.moments
+    if capture is None:
+        return
+    try:
+        capture.note(message)
+        if message.startswith(cfg.MOMENTS_MARK_PREFIXES) and time.time() - state.moments_marked >= cfg.MOMENTS_MARK_GAP:
+            state.moments_marked = time.time()
+            state.moments_notes.append((round(time.time() - capture.started), message[:200]))
+            capture.mark(message[:80])
+    except Exception as error:
+        logger.warning(f"The capture of the run's moments: {error}")
 
+def macro_version() -> str:
+    """The commit the macro is at (git's short hash, and whether files are changed), or "unknown"."""
+    try:
+        run = lambda *args: subprocess.run(["git", *args], cwd=cfg.SCRIPT_DIR, capture_output=True, text=True, timeout=10).stdout.strip()
+        return f"{run('rev-parse', '--short', 'HEAD')}{' (with changes)' if run('status', '--porcelain', '--untracked-files=no') else ''}"
+    except Exception:
+        return "unknown"
 
+def copy_tail(source: str, target: str, limit: int) -> None:
+    """The last `limit` bytes of the text file `source` into `target` (all of it when it is shorter); nothing if there is no source."""
+    try:
+        with open(source, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - limit))
+            data = f.read()
+        with open(target, "wb") as f:
+            f.write(data)
+    except OSError:
+        pass
 
+def write_moments_files(capture: InputCapture, seconds: float) -> None:
+    """The files of a kept run's moments besides the frames: README.txt (what everything is and what the macro is, for a reader with nothing else), the run's own log (run_log.txt), status.json,
+    config.json (the game config but for the private server link), failures.txt (what was saved for the run's failures), the commit in info.json. Never raises."""
+    folder = capture.folder
+    try:
+        run = state.run_number
+        copy_tail(os.path.join(cfg.RUNS_DIR, f"run{run}.txt"), os.path.join(folder, "run_log.txt"), int(cfg.MOMENTS_RUN_LOG_MB * 1024 * 1024))
+        copy_tail(cfg.STATUS_PATH, os.path.join(folder, "status.json"), 1024 * 1024)
+        config = {key: value for key, value in load_game_config().items() if key != "private_server_link"}
+        with open(os.path.join(folder, "config.json"), "w", encoding="utf-8") as f:
+            json.dump({"game_config": config, "enabled_needs": sorted(cfg.ENABLED_NEEDS), "disabled_this_run": sorted(state.disabled_needs), "run_stats": asdict(run_stats)}, f, indent=1, default=str)
+        failures = []
+        if os.path.isdir(cfg.FAILURE_DIR):
+            for name in sorted(os.listdir(cfg.FAILURE_DIR)):
+                if f"_run{run}_" in name and os.path.isfile(os.path.join(cfg.FAILURE_DIR, name, "info.txt")):
+                    with open(os.path.join(cfg.FAILURE_DIR, name, "info.txt"), encoding="utf-8", errors="replace") as f:
+                        failures.append(f"--- {name} (its screen.png, need_icons.png and state.json are in debug/failures/)\n{f.read()}")
+        with open(os.path.join(folder, "failures.txt"), "w", encoding="utf-8") as f:
+            f.write("\n".join(failures) or "no failure folders were saved for this run\n")
+        version = macro_version()
+        info_path = os.path.join(folder, "info.json")
+        with open(info_path, encoding="utf-8") as f:
+            info = json.load(f)
+        info.update(run=run, macro_version=version, run_seconds=round(seconds), moments=[{"seconds": t, "what": what} for t, what in state.moments_notes])
+        with open(info_path, "w", encoding="utf-8") as f:
+            json.dump(info, f, indent=1)
+        marks = "\n".join(f"  {t // 3600}:{t % 3600 // 60:02d}:{t % 60:02d}  {what}" for t, what in state.moments_notes) or "  (none: nothing went wrong enough to mark)"
+        with open(os.path.join(folder, "README.txt"), "w", encoding="utf-8") as f:
+            f.write(MOMENTS_README.format(run=run, version=version, hours=seconds / 3600, started=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(capture.started)), frames=capture.frames,
+                                          dropped=capture.dropped, zips=cfg.MOMENTS_ZIPS, marks=marks, tail=cfg.MOMENTS_TAIL, interval=cfg.MOMENTS_FRAME_INTERVAL, burst=cfg.RUN_CAPTURE_BURST))
+    except Exception as error:
+        logger.warning(f"Couldn't write the files of the run's moments: {error}")
 
+MOMENTS_README = """MOMENTS OF RUN {run} - Adopt Me macro, commit {version}
+Started {started}, ran {hours:.1f} hours. For improving the macro and fixing what failed; this folder is all that is needed.
 
+THE MACRO: a Python program (github.com/ExaltedTime/AdoptMeMacro, main.py; docs/ARCHITECTURE.md describes it) that plays Roblox's Adopt Me by itself: it reads the need icons on the bar at the top of the
+screen (hungry, thirsty, dirty, sleepy, ...), walks the character to the place that need is done and clicks, and checks the icon went away. It rejoins the game now and then, and collects a money tree, a lure
+and the pet pen on timers. Screens are 1920x1080 (the positions in events are in that space).
+PRIVACY: the frames are of the Roblox window only, but the game shows other players' names and chat; the private server link is not in any file here.
 
+THE FRAMES (frame_<n>_<seconds>.png): lossless screenshots, <seconds> from the start of the capture. Taken every {interval:g} s, thinned out to fit {zips} zips ({frames} saved, {dropped} thinned): what is
+left is spread over the run. Frames of the moments below were saved every 0.5 s for {burst:g} s and are never thinned, and so are the last {tail:g} s of the run.
 
+THE FILES:
+  events.jsonl   one JSON line per event, "t" = seconds from the start (the frames' clock):
+                 type "frame": a frame saved, with "activity" (what the macro was doing: a need handler, a side action, setup, a rejoin, or waiting for needs), "detected" (the needs it last saw on the
+                 bar), "cycles", "resolved" (needs resolved so far), "failures", "disabled" (needs switched off as stuck), "task" (a handler running);
+                 type "log": a line of the run log (what happened: needs detected and resolved, failures, rejoins, popups closed); type "mark": a moment kept (see below); "frame_dropped": thinned out.
+  output.log     everything the macro printed, debug lines too (the last part of the run when it was long), with times.
+  run_log.txt    the run's own log (the same lines as the "log" events, with their wall-clock times).
+  failures.txt   what the macro saved for each failure (reason, time, what was detected, disabled needs); their screenshots are in the macro's debug/failures folder and are not here.
+  status.json    the macro's status when the run ended. config.json: its settings (the private server link is left out), the enabled needs and the counts of the run.
+  info.json      the capture's facts, the commit, and the moments.
 
+THE MOMENTS KEPT (time into the capture, what was logged): a failure, a rejoin, a white screen, a recovery, a need disabled as stuck, or a quiet period (no need resolved for a while), at most one a minute:
+{marks}
 
+To read it: find a moment's time, open the frames around it (names carry the seconds), read events.jsonl and output.log around the same time, and compare what the macro logged with what the frames show.
+"""
 
-
-
-
-
-
-
+def finish_moments() -> None:
+    """Stop the capture of the run's moments (the loop's end): after MOMENTS_MIN_RUN seconds or more its tail is kept, its files are written (write_moments_files()) and it is zipped, else it is deleted.
+    Never raises."""
+    capture, state.moments = state.moments, None
+    if capture is None:
+        return
+    try:
+        if state.moments_log is not None:
+            logger.removeHandler(state.moments_log)
+            state.moments_log.close()
+            state.moments_log = None
+        seconds = time.time() - capture.started
+        long = seconds >= cfg.MOMENTS_MIN_RUN
+        if long:
+            capture.protect_tail(cfg.MOMENTS_TAIL)
+        capture.stopped_because = capture.stopped_because or "the run ended"
+        summary = capture.stop()
+        if long:
+            write_moments_files(capture, seconds)
+            logger.info(f"Moments of the run: {summary}")
+            zip_capture_in_background(capture.folder)
+        else:
+            shutil.rmtree(capture.folder, ignore_errors=True)
+    except Exception as error:
+        logger.warning(f"Couldn't finish the capture of the run's moments: {error}")
 
 # ============================================================================
 # WORKFLOWS
@@ -4499,6 +4797,7 @@ def run_full_cycle() -> None:
         unscrew()
         side_quest()
         pet_pen()
+        pet_pen_swap_due()
         pet_repick()
         if process_needs():
             return
@@ -4522,6 +4821,7 @@ def run_workflow_loop() -> None:
     state.white_since = None
     log_run_event("LOOP started")
     recorder = start_recording_if_requested()
+    start_moments()
     logger.info("=" * 50)
     logger.info(f"[LOOP] Starting continuous workflow (run {state.run_number})")
     logger.info("=" * 50)
@@ -4572,7 +4872,7 @@ def run_workflow_loop() -> None:
             recorder.stop()
         flush_idle_checks()
         log_run_event("LOOP stopped")
-        write_run_report(state.run_number)
+        finish_moments()
         logger.info("[LOOP] Stopped")
 
 # ============================================================================
@@ -4591,7 +4891,7 @@ def run_workflow_loop() -> None:
 #      need disabled as stuck drawn as a grey bar until the next rejoin;
 #   2. needs detected per check, over time;
 #   3. average seconds per resolved need, with how many there were;
-#   4. counts of failures by kind, popups, minigames and the like;
+#   4. counts of failures by kind, popups and the like;
 #   5. CPU and memory use: the script's, and the whole PC's as a second line.
 
 LINE_RE = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] \[RUN ([^\]]+)\] (.*)$")
@@ -4978,6 +5278,25 @@ def write_run_report(run: Union[int, str]) -> Optional[str]:
         keep_newest_files(cfg.RUNS_DIR, cfg.MAX_REPORTS, ".png")
     return path
 
+def newest_run_in_log() -> Optional[int]:
+    """The number of the run the last line of the run log is of (a number from the log's last 200 kB), or None."""
+    try:
+        with open(cfg.RUN_LOG_PATH, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 200_000))
+            text = f.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    runs = [m.group(2) for m in map(LINE_RE.match, text.split("\n")) if m]
+    return int(runs[-1]) if runs and runs[-1].isdigit() else None
+
+def report_from_outside(run: Optional[int]) -> str:
+    """The `report` command: draw the chart of run `run` (the newest in the log when none is named) into RUNS_DIR - the charts are not drawn when a run stops. How it ended, for the bot."""
+    run = run or newest_run_in_log()
+    if run is None:
+        return "given up: there is no run in the log"
+    return "done" if write_run_report(run) else f"given up: run {run} is not in the log"
+
 def test_need_handler(name: str, handler_cls: Optional[Callable[[], NeedHandler]] = None) -> None:
     """Run the need handler `name` on its own, outside the normal need-detection flow (the Debug tab's Test button, the `test` command), so it can be tried even
     when it is not in ENABLED_NEEDS; TEST_ALL_TELEPORTS runs every teleport handler in turn instead."""
@@ -4994,7 +5313,7 @@ def test_need_handler(name: str, handler_cls: Optional[Callable[[], NeedHandler]
 
 def run_all_need_handlers(handlers: Optional[dict[str, Callable[[], NeedHandler]]] = None) -> dict[str, str]:
     """Run need handlers once each (the Debug tab's "test every teleport handler": TELEPORT_HANDLERS, or any given), respawning after
-    each, minigame popups declined. Returns {need: "done" | "failed" | "interrupted by ..."}.
+    each. Returns {need: "done" | "failed" | "interrupted by ..."}.
     See docs/ARCHITECTURE.md#gui-internals.
     """
     handlers = TELEPORT_HANDLERS if handlers is None else handlers
@@ -5393,6 +5712,8 @@ class AdoptMeGUI:
             self.act_from_outside(f"decline:{data['listing']}:{data['offer']}", stem)           # (the loop is stopped first and not resumed)
         elif command == "reset_config":
             finish_command(stem, self.reset_config_from_outside())
+        elif command == "report":
+            finish_command(stem, report_from_outside(data.get("run") if data else None))
         elif command == "server_link" and data:
             self.server_link_var.set(data["link"].strip())
             self.save_server_link()
@@ -5902,6 +6223,7 @@ class AdoptMeGUI:
         """Fill the Options subtab: record the next run, show the debug lines in the output or not, refresh the debug
         folder, reset the config."""
         self.add_config_checkbox(parent, "Record the next run (low quality video)", "record_next_run", load_game_config())
+        self.add_config_checkbox(parent, "Capture the moments of a run (kept when it lasts over an hour)", "keep_moments", load_game_config())
         self.add_config_checkbox(parent, "Collect the Pet Pen when the Task Board says it is ready", "pet_pen_enabled", load_game_config())
         self.add_config_checkbox(parent, "Setup levels a pet that still grows (no eggs, none full grown)", "level_growing_pet", load_game_config())
         self.add_config_checkbox(parent, f"{cfg.HOTKEYS['blackout'].upper()} blanks the screen in Roblox (off: type it)", "blackout_hotkey_enabled", load_game_config())

@@ -1,5 +1,5 @@
 """The logic of the Discord bot (discord_bot.py) that needs neither Discord nor Windows: reading the config, deciding who may give
-orders, and turning the files the macro writes (status.json, run_log.txt, the run charts) into what is posted.
+orders, and turning the files the macro writes (status.json, run_log.txt) into what is posted.
 Plain functions, so tests/test_bot.py can run them anywhere. See docs/ARCHITECTURE.md#discord-bot."""
 import contextlib
 import glob
@@ -296,15 +296,17 @@ def parse_failure(line: str) -> Optional[Failure]:
 
 
 def failure_screenshot_path(failure: Failure) -> Optional[str]:
-    """The screenshot file of `failure` if it is one, still there, and inside the debug folder (a line is only text: it is not trusted with a path)."""
-    if not failure.screenshot:
+    """The screenshot file of `failure` if it is one: a .png, still there, and inside the failures folder (a line is only text: it is not trusted with a path, and nothing else of debug/ - the config
+    with the private server link - is ever sent)."""
+    if not failure.screenshot or not failure.screenshot.lower().endswith(".png"):
         return None
     path = os.path.normpath(os.path.join(cfg.DEBUG_DIR, failure.screenshot))
+    folder = os.path.normpath(cfg.FAILURE_DIR)
     try:
-        inside = os.path.commonpath([path, os.path.normpath(cfg.DEBUG_DIR)]) == os.path.normpath(cfg.DEBUG_DIR)
+        inside = os.path.commonpath([path, folder]) == folder
     except ValueError:                                  # (a path on another drive: Windows has no common path with it)
         return None
-    return path if inside and os.path.isfile(path) else None
+    return path if inside and os.path.isfile(path) and not os.path.islink(path) else None
 
 
 def read_new_lines(path: str, offset: int) -> tuple[list[str], int]:
@@ -411,11 +413,6 @@ def heartbeat_due(last: Optional[float], hours: float, now: float) -> bool:
     return hours > 0 and (last is None or now - last >= hours * 3600)
 
 
-def run_charts(runs_dir: str = "") -> list[str]:
-    """The run charts (RUNS_DIR/run<N>.png) there are now, oldest first."""
-    return sorted(glob.glob(os.path.join(runs_dir or cfg.RUNS_DIR, "run*.png")), key=os.path.getmtime)
-
-
 # --- the bot's memory between starts (bot_state.json): where it got to ---
 
 def state_path() -> str:
@@ -426,7 +423,6 @@ def state_path() -> str:
 class BotState:
     log_unreadable: bool = False                             # the run log could not be read and that was posted
     log_offset: Optional[int] = None                         # None: never started - begin at the end of the run log, not at its start
-    charts: list[str] = field(default_factory=list)          # run charts already posted (or there when the bot first started)
     stale: bool = False
     last_heartbeat: Optional[float] = None
     desired_state: Optional[str] = None                      # after the bot's /start ("open": the window, no loop), /loop ("running": the loop too), /stop ("open") and /exit ("stopped"); None before: a macro that is gone is a crash only if it should be there
@@ -442,9 +438,6 @@ def load_state(path: str) -> BotState:
     for key in ("log_offset", "last_heartbeat"):
         if isinstance(data.get(key), (int, float)) and not isinstance(data.get(key), bool):
             setattr(state, key, data[key])
-    for key in ("charts",):
-        if isinstance(data.get(key), list):
-            setattr(state, key, [item for item in data[key] if isinstance(item, str)])
     if isinstance(data.get("previous_commit"), str) and re.fullmatch(r"[0-9a-f]{7,64}", data["previous_commit"]):
         state.previous_commit = data["previous_commit"]
     if isinstance(data.get("restarts"), list):
@@ -698,7 +691,7 @@ def switch_command(kind: str, name: str, value: bool) -> dict[str, Any]:
 
 
 # The game config's defaults for the switches (main.py's _read_game_config(): side quest, the private server and the blackout key on, the rest off), for a config that doesn't have them yet.
-OPTION_DEFAULTS = {"side_quest_enabled": True, "use_private_server": True, "blackout_hotkey_enabled": True, "new_need_hotkey_enabled": True, "level_growing_pet": True, "pet_pen_enabled": True}
+OPTION_DEFAULTS = {"side_quest_enabled": True, "use_private_server": True, "blackout_hotkey_enabled": True, "new_need_hotkey_enabled": True, "level_growing_pet": True, "pet_pen_enabled": True, "keep_moments": True}
 
 
 def switch_states(config: Optional[dict[str, Any]]) -> dict[str, bool]:

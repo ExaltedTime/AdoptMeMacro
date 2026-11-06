@@ -168,12 +168,12 @@ def test_the_pens_full_grown_pet_the_free_place_and_the_small_backpack_are_found
 
 def test_a_pet_fits_unless_it_is_grey_in_a_trade_listing_or_has_the_green_edge_of_the_equipped_one_and_the_empty_cells_do_not(macro):
     frame = shot("pen_backpack")
-    assert [macro.pen_cell_fits(frame, 0, column) for column in range(4)] == [False, False, False, False]       # (the equipped pet, then three in listings)
-    assert [macro.pen_cell_fits(frame, 1, column) for column in range(4)] == [False, False, True, True]
-    assert macro.first_fitting_cell(frame) == (1055, 787)                                                       # (what the person clicked)
+    assert [(macro.pet_cell_state(frame, 0, column) == "pet") for column in range(4)] == [False, False, False, False]       # (the equipped pet, then three in listings)
+    assert [(macro.pet_cell_state(frame, 1, column) == "pet") for column in range(4)] == [False, False, True, True]
+    assert macro.first_listed_cell(frame) == ("pet", (1055, 787))                                                       # (what the person clicked)
     flat = frame.copy()
     flat[630:910, 850:1190] = 255                                                                               # (a list that has ended: nothing in the cells)
-    assert macro.first_fitting_cell(flat) is None
+    assert macro.first_listed_cell(flat) is None
 
 
 def test_the_list_is_scrolled_while_no_pet_fits_and_given_up_when_a_scroll_changes_nothing(macro, monkeypatch):
@@ -187,11 +187,11 @@ def test_the_list_is_scrolled_while_no_pet_fits_and_given_up_when_a_scroll_chang
     scrolls.clear()
     moving = iter(range(1, 100))
     monkeypatch.setattr(macro, "scroll_down", lambda n: (scrolls.append(n), frames.__setitem__(0, np.full((1080, 1920, 3), next(moving) % 250, np.uint8)))[0])
-    monkeypatch.setattr(macro, "first_fitting_cell", lambda img: (1, 2) if len(scrolls) == 3 else None)
+    monkeypatch.setattr(macro, "first_listed_cell", lambda img, stop=False: ("pet", (1, 2)) if len(scrolls) == 3 else None)
     assert macro.choose_pen_pet() == (1, 2) and scrolls == [1, 1, 1]
     scrolls.clear()
-    monkeypatch.setattr(macro, "first_fitting_cell", lambda img: None)
-    assert macro.choose_pen_pet() is None and len(scrolls) == macro.cfg.PET_PEN_SCROLL_MAX + 1
+    monkeypatch.setattr(macro, "first_listed_cell", lambda img, stop=False: None)
+    assert macro.choose_pen_pet() is None and len(scrolls) == macro.cfg.PET_GRID_SCROLL_MAX + 1
 
 
 def test_a_full_grown_pet_is_taken_out_and_the_first_pet_that_fits_is_put_in(macro, monkeypatch):

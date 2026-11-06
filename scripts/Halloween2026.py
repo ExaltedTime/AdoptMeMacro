@@ -53,7 +53,7 @@ MINIGAME_FINISH_BUTTON_BOX = (860, 725, 1060, 800)
 MINIGAME_FINISH_BUTTON_MIN_PIXELS = 2000
 MINIGAME_FINISH_BUTTON_POS = (966, 762)
 # While one runs it has its own overlay along the top of the screen (Hauntlet 2: the ROOM counter beside the
-# timer and monitor; Ghost Gallery: the TIME LEFT / GHOST GALLERY / Score banner; Stitches' Spotlight: TIME LEFT / STITCHES' SPOTLIGHT / Candy Corn). Crops of each overlay (ref/overlays/<minigame>.png, found within its box here, at least
+# timer and monitor; Ghost Gallery: the TIME LEFT / GHOST GALLERY / Score banner; Stitches' Spotlight: TIME LEFT / STITCHES' SPOTLIGHT / Candy Corn). Crops of each overlay (scripts/Halloween2026_ref/overlays/<minigame>.png, found within its box here, at least
 # MINIGAME_OVERLAY_THRESHOLD) say whether the game is on: one that was seen and then isn't, for
 # MINIGAME_OVERLAY_LOST_TIMEOUT seconds, was left (game over, kicked out) - and one never seen within
 # MINIGAME_OVERLAY_START_GRACE seconds after its start wait never started.
@@ -107,12 +107,20 @@ EXIT_POLL = 0.25                                                # seconds betwee
 MINIGAME_FINISH_CLICK_TRIES = 3      # NICE! clicks before giving up on the finish screen closing
 MINIGAME_START_LOOK_INTERVAL = 0.5     # how often each minigame looks for its overlay while waiting for the game to begin
 MINIGAME_START_WAIT = 90.0          # each minigame waits for its overlay (the game has begun: the lobby's countdown to a round that starts at a fixed time) and act
-MINIGAME_TEMPLATE_DIR = os.path.join(cfg.SCRIPT_DIR, "ref", "halloween")
-MINIGAME_OVERLAY_DIR = os.path.join(cfg.SCRIPT_DIR, "ref", "overlays")
-HAUNTLET_DIGIT_DIR = os.path.join(cfg.SCRIPT_DIR, "ref", "hauntlet_2", "digits")   # 0.png ... 9.png: the digits of the ROOM panel, see read_hauntlet_room()
-HAUNTLET_ITEM_DIR = os.path.join(cfg.SCRIPT_DIR, "ref", "hauntlet_2", "items")      # a folder per item (phone/, key/, ...) of pictures of its slot; see read_hauntlet_items()
-HAUNTLET_COUNT_DIR = os.path.join(cfg.SCRIPT_DIR, "ref", "hauntlet_2", "counts")    # x/, 1/, 2/: the glyphs of an item's "x2" badge
-CANDY_CORN_DIGIT_DIR = os.path.join(cfg.SCRIPT_DIR, "ref", "candy_corn_digits")      # 0.png ... 9.png: the digits of the candy corn total in the HUD, see read_candy_corn()
+KEYS_EVENT = {                                               # keys only the event's players press (the macro's KEYS has the rest). They are not in main.py's HELD_KEYS: a restored event adds them there, so that a stop lets go of them
+    "speed_boost": "e",            # Stitches' Spotlight's speed boost ("Press E for a Speed Boost!"), pressed every STITCHES_BOOST_INTERVAL
+    "zoom_out": "o",               # zooms the camera out while held (the players use it to see the whole room)
+    "camera_left": "left",         # the arrow keys turn the camera (Stitches' Spotlight turns it to keep the middle of the ring in view)
+    "camera_right": "right",
+}
+REF_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Halloween2026_ref")     # the event's pictures: halloween/ (the titles), overlays/, popups/, hauntlet_2/, candy_corn_digits/
+POPUP_DIR = os.path.join(REF_DIR, "popups")                  # the crops of POPUP_TEMPLATES_EVENT
+MINIGAME_TEMPLATE_DIR = os.path.join(REF_DIR, "halloween")
+MINIGAME_OVERLAY_DIR = os.path.join(REF_DIR, "overlays")
+HAUNTLET_DIGIT_DIR = os.path.join(REF_DIR, "hauntlet_2", "digits")   # 0.png ... 9.png: the digits of the ROOM panel, see read_hauntlet_room()
+HAUNTLET_ITEM_DIR = os.path.join(REF_DIR, "hauntlet_2", "items")      # a folder per item (phone/, key/, ...) of pictures of its slot; see read_hauntlet_items()
+HAUNTLET_COUNT_DIR = os.path.join(REF_DIR, "hauntlet_2", "counts")    # x/, 1/, 2/: the glyphs of an item's "x2" badge
+CANDY_CORN_DIGIT_DIR = os.path.join(REF_DIR, "candy_corn_digits")      # 0.png ... 9.png: the digits of the candy corn total in the HUD, see read_candy_corn()
 # Every minigame played is recorded the same way, automatically (MINIGAME_CAPTURE; not while a capture of the hotkey's is
 # running), into a folder of RUN_CAPTURES_DIR. Of each minigame the captures of its RUN_CAPTURES_BEST best runs (the most candy corn
 # earned), its RUN_CAPTURES_WORST worst, its latest and the latest RUN_CAPTURES_FAILED that failed are kept (prune_run_captures()). A lossless frame is 1-3 MB, so a run
@@ -451,12 +459,20 @@ TELEPORT_WALK_NEEDS_HALLOWEEN = {
 
 
 
-# The crops the event's code looks for with m.popup_visible() (ref/popups/): the macro's POPUP_TEMPLATES had these entries while the event ran; a restored event adds them back to it.
+# The crops the event's code looks for with popup_visible() (POPUP_DIR): the macro's POPUP_TEMPLATES had these entries (and its ref/popups the crops) while the event ran; a restored event adds them back.
 POPUP_TEMPLATES_EVENT = {
     "minigame_popup": {"box": (780, 515, 1160, 585), "threshold": 0.8},       # the minigame popup's "Teleport there now?" line (the same in every minigame's popup, always in the same place)
     "exit_game": {"box": (760, 445, 1160, 605), "threshold": 0.8},            # the exit dialog's "Do you want to exit this game?" title (the same with its right button grey or green)
     "exit_minigame": {"box": (0, 1000, 220, 1078), "threshold": 0.8},         # the red "Exit Minigame" button at the bottom left of every minigame
 }
+
+def popup_visible(img: Image, name: str) -> bool:
+    """m.popup_visible() for the event's own crops (POPUP_DIR, POPUP_TEMPLATES_EVENT), the macro's for any other name."""
+    entry = POPUP_TEMPLATES_EVENT.get(name)
+    if entry is None:
+        return m.popup_visible(img, name)
+    crop = m.load_templates(POPUP_DIR).get(name)
+    return crop is not None and m.find_template(img, crop, entry["box"])[0] >= entry["threshold"]
 
 
 @dataclass
@@ -476,6 +492,33 @@ event = EventState()
 # ============================================================================
 # CODE
 # ============================================================================
+
+
+def template_score(img: m.Image, crop: m.Image, box: m.Box) -> float:
+    """How well `crop` matches anywhere within `box` (left, top, right,
+    bottom) of `img`: 0-1, 1 = identical (cv2.matchTemplate)."""
+    left, top, right, bottom = box
+    band = img[top:bottom, left:right]
+    if crop.shape[0] > band.shape[0] or crop.shape[1] > band.shape[1]:
+        return 0.0
+    return float(cv2.minMaxLoc(cv2.matchTemplate(band, crop, cv2.TM_CCOEFF_NORMED))[1])
+
+
+def hsv_fraction(img: m.Image, box: m.Box, ranges: Sequence[tuple[tuple[int, int, int], tuple[int, int, int]]]) -> float:
+    """The share (0-1) of `box` of `img` whose HSV colour (OpenCV's) is within any of the (low, high) `ranges`."""
+    left, top, right, bottom = box
+    region = img[top:bottom, left:right]
+    if region.size == 0:                                      # (a frame too small to have the box)
+        return 0.0
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    mask = np.zeros(hsv.shape[:2], np.uint8)
+    for low, high in ranges:
+        mask |= cv2.inRange(hsv, np.array(low, np.uint8), np.array(high, np.uint8))
+    return float(np.count_nonzero(mask)) / max(1, mask.size)
+
+
+
+
 
 
 @contextlib.contextmanager
@@ -507,7 +550,7 @@ def detect_minigame_popup(img: Image) -> bool:
     is looked at on its own: a popup over the open backpack, whose buttons are green too, was missed when all the green on the
     screen was taken together. See docs/ARCHITECTURE.md#need-handlers.
     """
-    if m.detect_sick_dialog(img) or not m.popup_visible(img, "minigame_popup"):
+    if m.detect_sick_dialog(img) or not popup_visible(img, "minigame_popup"):
         return False                                                  # (another dialog with a green and a red button is not the popup: it has its "Teleport there now?")
     green = (m.exact_color_mask(img, cfg.GREEN_BUTTON_COLOR) > 0).astype(np.uint8)
     count, _, stats, centres = cv2.connectedComponentsWithStats(green)
@@ -527,7 +570,7 @@ def identify_minigame(img: Image) -> Optional[str]:
     match reaches MINIGAME_TITLE_MATCH_THRESHOLD - otherwise None."""
     best_name, best_score = None, MINIGAME_TITLE_MATCH_THRESHOLD
     for name, crop in m.load_templates(MINIGAME_TEMPLATE_DIR).items():
-        score = m.template_score(img, crop, MINIGAME_TITLE_BOX)
+        score = template_score(img, crop, MINIGAME_TITLE_BOX)
         if score >= best_score:
             best_name, best_score = name, score
     return best_name
@@ -544,19 +587,19 @@ def wanting_exit_dialog() -> Iterator[None]:
 def detect_exit_dialog(img: Image) -> Optional[str]:
     """"Do you want to exit this game?" - its title (POPUP_TEMPLATES["exit_game"]: the teleport's Yes / No dialogs have the same buttons) and a red Cancel with, at its
     right, a grey button (still counting down: "counting") or a green one (Exit Game: "ready"); None if it is not there."""
-    if not m.popup_visible(img, "exit_game"):
+    if not popup_visible(img, "exit_game"):
         return None
-    if m.hsv_fraction(img, EXIT_DIALOG_CANCEL_BOX, (EXIT_RED_HSV, EXIT_RED_HSV_HIGH)) < EXIT_DIALOG_MIN_FRACTION:
+    if hsv_fraction(img, EXIT_DIALOG_CANCEL_BOX, (EXIT_RED_HSV, EXIT_RED_HSV_HIGH)) < EXIT_DIALOG_MIN_FRACTION:
         return None
-    if m.hsv_fraction(img, EXIT_DIALOG_RIGHT_BOX, (EXIT_GREEN_HSV,)) >= EXIT_DIALOG_MIN_FRACTION:
+    if hsv_fraction(img, EXIT_DIALOG_RIGHT_BOX, (EXIT_GREEN_HSV,)) >= EXIT_DIALOG_MIN_FRACTION:
         return "ready"
-    if m.hsv_fraction(img, EXIT_DIALOG_RIGHT_BOX, (EXIT_GREY_HSV,)) >= EXIT_DIALOG_MIN_FRACTION:
+    if hsv_fraction(img, EXIT_DIALOG_RIGHT_BOX, (EXIT_GREY_HSV,)) >= EXIT_DIALOG_MIN_FRACTION:
         return "counting"
     return None
 
 def in_minigame(img: Image) -> bool:
     """True if a minigame is being played: the red Exit Minigame button (every minigame has it) or the overlay of one the macro knows (MINIGAME_LABELS) is on screen."""
-    return m.popup_visible(img, "exit_minigame") or any(minigame_overlay_visible(img, name) for name in MINIGAME_LABELS)
+    return popup_visible(img, "exit_minigame") or any(minigame_overlay_visible(img, name) for name in MINIGAME_LABELS)
 
 def exit_minigame() -> bool:
     with wanting_exit_dialog():
@@ -622,7 +665,7 @@ def minigame_overlay_visible(img: Image, name: str) -> bool:
     """True if minigame `name`'s overlay (its crop in MINIGAME_OVERLAY_DIR, within its box in MINIGAME_OVERLAYS) is on screen in `img`, at least
     MINIGAME_OVERLAY_THRESHOLD: one template match, not one per minigame, since this is asked at every look."""
     crop = m.load_templates(MINIGAME_OVERLAY_DIR).get(name)
-    return crop is not None and name in MINIGAME_OVERLAYS and m.template_score(img, crop, MINIGAME_OVERLAYS[name]) >= MINIGAME_OVERLAY_THRESHOLD
+    return crop is not None and name in MINIGAME_OVERLAYS and template_score(img, crop, MINIGAME_OVERLAYS[name]) >= MINIGAME_OVERLAY_THRESHOLD
 
 class MinigameWatch:
     """Keeps track of whether the minigame being played is on screen (its
@@ -680,7 +723,7 @@ def zoom_out() -> None:
     """Zoom the camera out (KEYS["zoom_out"] held MINIGAME_ZOOM_OUT_DURATION seconds) to see the whole room: close up, the TVs
     over a Hauntlet 2 room's doors are cut off by the top of the screen."""
     m.logger.debug("Zooming the camera out")
-    m.hold_key(cfg.KEYS["zoom_out"], MINIGAME_ZOOM_OUT_DURATION)
+    m.hold_key(KEYS_EVENT["zoom_out"], MINIGAME_ZOOM_OUT_DURATION)
 
 def minigame_wait(duration: float, watch: MinigameWatch) -> None:
     """wait_interruptible(), with the popup checks every
@@ -1552,7 +1595,7 @@ class RingCamera:
     shows they work the other way."""
 
     def __init__(self) -> None:
-        self.keys = (cfg.KEYS["camera_left"], cfg.KEYS["camera_right"])
+        self.keys = (KEYS_EVENT["camera_left"], KEYS_EVENT["camera_right"])
         self.bias = 0.0
         self.lost_since: Optional[float] = None
 
@@ -1620,7 +1663,7 @@ def play_stitches_spotlight(deadline: float, watch: MinigameWatch) -> bool:
             if turn is not None:
                 m.hold_key(*turn)
             if m.time.time() >= next_boost:
-                m.pydirectinput.press(cfg.KEYS["speed_boost"])
+                m.pydirectinput.press(KEYS_EVENT["speed_boost"])
                 next_boost = m.time.time() + STITCHES_BOOST_INTERVAL
             m.wait_interruptible(STITCHES_CENTER_INTERVAL)
     finally:

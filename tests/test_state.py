@@ -5,6 +5,7 @@ import threading
 import types
 import time
 
+import cv2
 import numpy as np
 import pytest
 
@@ -69,7 +70,7 @@ def test_state_snapshot_is_json_friendly(macro):
 
 def test_log_failure_makes_a_folder_with_screen_info_and_state(macro, monkeypatch):
     import numpy as np
-    monkeypatch.setattr(macro, "grab_full_screen", lambda: np.zeros((20, 30, 3), np.uint8))
+    monkeypatch.setattr(macro, "grab_roblox_native", lambda: np.zeros((20, 30, 3), np.uint8))
     monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((1080, 1920, 3), np.uint8))
     macro.state.run_number = 4
     macro.log_failure("pizza still showing after 60.0s")
@@ -82,20 +83,24 @@ def test_log_failure_makes_a_folder_with_screen_info_and_state(macro, monkeypatc
     assert "FAILURE: pizza still showing" in open(macro.cfg.RUN_LOG_PATH).read()
 
 
-def test_failure_report_without_roblox_still_saves_the_screen(macro, monkeypatch):
+def test_a_failure_report_shows_the_game_window_only_and_without_one_has_no_screenshot(macro, monkeypatch):
     import numpy as np
-    monkeypatch.setattr(macro, "grab_full_screen", lambda: np.zeros((20, 30, 3), np.uint8))
-    def no_roblox():
-        raise RuntimeError("no window")
-    monkeypatch.setattr(macro, "grab_screen", no_roblox)
-    shot = macro.save_failure_report("roblox isn't running")
-    folder = os.path.join(macro.cfg.FAILURE_DIR, shot.split("/")[0])
-    assert "screen.png" in os.listdir(folder) and "need_icons.png" not in os.listdir(folder)
+    monkeypatch.setattr(macro, "grab_full_screen", lambda: np.full((1080, 1920, 3), 9, np.uint8))
+    monkeypatch.setattr(macro, "roblox_rect", lambda: (100, 50, 640, 360))
+    monkeypatch.setattr(macro, "roblox_window", lambda: types.SimpleNamespace(isMinimized=False))
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((1080, 1920, 3), np.uint8))
+    shot = macro.save_failure_report("a failure")
+    saved = cv2.imread(os.path.join(macro.cfg.FAILURE_DIR, shot))
+    assert saved.shape == (360, 640, 3)                                           # (the window, not the monitor)
+    monkeypatch.setattr(macro, "roblox_window", lambda: None)
+    assert macro.save_failure_report("roblox isn't running") is None               # (nothing of the desktop is kept - the failure goes to Discord)
+    (_, folder) = sorted(os.listdir(macro.cfg.FAILURE_DIR))
+    assert "screen.png" not in os.listdir(os.path.join(macro.cfg.FAILURE_DIR, folder)) and "state.json" in os.listdir(os.path.join(macro.cfg.FAILURE_DIR, folder))
 
 
 def test_failure_folders_keep_only_the_newest(macro, monkeypatch):
     import numpy as np
-    monkeypatch.setattr(macro, "grab_full_screen", lambda: np.zeros((4, 4, 3), np.uint8))
+    monkeypatch.setattr(macro, "grab_roblox_native", lambda: np.zeros((4, 4, 3), np.uint8))
     monkeypatch.setattr(macro.cfg, "MAX_FAILURE_FOLDERS", 3)
     os.makedirs(macro.cfg.FAILURE_DIR)
     for i in range(5):
@@ -750,7 +755,7 @@ def test_the_zoom_keys_and_the_mouse_buttons_that_are_down_are_released_with_the
     monkeypatch.setattr(macro.pydirectinput, "mouseUp", lambda button="left": buttons.append(button), raising=False)
     monkeypatch.setattr(macro, "pressed_inputs", lambda: held[0])
     macro.release_all_inputs()
-    assert {macro.cfg.KEYS["zoom_in"], macro.cfg.KEYS["zoom_out"], macro.cfg.KEYS["helicopter"]} <= set(released)
+    assert {macro.cfg.KEYS["zoom_in"], macro.cfg.KEYS["helicopter"]} <= set(released)
     assert sorted(buttons) == ["left", "right"]                                      # (the camera is turned with the right one)
     buttons.clear()
     held[0] = {"mouse_left"}

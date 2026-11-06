@@ -33,7 +33,7 @@ def camera(macro, monkeypatch, deadband=5.0):
 
 
 def test_the_camera_is_turned_towards_the_side_the_line_says_and_not_when_it_is_straight(macro, monkeypatch):
-    left_key, right_key = (macro.cfg.KEYS["camera_left"], macro.cfg.KEYS["camera_right"])
+    left_key, right_key = (hw.KEYS_EVENT["camera_left"], hw.KEYS_EVENT["camera_right"])
     interval = hw.STITCHES_TURN_HOLD_MAX * 2.5                           # (a look interval)
     monkeypatch.setattr(hw, "STITCHES_TURN_BIAS_GAIN", 0.001 / interval)     # (what is learned in a look is the same whatever the interval)
     ring = camera(macro, monkeypatch)
@@ -48,7 +48,7 @@ def test_the_camera_is_turned_towards_the_side_the_line_says_and_not_when_it_is_
 
 
 def test_a_line_that_stays_off_teaches_a_steady_turn_which_goes_on_while_the_line_is_out_of_sight(macro, monkeypatch):
-    right_key = macro.cfg.KEYS["camera_right"]
+    right_key = hw.KEYS_EVENT["camera_right"]
     ring = camera(macro, monkeypatch)
     interval = hw.STITCHES_TURN_HOLD_MAX * 2.5                           # (a look interval: a turn is learned and held for part of it)
     monkeypatch.setattr(hw, "STITCHES_TURN_BIAS_GAIN", 0.001 / interval)     # (the learning is per second: what is learned in ten looks is the same whatever the interval)
@@ -67,7 +67,7 @@ def test_a_line_that_stays_off_teaches_a_steady_turn_which_goes_on_while_the_lin
 
 
 def test_swapping_the_camera_keys_turns_the_other_way_and_flips_what_was_learned(macro, monkeypatch):
-    left_key, right_key = (macro.cfg.KEYS["camera_left"], macro.cfg.KEYS["camera_right"])
+    left_key, right_key = (hw.KEYS_EVENT["camera_left"], hw.KEYS_EVENT["camera_right"])
     ring = camera(macro, monkeypatch)
     ring.bias = 0.3
     ring.swap_keys()
@@ -91,7 +91,7 @@ def calibration(macro, monkeypatch, angles):
 
 
 def test_the_camera_keys_are_tested_by_turning_right_and_seeing_the_line_move(macro, monkeypatch):
-    keys = (macro.cfg.KEYS["camera_left"], macro.cfg.KEYS["camera_right"])
+    keys = (hw.KEYS_EVENT["camera_left"], hw.KEYS_EVENT["camera_right"])
     ring, pressed, marks = calibration(macro, monkeypatch, [30.0, 10.0])               # turning right made a line that fell to the right level: as assumed
     assert ring.keys == keys and pressed == [keys[1]] and marks == []
     ring, _, _ = calibration(macro, monkeypatch, [10.0, 30.0])                           # it went the other way: the keys are swapped
@@ -122,6 +122,6 @@ def test_the_player_walks_boosts_and_turns_until_the_finish_screen_shows(macro, 
     assert hw.play_stitches_spotlight(10 ** 12, watch) is True
     walk = cfg.KEYS["right"]
     assert events[0] == ("down", walk) and events[-1] == ("up", walk)
-    assert ("turn", (cfg.KEYS["camera_left"], cfg.KEYS["camera_right"])[1]) in events
-    boosts = [i for i, event in enumerate(events) if event == ("press", cfg.KEYS["speed_boost"])]
+    assert ("turn", (hw.KEYS_EVENT["camera_left"], hw.KEYS_EVENT["camera_right"])[1]) in events
+    boosts = [i for i, event in enumerate(events) if event == ("press", hw.KEYS_EVENT["speed_boost"])]
     assert 2 <= len(boosts) <= 4                                                          # (about one every STITCHES_BOOST_INTERVAL of the fake time: 6 looks of STITCHES_CENTER_INTERVAL)

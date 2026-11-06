@@ -14,8 +14,6 @@ from scripts import Halloween2026 as hw
 def fresh_event_state(monkeypatch):
     """The event's own state (it was fields of the macro's State) is new for every test."""
     monkeypatch.setattr(hw, "event", hw.EventState())
-    for name, entry in hw.POPUP_TEMPLATES_EVENT.items():                      # (the crops the event looks for, which the macro's own table does not have any more)
-        monkeypatch.setitem(hw.cfg.POPUP_TEMPLATES, name, entry)
     yield
 
 

@@ -178,12 +178,21 @@ def test_a_failures_screenshot_is_only_taken_from_inside_the_debug_folder(macro_
     assert bot_lib.failure_screenshot_path(bot_lib.Failure("t", 1, "r", "../secret.txt")) is None          # a line is only text
     assert bot_lib.failure_screenshot_path(bot_lib.Failure("t", 1, "r", "failures/gone/screen.png")) is None
     assert bot_lib.failure_screenshot_path(bot_lib.Failure("t", 1, "r", None)) is None
+    config = tmp_path / "debug" / ".config"
+    config.write_text('{"private_server_link": "secret"}')
+    assert bot_lib.failure_screenshot_path(bot_lib.Failure("t", 1, "r", ".config")) is None                 # (only a .png of the failures folder: never the config)
+    other = tmp_path / "debug" / "runs" / "x.png"
+    other.parent.mkdir(parents=True)
+    other.write_bytes(b"png")
+    assert bot_lib.failure_screenshot_path(bot_lib.Failure("t", 1, "r", "runs/x.png")) is None
+    assert bot_lib.failure_screenshot_path(bot_lib.Failure("t", 1, "r", "failures/f1/screen.png.txt")) is None
 
 
 @pytest.fixture
 def macro_paths(monkeypatch, tmp_path):
     (tmp_path / "debug").mkdir()
     monkeypatch.setattr(bot_lib.cfg, "DEBUG_DIR", str(tmp_path / "debug"))
+    monkeypatch.setattr(bot_lib.cfg, "FAILURE_DIR", str(tmp_path / "debug" / "failures"))
 
 
 def test_new_lines_are_read_from_where_the_last_look_ended(tmp_path):
@@ -393,10 +402,10 @@ def test_a_heartbeat_is_due_when_switched_on_and_the_time_has_passed():
 def test_what_the_bot_has_dealt_with_is_kept_between_starts_and_a_bad_file_means_defaults(tmp_path):
     path = str(tmp_path / "bot_state.json")
     assert bot_lib.load_state(path) == bot_lib.BotState() and bot_lib.BotState().log_offset is None
-    state = bot_lib.BotState(log_offset=1234, charts=["run1.png"], stale=True, last_heartbeat=55.5)
+    state = bot_lib.BotState(log_offset=1234, stale=True, last_heartbeat=55.5)
     bot_lib.save_state(path, state)
     assert bot_lib.load_state(path) == state and not os.path.exists(path + ".tmp")
-    (tmp_path / "bot_state.json").write_text(json.dumps({"log_offset": "x", "charts": "run1.png", "stale": 1}))
+    (tmp_path / "bot_state.json").write_text(json.dumps({"log_offset": "x", "stale": 1}))
     assert bot_lib.load_state(path) == bot_lib.BotState()
     (tmp_path / "bot_state.json").write_text("{broken")
     assert bot_lib.load_state(path) == bot_lib.BotState()
@@ -420,9 +429,9 @@ def make_capture(root, name, outcome="finished (the game over screen)", zips=("c
 def debug_folders(tmp_path, monkeypatch):
     """The folders /pull takes from, in tmp_path, with a capture, failures, logs and a game config (which must never be reachable)."""
     root = tmp_path / "debug"
-    for name in ("failures", "logs", "runs", "minigame_captures", "captures", "recordings", "screenshots"):
+    for name in ("failures", "logs", "runs", "moments", "captures", "recordings", "screenshots"):
         (root / name).mkdir(parents=True)
-    monkeypatch.setattr(bot_lib.cfg, "PULL_SOURCES", {name: str(root / name) for name in ("failures", "logs", "runs", "minigame_captures", "captures", "recordings", "screenshots")})
+    monkeypatch.setattr(bot_lib.cfg, "PULL_SOURCES", {name: str(root / name) for name in ("failures", "logs", "runs", "moments", "captures", "recordings", "screenshots")})
     (root / ".config").write_text('{"private_server_link": "secret"}')
     return root
 
@@ -482,11 +491,11 @@ def test_a_screenshot_is_pulled_as_a_file_the_newest_first(debug_folders):
 
 
 def test_a_capture_is_pulled_as_its_zips_alone_not_its_frames_and_other_things_as_all_their_files(debug_folders):
-    make_capture(debug_folders / "minigame_captures", "hauntlet_2_20261016_100000_9330cc_room23", zips=("p1.zip", "p2.zip"))
-    path, name = bot_lib.resolve_pull("minigame_captures", None)
+    make_capture(debug_folders / "moments", "run7_20261016_100000", zips=("p1.zip", "p2.zip"))
+    path, name = bot_lib.resolve_pull("moments", None)
     assert sorted(rel for _, rel in bot_lib.pull_files(path, name)) == sorted(os.path.join(name, r) for r in (os.path.join("zips", "p1.zip"), os.path.join("zips", "p2.zip")))
-    make_capture(debug_folders / "minigame_captures", "ghost_gallery_20261016_110000")
-    path, name = bot_lib.resolve_pull("minigame_captures", bot_lib.PULL_ALL)                  # (everything: still only the zips, of every capture)
+    make_capture(debug_folders / "moments", "run8_20261016_110000")
+    path, name = bot_lib.resolve_pull("moments", bot_lib.PULL_ALL)                  # (everything: still only the zips, of every capture)
     assert {os.path.splitext(rel)[1] for _, rel in bot_lib.pull_files(path, name)} == {".zip"}
     touch(debug_folders / "failures" / "f1" / "screen.png", 1)
     touch(debug_folders / "failures" / "f1" / "sub" / "info.txt", 1)
@@ -500,19 +509,19 @@ def test_a_capture_is_pulled_as_its_zips_alone_not_its_frames_and_other_things_a
 def test_pulled_files_are_copied_into_a_folder_of_the_source_and_a_too_big_pull_copies_nothing(debug_folders, tmp_path):
     onedrive = tmp_path / "onedrive"
     onedrive.mkdir()
-    make_capture(debug_folders / "minigame_captures", "hauntlet_2_20261016_100000", zips=("p1.zip", "p2.zip"))
-    path, name = bot_lib.resolve_pull("minigame_captures", None)
+    make_capture(debug_folders / "moments", "run7_20261016_100000", zips=("p1.zip", "p2.zip"))
+    path, name = bot_lib.resolve_pull("moments", None)
     files = bot_lib.pull_files(path, name)
-    assert bot_lib.copy_pull(files, str(onedrive), "minigame_captures", 100) == pytest.approx(2, abs=0.01)
-    assert sorted(os.listdir(onedrive / "minigame_captures" / name / "zips")) == ["p1.zip", "p2.zip"] and (debug_folders / "minigame_captures" / name / "zips" / "p1.zip").exists()
-    bot_lib.copy_pull(files, str(onedrive), "minigame_captures", 100)                            # (again: replaces, no error)
-    path, name = bot_lib.resolve_pull("minigame_captures", bot_lib.PULL_ALL)                       # (the whole folder: its own name is not in the path twice)
-    bot_lib.copy_pull(bot_lib.pull_files(path, name), str(onedrive / "all"), "minigame_captures", 100)
-    assert sorted(os.listdir(onedrive / "all" / "minigame_captures")) == [bot_lib_name for bot_lib_name in os.listdir(debug_folders / "minigame_captures")]
+    assert bot_lib.copy_pull(files, str(onedrive), "moments", 100) == pytest.approx(2, abs=0.01)
+    assert sorted(os.listdir(onedrive / "moments" / name / "zips")) == ["p1.zip", "p2.zip"] and (debug_folders / "moments" / name / "zips" / "p1.zip").exists()
+    bot_lib.copy_pull(files, str(onedrive), "moments", 100)                            # (again: replaces, no error)
+    path, name = bot_lib.resolve_pull("moments", bot_lib.PULL_ALL)                       # (the whole folder: its own name is not in the path twice)
+    bot_lib.copy_pull(bot_lib.pull_files(path, name), str(onedrive / "all"), "moments", 100)
+    assert sorted(os.listdir(onedrive / "all" / "moments")) == [bot_lib_name for bot_lib_name in os.listdir(debug_folders / "moments")]
     other = tmp_path / "other"
     other.mkdir()
     with pytest.raises(ValueError, match="more than the 1 MB"):
-        bot_lib.copy_pull(files, str(other), "minigame_captures", 1)
+        bot_lib.copy_pull(files, str(other), "moments", 1)
     assert os.listdir(other) == []
     with pytest.raises(ValueError, match="no files"):
         bot_lib.copy_pull([], str(other), "logs", 100)

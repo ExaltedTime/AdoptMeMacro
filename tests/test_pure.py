@@ -13,6 +13,11 @@ def test_parse_server_link_old_form(macro):
     assert macro.parse_server_link(f"https://www.roblox.com/games/1?privateServerLinkCode={code}") == ("LinkCode", code)
 
 
+def test_parse_server_link_takes_ascii_letters_and_digits_only(macro):
+    assert macro.parse_server_link("https://www.roblox.com/share?code=" + "é" * 32 + "&type=Server") is None
+    assert macro.parse_server_link("https://www.roblox.com/games/1?privateServerLinkCode=" + "a" * 31 + "/") is None
+
+
 @pytest.mark.parametrize("link", ["", "https://www.roblox.com/games/920587237", "share?code=tooshort&type=Server"])
 def test_parse_server_link_rejects_other_text(macro, link):
     assert macro.parse_server_link(link) is None

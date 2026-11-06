@@ -103,6 +103,15 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     # The purple backpack button at the bottom centre: the game's normal UI, there in the world and the Trading Hub and not on a loading screen.
     "backpack_button": {"box": (880, 950, 1040, 1075), "threshold": 0.8},
     # The "Pet Pen Ready" card of the Task Board's Alerts tab (its title line; the cards are listed one under the other, so it is looked for in the whole list).
+    # The age-up screen's purple pill that says Friend (a pet of the pen has grown as far as it does: it is to be switched out; the crop is the word, the pill has a gold edge and a heart count). Four pills sit
+    # over the four pets, two above and two below; the one in the top left was the one in the capture.
+    "pet_friend":      {"box": (560, 60, 1360, 620), "threshold": 0.8},
+    # The Pet Pen's own screen (opened at the pen in the yard): its title, the "Full grown!" sign a pet of it carries when it has grown as far as it does, the green Add Pet tile of the first free place, and the
+    # small BACKPACK that Add Pet opens (a panel over the pen, with the pets in a grid of four columns).
+    "pet_pen_title":      {"box": (700, 240, 1000, 360), "threshold": 0.8},
+    "pet_pen_full_grown": {"box": (760, 330, 1330, 660), "threshold": 0.8},
+    "pet_pen_add":        {"box": (760, 330, 1330, 660), "threshold": 0.8},
+    "pet_backpack_title": {"box": (700, 600, 1000, 700), "threshold": 0.8},
     "pet_pen_ready":   {"box": (836, 430, 1310, 720), "threshold": 0.8},
     # The Trading Hub Phone's screens (trades_tour(), decline_offer(); crops of tests/trades/): the phone's TRADE LISTINGS button, the "TRADING HUB" menu's title, the
     # "MY LISTINGS" title and the "1/2" / "2/2" of its "LISTING n/2", the "OFFERS" title (also there, dimmed, over an offer opened on its own), that offer's red DECLINE
@@ -137,6 +146,7 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "pet_alicorn":                 {"box": (900, 640, 1230, 900), "threshold": 0.8},
     "age_egg":                     {"box": (800, 640, 1130, 880), "threshold": 0.85},       # the Age rows of the backpack's FILTERS panel: the text of Egg and of Full Grown (their boxes are found left of it)
     "age_full_grown":              {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "age_full_grown_pen":          {"box": (800, 640, 1130, 880), "threshold": 0.85},       # the same row in the pen's small backpack, whose panel has no blue line under the text (the first crop was cut in the big backpack's)
     "pet_unequip":                 {"box": (980, 780, 1215, 840), "threshold": 0.85},
     "phone_icon":         {"box": (850, 690, 950, 790), "threshold": 0.8},
     "phone_card":         {"box": (850, 700, 1250, 900), "threshold": 0.85},   # (the box is where the card's name can be: with the item in the first slot or the second)
@@ -184,10 +194,10 @@ for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
 COMMANDS_DIR = os.path.join(DEBUG_DIR, "commands")          # the commands for the macro, one <time>-<id>.json file each, written by the Discord bot (see read_command_with_id()); the macro removes each once read and leaves a <time>-<id>.ack saying it was taken or why not
-COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus", "blackout", "test", "reset_config", "server_link", "trades", "decline", "capture", "recenter")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, travel to / leave the Trading Hub, take pictures of the backpack's pets tab, or run Setup and then the loop (`sloop`), bring the Roblox window to the front (`focus`), blank / show the screen (`blackout`), run one need handler on its own or every teleport one (`test`, what the Debug tab's Test buttons do), reset the config (`reset_config`), save the private server link (`server_link`), take pictures of the offers on the two trade listings (`trades`), decline one of them (`decline`), or start the input capture (the capture hotkey's) and stop it again (`capture`), or close what is open and respawn (`recenter`)
+COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus", "blackout", "test", "reset_config", "server_link", "trades", "decline", "capture", "recenter", "report")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, travel to / leave the Trading Hub, take pictures of the backpack's pets tab, or run Setup and then the loop (`sloop`), bring the Roblox window to the front (`focus`), blank / show the screen (`blackout`), run one need handler on its own or every teleport one (`test`, what the Debug tab's Test buttons do), reset the config (`reset_config`), save the private server link (`server_link`), take pictures of the offers on the two trade listings (`trades`), decline one of them (`decline`), or start the input capture (the capture hotkey's) and stop it again (`capture`), or close what is open and respawn (`recenter`), or draw the chart of a run (`report`, the newest in the log or the one named)
 NEED_NAMES = ("catch", "pet", "choose", "ride", "walk", "hungry", "thirsty", "dirty", "potty", "sleepy", "bored", "beach", "school", "cafe", "salon", "pizza", "camping", "sick")   # the Debug tab's need switches (the keys of main.py's NEED_HANDLER_CLASSES)
 OPTION_SWITCHES = {"side_quest": "side_quest_enabled", "resume_on_focus_loss": "resume_on_focus_loss", "record_next_run": "record_next_run",
-                   "use_private_server": "use_private_server", "pet_pen": "pet_pen_enabled", "blackout_hotkey": "blackout_hotkey_enabled", "new_need_hotkey": "new_need_hotkey_enabled", "level_growing_pet": "level_growing_pet"}   # the other switches a command may change: name -> the game config's key ("show_debug_lines" too, which is only in the window)
+                   "use_private_server": "use_private_server", "pet_pen": "pet_pen_enabled", "blackout_hotkey": "blackout_hotkey_enabled", "new_need_hotkey": "new_need_hotkey_enabled", "level_growing_pet": "level_growing_pet", "keep_moments": "keep_moments"}   # the other switches a command may change: name -> the game config's key ("show_debug_lines" too, which is only in the window)
 SHOW_DEBUG_LINES_OPTION = "show_debug_lines"
 TEST_ALL_TELEPORTS = "teleports"                       # the `test` command's handler for the Debug tab's "Test every teleport handler" (the others are NEED_NAMES)
 COMMAND_POLL_MS = 1000                                      # how often the macro looks for one
@@ -197,6 +207,7 @@ REJOIN_STOP_POLL_MS = 500                                   # a rejoin asked for
 REJOIN_STOP_WAIT_MS = 15000                                 # and how long to wait for that before giving up
 START_LOOP_DELAY_MS = 1500                                  # after the window is up, before the --loop argument starts the loop
 BOT_COMMAND_ACK_WAIT = 30.0                                 # seconds the bot waits for the macro to take a command (it looks every COMMAND_POLL_MS) before it withdraws it and says so
+BOT_REPORT_WAIT = 60.0                                      # seconds the bot waits for the macro to draw a run chart (/report)
 BOT_COMMAND_ACK_POLL = 0.25                                 # seconds between the bot's looks for the macro's answer
 BOT_ACK_KEEP = 300                                          # seconds an answer of the macro that nobody read stays in the commands folder
 BOT_ACTION_WAIT = 3600.0                                    # seconds the bot waits for an action it asked for (Setup, a rejoin, a trip) to report that it ended, before it says it has not
@@ -218,7 +229,6 @@ BOT_CHANNEL_TRIES = 5                                       # times the bot trie
 BOT_CHANNEL_RETRY_WAIT = 2.0                                # seconds before the second try; doubled for each one after
 BOT_WATCH_INTERVAL = 10                                     # seconds between the Discord bot's looks at what the macro wrote (failures, run charts, captures, status)
 BOT_ALERT_GAP = 60                                          # seconds: at most one failure post per this long, the rest counted ("N more failures")
-BOT_FILE_SETTLE = 5                                         # seconds a run chart must be unchanged before it is posted
 BOT_CAPTURE_WAIT = 20.0                                     # seconds the bot waits, after /capture, for the macro to say whether a capture started or stopped
 BOT_RVIEW_SECONDS = 30                                     # /rview: how long the rolling view runs when it is not told
 BOT_RVIEW_MAX_SECONDS = 900                                 # the longest it can be asked to run, in seconds, and the most "until done" runs
@@ -265,9 +275,22 @@ CAPTURE_MAX_MINUTES = 15                 # a capture stops by itself after this 
 CAPTURE_MIN_FREE_MB = 3000               # ...or when less than this much disk is free
 MAX_CAPTURES = 5                         # oldest captures are deleted beyond this many
 # What the Discord bot's /pull can copy into OneDrive: the folders of debug/ (not the game config, which holds the private server link).
-PULL_SOURCES = {"failures": FAILURE_DIR, "logs": LOGS_DIR, "runs": RUNS_DIR, "captures": CAPTURES_DIR, "recordings": RECORDINGS_DIR, "screenshots": SCREENSHOTS_DIR}
+MOMENTS_DIR = os.path.join(DEBUG_DIR, "moments")     # the capture of a run's moments (see start_moments()): a folder per run
+PULL_SOURCES = {"failures": FAILURE_DIR, "logs": LOGS_DIR, "runs": RUNS_DIR, "captures": CAPTURES_DIR, "recordings": RECORDINGS_DIR, "moments": MOMENTS_DIR, "screenshots": SCREENSHOTS_DIR}
 RUN_CAPTURE_BURST = 4.0
 RUN_CAPTURE_PROTECTED = 25
+MOMENTS_MIN_RUN = 60 * 60              # seconds a run lasts for its moments to be kept (a shorter run leaves nothing)
+MOMENTS_ZIPS = 20                      # the most zips (of CAPTURE_ZIP_MB) a run's moments come to: the frames are thinned out to fit
+MOMENTS_FRAME_INTERVAL = 20.0          # seconds between two looks (a mark makes every CAPTURE_FRAME_INTERVAL look save a frame for RUN_CAPTURE_BURST seconds)
+MOMENTS_PROTECTED = 100                # the most frames that marks and the tail keep from being thinned out (the zips hold about 200)
+MOMENTS_MAX_HOURS = 48                 # a run's capture stops by itself after this long
+MOMENTS_MARK_PREFIXES = ("FAILURE", "scheduled rejoin", "white screen", "recovery complete", "disabled:", "quiet:")     # the run-log lines that are moments worth keeping frames of
+MOMENTS_MARK_GAP = 60.0                # at most one mark this often (a failure repeated every cycle is one moment)
+MOMENTS_TAIL = 90.0                    # seconds at the end of a run whose frames are kept
+MOMENTS_LOG_MB = 8                     # the most of the macro's output kept with a run's moments (the last part of it)
+MOMENTS_RUN_LOG_MB = 2                 # the most of the run's own log kept (its last part)
+MOMENTS_RESERVE_MB = 12                # room left in the first zip for those files (they are deflated, so they take less)
+MOMENTS_KEEP = 3                       # the moments of this many runs are kept (the oldest folders go)
 CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into zips of at most this size (chat attachments are limited to 30 MB)
 
 
@@ -531,25 +554,20 @@ TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
 SICK_FINAL_CLICK_POS = (1045, 660)       # click after the sick need's walk
 
 # Whether a teleport-walk need flies by helicopter by default; an entry can
-# override it with `helicopter=True/False`. Only the Halloween bored, beach
-# and camping entries turn it on.
+# override it with `helicopter=True/False`. No entry turns it on now (the event's did: scripts/Halloween2026.py).
 HELICOPTER_REQUIRED = False
 HELICOPTER_FORWARD_DURATION = 1.0  # step forward this long after teleporting, before equipping
 HELICOPTER_HOLD_DURATION = 4.5     # then hold KEYS["helicopter"] this long (it was 0.5 s less, and the helicopter could be caught on a tree)
 
 # Every key the macro presses, by what it is for (code says cfg.KEYS["forward"], not "w"): the game's own bindings, then the macro's hotkeys.
 KEYS = {
-    "forward": "w", "left": "a", "back": "s", "right": "d",   # walking (every minigame walks with them; Stitches' Spotlight holds "right" all round the ring)
+    "forward": "w", "left": "a", "back": "s", "right": "d",   # walking
     "jump": "space",
     "backpack": "b",
     "mount": "e",                  # mounting a vehicle...
     "interact": "e",               # ...and collecting/harvesting (lure_collect(), tree_collect()): the same physical key, named for each use
-    "speed_boost": "e",            # Stitches' Spotlight's speed boost ("Press E for a Speed Boost!"), pressed every STITCHES_BOOST_INTERVAL
     "zoom_in": "i",
-    "zoom_out": "o",               # zooms the camera out while held (the minigames hold it to see the whole room)
     "helicopter": "r",             # held to fly the equipped helicopter (also held briefly by ride)
-    "camera_left": "left",         # the arrow keys turn the camera (Stitches' Spotlight turns it to keep the middle of the ring in view)
-    "camera_right": "right",
     "foreground_tap": "alt",       # tapped when Windows refuses to bring Roblox to the front: a program that was just given the keys may then ask for the foreground (force_foreground())
 }
 KEY_SEQUENCES = {                  # keys pressed one after the other, each held KEY_STEP_GAP-ish (RESPAWN_KEY_DURATION, REJOIN_LEAVE_KEY_GAP)
@@ -571,8 +589,8 @@ HELD_KEYS = tuple(dict.fromkeys([*KEYS.values(), *(key for keys in KEY_SEQUENCES
 # wait for the need to clear. Each entry: where to teleport, the
 # (key, seconds) holds to perform in order, optionally a `final_click` (a need with one has a doctor's dialog to answer after the last hold:
 # its prompt is clicked, the dialog waited for and this is its Yes - sick; see TeleportWalkNeedHandler._open_dialog()), optionally `helicopter` (above) and optionally
-# `max_wait` (how long to wait for the need to clear afterwards; default NEED_GONE_MAX_WAIT). One table: the nursery's routes (bored, beach, school, camping, sick) are the ones from
-# before Halloween moved it, which it is back to; the event's own are kept in scripts/Halloween2026.py.
+# `max_wait` (how long to wait for the need to clear afterwards; default NEED_GONE_MAX_WAIT). One table: the nursery's routes (bored, beach, school, camping, sick); the
+# event's own routes are in scripts/Halloween2026.py.
 TELEPORT_WALK_NEEDS: dict[str, dict[str, Any]] = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["forward"], 16.0), (KEYS["left"], 10.0))),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["left"], 27.0),)),
@@ -634,7 +652,25 @@ PET_PEN_POLL = 0.5                        # seconds between looks while waiting 
 PET_PEN_ANIMATION_WAIT = 8.0              # seconds from the card's click to the age-up animation being over (the capture clicked NICE! 8 s after)
 PET_PEN_NICE_WAIT = 15.0                  # seconds to see the NICE! button in
 PET_PEN_NICE_TRIES = 3                    # clicks on it while it is still there
-PET_REPICK_INTERVAL = 10 * 60            # seconds between the loop's picks of the pet to level (see pet_repick(): a pet that has grown up is no longer in the filtered list)
+PET_PEN_ROUTE = (("hold", "back", 0.7), ("press", "interact", 0), ("wait", "exit", 5.0), ("hold", "left", 2.23), ("hold", "back", 0.3), ("hold", "left", 0.18), ("press", "interact", 0))      # from the respawn in the house to the pen: out of the house (E at the door, the yard loads), then along the fence to the pen; the second E opens it (the capture of a person doing it)
+PET_PEN_OPEN_WAIT = 4.0                   # seconds for the pen's screen to come up after that E
+PET_PEN_SLOTS = ((855, 415), (1045, 415), (855, 580), (1045, 580))      # the middles of the pen's four places (two above, two below)
+PET_PEN_SLOT_HALF = (95, 80)              # half the width and height of the box a place is looked at in
+PET_PEN_X_OFFSET = (77, -60)              # the red X that takes a pet out is this far from its place's middle
+PET_PEN_CLOSE_POS = (1187, 300)           # the red X of the pen's screen
+PET_PEN_GRID_X = (895, 975, 1055, 1135)   # the middles of the cells of the small backpack's grid, by column...
+PET_PEN_GRID_Y = (706, 787, 867)          # ...and by row (three rows show)
+PET_PEN_CELL_HALF = 36                    # half the size of a cell
+PET_PEN_LOCKED_MAX_V = 200                # a cell whose corners are darker than this (brightness 0-255) is grey: a pet that is in a trade listing (white cells are 250 and more, grey ones 160)
+PET_PEN_GREEN_BORDER_MIN = 0.05           # a cell whose edge is this green (share of its pixels) is the equipped pet (0.25 on the capture)
+PET_PEN_CONTENT_MIN_STD = 8.0             # a cell with a pet in it has a picture (grey levels vary this much); an empty one is flat
+PET_PEN_SCROLL_POS = (1193, 760)          # the mouse is put on the grid's scroll bar to turn the wheel (over a pet it would open its card)
+PET_PEN_SCROLL_MAX = 40                   # most scrolls looking for a pet that fits
+PET_PEN_BACKPACK_CLOSE_POS = (1188, 640)  # the small backpack's red X (from the picture; not clicked in the capture)
+PET_PEN_FILTER_BUTTON_POS = (956, 640)    # the orange filter button in the small backpack's header (it opens the same FILTERS panel as the big backpack's, in the same place)
+PET_PEN_UI_SETTLE = 1.5                   # seconds after a click in the pen's screens
+PET_PEN_SWAP_RETRY = 10 * 60              # seconds before a swap that did not come through is tried again
+PET_REPICK_INTERVAL = 30 * 60            # seconds between the loop's picks of the pet to level (see pet_repick(): a pet that has grown up is no longer in the filtered list)
 TREE_CHECK_INTERVAL = 10 * 60          # seconds (10 minutes) between tree harvests
 LURE_RECOLLECT_INTERVAL = 4 * 60 * 60  # seconds (4 hours)
 
@@ -645,6 +681,7 @@ SETUP_BACKPACK_SETTINGS_POS = (977, 646)
 SETUP_SORT_MENU_POS = (1031, 680)
 SETUP_CONFIRM_POS = (1047, 908)
 PET_FIRST_ITEM_POS = (975, 707)                  # the pets tab's first pet, right of the green plus tile: the first of the list the filters leave
+AGE_ALTERNATES = {"age_full_grown": ("age_full_grown_pen",)}   # other crops of the same row, tried when the first is not found
 AGE_LABELS = ("age_egg", "age_full_grown")        # the Age rows Setup unticks (POPUP_TEMPLATES): what is neither an egg nor full grown still grows
 AGE_CHECKBOX_DX = -17                             # px from where the text of a row starts to the middle of its box
 AGE_CHECKBOX_HALF = 12                            # half the side of the square looked at for a tick

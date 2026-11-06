@@ -1,6 +1,6 @@
 # Halloween 2026 (archived)
 
-The Halloween event's minigames (Hauntlet 2, Ghost Gallery, Stitches' Spotlight, candy corn) are no longer part of `main.py`. Their code is `scripts/Halloween2026.py`, which imports `main` as `m` and uses its screen, input and detection helpers; its constants are in that file, its tests in `tests/halloween2026/` and its crops in `ref/halloween/`, `ref/overlays/` and `tests/halloween*/`. Nothing in `main.py` calls it. The sections below are what ARCHITECTURE.md said while the event ran; hook names in them (`minigame_popup()` inside `unscrew()`, `play_minigames`, `exit_minigame()`) no longer exist in `main.py`.
+The Halloween event's minigames (Hauntlet 2, Ghost Gallery, Stitches' Spotlight, candy corn) are no longer part of `main.py`. Their code is `scripts/Halloween2026.py` (its pictures are in `scripts/Halloween2026_ref/`, its own keys are `KEYS_EVENT`), which imports `main` as `m` and uses its screen, input and detection helpers; its constants are in that file, its tests in `tests/halloween2026/` and its crops in `scripts/Halloween2026_ref/halloween/`, `scripts/Halloween2026_ref/overlays/` and `tests/halloween*/`. Nothing in `main.py` calls it. The sections below are what ARCHITECTURE.md said while the event ran; hook names in them (`minigame_popup()` inside `unscrew()`, `play_minigames`, `exit_minigame()`) no longer exist in `main.py`.
 
 ## Popups and playing
 
@@ -12,9 +12,9 @@ color is unique alone (Yes green = `GREEN_BUTTON_COLOR`, No red = the
 Exit Home button), so it needs the Yes green (`GREEN_BUTTON_COLOR`, at
 least `MINIGAME_POPUP_MIN_BUTTON_PIXELS` px) with the No red
 (`MINIGAME_POPUP_NO_COLOR`) within `MINIGAME_POPUP_NO_MAX_DX` / `_DY` px to
-its left, **under the popup's own "Teleport there now?" line** (a crop, `ref/popups/minigame_popup.png`, `POPUP_TEMPLATES["minigame_popup"]`; identical in the popups of all of them). The crop was added after a run in which 30 "popup dismissed (unknown)" lines, each a click on the popup's "do not show again" and No places, and 19 "can't spawn vehicle" windows came with a cascade of failed needs (choose 10 of 10, the buttons' needs 15 in a row): the dialogs taken for the popup were the macro's own teleport dialogs ("Teleport to the Nursery to adopt pets?", "Teleport to The Vehicle Dealership to see vehicles?": a green Yes and a red No, clicked by `teleport_to()` and "dismissed" by the in-task check in the middle of it), as the screenshots `tests/popups/teleport_*.png` show - the detector before the crop fired on both. The one dialog left out on purpose is the sick need's own "Ask Doctor Heart to heal your family?" dialog, which has the same Yes/No look but is the sick handler's to answer (its Yes is `SICK_FINAL_CLICK_POS`): `ref/popups/sick_dialog.png`, within its `POPUP_TEMPLATES` box, makes the detector ignore it. (Before that, the periodic in-task check (`UNSCREW_TASK_INTERVAL`) took it for a minigame popup and clicked its decline positions in the middle of the sick sequence - `unknown` popups clustered in the sick handler in the logs.) `identify_minigame()` then says which one it is: it matches the
+its left, **under the popup's own "Teleport there now?" line** (a crop, `scripts/Halloween2026_ref/popups/minigame_popup.png`, `POPUP_TEMPLATES["minigame_popup"]`; identical in the popups of all of them). The crop was added after a run in which 30 "popup dismissed (unknown)" lines, each a click on the popup's "do not show again" and No places, and 19 "can't spawn vehicle" windows came with a cascade of failed needs (choose 10 of 10, the buttons' needs 15 in a row): the dialogs taken for the popup were the macro's own teleport dialogs ("Teleport to the Nursery to adopt pets?", "Teleport to The Vehicle Dealership to see vehicles?": a green Yes and a red No, clicked by `teleport_to()` and "dismissed" by the in-task check in the middle of it), as the screenshots `tests/popups/teleport_*.png` show - the detector before the crop fired on both. The one dialog left out on purpose is the sick need's own "Ask Doctor Heart to heal your family?" dialog, which has the same Yes/No look but is the sick handler's to answer (its Yes is `SICK_FINAL_CLICK_POS`): `ref/popups/sick_dialog.png`, within its `POPUP_TEMPLATES` box, makes the detector ignore it. (Before that, the periodic in-task check (`UNSCREW_TASK_INTERVAL`) took it for a minigame popup and clicked its decline positions in the middle of the sick sequence - `unknown` popups clustered in the sick handler in the logs.) `identify_minigame()` then says which one it is: it matches the
 first line of the title (`MINIGAME_TITLE_BOX`) against the crops in
-`ref/halloween/` (`cv2.matchTemplate`, best score at least
+`scripts/Halloween2026_ref/halloween/` (`cv2.matchTemplate`, best score at least
 `MINIGAME_TITLE_MATCH_THRESHOLD`); a minigame's name is its file name,
 lower-cased (`ghost_gallery.png` → `ghost_gallery`, `hauntlet_2.png` → `hauntlet_2`), so a new one is just a
 new crop - plus an entry in `MINIGAME_LABELS` and a player in
@@ -56,7 +56,7 @@ input). A minigame that ran to the GAME OVER! screen counts as progress for the 
 *Telling whether it is on.* Each minigame has an overlay along the top of the
 screen while it runs (Hauntlet 2: the ROOM counter; Ghost Gallery: the TIME
 LEFT / GHOST GALLERY / Score banner; Stitches' Spotlight: TIME LEFT / the title / the Candy Corn count), recognised by a crop in
-`ref/overlays/<minigame>.png` within its box in `MINIGAME_OVERLAYS`
+`scripts/Halloween2026_ref/overlays/<minigame>.png` within its box in `MINIGAME_OVERLAYS`
 (`minigame_overlay_visible()`, at least `MINIGAME_OVERLAY_THRESHOLD`). A
 `MinigameWatch` made by `play_minigame()` is fed every screenshot the player
 takes (`minigame_look()`, `minigame_wait()`): once the overlay has been seen,
@@ -85,7 +85,7 @@ out `MINIGAME_MAX_DURATION`. The watch also looks for the "Disconnected" dialog 
 at the top of the screen, or `None` when it can't be read. It only reads: nothing here decides or presses a key.
 The panel is flat UI that never moves or scales, so the digits are matched exactly: the white pixels
 (`HAUNTLET_DIGIT_WHITE_LEVEL`) inside `HAUNTLET_ROOM_BOX` are split into connected pieces, each piece is cut
-out, shrunk to `HAUNTLET_DIGIT_SIZE` and compared with the saved digit pictures in `ref/hauntlet_2/digits/`
+out, shrunk to `HAUNTLET_DIGIT_SIZE` and compared with the saved digit pictures in `scripts/Halloween2026_ref/hauntlet_2/digits/`
 (`0.png` ... `9.png`, cut from a real run) by mean difference. The best must be under
 `HAUNTLET_DIGIT_MAX_DIFF`; on a 256-frame run (rooms 1-29, three layers of the hotel) every readable frame
 matched at 0.0 and the two most alike digits are 43.7 apart. No panel (the white transition, the lobby, a
@@ -97,7 +97,7 @@ rooms (`tests/halloween2026/hauntlet_2/room_panels/`) back through the reader.
 `HauntletItem(name, count, pos)`. The slots are round white-ringed icons about 115 px apart, found as circles in
 `HAUNTLET_SLOT_BAND` (`find_item_slots()`, Hough, radius `HAUNTLET_SLOT_RADIUS`; a slot that has just changed is a
 little bigger). Each slot's `HAUNTLET_ITEM_CROP`-px square is matched by correlation, as a grey picture so the slot's
-bright blue or dim teal background matters little, against the pictures in `ref/hauntlet_2/items/<name>/` (a folder per
+bright blue or dim teal background matters little, against the pictures in `scripts/Halloween2026_ref/hauntlet_2/items/<name>/` (a folder per
 item, several pictures each - bright, dim, slightly enlarged). The best must reach `HAUNTLET_ITEM_MATCH` or the
 item is `unknown`. They were cut from the 382 slots of a 256-frame run: `phone`, `key`, `gold_key`, `cyan_potion`,
 `heart_potion`, `red_potion`, plus `backpack` (the lobby's button, which sits where a slot would and is left out,
@@ -105,7 +105,7 @@ item is `unknown`. They were cut from the 382 slots of a 256-frame run: `phone`,
 it has no pictures yet. A slot that matches none of them reads as `unknown`; nothing is saved. The count is the number
 on the purple "x2" badge at a slot's top left (`read_item_count()`): the badge is the purple piece of the right size
 (`HAUNTLET_BADGE_*`), its white pieces are the "x" and the digits, each compared with the glyphs in
-`ref/hauntlet_2/counts/` (`x`, `1`, `2` - the only counts in the run, so no other digit is known yet: a glyph that
+`scripts/Halloween2026_ref/hauntlet_2/counts/` (`x`, `1`, `2` - the only counts in the run, so no other digit is known yet: a glyph that
 matches none gives `None`, not a guess).
 
 **Hearts.** `read_hauntlet_hearts()` returns `HauntletHearts(red, black, width, pos)` for the row above the player's head.
@@ -313,7 +313,7 @@ The tests use frames of a round (`tests/halloween2026/stitches_spotlight/`) and 
 ### Candy corn
 
 What a minigame run earns is read, not guessed. **The HUD's candy corn total** (top right, red digits on a white flag - on screen in the lobby, in the world and on the GAME OVER! screen, not at home or in a minigame) is read by `read_candy_corn()`:
-the red pixels of `CANDY_CORN_BOX` that make up pieces as tall as a digit (`CANDY_CORN_DIGIT_HEIGHT`; the commas are half that) are the digits, each shrunk to `CANDY_CORN_DIGIT_SIZE` and compared with the saved ones (`ref/candy_corn_digits/`, cut from six real screens
+the red pixels of `CANDY_CORN_BOX` that make up pieces as tall as a digit (`CANDY_CORN_DIGIT_HEIGHT`; the commas are half that) are the digits, each shrunk to `CANDY_CORN_DIGIT_SIZE` and compared with the saved ones (`scripts/Halloween2026_ref/candy_corn_digits/`, cut from six real screens
 that between them have every digit; `CANDY_CORN_MAX_DIFF`). It returns None rather than a wrong number: no counter, a digit that matches none, digits further apart than `CANDY_CORN_PITCH` (one is missing) or a piece as tall as a digit but too wide
 (something over the first or last digit, which would leave a number that looks right). The six screens are read right, a leave-one-out test of the digits (each read with templates cut from the other screens) 41 of 41, and over 553 captured frames it
 read only totals that were plausible, in the lobby and game over frames. `read_candy_corn_settled()` reads until two looks half a second apart agree, as the total counts up for a moment after a run.

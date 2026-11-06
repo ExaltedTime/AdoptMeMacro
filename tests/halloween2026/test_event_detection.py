@@ -19,7 +19,9 @@ def put(img, crop, box):
 
 
 def reference(macro, name):
-    crop = macro.load_templates(macro.cfg.STRAY_WINDOW_DIR).get(name)
+    crop = macro.load_templates(hw.POPUP_DIR).get(name)
+    if crop is None:
+        crop = macro.load_templates(macro.cfg.STRAY_WINDOW_DIR).get(name)
     assert crop is not None, f"ref/popups/{name}.png is missing"
     return crop
 
@@ -32,7 +34,7 @@ def test_the_finish_screens_of_both_minigames_are_recognised_in_real_screenshots
 
 
 def with_popup_text(macro, img):
-    return put(img, reference(macro, "minigame_popup"), macro.cfg.POPUP_TEMPLATES["minigame_popup"]["box"])
+    return put(img, reference(macro, "minigame_popup"), hw.POPUP_TEMPLATES_EVENT["minigame_popup"]["box"])
 
 
 def test_minigame_popup_is_a_green_yes_with_a_red_no_beside_it_under_its_teleport_text(macro):

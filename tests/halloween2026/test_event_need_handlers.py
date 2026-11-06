@@ -10,8 +10,8 @@ def exit_screen(macro, left="red", right="grey", overlay=True):
     import numpy as np
     img = np.full((macro.cfg.REFERENCE_HEIGHT, macro.cfg.REFERENCE_WIDTH, 3), 235, np.uint8)         # (a pale scene)
     colours = {"red": (60, 40, 216), "grey": (70, 65, 62), "green": (85, 198, 74)}                         # BGR
-    title = macro.load_templates(macro.cfg.STRAY_WINDOW_DIR)["exit_game"]
-    left_, top_, *_ = macro.cfg.POPUP_TEMPLATES["exit_game"]["box"]
+    title = macro.load_templates(hw.POPUP_DIR)["exit_game"]
+    left_, top_, *_ = hw.POPUP_TEMPLATES_EVENT["exit_game"]["box"]
     img[top_ + 20:top_ + 20 + title.shape[0], left_ + 20:left_ + 20 + title.shape[1]] = title
     for box, name in ((hw.EXIT_DIALOG_CANCEL_BOX, left), (hw.EXIT_DIALOG_RIGHT_BOX, right)):
         if name:

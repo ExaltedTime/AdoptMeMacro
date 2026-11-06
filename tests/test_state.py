@@ -750,7 +750,7 @@ def test_the_zoom_keys_and_the_mouse_buttons_that_are_down_are_released_with_the
     monkeypatch.setattr(macro.pydirectinput, "mouseUp", lambda button="left": buttons.append(button), raising=False)
     monkeypatch.setattr(macro, "pressed_inputs", lambda: held[0])
     macro.release_all_inputs()
-    assert {macro.cfg.KEYS["zoom_in"], macro.cfg.KEYS["zoom_out"], macro.cfg.KEYS["helicopter"]} <= set(released)
+    assert {macro.cfg.KEYS["zoom_in"], macro.cfg.KEYS["helicopter"]} <= set(released)
     assert sorted(buttons) == ["left", "right"]                                      # (the camera is turned with the right one)
     buttons.clear()
     held[0] = {"mouse_left"}

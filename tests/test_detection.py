@@ -426,24 +426,6 @@ def test_the_only_pets_message_is_found_by_its_letters_over_any_background(macro
     assert not macro.only_pets_message_visible(np.full(BLACK, 255, np.uint8))                 # nor is a white screen
 
 
-POPUP_SCREENSHOTS = {                    # real screenshots of a 1920x1080 window (tests/popups): name -> (is a minigame popup, which one)
-    "hauntlet_house": (True, "hauntlet_2"),
-    "ghost_house": (True, "ghost_gallery"),
-    "stitches_spotlight": (True, "stitches_spotlight"),   
-    "ghost_over_backpack": (True, "ghost_gallery"),      # the open backpack behind it has green buttons too: it was not found, with all the green taken together
-    "paycheck": (False, None),                           # the paycheck's green CASH OUT, a green Okay, the finish screen's NICE!: no red No beside them
-    "star_rewards": (False, None),                       # the calendar view (real screenshot, lossless)
-    "star_rewards_claim": (False, None),                 # the view that opens by itself once a day, with its green CLAIM! button
-    "game_over": (False, None),
-    "teleport_nursery": (False, None),                   # the macro's own teleport dialogs (backpack -> category -> Yes) have a green Yes and a red No too: 30 of them were
-    "teleport_dealership": (False, None),                # taken for a minigame popup and "dismissed" in a run, which broke the teleports and the needs after them
-    "cant_spawn_vehicle": (False, None),                 # "You can't spawn a vehicle here." with its green Okay
-    "backpack_open": (False, None),
-}
-
-
-
-
 def screenshot(name):
     import cv2
     return cv2.imread(os.path.join(os.path.dirname(__file__), "popups", f"{name}.png"))

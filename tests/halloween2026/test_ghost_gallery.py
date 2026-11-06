@@ -286,7 +286,7 @@ def test_it_starts_with_a_zoomed_out_tilted_down_view_once_the_overlay_shows(mac
 def test_zooming_out_holds_the_zoom_out_key_and_the_tilt_drags_down_with_the_right_button(macro, world):
     cfg = macro.cfg
     world.real_zoom_out()
-    assert [(kind, key) for kind, key, _ in world.keys] == [("down", cfg.KEYS["zoom_out"]), ("up", cfg.KEYS["zoom_out"])]
+    assert [(kind, key) for kind, key, _ in world.keys] == [("down", hw.KEYS_EVENT["zoom_out"]), ("up", hw.KEYS_EVENT["zoom_out"])]
     assert world.keys[1][2] - world.keys[0][2] == pytest.approx(hw.MINIGAME_ZOOM_OUT_DURATION)
     world.real_tilt()
     assert world.mouse[:2] == [("move", cfg.REFERENCE_CENTER_X, cfg.REFERENCE_CENTER_Y), ("down", "right")] and world.mouse[-1] == ("up", "right")

@@ -556,12 +556,8 @@ KEYS = {
     "backpack": "b",
     "mount": "e",                  # mounting a vehicle...
     "interact": "e",               # ...and collecting/harvesting (lure_collect(), tree_collect()): the same physical key, named for each use
-    "speed_boost": "e",            # Stitches' Spotlight's speed boost ("Press E for a Speed Boost!"), pressed every STITCHES_BOOST_INTERVAL
     "zoom_in": "i",
-    "zoom_out": "o",               # zooms the camera out while held (the event's players used it to see the whole room)
     "helicopter": "r",             # held to fly the equipped helicopter (also held briefly by ride)
-    "camera_left": "left",         # the arrow keys turn the camera (Stitches' Spotlight turns it to keep the middle of the ring in view)
-    "camera_right": "right",
     "foreground_tap": "alt",       # tapped when Windows refuses to bring Roblox to the front: a program that was just given the keys may then ask for the foreground (force_foreground())
 }
 KEY_SEQUENCES = {                  # keys pressed one after the other, each held KEY_STEP_GAP-ish (RESPAWN_KEY_DURATION, REJOIN_LEAVE_KEY_GAP)

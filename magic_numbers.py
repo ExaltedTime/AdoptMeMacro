@@ -598,7 +598,7 @@ TELEPORT_WALK_NEEDS: dict[str, dict[str, Any]] = {
     "cafe":    dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=((KEYS["left"], 3.2), (KEYS["back"], 5), (KEYS["left"], 0.2), (KEYS["back"], 3))),
     "salon":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=((KEYS["left"], 2.5), (KEYS["forward"], 10.0))),
     "pizza":   dict(teleport_pos=TELEPORT_VEHICLES_TAB_POS, steps=((KEYS["forward"], 3.0), (KEYS["left"], 7.2), (KEYS["back"], 4.0))),
-    "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["forward"], 0.1), (KEYS["right"], 3.0), (KEYS["back"], 2.2), (KEYS["right"], 15.0), (KEYS["forward"],20.0))),
+    "camping": dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["right"], 7), (KEYS["back"], 18)), helicopter=True),
     "sick":    dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["forward"], 2.5), (KEYS["right"], 3.0), (KEYS["forward"], 0.8)),
                     final_click=SICK_FINAL_CLICK_POS),
 }

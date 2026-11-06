@@ -16,9 +16,9 @@ def shot(name):
 
 
 def test_the_sign_is_found_on_every_background_and_not_in_a_scene_without_it(macro):
-    for name in ("badge", "no_badge", "world_after", "board_pet_pen_ready", "board_other_alerts"):
+    for name in ("badge", "no_badge", "world_after", "board_pet_pen_ready", "board_other_alerts", "sign_stormy"):               # (the last: the Lightning Dimension update, a dark cloud round the sign and darker wood)
         x, y = macro.find_task_board_button(shot(name))
-        assert 40 <= x <= 90 and 530 <= y <= 575, name
+        assert 40 <= x <= 90 and 530 <= y <= 590, name
     assert macro.find_task_board_button(shot("age_up_nice")) is None
     assert macro.task_board_badge(shot("age_up_nice")) is False
 
@@ -311,3 +311,13 @@ def test_a_pet_is_not_put_in_when_the_filter_did_not_come_up_and_the_picking_wai
     monkeypatch.setattr(macro, "popup_found", lambda img, name: (857, 584))
     assert macro.put_a_pet_in_the_pen() is False and macro.clicks[-1] == macro.cfg.PET_PEN_BACKPACK_CLOSE_POS
     assert macro.cfg.PET_REPICK_INTERVAL == 30 * 60
+
+
+def test_the_sign_is_waited_for_after_a_respawn_when_the_screen_is_black_or_white_for_a_moment(macro, monkeypatch):
+    frames = [np.zeros((1080, 1920, 3), np.uint8), np.full((1080, 1920, 3), 255, np.uint8), shot("world_after"), shot("board_other_alerts")]
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "grab_screen", lambda: frames.pop(0) if len(frames) > 1 else frames[0])
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: macro.clicks.append((x, y)))
+    assert macro.collect_pet_pen() is True and 40 <= macro.clicks[0][0] <= 90                                       # (the sign was found on the third look)

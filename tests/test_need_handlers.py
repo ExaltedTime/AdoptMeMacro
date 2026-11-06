@@ -202,8 +202,9 @@ def test_the_choose_button_is_found_as_a_disc_when_its_exact_colour_is_not_there
 
 def test_the_choose_handler_clicks_the_disc_when_no_pixel_has_the_exact_colour_and_the_exact_colour_first_when_one_has(macro, events, monkeypatch):
     cfg = macro.cfg
-    monkeypatch.setattr(macro, "focus_pet", lambda *a: True)
+    monkeypatch.setattr(macro, "focus_pet_reliably", lambda *a: True)
     monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: events.append(("backed out",)))
+    monkeypatch.setattr(macro.cfg, "CHOOSE_FIND_WAIT", 0.0)
     monkeypatch.setattr(macro, "grab_screen", lambda: disc_screen(macro))
     assert macro.ChooseNeedHandler().handle() is True
     clicks = [e[1] for e in events if e[0] == "click"]
@@ -525,7 +526,7 @@ def test_a_need_is_judged_by_its_pulse_only_when_the_pulse_is_known_and_late(mac
     assert watch.overdue()
     watch.levels.append(160.0 - macro.cfg.PULSE_MIN_SWING)
     assert watch.pulsing() and not watch.overdue()
-    other = macro.PulseWatch("hungry")                                         # (a need whose pulse was never seen is not judged)
+    other = macro.PulseWatch("pizza")                                         # (a need whose pulse was never seen is not judged)
     other.waited = 10 * macro.cfg.PULSE_START_WAIT
     assert not other.overdue()
 

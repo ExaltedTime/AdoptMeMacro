@@ -197,7 +197,7 @@ def test_stray_windows_are_recognised_and_closed(macro, monkeypatch, name):
 
 @pytest.mark.parametrize("shot, name, closed_at", [("star_rewards_claim", "star_rewards_claim", (959, 675)), ("star_rewards", "star_rewards", (1209, 441)),
                                                    ("trading_hub", "trading_hub", (1278, 339)), ("task_board_alerts", "task_board", (1318, 369)),
-                                                   ("trade_board", "trade_board", (1282, 339))])
+                                                   ("trade_board", "trade_board", (1282, 339)), ("promo_limited_time", "promo_limited_time", (1085, 665))])
 def test_each_stray_window_is_told_from_the_others_in_a_real_screenshot_and_closed_where_it_closes(macro, monkeypatch, shot, name, closed_at):
     """Real screenshots (the Roblox ones, which lack the window's title bar, with 23 rows added on top as the macro's frames have). The Star Rewards
     that opens by itself once a day has only a CLAIM! button (no X), the calendar one that the star icon opens has a red X: each is clicked where its

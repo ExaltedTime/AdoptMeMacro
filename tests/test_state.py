@@ -449,7 +449,7 @@ def test_a_need_that_never_clears_is_a_failure_after_the_wait(need_gone, macro, 
     monkeypatch.setattr(macro, "wait_interruptible", lambda duration: clock.__setitem__(0, clock[0] + duration))
     need_gone["script"]()                                                  # always still there
     macro.wait_until_need_gone("hungry", max_wait=10)
-    assert need_gone["failures"] == ["hungry still showing after 10s"]
+    assert need_gone["failures"] == ["hungry still showing after 10s (its icon never pulsed)"]
 
 
 def test_config_reads_never_see_a_half_written_file(macro, monkeypatch, tmp_path):

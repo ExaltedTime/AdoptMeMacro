@@ -54,6 +54,8 @@ STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     "star_rewards": {"box": (640, 385, 1060, 475), "close_pos": (1209, 441)},      # the calendar view (the star icon opens it): closed by its red X
     # The Task Board (opened by a notification such as "Trading Hub: Your listing got an offer!", on its Alerts tab): its red X closes it. Only closed, for now.
     "task_board": {"box": (540, 300, 1000, 430), "close_pos": (1318, 369)},
+    # The shop's ad that comes up over the game (a "Limited Time" ribbon over a product, a red X and a blue COOL button; the one seen was merch): its COOL closes it. Only the ribbon is the crop, as the product changes.
+    "promo_limited_time": {"box": (560, 380, 1000, 480), "close_pos": (1085, 665)},
     "star_rewards_claim": {"box": (680, 410, 1080, 520), "close_pos": (959, 675)},   # the view that opens on its own once a day: no X, only the green CLAIM! button
     # "Are you sure you want to respawn your character?" - what respawn_character()'s esc, r, enter leaves
     # open when the Enter comes before the dialog does; "close_pos" is its Respawn button.
@@ -79,7 +81,7 @@ STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     "trade_request_expired": {"box": (700, 380, 1240, 560), "button": "okay"},
 }
 DIALOG_BUTTONS = {                              # (and the Task Board's wooden sign at the left edge - found by its wood brown, not by a crop: its background is the world - 100 x 60 to 110 x 80 on the captures; and the green NICE! of the Pet Pen's age-up screen: 270 x 67 on the capture)
-    "task_board": {"box": (0, 480, 200, 680), "hsv": (((5, 150, 90), (20, 255, 200)),), "size": ((90, 125), (45, 90))},
+    "task_board": {"box": (0, 480, 200, 680), "hsv": (((0, 100, 60), (22, 255, 230)),), "size": ((90, 125), (45, 90))},
     "nice":    {"box": (800, 970, 1120, 1070), "hsv": (((45, 110, 130), (80, 255, 255)),), "size": ((240, 300), (50, 80))},                              # the buttons of those cards (measured on a real frame: Decline 174 x 47 and Accept 174 x 49 side by side, Okay 360 x 49)
     "decline": {"box": (700, 540, 1260, 790), "hsv": (((170, 150, 150), (180, 255, 255)), ((0, 150, 150), (5, 255, 255))), "size": ((150, 210), (30, 60))},
     "okay":    {"box": (700, 540, 1260, 790), "hsv": (((45, 110, 130), (80, 255, 255)),), "size": ((300, 420), (30, 60))},
@@ -137,7 +139,7 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "filter_panel":                {"box": (780, 570, 1000, 650), "threshold": 0.85},
     "filter_sort_default":         {"box": (960, 650, 1100, 710), "threshold": 0.85},
     "filter_sort_favorites":       {"box": (960, 650, 1100, 710), "threshold": 0.85},
-    "filter_option_favorites":     {"box": (950, 720, 1110, 850), "threshold": 0.85},
+    "filter_option_favorites":     {"box": (950, 720, 1110, 960), "threshold": 0.85},       # (the sort menu's list: a longer one - 4 repicks in a 2-hour run did not find Favorites in the old box)
     "settings_title":              {"box": (780, 300, 980, 370), "threshold": 0.85},
     "settings_page_interaction":   {"box": (940, 335, 1110, 385), "threshold": 0.85},
     "settings_option_interaction": {"box": (940, 400, 1110, 520), "threshold": 0.85},
@@ -289,7 +291,8 @@ MOMENTS_MARK_GAP = 60.0                # at most one mark this often (a failure 
 MOMENTS_TAIL = 90.0                    # seconds at the end of a run whose frames are kept
 MOMENTS_LOG_MB = 8                     # the most of the macro's output kept with a run's moments (the last part of it)
 MOMENTS_RUN_LOG_MB = 2                 # the most of the run's own log kept (its last part)
-MOMENTS_RESERVE_MB = 12                # room left in the first zip for those files (they are deflated, so they take less)
+MOMENTS_FAILURE_SHOTS = 30             # the most failure screenshots (JPEG, about 0.3 MB each) kept with a run's moments
+MOMENTS_RESERVE_MB = 16                # room left in the first zip for those files (they are deflated, so they take less)
 MOMENTS_KEEP = 3                       # the moments of this many runs are kept (the oldest folders go)
 CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into zips of at most this size (chat attachments are limited to 30 MB)
 
@@ -397,6 +400,16 @@ PET_BAR_AREA = (500, 20000)
 PET_BAR_ASPECT = (1.8, 4.0)
 PET_BAR_WHITE_LEVEL = 225
 PET_BAR_WHITE_FRACTION = 0.15
+PET_PILL_HSV = (((122, 110, 200), (138, 215, 255)), ((126, 140, 60), (138, 215, 125)))     # the name pill as a whole: its filled part is bright purple and the rest dark purple (the pet's age progress), the text white over both
+PET_PILL_MIN_Y = 130                      # px: pills higher than this are the game's buttons (Edit House, My Homes, Lock), not a pet's
+PET_PILL_CLOSE = 11                       # px: the text's white strokes are closed over so that the pill is one blob
+PET_PILL_AREA = (800, 20000)
+PET_PILL_ASPECT = (2.0, 7.0)              # width / height
+PET_PILL_FILL = 0.6                       # of its box the blob fills (a pill nearly does)
+PET_FOCUS_TRIES = 3                       # tries at focusing the pet (the clicks, then the E key that opens its menu when the player is by it) before choose gives up
+PET_FOCUS_VIEW_WAIT = 2.5                 # seconds the view is waited for after each try (the first three chooses of a run clicked the pet and looked at once: the view came 20 s later)
+PET_FOCUS_POLL = 0.25
+CHOOSE_FIND_WAIT = 3.0                    # seconds the button is looked for in the view once it is up (it moves in)
 PET_BAR_BELOW_STEPS = (3.5, 1.5, 2.5)                          # bar heights under the bar's bottom edge to click, in turn until the pet is focused
 # The choose button when no pixel is CHOOSE_BUTTON_COLOR (twice in run 34 it was in plain sight: a purple-to-magenta disc with a "?" and, not always, a white outline, under the
 # focused pet): the biggest roundish blob of this hue (OpenCV's HSV: purple 141, magenta 154; the pink BACK button is 167, the backpack's purple is 130 and paler), at least
@@ -606,6 +619,7 @@ TELEPORT_WALK_NEEDS: dict[str, dict[str, Any]] = {
 WATCH_POLL_INTERVAL = 0.2           # how often the screen is looked at while waiting for the game's "Only Pets..." answer to a need button click
 DISABLED_NEEDS_REJOIN_THRESHOLD = 4  # this many needs disabled for the run (see NEED_STUCK_CHECKS) means something is
                                      # badly wrong: rejoin the game, run setup, and give every need a fresh chance
+NEED_NEVER_WORKED_FAILS = 3        # a need that was not cleared this many times in a run, and never was, is disabled for it (camping: a wait of 75 s four times and no success in a 2 hour run)
 NEED_STUCK_CHECKS = 5            # an enabled need still on screen after this many attempts in a row is
                                   # disabled for the rest of the run - see record_detection()
 NEED_GONE_MAX_WAIT = 75.0        # most any need is waited on to clear: wait_until_need_gone() (the teleport-walk needs and the button
@@ -614,10 +628,10 @@ NEED_GONE_MAX_WAIT = 75.0        # most any need is waited on to clear: wait_unt
 NEED_GONE_POLL_INTERVAL = 3.5    # how often to check for the icon during that wait (and, while walking, from the watcher thread)
 # The icon of a need that is being done pulses: its saturation swings from the normal level towards white and back about every 2.5 s, deeper as it goes, until the need clears (a capture of
 # dirty, thirsty and sleepy: the other icons stay constant). wait_until_need_gone() watches for it - see PulseWatch.
-PULSE_NEEDS = ("dirty", "thirsty", "sleepy")   # the needs whose pulse has been seen (a need not in here is only watched and logged, never judged by it)
+PULSE_NEEDS = ("hungry", "thirsty", "dirty", "potty", "sleepy", "bored", "beach", "school", "cafe", "salon")   # the needs whose pulse has been seen (a need not in here is only watched and logged, never judged by it)
 PULSE_POLL = 0.5                 # seconds between looks at the icon while waiting for a need to clear (the pulse is about 2.5 s long)
 PULSE_MIN_SWING = 10             # the saturation (0-255) of the icon moves this much between its highest and lowest look: a pulse (the same icon idle varies by 1-2)
-PULSE_START_WAIT = 12.0          # seconds from the click within which the pulse must show (it showed 1 to 6 s after)
+PULSE_START_WAIT = 12.0          # seconds from the click within which the pulse must show (it showed 1 to 5.5 s after in a 2-hour run: cafe slowest, the button needs 1 to 3 s)
 PULSE_DISC_MARGIN = 6            # px: the icon's saturation is taken inside its crop's circle this much smaller than the crop, to leave the ring and what is behind it out
 NEED_GONE_FLICKER_RECHECK_DELAY = 0.3  # before counting any single miss, re-sample this soon after -
                                         # the icon can flash for a frame (or briefly drop out against a
@@ -652,7 +666,8 @@ PET_PEN_POLL = 0.5                        # seconds between looks while waiting 
 PET_PEN_ANIMATION_WAIT = 8.0              # seconds from the card's click to the age-up animation being over (the capture clicked NICE! 8 s after)
 PET_PEN_NICE_WAIT = 15.0                  # seconds to see the NICE! button in
 PET_PEN_NICE_TRIES = 3                    # clicks on it while it is still there
-PET_PEN_ROUTE = (("hold", "back", 0.7), ("press", "interact", 0), ("wait", "exit", 5.0), ("hold", "left", 2.23), ("hold", "back", 0.3), ("hold", "left", 0.18), ("press", "interact", 0))      # from the respawn in the house to the pen: out of the house (E at the door, the yard loads), then along the fence to the pen; the second E opens it (the capture of a person doing it)
+# (a ("door", name, seconds) step waits for the white screen of the door to come and go, and the seconds if none showed)
+PET_PEN_ROUTE = (("hold", "back", 0.7), ("press", "interact", 0), ("door", "exit", 5.0), ("hold", "left", 2.23), ("hold", "back", 0.3), ("hold", "left", 0.18), ("press", "interact", 0))      # from the respawn in the house to the pen: out of the house (E at the door, the yard loads), then along the fence to the pen; the second E opens it (the capture of a person doing it)
 PET_PEN_OPEN_WAIT = 4.0                   # seconds for the pen's screen to come up after that E
 PET_PEN_SLOTS = ((855, 415), (1045, 415), (855, 580), (1045, 580))      # the middles of the pen's four places (two above, two below)
 PET_PEN_SLOT_HALF = (95, 80)              # half the width and height of the box a place is looked at in
@@ -749,6 +764,12 @@ DISCONNECT_PANEL_MIN_FRACTION = 0.5
 WHITE_SCREEN_LEVEL = 250
 WHITE_SCREEN_MIN_FRACTION = 0.6
 WHITE_SCREEN_REJOIN_AFTER = 30.0
+# A door, a respawn and a teleport each show the white screen and fade out of it: wait_for_white_to_pass() waits for that, not for a fixed time.
+WHITE_POLL = 0.2                  # seconds between looks while the white screen is waited for
+WHITE_LOOK = 2.0                  # seconds the white screen is waited to show at all before the transition is taken as not having one (and the old fixed wait is used)
+WHITE_PASS_MAX = 15.0             # seconds at most, from the start, for it to go
+WHITE_CLEAR_LOOKS = 2             # looks in a row that are not white for it to be gone
+WHITE_SETTLE = 0.5                # seconds after it has gone, for the world to be usable
 ROBLOX_CRASH_WINDOW_TITLE = "Roblox Crash"
 
 # Optional: resume after Roblox loses focus instead of stopping (the "Resume after focus loss" checkbox).

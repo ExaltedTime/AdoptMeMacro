@@ -1129,7 +1129,7 @@ def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAI
         remaining = max_wait - pulse.waited
         if remaining <= 0:
             logger.debug(f"{need_name} still showing after {max_wait}s, moving on")
-            log_failure(f"{need_name} still showing after {max_wait}s")
+            log_failure(f"{need_name} still showing after {max_wait}s" + (f" (its icon pulsed {pulse.first_seen:.1f}s after the action)" if pulse.first_seen is not None else " (its icon never pulsed)"))
             state.need_cleared = False
             return
         step = min(cfg.PULSE_POLL, remaining)
@@ -1494,6 +1494,26 @@ def click_need_button(need_name: str) -> bool:
 # MOVEMENT
 # ============================================================================
 
+def wait_for_white_to_pass(static: float, look: float = cfg.WHITE_LOOK) -> bool:
+    """Wait out a transition by its white screen (a door, a respawn, a teleport: detect_white_screen()) instead of a fixed time: for it to show - within `look` seconds - and then go (WHITE_CLEAR_LOOKS looks
+    in a row that are not white, WHITE_PASS_MAX at most), then WHITE_SETTLE more; True. When none shows in `look` seconds the wait is `static` seconds in all (what it was before, so that a transition without
+    a white screen costs no more than it did); False."""
+    started = time.time()
+    seen, clear = False, 0
+    while time.time() - started < cfg.WHITE_PASS_MAX:
+        if detect_white_screen(grab_screen()):
+            seen, clear = True, 0
+        elif seen:
+            clear += 1
+            if clear >= cfg.WHITE_CLEAR_LOOKS:
+                wait_interruptible(cfg.WHITE_SETTLE)
+                return True
+        elif time.time() - started >= look:
+            wait_interruptible(max(0.0, static - (time.time() - started)))
+            return False
+        wait_interruptible(cfg.WHITE_POLL)
+    return seen
+
 def respawn_character() -> None:
     """Respawn the character (ESC, R, ENTER), make sure the respawn dialog
     isn't left open (dismiss_stray_windows()), and wait for it to settle."""
@@ -1514,7 +1534,7 @@ def respawn_character() -> None:
     for _ in range(2):
         if dismiss_stray_windows() != "respawn_confirm":
             break
-    wait_interruptible(cfg.RESPAWN_WAIT)
+    wait_for_white_to_pass(cfg.RESPAWN_WAIT)                                                 # (the respawn's white screen and its fade, or the old fixed wait when none shows)
     logger.debug("Respawn complete")
 
 def close_open_windows() -> int:
@@ -1752,13 +1772,18 @@ def sort_is_favorites() -> bool:
     """Whether the open FILTERS panel says Favorites on its sort button (its crop, looked for for SETUP_LOOK_WAIT seconds)."""
     return wait_for_any(("filter_sort_favorites",), cfg.SETUP_LOOK_WAIT) is not None
 
+def log_setup_problem(text: str) -> None:
+    """A step of Setup that did not go right: in the run log with the screen as it was (a folder of FAILURE_DIR, not counted as a failure: Setup says the whole of it at its end)."""
+    shot = save_failure_report(text)
+    log_run_event(text + (f" (screenshot: failures/{shot})" if shot else ""))
+
 def choose_sort_favorites() -> bool:
     """In the open FILTERS panel, whose sort is not Favorites: open the sort menu, click Favorites where its text is, and see the button say Favorites. False (logged) if a step did not happen."""
     logger.debug("Opening sort menu...")
     hover_click(*cfg.SETUP_SORT_MENU_POS)
     option = wait_for_template("filter_option_favorites")
     if option is None:
-        log_run_event("setup: Favorites was not in the sort menu")
+        log_setup_problem("setup: Favorites was not in the sort menu")
         return False
     hover_click(*option)
     if sort_is_favorites():
@@ -1842,9 +1867,9 @@ def set_backpack_filter() -> bool:
             if not sort_is_favorites():
                 sound = choose_sort_favorites()
                 changed = sound
-            if sound and growing:
+            if growing:                                                                           # (whether or not the sort took: a pet that has grown up must not be the first of the list)
                 aged = untick_egg_and_full_grown()
-                sound = aged is not None
+                sound = sound and aged is not None
                 changed = changed or bool(aged)
             if not sound:
                 ok = False
@@ -1856,7 +1881,10 @@ def set_backpack_filter() -> bool:
                 wait_interruptible(cfg.UI_SETTLE)
                 panel_open = open_filter_panel()                                                  # (looked at again: the Confirm took)
                 ok = panel_open and sort_is_favorites() and (not growing or (scroll_filters_to_age() and age_filter_is_right()))
-                log_run_event("setup: the backpack's filters are set" if ok else "setup: the backpack's filters are not as set after Confirm")
+                if ok:
+                    log_run_event("setup: the backpack's filters are set")
+                else:
+                    log_setup_problem("setup: the backpack's filters are not as set after Confirm")
             if panel_open:
                 hover_click(*cfg.SETUP_FILTER_CANCEL_POS)                                         # (a panel only looked at - or one that could not be set - is left as it was)
                 wait_interruptible(cfg.UI_SETTLE)
@@ -1901,7 +1929,10 @@ def equip_pet(what: str, where: Callable[[], Optional[Point]]) -> bool:
     hover_click(*button)
     wait_interruptible(cfg.UI_SETTLE)
     equipped = wait_for_template("pet_unequip") is not None
-    log_run_event(f"setup: {what} is equipped" if equipped else f"setup: the card of {what} does not say Unequip after Equip")
+    if equipped:
+        log_run_event(f"setup: {what} is equipped")
+    else:
+        log_setup_problem(f"setup: the card of {what} does not say Unequip after Equip")
     return equipped
 
 def send_macro_window_to_back() -> None:
@@ -2720,6 +2751,22 @@ def focus_pet(click_duration: float = cfg.CLICK_MOVE_DURATION) -> bool:
             focus_pet_by_bar(grab_screen(), click_duration)
     return True
 
+def focus_pet_reliably(click_duration: float = cfg.CLICK_MOVE_DURATION) -> bool:
+    """focus_pet() and then the pet's view is waited for (PET_FOCUS_VIEW_WAIT: the first three chooses of a run clicked the pet and looked at once, found no button, and the view came a few seconds
+    after); when it does not come the E key is pressed - the pet's own prompt, which opens its menu when the player is by it, whatever the pet is and wherever its name pill is - and the whole is tried
+    again, PET_FOCUS_TRIES times. True once the view is up."""
+    for attempt in range(1, cfg.PET_FOCUS_TRIES + 1):
+        if detect_pet_focus(grab_screen()):
+            return True
+        if focus_pet(click_duration) and look_until(detect_pet_focus, cfg.PET_FOCUS_VIEW_WAIT, cfg.PET_FOCUS_POLL) is not None:
+            return True
+        pydirectinput.press(cfg.KEYS["interact"])
+        if look_until(detect_pet_focus, cfg.PET_FOCUS_VIEW_WAIT, cfg.PET_FOCUS_POLL) is not None:
+            log_run_event("pet: focused with the E key")
+            return True
+        log_run_event(f"pet: not focused (try {attempt} of {cfg.PET_FOCUS_TRIES})")
+    return False
+
 def find_pet_bar(img: Image) -> list[Point]:
     """Where to click the pet by the name bar over it, for a pet that stands still (nothing moves for focus_pet() to find): the purple part of the bar by its hue (PET_BAR_HSV), a wide
     short blob (PET_BAR_ASPECT, PET_BAR_AREA) with white at its right (PET_BAR_WHITE_*), whatever its words and outline. The pet is a different number of bar heights under the bar's bottom
@@ -2739,9 +2786,30 @@ def find_pet_bar(img: Image) -> list[Point]:
             best = (area, [(x + w, int(y + h + below * h)) for below in cfg.PET_BAR_BELOW_STEPS])
     return best[1] if best is not None else []
 
+def find_pet_pill(img: Image, ignore: Optional[Box] = None) -> list[Point]:
+    """Where to click the pet by its name pill, whatever the pet and however much it has grown: the pill is bright purple where it is filled and dark purple beyond (PET_PILL_HSV, the white text
+    closed over, PET_PILL_CLOSE), a wide short blob (PET_PILL_ASPECT, PET_PILL_AREA, PET_PILL_FILL) below the game's own buttons (PET_PILL_MIN_Y) and outside `ignore` (the macro's window). The pet is
+    centred under it, PET_BAR_BELOW_STEPS pill heights below its bottom edge (the biggest pill first). No points if there is none."""
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    mask = cv2.bitwise_or(cv2.inRange(hsv, *cfg.PET_PILL_HSV[0]), cv2.inRange(hsv, *cfg.PET_PILL_HSV[1]))
+    mask[:cfg.PET_PILL_MIN_Y] = 0
+    if ignore is not None:
+        left, top, right, bottom = ignore
+        mask[top:bottom, left:right] = 0
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((cfg.PET_PILL_CLOSE, cfg.PET_PILL_CLOSE), np.uint8))
+    count, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    best: Optional[tuple[int, list[Point]]] = None
+    for i in range(1, count):
+        x, y, w, h, area = (int(v) for v in stats[i])
+        if not cfg.PET_PILL_AREA[0] <= area <= cfg.PET_PILL_AREA[1] or not cfg.PET_PILL_ASPECT[0] <= w / h <= cfg.PET_PILL_ASPECT[1] or area < cfg.PET_PILL_FILL * w * h:
+            continue
+        if best is None or area > best[0]:
+            best = (area, [(x + w // 2, int(y + h + below * h)) for below in cfg.PET_BAR_BELOW_STEPS])
+    return best[1] if best is not None else []
+
 def focus_pet_by_bar(img: Image, click_duration: float = cfg.CLICK_MOVE_DURATION) -> bool:
-    """Click the pet by the name bar over it (find_pet_bar(), each place in turn) and say whether that focused it (detect_pet_focus())."""
-    points = find_pet_bar(img)
+    """Click the pet by the name bar over it (find_pet_bar(), or find_pet_pill() when that finds none, each place in turn) and say whether that focused it (detect_pet_focus())."""
+    points = find_pet_bar(img) or find_pet_pill(img, macro_window_reference_rect())
     if not points:
         logger.debug("Focus_pet: no name bar either")
         return False
@@ -2984,22 +3052,32 @@ class ChooseNeedHandler(NeedHandler):
             dismiss_stray_windows()                          # (a choose that failed left the pet in focus, where the next need's walk goes nowhere: backed out of now)
         return done
 
+    @staticmethod
+    def _find_button(img: Image) -> Optional[tuple[Point, bool]]:
+        """(where the button is, whether its exact colour was how it was found) - the colour first, then the purple disc - or None."""
+        point = find_exact_color(img, cfg.CHOOSE_BUTTON_COLOR)
+        if point is not None:
+            return point, True
+        point = find_choose_disc(img)
+        return (point, False) if point is not None else None
+
     def _choose(self) -> bool:
-        if not focus_pet():
+        if not focus_pet_reliably():
+            log_run_event("choose: the pet's view did not come up")
             return False
         wait_interruptible(cfg.UI_SETTLE)
 
         logger.debug(f"Searching screen for color {cfg.CHOOSE_BUTTON_COLOR}...")
-        img = grab_screen()
-        match = find_exact_color(img, cfg.CHOOSE_BUTTON_COLOR)
-        if match is None:
-            logger.warning(f"No pixel matching {cfg.CHOOSE_BUTTON_COLOR} found on screen - looking for the purple disc")
-            match = find_choose_disc(img)
-            if match is None:
-                logger.warning("No purple disc found either")
-                shot = save_failure_report("choose: no button in the focused view")          # (the failure screenshot taken after this is of the pet focus closed: the button is in this one)
-                log_run_event(f"choose: no button found - the focused view is in failures/{shot}")
-                return False
+        found = look_until(self._find_button, cfg.CHOOSE_FIND_WAIT, cfg.PET_FOCUS_POLL)             # (the button moves in with the view: looked for for a few seconds, not once)
+        if found is None:
+            logger.warning("No choose button found, by colour or by shape")
+            shot = save_failure_report("choose: no button in the focused view")          # (the failure screenshot taken after this is of the pet focus closed: the button is in this view)
+            log_run_event(f"choose: no button found - the focused view is in failures/{shot}")
+            return False
+        match: Point
+        by_colour: bool
+        match, by_colour = found
+        if not by_colour:
             logger.info(f"The choose button was found as a purple disc at {match}")
             log_run_event("choose: the button was found by its shape and hue, not its exact colour")
         logger.debug(f"Found at {match}, moving there slowly...")
@@ -3076,7 +3154,7 @@ def teleport_to(category_pos: Point) -> None:
             logger.debug(f"The teleport did not take after click {attempt + 1}")
         else:
             log_run_event("teleport: nothing happened after the dialog's Yes")
-    wait_interruptible(cfg.TELEPORT_WAIT)
+    wait_for_white_to_pass(cfg.TELEPORT_WAIT)                                                # (the teleport's white screen to fade, not a fixed time)
     logger.debug("Walking backward...")
     hold_key(cfg.KEYS["back"], cfg.TELEPORT_BACK_DURATION)
     wait_interruptible(cfg.TELEPORT_SETTLE_WAIT)
@@ -3288,6 +3366,10 @@ def process_needs() -> bool:
                 logger.debug(f"{need_name} was not cleared, counting it as failed")
                 run_stats.failed[need_name] = run_stats.failed.get(need_name, 0) + 1
                 log_run_event(f"not cleared: {need_name} ({seconds:.0f}s)")
+                if run_stats.failed[need_name] >= cfg.NEED_NEVER_WORKED_FAILS and not run_stats.resolved.get(need_name) and need_name not in state.disabled_needs:
+                    state.disabled_needs.add(need_name)                                              # (a need that has failed this often and never once worked costs its wait every time it comes)
+                    log_run_event(f"disabled: {need_name}")
+                    log_failure(f"{need_name} failed {run_stats.failed[need_name]} times and never worked in this run - disabled for this run")
                 write_status()
                 return True
             run_stats.resolved[need_name] = run_stats.resolved.get(need_name, 0) + 1
@@ -3826,7 +3908,7 @@ def collect_pet_pen() -> bool:
         return False
     state.task_board_wanted = True
     try:
-        sign = find_task_board_button(grab_screen())
+        sign = look_until(find_task_board_button, cfg.PET_PEN_UI_WAIT, cfg.PET_PEN_POLL)                 # (just after a respawn the screen is black or white for a moment: 3 of 4 looks in a 2-hour run saw no sign)
         if sign is None:
             log_run_event("pet pen: the Task Board's sign was not seen")
             return False
@@ -3934,6 +4016,8 @@ def open_pet_pen() -> bool:
             hold_key(cfg.KEYS[what], amount)
         elif kind == "press":
             pydirectinput.press(cfg.KEYS[what])
+        elif kind == "door":
+            wait_for_white_to_pass(amount, cfg.WHITE_LOOK + 1.0)                                      # (the door's white screen to fade: the yard has loaded then)
         else:
             wait_interruptible(amount)
     return look_until(lambda img: popup_visible(img, "pet_pen_title"), cfg.PET_PEN_OPEN_WAIT, cfg.PET_PEN_POLL) is not None
@@ -4574,6 +4658,13 @@ def write_moments_files(capture: InputCapture, seconds: float) -> None:
                         failures.append(f"--- {name} (its screen.png, need_icons.png and state.json are in debug/failures/)\n{f.read()}")
         with open(os.path.join(folder, "failures.txt"), "w", encoding="utf-8") as f:
             f.write("\n".join(failures) or "no failure folders were saved for this run\n")
+        shots = sorted(name for name in os.listdir(cfg.FAILURE_DIR) if f"_run{run}_" in name and os.path.isfile(os.path.join(cfg.FAILURE_DIR, name, "screen.png"))) if os.path.isdir(cfg.FAILURE_DIR) else []
+        if len(shots) > cfg.MOMENTS_FAILURE_SHOTS:
+            shots = [shots[i * len(shots) // cfg.MOMENTS_FAILURE_SHOTS] for i in range(cfg.MOMENTS_FAILURE_SHOTS)]            # (spread over the run)
+        for name in shots:
+            picture = cv2.imread(os.path.join(cfg.FAILURE_DIR, name, "screen.png"))
+            if picture is not None:
+                cv2.imwrite(os.path.join(folder, f"failure_{name}.jpg"), picture, [cv2.IMWRITE_JPEG_QUALITY, 85])
         version = macro_version()
         info_path = os.path.join(folder, "info.json")
         with open(info_path, encoding="utf-8") as f:
@@ -4583,7 +4674,7 @@ def write_moments_files(capture: InputCapture, seconds: float) -> None:
             json.dump(info, f, indent=1)
         marks = "\n".join(f"  {t // 3600}:{t % 3600 // 60:02d}:{t % 60:02d}  {what}" for t, what in state.moments_notes) or "  (none: nothing went wrong enough to mark)"
         with open(os.path.join(folder, "README.txt"), "w", encoding="utf-8") as f:
-            f.write(MOMENTS_README.format(run=run, version=version, hours=seconds / 3600, started=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(capture.started)), frames=capture.frames,
+            f.write(MOMENTS_README.format(run=run, version=version, hours=seconds / 3600, started=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(capture.started)), frames=capture.frames, shots=cfg.MOMENTS_FAILURE_SHOTS,
                                           dropped=capture.dropped, zips=cfg.MOMENTS_ZIPS, marks=marks, tail=cfg.MOMENTS_TAIL, interval=cfg.MOMENTS_FRAME_INTERVAL, burst=cfg.RUN_CAPTURE_BURST))
     except Exception as error:
         logger.warning(f"Couldn't write the files of the run's moments: {error}")
@@ -4606,7 +4697,7 @@ THE FILES:
                  type "log": a line of the run log (what happened: needs detected and resolved, failures, rejoins, popups closed); type "mark": a moment kept (see below); "frame_dropped": thinned out.
   output.log     everything the macro printed, debug lines too (the last part of the run when it was long), with times.
   run_log.txt    the run's own log (the same lines as the "log" events, with their wall-clock times).
-  failures.txt   what the macro saved for each failure (reason, time, what was detected, disabled needs); their screenshots are in the macro's debug/failures folder and are not here.
+  failures.txt   what the macro saved for each failure (reason, time, what was detected, disabled needs); failure_<folder>.jpg are their screenshots (the game window, JPEG; at most {shots} of them, spread over the run).
   status.json    the macro's status when the run ended. config.json: its settings (the private server link is left out), the enabled needs and the counts of the run.
   info.json      the capture's facts, the commit, and the moments.
 

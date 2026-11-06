@@ -3805,6 +3805,14 @@ def task_board_badge(img: Image) -> bool:
         mask = cv2.bitwise_or(mask, cv2.inRange(hsv, *extra))
     return int(cv2.countNonZero(mask)) >= cfg.TASK_BOARD_BADGE_MIN_PIXELS
 
+def note_pet_friend(img: Image) -> bool:
+    """On the age-up screen: say in the run log if a pet shows the Friend pill (it is to be switched out of the pen), and where it is. True if one does."""
+    found = popup_found(img, "pet_friend")
+    if found is None:
+        return False
+    log_run_event(f"pet pen: a pet reached Friend ({'top' if found[1] < img.shape[0] // 2 else 'bottom'} {'left' if found[0] < img.shape[1] // 2 else 'right'}) - it is to be switched out of the pen (not done by the macro yet)")
+    return True
+
 def collect_pet_pen() -> bool:
     """Open the Task Board and, when it has the "Pet Pen Ready" card, click it, wait out the age-up screen and click its NICE!. True once the board has been looked at (and the pets collected if they were
     ready), False when the game was not in front or the NICE! never came."""
@@ -3830,6 +3838,7 @@ def collect_pet_pen() -> bool:
             button = look_until(lambda img: find_dialog_button(img, cfg.DIALOG_BUTTONS["nice"]), cfg.PET_PEN_NICE_WAIT, cfg.PET_PEN_POLL)
             if button is None:
                 break
+            note_pet_friend(grab_screen())
             hover_click(*button)
             wait_interruptible(cfg.UI_SETTLE)
             if find_dialog_button(grab_screen(), cfg.DIALOG_BUTTONS["nice"]) is None:

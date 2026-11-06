@@ -139,3 +139,15 @@ def test_a_finished_setup_counts_as_the_pick_of_the_pet(macro, monkeypatch):
     assert macro.load_game_config()["pet_repicked"] == 0.0
     assert macro.setup_game() is True
     assert macro.load_game_config()["pet_repicked"] > 0.0
+
+
+def test_the_friend_pill_of_a_pet_that_has_grown_up_is_found_with_its_place_and_no_other_screen_has_one(macro, monkeypatch):
+    log = []
+    monkeypatch.setattr(macro, "log_run_event", log.append)
+    x, y = macro.popup_found(shot("age_up_friend"), "pet_friend")
+    assert abs(x - 700) < 10 and abs(y - 111) < 10
+    assert macro.note_pet_friend(shot("age_up_friend")) is True and "reached Friend (top left)" in log[0]
+    log.clear()
+    for name in ("age_up_nice", "earned_nice", "board_pet_pen_ready", "world_after"):
+        assert macro.note_pet_friend(shot(name)) is False, name
+    assert log == []

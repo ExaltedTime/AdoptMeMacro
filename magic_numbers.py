@@ -103,6 +103,9 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     # The purple backpack button at the bottom centre: the game's normal UI, there in the world and the Trading Hub and not on a loading screen.
     "backpack_button": {"box": (880, 950, 1040, 1075), "threshold": 0.8},
     # The "Pet Pen Ready" card of the Task Board's Alerts tab (its title line; the cards are listed one under the other, so it is looked for in the whole list).
+    # The age-up screen's purple pill that says Friend (a pet of the pen has grown as far as it does: it is to be switched out; the crop is the word, the pill has a gold edge and a heart count). Four pills sit
+    # over the four pets, two above and two below; the one in the top left was the one in the capture.
+    "pet_friend":      {"box": (560, 60, 1360, 620), "threshold": 0.8},
     "pet_pen_ready":   {"box": (836, 430, 1310, 720), "threshold": 0.8},
     # The Trading Hub Phone's screens (trades_tour(), decline_offer(); crops of tests/trades/): the phone's TRADE LISTINGS button, the "TRADING HUB" menu's title, the
     # "MY LISTINGS" title and the "1/2" / "2/2" of its "LISTING n/2", the "OFFERS" title (also there, dimmed, over an offer opened on its own), that offer's red DECLINE

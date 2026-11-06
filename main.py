@@ -1826,7 +1826,7 @@ def untick_egg_and_full_grown() -> Optional[bool]:
     """In the open FILTERS panel: scroll to the Age rows and untick Egg and Full Grown where they are ticked (a box that is unticked already is left alone), looking at each after its click.
     True if something was clicked (the panel is to be confirmed), False if both were unticked already, None (logged) if the rows were not found or a click did not take."""
     if not scroll_filters_to_age():
-        log_run_event("setup: the filters' Age rows were not found")
+        log_setup_problem("setup: the filters' Age rows were not found")
         return None
     clicked = False
     for label in cfg.AGE_LABELS:

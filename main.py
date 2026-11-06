@@ -1738,11 +1738,11 @@ def lock_house() -> bool:
     log_run_event("setup: the house is locked")
     return True
 
-def open_filter_panel() -> bool:
-    """In the open backpack: its settings button, and the FILTERS panel that comes up (tried twice). False (logged) if it did not."""
+def open_filter_panel(button: Point = cfg.SETUP_BACKPACK_SETTINGS_POS) -> bool:
+    """In the open backpack: its settings button (`button`: the big backpack's, or the pen's small one), and the FILTERS panel that comes up (tried twice). False (logged) if it did not."""
     for _ in range(2):
         logger.debug("Opening the filters...")
-        hover_click(*cfg.SETUP_BACKPACK_SETTINGS_POS)
+        hover_click(*button)
         if wait_for_template("filter_panel") is not None:
             return True
     log_run_event("setup: the backpack's filters did not open")
@@ -1769,10 +1769,13 @@ def choose_sort_favorites() -> bool:
 def age_checkbox(img: Image, label: str) -> Optional[tuple[Point, bool]]:
     """Where the checkbox of the Age filter's row `label` (POPUP_TEMPLATES: "age_egg", "age_full_grown" - the crop of its text) is, and whether it is ticked (a tick is purple, AGE_TICK_HSV,
     at least AGE_TICK_MIN_PIXELS of the AGE_CHECKBOX_HALF square round its middle). None if the row is not in view."""
-    centre = popup_found(img, label)
-    if centre is None:
+    for name in (label, *cfg.AGE_ALTERNATES.get(label, ())):
+        centre = popup_found(img, name)
+        if centre is not None:
+            break
+    else:
         return None
-    x = centre[0] - load_templates(cfg.STRAY_WINDOW_DIR)[label].shape[1] // 2 + cfg.AGE_CHECKBOX_DX            # (the box is a fixed way left of where the text starts: the text's width differs)
+    x = centre[0] - load_templates(cfg.STRAY_WINDOW_DIR)[name].shape[1] // 2 + cfg.AGE_CHECKBOX_DX            # (the box is a fixed way left of where the text starts: the text's width differs)
     half = cfg.AGE_CHECKBOX_HALF
     patch = cv2.cvtColor(img[centre[1] - half:centre[1] + half, x - half:x + half], cv2.COLOR_BGR2HSV)
     ticked = cv2.countNonZero(cv2.inRange(patch, *cfg.AGE_TICK_HSV)) >= cfg.AGE_TICK_MIN_PIXELS
@@ -3935,6 +3938,29 @@ def open_pet_pen() -> bool:
             wait_interruptible(amount)
     return look_until(lambda img: popup_visible(img, "pet_pen_title"), cfg.PET_PEN_OPEN_WAIT, cfg.PET_PEN_POLL) is not None
 
+def ensure_pen_age_filter() -> bool:
+    """In the pen's small backpack: the Age filter without Egg and Full Grown, which the game keeps from one opening to the next. The FILTERS panel is opened, the two boxes looked at first and only a ticked one clicked
+    (untick_egg_and_full_grown()); a panel that was only looked at is cancelled and one that was changed confirmed, opened again and looked at (the same panel and positions as Setup's). False (logged) if it did not come up, the
+    rows were not found or the change did not take."""
+    if not open_filter_panel(cfg.PET_PEN_FILTER_BUTTON_POS):
+        return False
+    changed = untick_egg_and_full_grown()
+    if changed is None:
+        hover_click(*cfg.SETUP_FILTER_CANCEL_POS)
+        wait_interruptible(cfg.UI_SETTLE)
+        return False
+    if not changed:
+        hover_click(*cfg.SETUP_FILTER_CANCEL_POS)                                      # (already as it should be: left as it is)
+        wait_interruptible(cfg.UI_SETTLE)
+        return True
+    hover_click(*cfg.SETUP_CONFIRM_POS)
+    wait_interruptible(cfg.UI_SETTLE)
+    ok = open_filter_panel(cfg.PET_PEN_FILTER_BUTTON_POS) and scroll_filters_to_age() and age_filter_is_right()
+    log_run_event("pet pen: the backpack's Age filter is set" if ok else "pet pen: the backpack's Age filter did not take")
+    hover_click(*cfg.SETUP_FILTER_CANCEL_POS)
+    wait_interruptible(cfg.UI_SETTLE)
+    return ok
+
 def put_a_pet_in_the_pen() -> bool:
     """The pen's first free place: Add Pet clicked, the small backpack waited for, the first pet that fits clicked (choose_pen_pet()). False, with the backpack closed again, when there is no free place, the backpack did
     not come up or no pet fits."""
@@ -3945,6 +3971,10 @@ def put_a_pet_in_the_pen() -> bool:
     hover_click(*add)
     if look_until(lambda img: popup_visible(img, "pet_backpack_title"), cfg.PET_PEN_OPEN_WAIT, cfg.PET_PEN_POLL) is None:
         log_run_event("pet pen: the backpack did not come up after Add Pet")
+        return False
+    if not ensure_pen_age_filter():
+        hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
+        wait_interruptible(cfg.PET_PEN_UI_SETTLE)
         return False
     pet = choose_pen_pet()
     if pet is None:

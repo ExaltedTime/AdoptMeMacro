@@ -199,6 +199,7 @@ def test_a_full_grown_pet_is_taken_out_and_the_first_pet_that_fits_is_put_in(mac
     frames = {"pen": "pen_full_grown", "out": "pen_add_pet", "backpack": "pen_backpack", "in": "pen_after_add"}
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
     monkeypatch.setattr(macro, "open_pet_pen", lambda: True)
+    monkeypatch.setattr(macro, "ensure_pen_age_filter", lambda: True)                                           # (its own tests)
     monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
     monkeypatch.setattr(macro, "grab_screen", lambda: shot(frames[stage[0]]))
     log = []
@@ -247,3 +248,66 @@ def test_nothing_fits_the_pet_stays_out_and_a_swap_is_asked_for_by_friend_and_tr
     monkeypatch.setattr(macro, "run_side_action", lambda action: tried.append(action.__name__) or True)
     macro.pet_pen_swap_due()
     assert len(tried) == 2 and macro.load_game_config()["pet_pen_swap"] is False
+
+
+def test_both_age_rows_are_found_and_read_in_the_pens_filters_panel_whatever_their_state(macro):
+    for name, egg, full in (("pen_filters_both_ticked", True, True), ("pen_filters_full_grown_off", True, False), ("pen_filters_both_off", False, False)):
+        img = shot(name)
+        assert macro.age_checkbox(img, "age_egg")[1] is egg and macro.age_checkbox(img, "age_full_grown")[1] is full, name
+        assert macro.age_filter_is_right.__name__                                                               # (it reads the live screen: see the next tests)
+    assert macro.age_checkbox(shot("pen_filters_top"), "age_egg") is None                                        # (the Age rows are not in view at the top of the panel)
+
+
+def pen_filter_world(macro, monkeypatch, start):
+    """The pen's FILTERS panel as a state machine over the real frames: clicking the Egg or the Full Grown box flips it, Confirm and Cancel close the panel, the filter button opens it again."""
+    state = {"egg": start[0], "full": start[1], "open": False}
+    mixed = shot("pen_filters_both_ticked").copy()                                                              # (Egg off, Full Grown on: made of the two real ones)
+    mixed[770:815, 900:960] = shot("pen_filters_both_off")[770:815, 900:960]
+    frames = {(True, True): "pen_filters_both_ticked", (True, False): "pen_filters_full_grown_off", (False, False): "pen_filters_both_off", (False, True): mixed}
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "grab_screen", lambda: (frames[(state["egg"], state["full"])] if not isinstance(frames[(state["egg"], state["full"])], str) else shot(frames[(state["egg"], state["full"])])) if state["open"] else shot("pen_backpack"))
+    egg_box, full_box = macro.age_checkbox(shot("pen_filters_both_ticked"), "age_egg")[0], macro.age_checkbox(shot("pen_filters_both_ticked"), "age_full_grown")[0]
+    clicks = []
+
+    def click(x, y, duration=0):
+        clicks.append((x, y))
+        if (x, y) == macro.cfg.PET_PEN_FILTER_BUTTON_POS:
+            state["open"] = True
+        elif (x, y) in (macro.cfg.SETUP_CONFIRM_POS, macro.cfg.SETUP_FILTER_CANCEL_POS):
+            state["open"] = False
+        elif abs(x - egg_box[0]) < 15 and abs(y - egg_box[1]) < 15:
+            state["egg"] = not state["egg"]
+        elif abs(x - full_box[0]) < 15 and abs(y - full_box[1]) < 15:
+            state["full"] = not state["full"]
+    monkeypatch.setattr(macro, "hover_click", click)
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    return state, clicks, egg_box, full_box
+
+
+def test_a_filter_that_is_already_set_is_looked_at_and_left_alone_and_cancelled(macro, monkeypatch):
+    state, clicks, egg_box, full_box = pen_filter_world(macro, monkeypatch, (False, False))
+    assert macro.ensure_pen_age_filter() is True
+    assert clicks == [macro.cfg.PET_PEN_FILTER_BUTTON_POS, macro.cfg.SETUP_FILTER_CANCEL_POS]                  # (no box was clicked: that would have ticked it again)
+    assert (state["egg"], state["full"]) == (False, False)
+
+
+def test_only_the_boxes_that_are_ticked_are_clicked_then_confirmed_and_looked_at_again(macro, monkeypatch):
+    state, clicks, egg_box, full_box = pen_filter_world(macro, monkeypatch, (True, False))
+    assert macro.ensure_pen_age_filter() is True
+    assert [c for c in clicks if abs(c[0] - full_box[0]) < 15 and abs(c[1] - full_box[1]) < 15] == []          # (Full Grown was unticked: not clicked)
+    assert (state["egg"], state["full"]) == (False, False) and macro.cfg.SETUP_CONFIRM_POS in clicks
+    assert clicks[-1] == macro.cfg.SETUP_FILTER_CANCEL_POS and clicks.count(macro.cfg.PET_PEN_FILTER_BUTTON_POS) == 2     # (opened, changed, confirmed, opened again to look, cancelled)
+    state, clicks, *_ = pen_filter_world(macro, monkeypatch, (True, True))
+    assert macro.ensure_pen_age_filter() is True and (state["egg"], state["full"]) == (False, False)
+
+
+def test_a_pet_is_not_put_in_when_the_filter_did_not_come_up_and_the_picking_waits_half_an_hour(macro, monkeypatch):
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    monkeypatch.setattr(macro, "grab_screen", lambda: shot("pen_backpack"))
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: macro.clicks.append((x, y)))
+    monkeypatch.setattr(macro, "look_until", lambda find, seconds, poll=0: (1, 1))
+    monkeypatch.setattr(macro, "ensure_pen_age_filter", lambda: False)
+    monkeypatch.setattr(macro, "popup_found", lambda img, name: (857, 584))
+    assert macro.put_a_pet_in_the_pen() is False and macro.clicks[-1] == macro.cfg.PET_PEN_BACKPACK_CLOSE_POS
+    assert macro.cfg.PET_REPICK_INTERVAL == 30 * 60

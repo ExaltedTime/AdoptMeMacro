@@ -146,6 +146,7 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "pet_alicorn":                 {"box": (900, 640, 1230, 900), "threshold": 0.8},
     "age_egg":                     {"box": (800, 640, 1130, 880), "threshold": 0.85},       # the Age rows of the backpack's FILTERS panel: the text of Egg and of Full Grown (their boxes are found left of it)
     "age_full_grown":              {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "age_full_grown_pen":          {"box": (800, 640, 1130, 880), "threshold": 0.85},       # the same row in the pen's small backpack, whose panel has no blue line under the text (the first crop was cut in the big backpack's)
     "pet_unequip":                 {"box": (980, 780, 1215, 840), "threshold": 0.85},
     "phone_icon":         {"box": (850, 690, 950, 790), "threshold": 0.8},
     "phone_card":         {"box": (850, 700, 1250, 900), "threshold": 0.85},   # (the box is where the card's name can be: with the item in the first slot or the second)
@@ -666,9 +667,10 @@ PET_PEN_CONTENT_MIN_STD = 8.0             # a cell with a pet in it has a pictur
 PET_PEN_SCROLL_POS = (1193, 760)          # the mouse is put on the grid's scroll bar to turn the wheel (over a pet it would open its card)
 PET_PEN_SCROLL_MAX = 40                   # most scrolls looking for a pet that fits
 PET_PEN_BACKPACK_CLOSE_POS = (1188, 640)  # the small backpack's red X (from the picture; not clicked in the capture)
+PET_PEN_FILTER_BUTTON_POS = (956, 640)    # the orange filter button in the small backpack's header (it opens the same FILTERS panel as the big backpack's, in the same place)
 PET_PEN_UI_SETTLE = 1.5                   # seconds after a click in the pen's screens
 PET_PEN_SWAP_RETRY = 10 * 60              # seconds before a swap that did not come through is tried again
-PET_REPICK_INTERVAL = 10 * 60            # seconds between the loop's picks of the pet to level (see pet_repick(): a pet that has grown up is no longer in the filtered list)
+PET_REPICK_INTERVAL = 30 * 60            # seconds between the loop's picks of the pet to level (see pet_repick(): a pet that has grown up is no longer in the filtered list)
 TREE_CHECK_INTERVAL = 10 * 60          # seconds (10 minutes) between tree harvests
 LURE_RECOLLECT_INTERVAL = 4 * 60 * 60  # seconds (4 hours)
 
@@ -679,6 +681,7 @@ SETUP_BACKPACK_SETTINGS_POS = (977, 646)
 SETUP_SORT_MENU_POS = (1031, 680)
 SETUP_CONFIRM_POS = (1047, 908)
 PET_FIRST_ITEM_POS = (975, 707)                  # the pets tab's first pet, right of the green plus tile: the first of the list the filters leave
+AGE_ALTERNATES = {"age_full_grown": ("age_full_grown_pen",)}   # other crops of the same row, tried when the first is not found
 AGE_LABELS = ("age_egg", "age_full_grown")        # the Age rows Setup unticks (POPUP_TEMPLATES): what is neither an egg nor full grown still grows
 AGE_CHECKBOX_DX = -17                             # px from where the text of a row starts to the middle of its box
 AGE_CHECKBOX_HALF = 12                            # half the side of the square looked at for a tick

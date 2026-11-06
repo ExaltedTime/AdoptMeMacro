@@ -1770,6 +1770,17 @@ def open_filter_panel(button: Point = cfg.SETUP_BACKPACK_SETTINGS_POS) -> bool:
     log_run_event("setup: the backpack's filters did not open")
     return False
 
+def scroll_filters_to_top() -> bool:
+    """In the open FILTERS panel: scroll it back up (the wheel over its scroll bar) until its Sort By button is in view. The game keeps the panel where it was scrolled to - the Age rows, after Setup or the pen
+    had it there - and then the sort button is not where Setup clicks. False (logged by the caller) if it never came into view."""
+    for _ in range(cfg.FILTERS_SCROLL_TRIES + 1):
+        if wait_for_any(("filter_sort_default", "filter_sort_favorites"), 0.0) is not None:
+            return True
+        hover_move(*cfg.FILTERS_SCROLL_POS)
+        scroll_up(1)
+        wait_interruptible(cfg.UI_SETTLE)
+    return False
+
 def sort_is_favorites() -> bool:
     """Whether the open FILTERS panel says Favorites on its sort button (its crop, looked for for SETUP_LOOK_WAIT seconds)."""
     return wait_for_any(("filter_sort_favorites",), cfg.SETUP_LOOK_WAIT) is not None
@@ -1866,6 +1877,8 @@ def set_backpack_filter() -> bool:
         wait_interruptible(cfg.UI_SETTLE)
         if open_filter_panel():
             changed, sound = False, True
+            if not scroll_filters_to_top():
+                log_setup_problem("setup: the filters' panel could not be scrolled up to its Sort By")
             if not sort_is_favorites():
                 sound = choose_sort_favorites()
                 changed = sound
@@ -1882,7 +1895,7 @@ def set_backpack_filter() -> bool:
                 hover_click(*cfg.SETUP_CONFIRM_POS)
                 wait_interruptible(cfg.UI_SETTLE)
                 panel_open = open_filter_panel()                                                  # (looked at again: the Confirm took)
-                ok = panel_open and sort_is_favorites() and (not growing or (scroll_filters_to_age() and age_filter_is_right()))
+                ok = panel_open and scroll_filters_to_top() and sort_is_favorites() and (not growing or (scroll_filters_to_age() and age_filter_is_right()))     # (the panel is where it was scrolled to: back up to the sort first)
                 if ok:
                     log_run_event("setup: the backpack's filters are set")
                 else:
@@ -2031,15 +2044,19 @@ def travel_to_trade_hub() -> bool:
     log_run_event("travelling to the Trading Hub")
     return True
 
-def scroll_down(clicks: int) -> None:
-    """Turn the mouse wheel `clicks` notches down (WHEEL_NOTCH units each), over wherever the mouse is, INVENTORY_SCROLL_CHUNK at a time with INVENTORY_SCROLL_PAUSE
+def scroll_down(clicks: int, direction: int = -1) -> None:
+    """Turn the mouse wheel `clicks` notches down (up with `direction` 1; WHEEL_NOTCH units each), over wherever the mouse is, INVENTORY_SCROLL_CHUNK at a time with INVENTORY_SCROLL_PAUSE
     between: a game may take one huge turn of the wheel for a small one."""
     while clicks > 0:
         check_running()
         step = min(clicks, cfg.INVENTORY_SCROLL_CHUNK)
-        pyautogui.scroll(-step * cfg.WHEEL_NOTCH)         # (Windows takes the wheel in 120ths of a notch: 10 would hardly move a list)
+        pyautogui.scroll(direction * step * cfg.WHEEL_NOTCH)         # (Windows takes the wheel in 120ths of a notch: 10 would hardly move a list)
         clicks -= step
         time.sleep(cfg.INVENTORY_SCROLL_PAUSE)
+
+def scroll_up(clicks: int) -> None:
+    """scroll_down() the other way."""
+    scroll_down(clicks, 1)
 
 def panel_picture(img: Image) -> Image:
     left, top, right, bottom = cfg.INVENTORY_PANEL_BOX

@@ -4,6 +4,8 @@ import os
 import time
 import zipfile
 
+import cv2
+import numpy as np
 import pytest
 
 import test_capture
@@ -199,6 +201,7 @@ def test_a_long_runs_folder_is_self_explaining_with_its_log_status_config_failur
     for name, run in (("20261106_100500_run7_hungry_still", 7), ("20261106_100600_run8_other", 8)):
         os.makedirs(os.path.join(cfg.FAILURE_DIR, name))
         open(os.path.join(cfg.FAILURE_DIR, name, "info.txt"), "w").write(f"reason: failure of run {run}\n")
+        cv2.imwrite(os.path.join(cfg.FAILURE_DIR, name, "screen.png"), np.full((40, 60, 3), 80, np.uint8))
     macro.update_game_config(lambda c: c.update(keep_moments=True, private_server_link="https://www.roblox.com/share?code=SECRET"))
     macro.start_moments()
     capture = macro.state.moments
@@ -206,7 +209,7 @@ def test_a_long_runs_folder_is_self_explaining_with_its_log_status_config_failur
     capture.started -= macro.cfg.MOMENTS_MIN_RUN + 100
     macro.finish_moments()
     folder = capture.folder
-    assert sorted(f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))) == ["README.txt", "config.json", "failures.txt", "info.json", "output.log", "run_log.txt", "status.json"]
+    assert sorted(f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))) == ["README.txt", "config.json", "failure_20261106_100500_run7_hungry_still.jpg", "failures.txt", "info.json", "output.log", "run_log.txt", "status.json"]
     readme = open(os.path.join(folder, "README.txt"), encoding="utf-8").read()
     assert "RUN 7" in readme and "FAILURE: hungry still showing" in readme and "events.jsonl" in readme and "private server link" in readme
     assert "failure of run 7" in open(os.path.join(folder, "failures.txt")).read() and "failure of run 8" not in open(os.path.join(folder, "failures.txt")).read()

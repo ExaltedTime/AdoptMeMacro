@@ -525,7 +525,7 @@ def test_a_need_is_judged_by_its_pulse_only_when_the_pulse_is_known_and_late(mac
     assert watch.overdue()
     watch.levels.append(160.0 - macro.cfg.PULSE_MIN_SWING)
     assert watch.pulsing() and not watch.overdue()
-    other = macro.PulseWatch("hungry")                                         # (a need whose pulse was never seen is not judged)
+    other = macro.PulseWatch("pizza")                                         # (a need whose pulse was never seen is not judged)
     other.waited = 10 * macro.cfg.PULSE_START_WAIT
     assert not other.overdue()
 

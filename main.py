@@ -1129,7 +1129,7 @@ def wait_until_need_gone(need_name: str, max_wait: float = cfg.NEED_GONE_MAX_WAI
         remaining = max_wait - pulse.waited
         if remaining <= 0:
             logger.debug(f"{need_name} still showing after {max_wait}s, moving on")
-            log_failure(f"{need_name} still showing after {max_wait}s")
+            log_failure(f"{need_name} still showing after {max_wait}s" + (f" (its icon pulsed {pulse.first_seen:.1f}s after the action)" if pulse.first_seen is not None else " (its icon never pulsed)"))
             state.need_cleared = False
             return
         step = min(cfg.PULSE_POLL, remaining)
@@ -1752,13 +1752,18 @@ def sort_is_favorites() -> bool:
     """Whether the open FILTERS panel says Favorites on its sort button (its crop, looked for for SETUP_LOOK_WAIT seconds)."""
     return wait_for_any(("filter_sort_favorites",), cfg.SETUP_LOOK_WAIT) is not None
 
+def log_setup_problem(text: str) -> None:
+    """A step of Setup that did not go right: in the run log with the screen as it was (a folder of FAILURE_DIR, not counted as a failure: Setup says the whole of it at its end)."""
+    shot = save_failure_report(text)
+    log_run_event(text + (f" (screenshot: failures/{shot})" if shot else ""))
+
 def choose_sort_favorites() -> bool:
     """In the open FILTERS panel, whose sort is not Favorites: open the sort menu, click Favorites where its text is, and see the button say Favorites. False (logged) if a step did not happen."""
     logger.debug("Opening sort menu...")
     hover_click(*cfg.SETUP_SORT_MENU_POS)
     option = wait_for_template("filter_option_favorites")
     if option is None:
-        log_run_event("setup: Favorites was not in the sort menu")
+        log_setup_problem("setup: Favorites was not in the sort menu")
         return False
     hover_click(*option)
     if sort_is_favorites():
@@ -1842,9 +1847,9 @@ def set_backpack_filter() -> bool:
             if not sort_is_favorites():
                 sound = choose_sort_favorites()
                 changed = sound
-            if sound and growing:
+            if growing:                                                                           # (whether or not the sort took: a pet that has grown up must not be the first of the list)
                 aged = untick_egg_and_full_grown()
-                sound = aged is not None
+                sound = sound and aged is not None
                 changed = changed or bool(aged)
             if not sound:
                 ok = False
@@ -1856,7 +1861,10 @@ def set_backpack_filter() -> bool:
                 wait_interruptible(cfg.UI_SETTLE)
                 panel_open = open_filter_panel()                                                  # (looked at again: the Confirm took)
                 ok = panel_open and sort_is_favorites() and (not growing or (scroll_filters_to_age() and age_filter_is_right()))
-                log_run_event("setup: the backpack's filters are set" if ok else "setup: the backpack's filters are not as set after Confirm")
+                if ok:
+                    log_run_event("setup: the backpack's filters are set")
+                else:
+                    log_setup_problem("setup: the backpack's filters are not as set after Confirm")
             if panel_open:
                 hover_click(*cfg.SETUP_FILTER_CANCEL_POS)                                         # (a panel only looked at - or one that could not be set - is left as it was)
                 wait_interruptible(cfg.UI_SETTLE)
@@ -1901,7 +1909,10 @@ def equip_pet(what: str, where: Callable[[], Optional[Point]]) -> bool:
     hover_click(*button)
     wait_interruptible(cfg.UI_SETTLE)
     equipped = wait_for_template("pet_unequip") is not None
-    log_run_event(f"setup: {what} is equipped" if equipped else f"setup: the card of {what} does not say Unequip after Equip")
+    if equipped:
+        log_run_event(f"setup: {what} is equipped")
+    else:
+        log_setup_problem(f"setup: the card of {what} does not say Unequip after Equip")
     return equipped
 
 def send_macro_window_to_back() -> None:
@@ -3288,6 +3299,10 @@ def process_needs() -> bool:
                 logger.debug(f"{need_name} was not cleared, counting it as failed")
                 run_stats.failed[need_name] = run_stats.failed.get(need_name, 0) + 1
                 log_run_event(f"not cleared: {need_name} ({seconds:.0f}s)")
+                if run_stats.failed[need_name] >= cfg.NEED_NEVER_WORKED_FAILS and not run_stats.resolved.get(need_name) and need_name not in state.disabled_needs:
+                    state.disabled_needs.add(need_name)                                              # (a need that has failed this often and never once worked costs its wait every time it comes)
+                    log_run_event(f"disabled: {need_name}")
+                    log_failure(f"{need_name} failed {run_stats.failed[need_name]} times and never worked in this run - disabled for this run")
                 write_status()
                 return True
             run_stats.resolved[need_name] = run_stats.resolved.get(need_name, 0) + 1
@@ -3826,7 +3841,7 @@ def collect_pet_pen() -> bool:
         return False
     state.task_board_wanted = True
     try:
-        sign = find_task_board_button(grab_screen())
+        sign = look_until(find_task_board_button, cfg.PET_PEN_UI_WAIT, cfg.PET_PEN_POLL)                 # (just after a respawn the screen is black or white for a moment: 3 of 4 looks in a 2-hour run saw no sign)
         if sign is None:
             log_run_event("pet pen: the Task Board's sign was not seen")
             return False
@@ -4574,6 +4589,13 @@ def write_moments_files(capture: InputCapture, seconds: float) -> None:
                         failures.append(f"--- {name} (its screen.png, need_icons.png and state.json are in debug/failures/)\n{f.read()}")
         with open(os.path.join(folder, "failures.txt"), "w", encoding="utf-8") as f:
             f.write("\n".join(failures) or "no failure folders were saved for this run\n")
+        shots = sorted(name for name in os.listdir(cfg.FAILURE_DIR) if f"_run{run}_" in name and os.path.isfile(os.path.join(cfg.FAILURE_DIR, name, "screen.png"))) if os.path.isdir(cfg.FAILURE_DIR) else []
+        if len(shots) > cfg.MOMENTS_FAILURE_SHOTS:
+            shots = [shots[i * len(shots) // cfg.MOMENTS_FAILURE_SHOTS] for i in range(cfg.MOMENTS_FAILURE_SHOTS)]            # (spread over the run)
+        for name in shots:
+            picture = cv2.imread(os.path.join(cfg.FAILURE_DIR, name, "screen.png"))
+            if picture is not None:
+                cv2.imwrite(os.path.join(folder, f"failure_{name}.jpg"), picture, [cv2.IMWRITE_JPEG_QUALITY, 85])
         version = macro_version()
         info_path = os.path.join(folder, "info.json")
         with open(info_path, encoding="utf-8") as f:
@@ -4583,7 +4605,7 @@ def write_moments_files(capture: InputCapture, seconds: float) -> None:
             json.dump(info, f, indent=1)
         marks = "\n".join(f"  {t // 3600}:{t % 3600 // 60:02d}:{t % 60:02d}  {what}" for t, what in state.moments_notes) or "  (none: nothing went wrong enough to mark)"
         with open(os.path.join(folder, "README.txt"), "w", encoding="utf-8") as f:
-            f.write(MOMENTS_README.format(run=run, version=version, hours=seconds / 3600, started=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(capture.started)), frames=capture.frames,
+            f.write(MOMENTS_README.format(run=run, version=version, hours=seconds / 3600, started=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(capture.started)), frames=capture.frames, shots=cfg.MOMENTS_FAILURE_SHOTS,
                                           dropped=capture.dropped, zips=cfg.MOMENTS_ZIPS, marks=marks, tail=cfg.MOMENTS_TAIL, interval=cfg.MOMENTS_FRAME_INTERVAL, burst=cfg.RUN_CAPTURE_BURST))
     except Exception as error:
         logger.warning(f"Couldn't write the files of the run's moments: {error}")
@@ -4606,7 +4628,7 @@ THE FILES:
                  type "log": a line of the run log (what happened: needs detected and resolved, failures, rejoins, popups closed); type "mark": a moment kept (see below); "frame_dropped": thinned out.
   output.log     everything the macro printed, debug lines too (the last part of the run when it was long), with times.
   run_log.txt    the run's own log (the same lines as the "log" events, with their wall-clock times).
-  failures.txt   what the macro saved for each failure (reason, time, what was detected, disabled needs); their screenshots are in the macro's debug/failures folder and are not here.
+  failures.txt   what the macro saved for each failure (reason, time, what was detected, disabled needs); failure_<folder>.jpg are their screenshots (the game window, JPEG; at most {shots} of them, spread over the run).
   status.json    the macro's status when the run ended. config.json: its settings (the private server link is left out), the enabled needs and the counts of the run.
   info.json      the capture's facts, the commit, and the moments.
 

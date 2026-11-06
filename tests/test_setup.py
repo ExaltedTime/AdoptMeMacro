@@ -70,10 +70,14 @@ def test_a_house_that_says_lock_is_locked_by_a_click_one_that_says_unlock_is_lef
 EGG_BOX, FULL_GROWN_BOX = (930, 793), (1014, 793)               # the middles of the two boxes in the real frames (the Age rows scrolled into view)
 
 
+FIRST_PET = (975, 706)                                                      # (the first cell of the pets grid that can be picked, on the real frames: right of the green Add tile)
+
+
 class Backpack:
     """The backpack's FILTERS panel and pets tab as the game has them, over real frames: the panel's edits are kept until Confirm (Cancel drops them), a wheel turn scrolls it to the Age rows,
     a click toggles a box, the sort menu sets Favorites; the pets tab's first pet has a card with Equip (or Unequip when it is out). `stuck` names clicks that do nothing."""
-    def __init__(self, macro, game, monkeypatch, sort="default", egg=True, full_grown=True, pet_out=False, stuck=(), notches=1):
+    def __init__(self, macro, game, monkeypatch, sort="default", egg=True, full_grown=True, pet_out=False, stuck=(), notches=1, grid="pets_grid"):
+        self.grid = grid                                                                                        # (the frame of the pets tab: the first pet of "pets_grid" can be picked, "backpack_pets" has the Alicorn)
         self.cfg, self.game = macro.cfg, game
         self.applied = {"sort": sort, "egg": egg, "fg": full_grown}
         self.pending, self.open, self.menu, self.scrolled, self.notches, self.turned = dict(self.applied), False, False, False, notches, 0
@@ -90,7 +94,7 @@ class Backpack:
         if self.game.state == "world":
             return self.game.frames["world"]
         if not self.open:
-            return frame("pet_card_equipped" if self.card == "unequip" else "pet_card_equip" if self.card == "equip" else "backpack_pets")
+            return frame("pet_card_equipped" if self.card == "unequip" else "pet_card_equip" if self.card == "equip" else self.grid)
         if self.scrolled:
             img = frame("filters_age_both_ticked").copy()
             for key, (x, y) in (("egg", EGG_BOX), ("fg", FULL_GROWN_BOX)):
@@ -119,7 +123,7 @@ class Backpack:
             self.applied, self.open = dict(self.pending), False
         elif self.open and self.near(x, y, cfg.SETUP_FILTER_CANCEL_POS):
             self.open = False
-        elif not self.open and self.near(x, y, cfg.PET_FIRST_ITEM_POS):
+        elif not self.open and self.near(x, y, FIRST_PET):
             self.card = "unequip" if self.pet_out else "equip"
         elif not self.open and self.card == "equip" and 1000 <= x <= 1120 and 795 <= y <= 835 and "equip" not in self.stuck:
             self.pet_out, self.card = True, "unequip"
@@ -146,7 +150,7 @@ def test_the_backpack_is_sorted_by_favorites_with_eggs_and_full_grown_pets_filte
     assert clicks.count(cfg.SETUP_CONFIRM_POS) == 1 and len(settings_clicks(game, cfg)) == 2 and clicks[clicks.index(cfg.SETUP_CONFIRM_POS) + 1] == cfg.SETUP_BACKPACK_SETTINGS_POS      # (reopened after Confirm)
     assert game.scrolls and set(game.scrolls) == {("down", 1)}                                  # (a notch at a time, until the rows are in view)
     assert "setup: the backpack's filters are set" in texts(game) and cfg.FILTERS_SCROLL_TRIES >= backpack.notches
-    assert backpack.card == "unequip" and backpack.pet_out and cfg.PET_FIRST_ITEM_POS in game.clicks                                 # (the first pet of the list is equipped)
+    assert backpack.card == "unequip" and backpack.pet_out and FIRST_PET in game.clicks                                 # (the first pet of the list is equipped)
     assert game.log[-1] == ("close", "setup")
 
 
@@ -183,12 +187,11 @@ def test_a_sort_a_box_or_a_confirm_that_does_not_take_is_a_failure_and_the_panel
 
 
 def test_with_the_option_off_the_age_filter_and_the_pet_are_left_and_the_alicorn_is_equipped_only_when_no_pet_is_out(macro, game, monkeypatch):
-    cfg = macro.cfg
     macro.update_game_config(lambda config: config.__setitem__("level_growing_pet", False))
-    backpack = Backpack(macro, game, monkeypatch, sort="favorites")
+    backpack = Backpack(macro, game, monkeypatch, sort="favorites", grid="backpack_pets")
     game.frames["world"] = frame("house_locked")                                               # (a pet's name bar: it is out)
     assert macro.set_backpack_filter() is True and game.scrolls == [] and backpack.applied == {"sort": "favorites", "egg": True, "fg": True}
-    assert cfg.PET_FIRST_ITEM_POS not in game.clicks and not any("Alicorn" in text for text in texts(game))
+    assert FIRST_PET not in game.clicks and not any("Alicorn" in text for text in texts(game))
     game.frames["world"] = np.zeros((1080, 1920, 3), np.uint8)                                  # (no pet out: the Alicorn is looked for by its picture)
     game.clicks.clear(), game.log.clear()
     game.state = "world"
@@ -199,10 +202,10 @@ def test_with_the_option_off_the_age_filter_and_the_pet_are_left_and_the_alicorn
 def test_a_pet_is_equipped_by_its_green_button_and_the_card_must_say_unequip_after_and_no_card_is_said(macro, game, monkeypatch):
     backpack = Backpack(macro, game, monkeypatch)
     game.state = "backpack"
-    assert macro.equip_pet("the first pet of the list", lambda: macro.cfg.PET_FIRST_ITEM_POS) is True and backpack.pet_out
+    assert macro.equip_pet("the first pet of the list", lambda: FIRST_PET) is True and backpack.pet_out
     assert "setup: the first pet of the list is equipped" in texts(game)
     Backpack(macro, game, monkeypatch, stuck=("equip",))
-    assert macro.equip_pet("a pet", lambda: macro.cfg.PET_FIRST_ITEM_POS) is False and "setup: the card of a pet does not say Unequip after Equip" in texts(game)
+    assert macro.equip_pet("a pet", lambda: FIRST_PET) is False and "setup: the card of a pet does not say Unequip after Equip" in texts(game)
     assert macro.equip_pet("a pet", lambda: None) is False and "setup: a pet was not seen in the pets tab" in texts(game)
     Backpack(macro, game, monkeypatch)
     assert macro.equip_pet("the first pet of the list", lambda: (5, 5)) is False and "no pet there?" in texts(game)[-1]         # (nothing under the click: no card comes up)
@@ -243,13 +246,14 @@ def test_setup_runs_its_steps_after_the_respawn_and_says_which_did_not_take(macr
     order, failures = [], []
     monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: None)
     monkeypatch.setattr(macro, "respawn_character", lambda: order.append("respawn"))
+    monkeypatch.setattr(macro, "check_pet_pen", lambda: order.append("pen") or True)
     monkeypatch.setattr(macro, "lock_house", lambda: order.append("lock") or True)
     monkeypatch.setattr(macro, "set_backpack_filter", lambda: order.append("filter") or False)
     monkeypatch.setattr(macro, "disable_trades", lambda: order.append("trades") or True)
     monkeypatch.setattr(macro, "log_failure", lambda text: failures.append(text))
     monkeypatch.setattr(macro, "log_run_event", lambda text: None)
     assert macro._setup_steps() is False
-    assert order == ["respawn", "lock", "filter", "trades"] and failures == ["setup: the backpack is not filtered to favorites"]       # (every step ran, the failure has a screenshot)
+    assert order == ["respawn", "pen", "lock", "filter", "trades"] and failures == ["setup: the backpack is not filtered to favorites"]       # (every step ran, the failure has a screenshot)
     monkeypatch.setattr(macro, "set_backpack_filter", lambda: True)
     assert macro._setup_steps() is True
 
@@ -263,3 +267,38 @@ def test_setup_from_outside_is_an_error_when_a_step_did_not_take(macro, monkeypa
         macro.leave_hub_and_setup()
     monkeypatch.setattr(macro, "setup_game", lambda: True)
     assert macro.setup_or_fail() is True
+
+
+def test_a_pen_that_could_not_be_checked_is_said_and_does_not_fail_setup(macro, monkeypatch):
+    log = []
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: None)
+    monkeypatch.setattr(macro, "respawn_character", lambda: None)
+    monkeypatch.setattr(macro, "check_pet_pen", lambda: False)
+    monkeypatch.setattr(macro, "lock_house", lambda: True)
+    monkeypatch.setattr(macro, "set_backpack_filter", lambda: True)
+    monkeypatch.setattr(macro, "disable_trades", lambda: True)
+    monkeypatch.setattr(macro, "log_run_event", log.append)
+    assert macro._setup_steps() is True and "setup: the pet pen could not be checked" in log
+
+
+def test_the_pen_is_checked_as_a_step_of_setup_unless_it_is_switched_off(macro, monkeypatch):
+    switched, respawned = [], []
+    monkeypatch.setattr(macro, "switch_pen_pets", lambda: switched.append(1) or True)
+    monkeypatch.setattr(macro, "respawn_character", lambda: respawned.append(1))
+    macro.update_game_config(lambda c: c.update(pet_pen_enabled=False, pet_pen_swap=True))
+    assert macro.check_pet_pen() is True and switched == [] and respawned == []
+    macro.update_game_config(lambda c: c.update(pet_pen_enabled=True))
+    assert macro.check_pet_pen() is True and switched == [1] and respawned == [1]                 # (back in the house after it)
+    assert macro.load_game_config()["pet_pen_swap"] is False and macro.load_game_config()["pet_pen_swap_tried"] > 0
+    monkeypatch.setattr(macro, "switch_pen_pets", lambda: False)
+    macro.update_game_config(lambda c: c.update(pet_pen_swap=True))
+    assert macro.check_pet_pen() is False and macro.load_game_config()["pet_pen_swap"] is True
+
+
+def test_the_pet_to_level_is_not_the_add_tile_a_pet_in_the_pen_orange_framed_or_a_grey_one_and_the_equipped_one_is_kept(macro):
+    real = frame("pets_tab_pen_and_equipped")
+    states = [[macro.pet_cell_state(real, row, column) for column in range(4)] for row in range(3)]
+    assert states == [["plus", "equipped", "pen", "pen"], ["pen", "pen", "pet", "pet"], ["pet", "pet", "pet", "pet"]]
+    assert macro.first_listed_cell(real, stop_at_equipped=True) == ("equipped", (975, 706))                   # (the pet that is out comes first: kept)
+    assert macro.first_listed_cell(real) == ("pet", (1055, 787))                                                # (pen pets and the equipped one skipped)
+    assert macro.first_listed_cell(frame("pets_grid"), stop_at_equipped=True) == ("pet", FIRST_PET)

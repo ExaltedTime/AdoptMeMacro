@@ -1712,6 +1712,8 @@ def _setup_steps() -> bool:
         if not dismiss_stray_windows():
             break
     respawn_character()
+    if not check_pet_pen():                                                  # (not a failed Setup: said in the log, and looked at again when a pet shows Friend)
+        log_run_event("setup: the pet pen could not be checked")
     failed = [name for name, step in (("the house is not locked", lock_house), ("the backpack is not filtered to favorites", set_backpack_filter),
                                       ("trades are not set to No One", disable_trades)) if not step()]
     if failed:
@@ -1826,7 +1828,7 @@ def untick_egg_and_full_grown() -> Optional[bool]:
     """In the open FILTERS panel: scroll to the Age rows and untick Egg and Full Grown where they are ticked (a box that is unticked already is left alone), looking at each after its click.
     True if something was clicked (the panel is to be confirmed), False if both were unticked already, None (logged) if the rows were not found or a click did not take."""
     if not scroll_filters_to_age():
-        log_run_event("setup: the filters' Age rows were not found")
+        log_setup_problem("setup: the filters' Age rows were not found")
         return None
     clicked = False
     for label in cfg.AGE_LABELS:
@@ -1889,7 +1891,15 @@ def set_backpack_filter() -> bool:
                 hover_click(*cfg.SETUP_FILTER_CANCEL_POS)                                         # (a panel only looked at - or one that could not be set - is left as it was)
                 wait_interruptible(cfg.UI_SETTLE)
         if growing:
-            equip_pet("the first pet of the list", lambda: cfg.PET_FIRST_ITEM_POS)
+            select_backpack_tab(cfg.INVENTORY_PETS_TAB_POS)
+            wait_interruptible(cfg.UI_SETTLE)
+            pick = choose_list_pet(stop_at_equipped=True)                                        # (not the Add tile, a grey pet in a listing or one in the pen; the equipped one is kept)
+            if pick is None:
+                log_run_event("setup: no pet that can be levelled was seen in the list - the pet that is out is kept")
+            elif pick[0] == "equipped":
+                log_run_event("setup: the equipped pet is the first of the list - kept")
+            else:
+                equip_pet("the first pet of the list", lambda: pick[1])
         elif not pet_out:
             log_run_event("setup: the pet is not out - equipping the Alicorn")
             equip_pet("the Alicorn", lambda: wait_for_template("pet_alicorn"))
@@ -3966,40 +3976,53 @@ def full_grown_slots(img: Image) -> list[int]:
     """The pen's places whose pet carries the "Full grown!" sign."""
     return [slot for slot in range(len(cfg.PET_PEN_SLOTS)) if slot_has(img, "pet_pen_full_grown", slot)]
 
-def pen_cell_fits(img: Image, row: int, column: int) -> bool:
-    """Whether the cell of the small backpack's grid has a pet that can go in the pen: one (a picture in it), not grey (in a trade listing: its corners are dark) and with no green edge (the equipped one)."""
-    x, y, half = cfg.PET_PEN_GRID_X[column], cfg.PET_PEN_GRID_Y[row], cfg.PET_PEN_CELL_HALF
+def pet_cell_state(img: Image, row: int, column: int) -> str:
+    """What the cell of the small backpack's grid (the pets tab, in the house and over the pen alike) holds: "plus" (the green Add tile), "empty", "locked" (grey: the pet is in a trade listing; its corners are dark),
+    "pen" (an orange frame with a little house: the pet is in the pen), "equipped" (a green frame) or "pet" (one that can be picked)."""
+    x, y, half = cfg.PET_GRID_X[column], cfg.PET_GRID_Y[row], cfg.PET_CELL_HALF
     cell = img[y - half:y + half, x - half:x + half]
     if cell.shape[0] < 2 * half or cell.shape[1] < 2 * half:
-        return False
+        return "empty"
     hsv = cv2.cvtColor(cell, cv2.COLOR_BGR2HSV)
+    ring = np.concatenate([cell[0:3, :].reshape(-1, 3), cell[-3:, :].reshape(-1, 3), cell[:, 0:3].reshape(-1, 3), cell[:, -3:].reshape(-1, 3)]).astype(int)
+    ring_hsv = np.concatenate([hsv[0:3, :].reshape(-1, 3), hsv[-3:, :].reshape(-1, 3), hsv[:, 0:3].reshape(-1, 3), hsv[:, -3:].reshape(-1, 3)]).astype(int)
+    green = float(((ring[:, 1] > 150) & (ring[:, 2] < 120) & (ring[:, 0] < 120)).mean())
+    if green >= cfg.PET_CELL_PLUS_GREEN:
+        return "plus"
+    if float(cv2.cvtColor(cell, cv2.COLOR_BGR2GRAY).std()) < cfg.PET_CELL_CONTENT_MIN_STD:
+        return "empty"
     corners = np.concatenate([hsv[2:10, 2:10].reshape(-1, 3), hsv[2:10, -10:-2].reshape(-1, 3)])
-    edge = np.concatenate([cell[0:3, :].reshape(-1, 3), cell[-3:, :].reshape(-1, 3), cell[:, 0:3].reshape(-1, 3), cell[:, -3:].reshape(-1, 3)]).astype(int)
-    green = float(((edge[:, 1] > 150) & (edge[:, 2] < 120) & (edge[:, 0] < 120)).mean())
-    return bool(corners[:, 2].mean() >= cfg.PET_PEN_LOCKED_MAX_V and green < cfg.PET_PEN_GREEN_BORDER_MIN and float(cv2.cvtColor(cell, cv2.COLOR_BGR2GRAY).std()) >= cfg.PET_PEN_CONTENT_MIN_STD)
+    if corners[:, 2].mean() < cfg.PET_CELL_LOCKED_MAX_V:
+        return "locked"
+    orange = float(((ring_hsv[:, 0] >= 5) & (ring_hsv[:, 0] <= 22) & (ring_hsv[:, 1] >= 140) & (ring_hsv[:, 2] >= 180)).mean())
+    if green >= cfg.PET_CELL_GREEN_BORDER_MIN and green >= orange:                                  # (a gold pet's background is orange too: the green frame wins when it is the stronger)
+        return "equipped"
+    return "pen" if orange >= cfg.PET_CELL_ORANGE_MIN else "pet"
 
-def first_fitting_cell(img: Image) -> Optional[Point]:
-    """The middle of the first cell (rows from the top, left to right) of the small backpack's grid that pen_cell_fits(), or None."""
-    for row in range(len(cfg.PET_PEN_GRID_Y)):
-        for column in range(len(cfg.PET_PEN_GRID_X)):
-            if pen_cell_fits(img, row, column):
-                return cfg.PET_PEN_GRID_X[column], cfg.PET_PEN_GRID_Y[row]
+def first_listed_cell(img: Image, stop_at_equipped: bool = False) -> Optional[tuple[str, Point]]:
+    """The first cell (rows from the top, left to right) of the small backpack's grid that can be picked - ("pet", its middle) - or, with `stop_at_equipped`, the equipped pet if it comes first: ("equipped", its
+    middle). None if there is neither."""
+    for row in range(len(cfg.PET_GRID_Y)):
+        for column in range(len(cfg.PET_GRID_X)):
+            state_here = pet_cell_state(img, row, column)
+            if state_here == "pet" or (stop_at_equipped and state_here == "equipped"):
+                return state_here, (cfg.PET_GRID_X[column], cfg.PET_GRID_Y[row])
     return None
 
-def choose_pen_pet() -> Optional[Point]:
-    """In the small backpack: the first pet that fits (first_fitting_cell()), scrolling the list down (the wheel on its scroll bar) a notch at a time while none does, until a scroll changes nothing (the end of the list) or
-    PET_PEN_SCROLL_MAX scrolls. None if none fits."""
-    grid_box = (cfg.PET_PEN_GRID_X[0] - cfg.PET_PEN_CELL_HALF, cfg.PET_PEN_GRID_Y[0] - cfg.PET_PEN_CELL_HALF, cfg.PET_PEN_GRID_X[-1] + cfg.PET_PEN_CELL_HALF, cfg.PET_PEN_GRID_Y[-1] + cfg.PET_PEN_CELL_HALF)
+def choose_list_pet(stop_at_equipped: bool = False) -> Optional[tuple[str, Point]]:
+    """In the small backpack: first_listed_cell(), scrolling the list down (the wheel on its scroll bar) a notch at a time while there is none, until a scroll changes nothing (the end of the list) or
+    PET_GRID_SCROLL_MAX scrolls. None if there is none."""
+    grid_box = (cfg.PET_GRID_X[0] - cfg.PET_CELL_HALF, cfg.PET_GRID_Y[0] - cfg.PET_CELL_HALF, cfg.PET_GRID_X[-1] + cfg.PET_CELL_HALF, cfg.PET_GRID_Y[-1] + cfg.PET_CELL_HALF)
 
     def grid(img: Image) -> Image:
         left, top, right, bottom = grid_box
         return img[top:bottom, left:right]
     img = grab_screen()
-    for _ in range(cfg.PET_PEN_SCROLL_MAX + 1):
-        found = first_fitting_cell(img)
+    for _ in range(cfg.PET_GRID_SCROLL_MAX + 1):
+        found = first_listed_cell(img, stop_at_equipped)
         if found is not None:
             return found
-        hover_move(*cfg.PET_PEN_SCROLL_POS)
+        hover_move(*cfg.PET_GRID_SCROLL_POS)
         scroll_down(1)
         wait_interruptible(cfg.PET_PEN_UI_SETTLE)
         after = grab_screen()
@@ -4007,6 +4030,11 @@ def choose_pen_pet() -> Optional[Point]:
             return None                                                      # (nothing moved: that was the end of the list)
         img = after
     return None
+
+def choose_pen_pet() -> Optional[Point]:
+    """The pet to put in the pen: choose_list_pet() (the equipped one is skipped), its middle, or None when none fits."""
+    found = choose_list_pet()
+    return found[1] if found is not None else None
 
 def open_pet_pen() -> bool:
     """From a respawn (in the house) to the pen's screen: PET_PEN_ROUTE, then the pen's title is waited for. True if it is up."""
@@ -4106,6 +4134,16 @@ def switch_pen_pets() -> bool:
     hover_click(*cfg.PET_PEN_CLOSE_POS)
     wait_interruptible(cfg.PET_PEN_UI_SETTLE)
     return True
+
+def check_pet_pen() -> bool:
+    """Setup's look at the pen (the game config's pet_pen_enabled): switch_pen_pets() - its full-grown pets out and others in, none if none is full grown - before the pet to level is picked, so that what was put in
+    the pen is not. The character is respawned after, back in the house where Setup goes on. True when the pen is as it should be (or the option is off)."""
+    if not load_game_config()["pet_pen_enabled"]:
+        return True
+    done = switch_pen_pets()
+    update_game_config(lambda c: c.update(pet_pen_swap_tried=time.time(), **({"pet_pen_swap": False} if done else {})))
+    respawn_character()
+    return done
 
 def pet_pen_swap_due() -> None:
     """Once per cycle after pet_pen(): when the age-up screen showed a pet that reached Friend (the game config's pet_pen_swap) and PET_PEN_SWAP_RETRY seconds have passed since the last try, switch_pen_pets(); the flag is cleared

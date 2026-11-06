@@ -76,11 +76,11 @@ FIRST_PET = (975, 706)                                                      # (t
 class Backpack:
     """The backpack's FILTERS panel and pets tab as the game has them, over real frames: the panel's edits are kept until Confirm (Cancel drops them), a wheel turn scrolls it to the Age rows,
     a click toggles a box, the sort menu sets Favorites; the pets tab's first pet has a card with Equip (or Unequip when it is out). `stuck` names clicks that do nothing."""
-    def __init__(self, macro, game, monkeypatch, sort="default", egg=True, full_grown=True, pet_out=False, stuck=(), notches=1, grid="pets_grid"):
+    def __init__(self, macro, game, monkeypatch, sort="default", egg=True, full_grown=True, pet_out=False, stuck=(), notches=1, grid="pets_grid", start_turned=0):
         self.grid = grid                                                                                        # (the frame of the pets tab: the first pet of "pets_grid" can be picked, "backpack_pets" has the Alicorn)
         self.cfg, self.game = macro.cfg, game
         self.applied = {"sort": sort, "egg": egg, "fg": full_grown}
-        self.pending, self.open, self.menu, self.scrolled, self.notches, self.turned = dict(self.applied), False, False, False, notches, 0
+        self.pending, self.open, self.menu, self.notches, self.turned = dict(self.applied), False, False, notches, start_turned          # (the panel keeps where it was scrolled to between openings: `turned` notches down)
         self.pet_out, self.card, self.stuck = pet_out, None, set(stuck)
         unticked = frame("filters_age_full_grown_off")
         self.empty = unticked[793 - 14:793 + 14, 1014 - 14:1014 + 14].copy()
@@ -88,6 +88,7 @@ class Backpack:
         monkeypatch.setattr(macro, "hover_click", self.click)
         monkeypatch.setattr(macro, "hover_move", lambda x, y, duration=0: None)
         monkeypatch.setattr(macro, "scroll_down", self.scroll)
+        monkeypatch.setattr(macro, "scroll_up", self.scroll_up)
         game.keys[("world", macro.cfg.KEYS["backpack"])] = "backpack"
 
     def grab(self):
@@ -109,8 +110,8 @@ class Backpack:
     def click(self, x, y, duration=0):
         self.game.clicks.append((x, y))
         cfg = self.cfg
-        if self.near(x, y, cfg.SETUP_BACKPACK_SETTINGS_POS) and not self.open and "settings" not in self.stuck:
-            self.open, self.pending, self.menu, self.scrolled, self.turned = True, dict(self.applied), False, False, 0
+        if self.near(x, y, cfg.SETUP_BACKPACK_SETTINGS_POS) and "settings" not in self.stuck:                  # (a panel opened again shows what the game has, not edits that were never confirmed)
+            self.open, self.pending, self.menu = True, dict(self.applied), False
         elif self.open and self.near(x, y, cfg.SETUP_SORT_MENU_POS) and not self.scrolled and "menu" not in self.stuck:
             self.menu = True
         elif self.open and self.menu and self.near(x, y, (1028, 806)) and "favorites" not in self.stuck:
@@ -128,10 +129,17 @@ class Backpack:
         elif not self.open and self.card == "equip" and 1000 <= x <= 1120 and 795 <= y <= 835 and "equip" not in self.stuck:
             self.pet_out, self.card = True, "unequip"
 
+    @property
+    def scrolled(self):
+        return self.open and self.turned >= self.notches
+
     def scroll(self, clicks):
         self.game.scrolls.append(("down", clicks))
         self.turned += clicks
-        self.scrolled = self.open and self.turned >= self.notches
+
+    def scroll_up(self, clicks):
+        self.game.scrolls.append(("up", clicks))
+        self.turned = max(0, self.turned - clicks)
 
 
 def settings_clicks(game, cfg):
@@ -148,7 +156,7 @@ def test_the_backpack_is_sorted_by_favorites_with_eggs_and_full_grown_pets_filte
     assert clicks[:2] == [cfg.SETUP_BACKPACK_SETTINGS_POS, cfg.SETUP_SORT_MENU_POS] and abs(clicks[2][0] - 1028) <= 6 and abs(clicks[2][1] - 806) <= 6        # (Favorites where its text is)
     assert [c for c in clicks if abs(c[0] - EGG_BOX[0]) <= 3 and abs(c[1] - EGG_BOX[1]) <= 3] and [c for c in clicks if abs(c[0] - FULL_GROWN_BOX[0]) <= 3 and abs(c[1] - FULL_GROWN_BOX[1]) <= 3]
     assert clicks.count(cfg.SETUP_CONFIRM_POS) == 1 and len(settings_clicks(game, cfg)) == 2 and clicks[clicks.index(cfg.SETUP_CONFIRM_POS) + 1] == cfg.SETUP_BACKPACK_SETTINGS_POS      # (reopened after Confirm)
-    assert game.scrolls and set(game.scrolls) == {("down", 1)}                                  # (a notch at a time, until the rows are in view)
+    assert game.scrolls and set(game.scrolls) == {("down", 1), ("up", 1)}                  # (a notch at a time, until the rows are in view; back up to the sort when the panel is opened again to be looked at)
     assert "setup: the backpack's filters are set" in texts(game) and cfg.FILTERS_SCROLL_TRIES >= backpack.notches
     assert backpack.card == "unequip" and backpack.pet_out and FIRST_PET in game.clicks                                 # (the first pet of the list is equipped)
     assert game.log[-1] == ("close", "setup")
@@ -302,3 +310,16 @@ def test_the_pet_to_level_is_not_the_add_tile_a_pet_in_the_pen_orange_framed_or_
     assert macro.first_listed_cell(real, stop_at_equipped=True) == ("equipped", (975, 706))                   # (the pet that is out comes first: kept)
     assert macro.first_listed_cell(real) == ("pet", (1055, 787))                                                # (pen pets and the equipped one skipped)
     assert macro.first_listed_cell(frame("pets_grid"), stop_at_equipped=True) == ("pet", FIRST_PET)
+
+
+def test_a_filters_panel_that_opens_scrolled_down_to_the_age_rows_is_scrolled_back_up_to_the_sort_first(macro, game, monkeypatch):
+    backpack = Backpack(macro, game, monkeypatch, notches=2, start_turned=2)                    # (the game kept the panel where Setup or the pen left it)
+    game.frames["world"] = frame("house_locked")
+    assert macro.set_backpack_filter() is True
+    assert backpack.applied == {"sort": "favorites", "egg": False, "fg": False}                   # (the sort took: its button was in view when it was clicked)
+    assert ("up", 1) in game.scrolls and game.scrolls.index(("up", 1)) < game.scrolls.index(("down", 1))
+    stuck = Backpack(macro, game, monkeypatch, notches=2, start_turned=2)
+    monkeypatch.setattr(macro, "scroll_up", lambda clicks: None)                                 # (a wheel that does nothing: the panel stays down)
+    game.clicks.clear(), game.scrolls.clear(), game.log.clear()
+    game.state = "world"
+    assert macro.set_backpack_filter() is False and stuck.applied["sort"] == "default"

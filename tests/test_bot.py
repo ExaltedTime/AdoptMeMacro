@@ -393,10 +393,10 @@ def test_a_heartbeat_is_due_when_switched_on_and_the_time_has_passed():
 def test_what_the_bot_has_dealt_with_is_kept_between_starts_and_a_bad_file_means_defaults(tmp_path):
     path = str(tmp_path / "bot_state.json")
     assert bot_lib.load_state(path) == bot_lib.BotState() and bot_lib.BotState().log_offset is None
-    state = bot_lib.BotState(log_offset=1234, charts=["run1.png"], stale=True, last_heartbeat=55.5)
+    state = bot_lib.BotState(log_offset=1234, stale=True, last_heartbeat=55.5)
     bot_lib.save_state(path, state)
     assert bot_lib.load_state(path) == state and not os.path.exists(path + ".tmp")
-    (tmp_path / "bot_state.json").write_text(json.dumps({"log_offset": "x", "charts": "run1.png", "stale": 1}))
+    (tmp_path / "bot_state.json").write_text(json.dumps({"log_offset": "x", "stale": 1}))
     assert bot_lib.load_state(path) == bot_lib.BotState()
     (tmp_path / "bot_state.json").write_text("{broken")
     assert bot_lib.load_state(path) == bot_lib.BotState()

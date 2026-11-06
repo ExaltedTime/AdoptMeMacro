@@ -352,6 +352,8 @@ class State:
     white_since: Optional[float] = None
     # The input capture that is running, if any (see toggle_input_capture()). A State field only so snapshot() sees it as text.
     capture: Optional[Any] = None
+    moments: Optional[Any] = None               # the capture of the run's moments (start_moments()), None when there is none
+    moments_marked: float = 0.0                 # when mark_moment() last marked it
     # The needs named by the last "detected:" line, and how many checks since then found exactly the same with no
     # handler run in between (not yet written to the run log - see note_repeat_check()).
     last_detected_body: Optional[str] = None
@@ -537,6 +539,9 @@ def read_command_with_id() -> tuple[str, Optional[dict[str, Any]]]:
     if data["command"] == "test" and data.get("handler") not in (*DEBUG_HANDLERS, cfg.TEST_ALL_TELEPORTS):
         dropped(f"test {data.get('handler')} is not a handler the macro has")
         return stem, None
+    if data["command"] == "report" and "run" in data and (not isinstance(data["run"], int) or isinstance(data["run"], bool) or data["run"] < 1):
+        dropped("report is asked for with the number of a run, or none")
+        return stem, None
     if data["command"] == "capture" and "value" in data and not isinstance(data["value"], bool):
         dropped("capture is asked for with a true or false value, or none")
         return stem, None
@@ -619,6 +624,7 @@ def log_run_event(message: str) -> None:
                 f.write(line)
         except OSError:
             pass   # the combined log above has it
+    note_moment(message)
 
 # What the macro knows about how this run is going, written to STATUS_PATH by
 # write_status() so it can be checked without opening the GUI.
@@ -797,6 +803,7 @@ def _read_game_config() -> dict[str, Any]:
         "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
         "record_next_run": False,   # record the next run as a low quality video; cleared when that run starts
         "blackout_hotkey_enabled": True,   # whether HOTKEYS["blackout"] blanks the screen (off: that key can be typed in Roblox)
+        "keep_moments": True,              # whether the loop captures the run's moments (start_moments()), kept when the run lasted MOMENTS_MIN_RUN seconds or more
         "pet_pen_enabled": True,           # whether pet_pen() collects the Pet Pen when the Task Board says it is ready
         "pet_repicked": 0.0,               # when pet_repick() last picked the pet to level
         "pet_pen_looked": 0.0,             # when pet_pen() last opened the board
@@ -3992,12 +3999,19 @@ class InputCapture:
     included) however long it runs: when it would need more, every other saved frame is deleted (the newest stays) and
     frames are then saved twice as far apart, so what is left is spread evenly over the whole run. See docs/ARCHITECTURE.md#input-capture."""
 
-    def __init__(self, folder: str, max_zips: Optional[int] = None) -> None:
+    def __init__(self, folder: str, max_zips: Optional[int] = None, interval: Optional[float] = None, protected_max: Optional[int] = None,
+                 max_minutes: Optional[float] = None, inputs: bool = True) -> None:
+        """`interval`: seconds between looks (CAPTURE_FRAME_INTERVAL); `protected_max`: most frames mark() and protect_tail() keep from being thinned (RUN_CAPTURE_PROTECTED); `max_minutes`: when it stops
+        by itself (CAPTURE_MAX_MINUTES); `inputs` False: no keys and mouse are recorded (the run's moments, see start_moments())."""
         self.folder = folder
         self.max_zips = max_zips
+        self.interval = interval or cfg.CAPTURE_FRAME_INTERVAL
+        self.protected_max = protected_max or cfg.RUN_CAPTURE_PROTECTED
+        self.max_minutes = max_minutes or cfg.CAPTURE_MAX_MINUTES
+        self.inputs = inputs
         self.dropped = 0
         self._kept: list[tuple[str, int]] = []          # the frames on disk, oldest first, with their sizes
-        self._gap = cfg.CAPTURE_FRAME_INTERVAL if max_zips else 0.0     # least seconds between two saved frames
+        self._gap = self.interval if max_zips else 0.0     # least seconds between two saved frames
         self.protected: set[str] = set()                # frames the thinning leaves alone: saved around a mark(), or in the tail of a run that went wrong
         self._burst_until = 0.0                         # until then every look saves a frame, however far apart the thinning has put them
         self.stop_event = threading.Event()
@@ -4022,9 +4036,9 @@ class InputCapture:
         with open(os.path.join(self.folder, "info.json"), "w", encoding="utf-8") as f:
             json.dump({"started": time.strftime("%Y-%m-%d %H:%M:%S"), "screen": list(pyautogui.size()),
                        "roblox_rect": [left, top, width, height], "reference": [cfg.REFERENCE_WIDTH, cfg.REFERENCE_HEIGHT],
-                       "frame_interval": cfg.CAPTURE_FRAME_INTERVAL, "max_zips": self.max_zips}, f, indent=1)
+                       "frame_interval": self.interval, "max_zips": self.max_zips}, f, indent=1)
         self._file = open(os.path.join(self.folder, "events.jsonl"), "w", encoding="utf-8")
-        self._threads = [threading.Thread(target=self._poll, daemon=True), threading.Thread(target=self._shots, daemon=True)]
+        self._threads = [threading.Thread(target=self._shots, daemon=True)] + ([threading.Thread(target=self._poll, daemon=True)] if self.inputs else [])
         for thread in self._threads:
             thread.start()
 
@@ -4064,11 +4078,15 @@ class InputCapture:
         self._burst_until = time.time() + cfg.RUN_CAPTURE_BURST
         self.shot_now.set()
 
+    def note(self, text: str) -> None:
+        """A line of the run's log into events.jsonl (a "log" line), so that the frames and what the macro was doing are on one clock."""
+        self._emit("log", text=text)
+
     def protect_tail(self, seconds: float) -> None:
         """Keep the frames of the last `seconds` of the run from being thinned out - where a run that went wrong shows why."""
         horizon = time.time() - self.started - seconds
         for name, _ in self._kept:
-            if len(self.protected) < cfg.RUN_CAPTURE_PROTECTED and float(name[:-len(".png")].rsplit("_", 1)[1]) >= horizon:
+            if len(self.protected) < self.protected_max and float(name[:-len(".png")].rsplit("_", 1)[1]) >= horizon:
                 self.protected.add(name)
 
     def _emit(self, kind: str, **fields: Any) -> None:
@@ -4121,8 +4139,8 @@ class InputCapture:
             clicked = self.shot_now.is_set()
             self.shot_now.clear()
             try:
-                if time.time() - self.started >= cfg.CAPTURE_MAX_MINUTES * 60:
-                    self._give_up(f"{cfg.CAPTURE_MAX_MINUTES:g} minutes")
+                if time.time() - self.started >= self.max_minutes * 60:
+                    self._give_up(f"{self.max_minutes:g} minutes")
                     return
                 if shutil.disk_usage(self.folder).free < cfg.CAPTURE_MIN_FREE_MB * 1024 * 1024:
                     self._give_up("the disk is nearly full")
@@ -4130,7 +4148,7 @@ class InputCapture:
                 seconds = time.time() - self.started
                 screen = grab_screen()
                 small = cv2.resize(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY), (320, 180), interpolation=cv2.INTER_AREA)
-                bursting = time.time() < self._burst_until and len(self.protected) < cfg.RUN_CAPTURE_PROTECTED     # (around a mark(): every look)
+                bursting = time.time() < self._burst_until and len(self.protected) < self.protected_max     # (around a mark(): every look)
                 if bursting or seconds - last_saved >= self._gap and (
                         clicked or last_small is None or seconds - last_saved >= max(cfg.CAPTURE_MAX_SKIP, self._gap)
                         or np.count_nonzero(cv2.absdiff(small, last_small) > cfg.CAPTURE_CHANGE_LEVEL) / small.size >= cfg.CAPTURE_CHANGE_FRACTION):
@@ -4147,7 +4165,7 @@ class InputCapture:
                     self.skipped += 1
             except Exception as error:
                 logger.warning(f"Input capture: couldn't save a frame: {error}")
-            self.shot_now.wait(cfg.CAPTURE_FRAME_INTERVAL)
+            self.shot_now.wait(cfg.CAPTURE_FRAME_INTERVAL if time.time() < self._burst_until else self.interval)
             if self.shot_now.is_set():
                 self.stop_event.wait(0.02)      # let the click land on screen before looking
 
@@ -4249,12 +4267,62 @@ def toggle_input_capture() -> Optional[InputCapture]:
         zip_capture_in_background(current.folder)
         if was_running:
             return None            # (one that had stopped by itself is only tidied up here: this press starts a new one)
+    finish_moments()                                                                      # (the capture of the run's moments is not kept beside this one)
     make_room_for_capture(cfg.CAPTURES_DIR, cfg.MAX_CAPTURES)
     capture = InputCapture(os.path.join(cfg.CAPTURES_DIR, "capture_" + time.strftime("%Y%m%d_%H%M%S")))
     capture.start()
     state.capture = capture
     logger.info(f"Capture started (press {cfg.HOTKEYS['capture'].upper()} again to stop): {capture.folder}")
     return capture
+
+# The moments of a run: a capture of the whole run kept to MOMENTS_ZIPS zips however long it goes (InputCapture with a budget: it thins itself out, so what is left is spread over the run), with the
+# frames of failures, rejoins and disabled needs kept first (note_moment() marks them) and the last MOMENTS_TAIL seconds. A run shorter than MOMENTS_MIN_RUN leaves nothing; a longer one is zipped
+# into MOMENTS_DIR, to be sent for improving the macro. The game config's keep_moments switches it off.
+
+def start_moments() -> None:
+    """Start the capture of the run's moments (the loop starts it), unless keep_moments is off or the hotkey's capture is running (two recorders would only get in each other's way). Never raises."""
+    if not load_game_config()["keep_moments"] or (state.capture is not None and state.capture.running):
+        return
+    try:
+        make_room_for_capture(cfg.MOMENTS_DIR, cfg.MOMENTS_KEEP)
+        capture = InputCapture(os.path.join(cfg.MOMENTS_DIR, f"run{state.run_number}_{time.strftime('%Y%m%d_%H%M%S')}"), max_zips=cfg.MOMENTS_ZIPS, interval=cfg.MOMENTS_FRAME_INTERVAL,
+                               protected_max=cfg.MOMENTS_PROTECTED, max_minutes=cfg.MOMENTS_MAX_HOURS * 60, inputs=False)
+        capture.start()
+        state.moments, state.moments_marked = capture, 0.0
+    except Exception as error:
+        logger.warning(f"Couldn't start the capture of the run's moments: {error}")
+
+def note_moment(message: str) -> None:
+    """A line of the run log for the moments capture (log_run_event() calls it); one that starts as MOMENTS_MARK_PREFIXES says is also a moment to keep (at most one every MOMENTS_MARK_GAP seconds). Never raises."""
+    capture = state.moments
+    if capture is None:
+        return
+    try:
+        capture.note(message)
+        if message.startswith(cfg.MOMENTS_MARK_PREFIXES) and time.time() - state.moments_marked >= cfg.MOMENTS_MARK_GAP:
+            state.moments_marked = time.time()
+            capture.mark(message[:80])
+    except Exception as error:
+        logger.warning(f"The capture of the run's moments: {error}")
+
+def finish_moments() -> None:
+    """Stop the capture of the run's moments (the loop's end): after MOMENTS_MIN_RUN seconds or more its tail is kept and it is zipped, else it is deleted. Never raises."""
+    capture, state.moments = state.moments, None
+    if capture is None:
+        return
+    try:
+        long = time.time() - capture.started >= cfg.MOMENTS_MIN_RUN
+        if long:
+            capture.protect_tail(cfg.MOMENTS_TAIL)
+        capture.stopped_because = capture.stopped_because or "the run ended"
+        summary = capture.stop()
+        if long:
+            logger.info(f"Moments of the run: {summary}")
+            zip_capture_in_background(capture.folder)
+        else:
+            shutil.rmtree(capture.folder, ignore_errors=True)
+    except Exception as error:
+        logger.warning(f"Couldn't finish the capture of the run's moments: {error}")
 
 # ============================================================================
 # HAUNTLET 2 READER
@@ -4462,6 +4530,7 @@ def run_workflow_loop() -> None:
     state.white_since = None
     log_run_event("LOOP started")
     recorder = start_recording_if_requested()
+    start_moments()
     logger.info("=" * 50)
     logger.info(f"[LOOP] Starting continuous workflow (run {state.run_number})")
     logger.info("=" * 50)
@@ -4512,7 +4581,7 @@ def run_workflow_loop() -> None:
             recorder.stop()
         flush_idle_checks()
         log_run_event("LOOP stopped")
-        write_run_report(state.run_number)
+        finish_moments()
         logger.info("[LOOP] Stopped")
 
 # ============================================================================
@@ -4917,6 +4986,25 @@ def write_run_report(run: Union[int, str]) -> Optional[str]:
         logger.debug(f"Run report: {path}")
         keep_newest_files(cfg.RUNS_DIR, cfg.MAX_REPORTS, ".png")
     return path
+
+def newest_run_in_log() -> Optional[int]:
+    """The number of the run the last line of the run log is of (a number from the log's last 200 kB), or None."""
+    try:
+        with open(cfg.RUN_LOG_PATH, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 200_000))
+            text = f.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    runs = [m.group(2) for m in map(LINE_RE.match, text.split("\n")) if m]
+    return int(runs[-1]) if runs and runs[-1].isdigit() else None
+
+def report_from_outside(run: Optional[int]) -> str:
+    """The `report` command: draw the chart of run `run` (the newest in the log when none is named) into RUNS_DIR - the charts are not drawn when a run stops. How it ended, for the bot."""
+    run = run or newest_run_in_log()
+    if run is None:
+        return "given up: there is no run in the log"
+    return "done" if write_run_report(run) else f"given up: run {run} is not in the log"
 
 def test_need_handler(name: str, handler_cls: Optional[Callable[[], NeedHandler]] = None) -> None:
     """Run the need handler `name` on its own, outside the normal need-detection flow (the Debug tab's Test button, the `test` command), so it can be tried even
@@ -5333,6 +5421,8 @@ class AdoptMeGUI:
             self.act_from_outside(f"decline:{data['listing']}:{data['offer']}", stem)           # (the loop is stopped first and not resumed)
         elif command == "reset_config":
             finish_command(stem, self.reset_config_from_outside())
+        elif command == "report":
+            finish_command(stem, report_from_outside(data.get("run") if data else None))
         elif command == "server_link" and data:
             self.server_link_var.set(data["link"].strip())
             self.save_server_link()
@@ -5842,6 +5932,7 @@ class AdoptMeGUI:
         """Fill the Options subtab: record the next run, show the debug lines in the output or not, refresh the debug
         folder, reset the config."""
         self.add_config_checkbox(parent, "Record the next run (low quality video)", "record_next_run", load_game_config())
+        self.add_config_checkbox(parent, "Capture the moments of a run (kept when it lasts over an hour)", "keep_moments", load_game_config())
         self.add_config_checkbox(parent, "Collect the Pet Pen when the Task Board says it is ready", "pet_pen_enabled", load_game_config())
         self.add_config_checkbox(parent, "Setup levels a pet that still grows (no eggs, none full grown)", "level_growing_pet", load_game_config())
         self.add_config_checkbox(parent, f"{cfg.HOTKEYS['blackout'].upper()} blanks the screen in Roblox (off: type it)", "blackout_hotkey_enabled", load_game_config())

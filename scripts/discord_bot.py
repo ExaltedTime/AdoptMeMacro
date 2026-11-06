@@ -741,12 +741,22 @@ def build(config: bot_lib.Config) -> discord.Client:
         else:
             await say(interaction, file=discord.File(io.BytesIO(text.encode("utf-8")), "run_log_tail.txt"))
 
-    @command("report", "The newest run chart")
-    async def report(interaction: discord.Interaction) -> None:
+    @command("report", "Have the macro draw the chart of a run (the newest in its log unless you name one) and send it")
+    @app_commands.describe(run="The run's number (the newest when left out)")
+    async def report(interaction: discord.Interaction, run: int = 0) -> None:
         await interaction.response.defer(thinking=True)
-        path = bot_lib.newest_report()
+        problem, name = await submit_command("report", **({"run": run} if run > 0 else {}))
+        if problem:
+            await say(interaction, problem)
+            return
+        ended = None
+        deadline = time.time() + cfg.BOT_REPORT_WAIT
+        while ended is None and time.time() < deadline:
+            await asyncio.sleep(cfg.BOT_ACTION_POLL)
+            ended = bot_lib.take_ack(cfg.COMMANDS_DIR, name, "done")
+        path = bot_lib.newest_report() if ended == "done" else None
         if path is None:
-            await say(interaction, "There is no run chart yet - one is written when a run stops.")
+            await say(interaction, f"No chart: {ended or f'the macro has not drawn it in {cfg.BOT_REPORT_WAIT:g} s'}.")
         else:
             await say(interaction, os.path.basename(path), file=discord.File(path))
 
@@ -1220,7 +1230,7 @@ async def find_channel(client: discord.Client, channel_id: int) -> Optional[disc
             log.warning("fetching channel %s failed (%s), try %d of %d", channel_id, error, attempt + 1, cfg.BOT_CHANNEL_TRIES)
             if attempt + 1 < cfg.BOT_CHANNEL_TRIES:
                 await asyncio.sleep(cfg.BOT_CHANNEL_RETRY_WAIT * 2 ** attempt)
-    log.error("channel %s could not be fetched in %d tries - the watching (alerts, charts, heartbeat) is off; commands still work", channel_id, cfg.BOT_CHANNEL_TRIES)
+    log.error("channel %s could not be fetched in %d tries - the watching (alerts, heartbeat) is off; commands still work", channel_id, cfg.BOT_CHANNEL_TRIES)
     return None
 
 
@@ -1237,7 +1247,7 @@ async def tell_channel(client: discord.Client, config: bot_lib.Config, text: str
 
 async def watch(client: discord.Client, config: bot_lib.Config) -> None:
     """Every BOT_WATCH_INTERVAL seconds look at what the macro wrote and post what is new: failures (with their screenshot), a status that has gone
-    stale (and its recovery), run charts, a heartbeat, a macro that is gone. A failure inside a look is logged and the watching
+    stale (and its recovery), a heartbeat, a macro that is gone. A failure inside a look is logged and the watching
     goes on. What it has dealt with is kept in bot_state.json, so a restart neither posts it again nor misses what came while it was down."""
     await client.wait_until_ready()
     channel = await find_channel(client, config.channel_id)
@@ -1248,7 +1258,6 @@ async def watch(client: discord.Client, config: bot_lib.Config) -> None:
     limiter = bot_lib.RateLimiter(cfg.BOT_ALERT_GAP)
     if state.log_offset is None:                                   # the first start: what is there already is not news
         state.log_offset = bot_lib.file_end(bot_lib.run_log_path())
-        state.charts = [os.path.basename(c) for c in bot_lib.run_charts()]
         bot_lib.save_state(path, state)
     while not client.is_closed():
         try:
@@ -1282,13 +1291,6 @@ async def watch_once(channel: discord.abc.Messageable, config: bot_lib.Config, s
     stale, text = bot_lib.stale_alert(state.stale, status, datetime.now(), config.stale_status_minutes)
     if not text or await attempt("the stale-status alert", channel.send(bot_lib.clip_message(text))):
         state.stale = stale                        # (kept as it was if the alert could not be sent, so that the next look says it again)
-    charts = bot_lib.run_charts()
-    there = {os.path.basename(chart) for chart in charts}
-    state.charts = [name for name in state.charts if name in there]    # (a chart that is gone - Refresh debug - is forgotten, so that a new run with the same number is posted)
-    for chart in charts:
-        if os.path.basename(chart) not in state.charts and now - os.path.getmtime(chart) >= cfg.BOT_FILE_SETTLE:
-            if await attempt("a run chart", post(channel, f"Run chart {os.path.basename(chart)}", chart)):
-                state.charts.append(os.path.basename(chart))
     if bot_lib.crash_check_due(state.desired_state, UPDATING or LAUNCHING > 0):
         running = await asyncio.to_thread(macro_process_running)
         state.crash_reported, event = bot_lib.crash_check(state.desired_state, running, state.crash_reported)

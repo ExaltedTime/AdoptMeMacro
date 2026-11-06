@@ -184,10 +184,10 @@ for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
     Path(_directory).mkdir(exist_ok=True)
 
 COMMANDS_DIR = os.path.join(DEBUG_DIR, "commands")          # the commands for the macro, one <time>-<id>.json file each, written by the Discord bot (see read_command_with_id()); the macro removes each once read and leaves a <time>-<id>.ack saying it was taken or why not
-COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus", "blackout", "test", "reset_config", "server_link", "trades", "decline", "capture", "recenter")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, travel to / leave the Trading Hub, take pictures of the backpack's pets tab, or run Setup and then the loop (`sloop`), bring the Roblox window to the front (`focus`), blank / show the screen (`blackout`), run one need handler on its own or every teleport one (`test`, what the Debug tab's Test buttons do), reset the config (`reset_config`), save the private server link (`server_link`), take pictures of the offers on the two trade listings (`trades`), decline one of them (`decline`), or start the input capture (the capture hotkey's) and stop it again (`capture`), or close what is open and respawn (`recenter`)
+COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus", "blackout", "test", "reset_config", "server_link", "trades", "decline", "capture", "recenter", "report")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, travel to / leave the Trading Hub, take pictures of the backpack's pets tab, or run Setup and then the loop (`sloop`), bring the Roblox window to the front (`focus`), blank / show the screen (`blackout`), run one need handler on its own or every teleport one (`test`, what the Debug tab's Test buttons do), reset the config (`reset_config`), save the private server link (`server_link`), take pictures of the offers on the two trade listings (`trades`), decline one of them (`decline`), or start the input capture (the capture hotkey's) and stop it again (`capture`), or close what is open and respawn (`recenter`), or draw the chart of a run (`report`, the newest in the log or the one named)
 NEED_NAMES = ("catch", "pet", "choose", "ride", "walk", "hungry", "thirsty", "dirty", "potty", "sleepy", "bored", "beach", "school", "cafe", "salon", "pizza", "camping", "sick")   # the Debug tab's need switches (the keys of main.py's NEED_HANDLER_CLASSES)
 OPTION_SWITCHES = {"side_quest": "side_quest_enabled", "resume_on_focus_loss": "resume_on_focus_loss", "record_next_run": "record_next_run",
-                   "use_private_server": "use_private_server", "pet_pen": "pet_pen_enabled", "blackout_hotkey": "blackout_hotkey_enabled", "new_need_hotkey": "new_need_hotkey_enabled", "level_growing_pet": "level_growing_pet"}   # the other switches a command may change: name -> the game config's key ("show_debug_lines" too, which is only in the window)
+                   "use_private_server": "use_private_server", "pet_pen": "pet_pen_enabled", "blackout_hotkey": "blackout_hotkey_enabled", "new_need_hotkey": "new_need_hotkey_enabled", "level_growing_pet": "level_growing_pet", "keep_moments": "keep_moments"}   # the other switches a command may change: name -> the game config's key ("show_debug_lines" too, which is only in the window)
 SHOW_DEBUG_LINES_OPTION = "show_debug_lines"
 TEST_ALL_TELEPORTS = "teleports"                       # the `test` command's handler for the Debug tab's "Test every teleport handler" (the others are NEED_NAMES)
 COMMAND_POLL_MS = 1000                                      # how often the macro looks for one
@@ -197,6 +197,7 @@ REJOIN_STOP_POLL_MS = 500                                   # a rejoin asked for
 REJOIN_STOP_WAIT_MS = 15000                                 # and how long to wait for that before giving up
 START_LOOP_DELAY_MS = 1500                                  # after the window is up, before the --loop argument starts the loop
 BOT_COMMAND_ACK_WAIT = 30.0                                 # seconds the bot waits for the macro to take a command (it looks every COMMAND_POLL_MS) before it withdraws it and says so
+BOT_REPORT_WAIT = 60.0                                      # seconds the bot waits for the macro to draw a run chart (/report)
 BOT_COMMAND_ACK_POLL = 0.25                                 # seconds between the bot's looks for the macro's answer
 BOT_ACK_KEEP = 300                                          # seconds an answer of the macro that nobody read stays in the commands folder
 BOT_ACTION_WAIT = 3600.0                                    # seconds the bot waits for an action it asked for (Setup, a rejoin, a trip) to report that it ended, before it says it has not
@@ -218,7 +219,6 @@ BOT_CHANNEL_TRIES = 5                                       # times the bot trie
 BOT_CHANNEL_RETRY_WAIT = 2.0                                # seconds before the second try; doubled for each one after
 BOT_WATCH_INTERVAL = 10                                     # seconds between the Discord bot's looks at what the macro wrote (failures, run charts, captures, status)
 BOT_ALERT_GAP = 60                                          # seconds: at most one failure post per this long, the rest counted ("N more failures")
-BOT_FILE_SETTLE = 5                                         # seconds a run chart must be unchanged before it is posted
 BOT_CAPTURE_WAIT = 20.0                                     # seconds the bot waits, after /capture, for the macro to say whether a capture started or stopped
 BOT_RVIEW_SECONDS = 30                                     # /rview: how long the rolling view runs when it is not told
 BOT_RVIEW_MAX_SECONDS = 900                                 # the longest it can be asked to run, in seconds, and the most "until done" runs
@@ -265,9 +265,19 @@ CAPTURE_MAX_MINUTES = 15                 # a capture stops by itself after this 
 CAPTURE_MIN_FREE_MB = 3000               # ...or when less than this much disk is free
 MAX_CAPTURES = 5                         # oldest captures are deleted beyond this many
 # What the Discord bot's /pull can copy into OneDrive: the folders of debug/ (not the game config, which holds the private server link).
-PULL_SOURCES = {"failures": FAILURE_DIR, "logs": LOGS_DIR, "runs": RUNS_DIR, "captures": CAPTURES_DIR, "recordings": RECORDINGS_DIR, "screenshots": SCREENSHOTS_DIR}
+MOMENTS_DIR = os.path.join(DEBUG_DIR, "moments")     # the capture of a run's moments (see start_moments()): a folder per run
+PULL_SOURCES = {"failures": FAILURE_DIR, "logs": LOGS_DIR, "runs": RUNS_DIR, "captures": CAPTURES_DIR, "recordings": RECORDINGS_DIR, "moments": MOMENTS_DIR, "screenshots": SCREENSHOTS_DIR}
 RUN_CAPTURE_BURST = 4.0
 RUN_CAPTURE_PROTECTED = 25
+MOMENTS_MIN_RUN = 60 * 60              # seconds a run lasts for its moments to be kept (a shorter run leaves nothing)
+MOMENTS_ZIPS = 20                      # the most zips (of CAPTURE_ZIP_MB) a run's moments come to: the frames are thinned out to fit
+MOMENTS_FRAME_INTERVAL = 20.0          # seconds between two looks (a mark makes every CAPTURE_FRAME_INTERVAL look save a frame for RUN_CAPTURE_BURST seconds)
+MOMENTS_PROTECTED = 100                # the most frames that marks and the tail keep from being thinned out (the zips hold about 200)
+MOMENTS_MAX_HOURS = 48                 # a run's capture stops by itself after this long
+MOMENTS_MARK_PREFIXES = ("FAILURE", "scheduled rejoin", "white screen", "recovery complete", "disabled:", "quiet:")     # the run-log lines that are moments worth keeping frames of
+MOMENTS_MARK_GAP = 60.0                # at most one mark this often (a failure repeated every cycle is one moment)
+MOMENTS_TAIL = 90.0                    # seconds at the end of a run whose frames are kept
+MOMENTS_KEEP = 3                       # the moments of this many runs are kept (the oldest folders go)
 CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into zips of at most this size (chat attachments are limited to 30 MB)
 
 

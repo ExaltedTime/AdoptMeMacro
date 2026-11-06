@@ -1678,26 +1678,23 @@ def _setup_steps() -> bool:
     log_run_event("setup: the house is locked, the backpack is filtered to favorites and trades are set to No One")
     return True
 
-def wait_for_any(names: Sequence[str], seconds: float = cfg.SETUP_UI_WAIT) -> Optional[str]:
-    """The first of the crops `names` (POPUP_TEMPLATES) seen on screen, within `seconds`; None if none was."""
+def look_until(find: Callable[[Image], Any], seconds: float, poll: float = cfg.SETUP_POLL) -> Any:
+    """What `find` returns for a screenshot - one is taken every `poll` seconds - as soon as that is something (not None or False), else None once `seconds` have gone by (there is always at least one
+    look). The one waiting loop of the setup, the trades, the sick need and the Pet Pen."""
     deadline = time.time() + seconds
     while True:
-        img = grab_screen()
-        for name in names:
-            if popup_visible(img, name):
-                return name
-        if time.time() >= deadline:
-            return None
-        wait_interruptible(cfg.SETUP_POLL)
+        found = find(grab_screen())
+        if found or time.time() >= deadline:
+            return found or None
+        wait_interruptible(poll)
+
+def wait_for_any(names: Sequence[str], seconds: float = cfg.SETUP_UI_WAIT) -> Optional[str]:
+    """The first of the crops `names` (POPUP_TEMPLATES) seen on screen, within `seconds`; None if none was."""
+    return look_until(lambda img: next((name for name in names if popup_visible(img, name)), None), seconds)
 
 def wait_for_template(name: str, seconds: float = cfg.SETUP_UI_WAIT) -> Optional[Point]:
     """Where the crop `name` is, once it is on screen (within `seconds`); None if it did not come."""
-    deadline = time.time() + seconds
-    while True:
-        found = popup_found(grab_screen(), name)
-        if found is not None or time.time() >= deadline:
-            return found
-        wait_interruptible(cfg.SETUP_POLL)
+    return look_until(lambda img: popup_found(img, name), seconds)
 
 def lock_house() -> bool:
     """The house's lock button (top of the screen, in the house after the respawn): its Unlock label means it is locked already and nothing is clicked; its Lock label is clicked, and the
@@ -2081,24 +2078,12 @@ def trade_screen(img: Image) -> Optional[str]:
 
 def wait_trade_screen(*screens: str) -> bool:
     """Wait up to TRADES_SCREEN_WAIT seconds for one of `screens` to be up (trade_screen())."""
-    deadline = time.time() + cfg.TRADES_SCREEN_WAIT
-    while True:
-        if trade_screen(grab_screen()) in screens:
-            return True
-        if time.time() >= deadline:
-            return False
-        wait_interruptible(cfg.TRADES_POLL)
+    return bool(look_until(lambda img: trade_screen(img) in screens, cfg.TRADES_SCREEN_WAIT, cfg.TRADES_POLL))
 
 def wait_for_phone_first() -> bool:
     """Wait up to TRADES_SEARCH_MAX_WAIT seconds for the backpack's list to be the search's: the phone's picture in the first slot (POPUP_TEMPLATES["phone_icon"]; in the unfiltered list it
     is in the second, behind the badge). In a capture the list followed the typed text by about two seconds."""
-    deadline = time.time() + cfg.TRADES_SEARCH_MAX_WAIT
-    while True:
-        if popup_visible(grab_screen(), "phone_icon"):
-            return True
-        if time.time() >= deadline:
-            return False
-        wait_interruptible(cfg.TRADES_POLL)
+    return bool(look_until(lambda img: popup_visible(img, "phone_icon"), cfg.TRADES_SEARCH_MAX_WAIT, cfg.TRADES_POLL))
 
 def focus_search_box() -> bool:
     """Click the backpack's search box, empty it and type the first letter of TRADES_SEARCH_TEXT, which is only left in it if the box has the focus: its placeholder
@@ -3128,13 +3113,13 @@ class TeleportWalkNeedHandler(NeedHandler):
         if detect_pet_focus(grab_screen()):                      # (it hides the prompt)
             log_run_event(f"{self.name}: the pet view is open - backing out of it")
             dismiss_stray_windows()
-        prompt = look_until(find_doctor_prompt, cfg.SICK_PROMPT_LOOK)
+        prompt = look_until(find_doctor_prompt, cfg.SICK_PROMPT_LOOK, cfg.SICK_LOOK_INTERVAL)
         if prompt is None:
             log_run_event(f"{self.name}: the doctor's prompt is not on screen")
             return False
         logger.debug(f"Clicking the {self.name} prompt at {prompt}...")
         hover_click(*prompt)
-        if look_until(detect_sick_dialog, cfg.SICK_CONFIRM_WAIT) is None:
+        if look_until(detect_sick_dialog, cfg.SICK_CONFIRM_WAIT, cfg.SICK_LOOK_INTERVAL) is None:
             log_run_event(f"{self.name}: no dialog after the prompt was clicked")
             return False
         return True
@@ -3498,17 +3483,6 @@ def find_doctor_prompt(img: Image) -> Optional[Point]:
     """Where the hand button over the player's head is (its centre) when the player stands in front of Doctor Heart, else None."""
     return popup_found(img, "doctor_prompt")
 
-def look_until(find: Callable[[Image], Any], seconds: float) -> Any:
-    """What `find` returns for a screenshot - one is taken every SICK_LOOK_INTERVAL - as soon as that is something (not None or False),
-    else None once `seconds` have gone by (there is always at least one look)."""
-    deadline = time.time() + seconds
-    while True:
-        found = find(grab_screen())
-        if found or time.time() >= deadline:
-            return found or None
-        wait_interruptible(cfg.SICK_LOOK_INTERVAL)
-
-
 # directory -> (the files' names and modification times, {name: image}) - see load_templates().
 _TEMPLATE_CACHE: dict[str, tuple[Any, dict[str, Image]]] = {}
 _TEMPLATE_CHECKED: dict[str, float] = {}      # directory -> when its files were last looked at
@@ -3534,15 +3508,6 @@ def load_templates(directory: str) -> dict[str, Image]:
                 templates[os.path.splitext(f)[0].lower()] = crop
         cached = _TEMPLATE_CACHE[directory] = (key, templates)
     return dict(cached[1])
-
-def template_score(img: Image, crop: Image, box: Box) -> float:
-    """How well `crop` matches anywhere within `box` (left, top, right,
-    bottom) of `img`: 0-1, 1 = identical (cv2.matchTemplate)."""
-    left, top, right, bottom = box
-    band = img[top:bottom, left:right]
-    if crop.shape[0] > band.shape[0] or crop.shape[1] > band.shape[1]:
-        return 0.0
-    return float(cv2.minMaxLoc(cv2.matchTemplate(band, crop, cv2.TM_CCOEFF_NORMED))[1])
 
 def find_template(img: Image, crop: Image, box: Box) -> tuple[float, Optional[Point]]:
     """Like template_score(), but also where: (score, (x, y) of the match's
@@ -3640,22 +3605,6 @@ def dismiss_stray_windows() -> Optional[str]:
         time.sleep(cfg.STRAY_CLOSE_SETTLE)
         return name
     return None
-
-def hsv_fraction(img: Image, box: Box, ranges: Sequence[tuple[Color, Color]]) -> float:
-    """The share (0-1) of `box` of `img` whose HSV colour (OpenCV's) is within any of the (low, high) `ranges`."""
-    left, top, right, bottom = box
-    region = img[top:bottom, left:right]
-    if region.size == 0:                                      # (a frame too small to have the box)
-        return 0.0
-    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-    mask = np.zeros(hsv.shape[:2], np.uint8)
-    for low, high in ranges:
-        mask |= cv2.inRange(hsv, np.array(low, np.uint8), np.array(high, np.uint8))
-    return float(np.count_nonzero(mask)) / max(1, mask.size)
-
-
-
-
 
 def in_trading_hub(img: Image) -> bool:
     """True if the Trading Hub island is on screen: its GO HOME button's text."""
@@ -3829,15 +3778,6 @@ def task_board_badge(img: Image) -> bool:
         mask = cv2.bitwise_or(mask, cv2.inRange(hsv, *extra))
     return int(cv2.countNonZero(mask)) >= cfg.TASK_BOARD_BADGE_MIN_PIXELS
 
-def wait_for_screen(look: Callable[[Image], Any], timeout: float) -> Any:
-    """What `look` (given a screenshot) returns once it is truthy, looking every PET_PEN_POLL seconds for `timeout`; None if it never is."""
-    deadline = time.time() + timeout
-    while True:
-        found = look(grab_screen())
-        if found or time.time() >= deadline:
-            return found or None
-        wait_interruptible(cfg.PET_PEN_POLL)
-
 def collect_pet_pen() -> bool:
     """Open the Task Board and, when it has the "Pet Pen Ready" card, click it, wait out the age-up screen and click its NICE!. True once the board has been looked at (and the pets collected if they were
     ready), False when the game was not in front or the NICE! never came."""
@@ -3850,7 +3790,7 @@ def collect_pet_pen() -> bool:
             log_run_event("pet pen: the Task Board's sign was not seen")
             return False
         hover_click(*sign)
-        if not wait_for_screen(lambda img: popup_visible(img, "task_board"), cfg.PET_PEN_UI_WAIT):
+        if not look_until(lambda img: popup_visible(img, "task_board"), cfg.PET_PEN_UI_WAIT, cfg.PET_PEN_POLL):
             log_run_event("pet pen: the Task Board did not open")
             return False
         card = popup_found(grab_screen(), "pet_pen_ready")
@@ -3860,7 +3800,7 @@ def collect_pet_pen() -> bool:
         hover_click(*card)
         wait_interruptible(cfg.PET_PEN_ANIMATION_WAIT)
         for _ in range(cfg.PET_PEN_NICE_TRIES):
-            button = wait_for_screen(lambda img: find_dialog_button(img, cfg.DIALOG_BUTTONS["nice"]), cfg.PET_PEN_NICE_WAIT)
+            button = look_until(lambda img: find_dialog_button(img, cfg.DIALOG_BUTTONS["nice"]), cfg.PET_PEN_NICE_WAIT, cfg.PET_PEN_POLL)
             if button is None:
                 break
             hover_click(*button)

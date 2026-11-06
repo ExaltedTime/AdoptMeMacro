@@ -478,6 +478,33 @@ event = EventState()
 # ============================================================================
 
 
+def template_score(img: m.Image, crop: m.Image, box: m.Box) -> float:
+    """How well `crop` matches anywhere within `box` (left, top, right,
+    bottom) of `img`: 0-1, 1 = identical (cv2.matchTemplate)."""
+    left, top, right, bottom = box
+    band = img[top:bottom, left:right]
+    if crop.shape[0] > band.shape[0] or crop.shape[1] > band.shape[1]:
+        return 0.0
+    return float(cv2.minMaxLoc(cv2.matchTemplate(band, crop, cv2.TM_CCOEFF_NORMED))[1])
+
+
+def hsv_fraction(img: m.Image, box: m.Box, ranges: Sequence[tuple[tuple[int, int, int], tuple[int, int, int]]]) -> float:
+    """The share (0-1) of `box` of `img` whose HSV colour (OpenCV's) is within any of the (low, high) `ranges`."""
+    left, top, right, bottom = box
+    region = img[top:bottom, left:right]
+    if region.size == 0:                                      # (a frame too small to have the box)
+        return 0.0
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    mask = np.zeros(hsv.shape[:2], np.uint8)
+    for low, high in ranges:
+        mask |= cv2.inRange(hsv, np.array(low, np.uint8), np.array(high, np.uint8))
+    return float(np.count_nonzero(mask)) / max(1, mask.size)
+
+
+
+
+
+
 @contextlib.contextmanager
 def end_wait(need_name: Optional[str]) -> Iterator[None]:
     """Mark `need_name`'s end wait as running (event.end_wait_need), so that a minigame popup waits for it - see minigame_popup(). The macro's wait_until_need_gone() and walk_alternating()
@@ -527,7 +554,7 @@ def identify_minigame(img: Image) -> Optional[str]:
     match reaches MINIGAME_TITLE_MATCH_THRESHOLD - otherwise None."""
     best_name, best_score = None, MINIGAME_TITLE_MATCH_THRESHOLD
     for name, crop in m.load_templates(MINIGAME_TEMPLATE_DIR).items():
-        score = m.template_score(img, crop, MINIGAME_TITLE_BOX)
+        score = template_score(img, crop, MINIGAME_TITLE_BOX)
         if score >= best_score:
             best_name, best_score = name, score
     return best_name
@@ -546,11 +573,11 @@ def detect_exit_dialog(img: Image) -> Optional[str]:
     right, a grey button (still counting down: "counting") or a green one (Exit Game: "ready"); None if it is not there."""
     if not m.popup_visible(img, "exit_game"):
         return None
-    if m.hsv_fraction(img, EXIT_DIALOG_CANCEL_BOX, (EXIT_RED_HSV, EXIT_RED_HSV_HIGH)) < EXIT_DIALOG_MIN_FRACTION:
+    if hsv_fraction(img, EXIT_DIALOG_CANCEL_BOX, (EXIT_RED_HSV, EXIT_RED_HSV_HIGH)) < EXIT_DIALOG_MIN_FRACTION:
         return None
-    if m.hsv_fraction(img, EXIT_DIALOG_RIGHT_BOX, (EXIT_GREEN_HSV,)) >= EXIT_DIALOG_MIN_FRACTION:
+    if hsv_fraction(img, EXIT_DIALOG_RIGHT_BOX, (EXIT_GREEN_HSV,)) >= EXIT_DIALOG_MIN_FRACTION:
         return "ready"
-    if m.hsv_fraction(img, EXIT_DIALOG_RIGHT_BOX, (EXIT_GREY_HSV,)) >= EXIT_DIALOG_MIN_FRACTION:
+    if hsv_fraction(img, EXIT_DIALOG_RIGHT_BOX, (EXIT_GREY_HSV,)) >= EXIT_DIALOG_MIN_FRACTION:
         return "counting"
     return None
 
@@ -622,7 +649,7 @@ def minigame_overlay_visible(img: Image, name: str) -> bool:
     """True if minigame `name`'s overlay (its crop in MINIGAME_OVERLAY_DIR, within its box in MINIGAME_OVERLAYS) is on screen in `img`, at least
     MINIGAME_OVERLAY_THRESHOLD: one template match, not one per minigame, since this is asked at every look."""
     crop = m.load_templates(MINIGAME_OVERLAY_DIR).get(name)
-    return crop is not None and name in MINIGAME_OVERLAYS and m.template_score(img, crop, MINIGAME_OVERLAYS[name]) >= MINIGAME_OVERLAY_THRESHOLD
+    return crop is not None and name in MINIGAME_OVERLAYS and template_score(img, crop, MINIGAME_OVERLAYS[name]) >= MINIGAME_OVERLAY_THRESHOLD
 
 class MinigameWatch:
     """Keeps track of whether the minigame being played is on screen (its

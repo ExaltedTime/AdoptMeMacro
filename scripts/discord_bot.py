@@ -628,6 +628,22 @@ class ConfirmView(discord.ui.View):
         await self.finish(interaction, False)
 
 
+class LinkBox(discord.ui.Modal, title="Private server link"):
+    """A box for the private server link: what is typed into it is not a message of the channel (a slash command's argument is shown there, and a link is a key to the server)."""
+    link: discord.ui.TextInput = discord.ui.TextInput(label="The private server's link", max_length=300)
+
+    def __init__(self, config: bot_lib.Config, save: Callable[[discord.Interaction, str], Awaitable[None]]) -> None:
+        super().__init__()
+        self.config = config
+        self.save = save
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return bot_lib.is_allowed(self.config, interaction.user.id, interaction.channel_id or 0)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.save(interaction, str(self.link).strip())
+
+
 class OwnerOnlyTree(app_commands.CommandTree):
     """A command tree that obeys the owner in the one channel and nobody else (their commands get no answer at all)."""
 
@@ -654,7 +670,7 @@ class OwnerOnlyTree(app_commands.CommandTree):
 
 
 def build(config: bot_lib.Config) -> discord.Client:
-    client = discord.Client(intents=discord.Intents.default())
+    client = discord.Client(intents=discord.Intents.default(), allowed_mentions=discord.AllowedMentions.none())     # (nothing the bot says pings anybody, whatever a log line holds)
     tree = OwnerOnlyTree(client, config)
     client.bot_state = bot_lib.load_state(bot_lib.state_path())  # type: ignore[attr-defined]   # (what the bot has dealt with; the commands and watch() share it)
     guild = discord.Object(id=config.guild_id) if config.guild_id else None
@@ -1119,10 +1135,11 @@ def build(config: bot_lib.Config) -> discord.Client:
             return
         await ask_macro(interaction, "reset_config", "Asked the macro to reset the config.", idle_only=True, label="The reset")
 
-    @command("server_link", "Save the private server link a rejoin goes to (the channel shows what you type)")
-    @app_commands.describe(link="The private server's link")
-    async def server_link(interaction: discord.Interaction, link: str) -> None:
-        await ask_macro(interaction, "server_link", "Asked the macro to save the private server link.", label="Saving the link", link=link)
+    @command("server_link", "Save the private server link a rejoin goes to (a box opens: the channel does not show it)")
+    async def server_link(interaction: discord.Interaction) -> None:
+        async def save(box: discord.Interaction, link: str) -> None:
+            await ask_macro(box, "server_link", "Asked the macro to save the private server link.", label="Saving the link", link=link)
+        await interaction.response.send_modal(LinkBox(config, save))
 
     pull_folders = [app_commands.Choice(name=name, value=name) for name in cfg.PULL_SOURCES]
 

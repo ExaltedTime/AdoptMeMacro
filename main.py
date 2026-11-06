@@ -248,6 +248,15 @@ def grab_full_screen() -> Image:
         shot = np.array(sct.grab(sct.monitors[1]))
     return cv2.cvtColor(shot, cv2.COLOR_BGRA2BGR)
 
+def grab_roblox_native() -> Optional[Image]:
+    """The Roblox window as it is on screen (not scaled), or None when there is no window or it is minimised: a picture that is kept and sent on (a failure's) is of the game only, not of whatever
+    else is on the monitor."""
+    window = roblox_window()
+    if window is None or window.isMinimized:
+        return None
+    left, top, width, height = roblox_rect()
+    return grab_full_screen()[top:top + height, left:left + width]
+
 def grab_screen() -> Image:
     """Screenshot of the Roblox window as a BGR array scaled to the reference size, so
     every detection works on the same pixels whatever the window.
@@ -721,7 +730,9 @@ def save_failure_report(reason: str) -> Optional[str]:
         name = f"{time.strftime('%Y%m%d_%H%M%S')}_run{state.run_number}_{slug}"
         folder = os.path.join(cfg.FAILURE_DIR, name)
         os.makedirs(folder, exist_ok=True)
-        cv2.imwrite(os.path.join(folder, "screen.png"), grab_full_screen())
+        game = grab_roblox_native()                                       # (the game's window: the rest of the monitor is nobody's business, and this goes to Discord)
+        if game is not None:
+            cv2.imwrite(os.path.join(folder, "screen.png"), game)
         try:
             cv2.imwrite(os.path.join(folder, "need_icons.png"), need_icon_strip(grab_screen()))
         except Exception:
@@ -737,7 +748,7 @@ def save_failure_report(reason: str) -> Optional[str]:
         for old in sorted(os.listdir(cfg.FAILURE_DIR))[:-cfg.MAX_FAILURE_FOLDERS]:
             path = os.path.join(cfg.FAILURE_DIR, old)
             shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
-        return f"{name}/screen.png"
+        return f"{name}/screen.png" if game is not None else None
     except Exception as e:
         logger.warning(f"Couldn't save a failure report: {e}")
         return None
@@ -2503,10 +2514,10 @@ def parse_server_link(link: str) -> Optional[tuple[str, str]]:
     """Turn a private server link (share or older form) into (type, code), or None.
     See docs/ARCHITECTURE.md#side-actions.
     """
-    match = re.search(r"privateServerLinkCode=(\w{32})", link, re.I)
+    match = re.search(r"privateServerLinkCode=([0-9A-Za-z]{32})", link, re.I)
     if match:
         return "LinkCode", match.group(1)
-    match = re.search(r"share\?code=(\w{32})&type=Server", link, re.I)
+    match = re.search(r"share\?code=([0-9A-Za-z]{32})&type=Server", link, re.I)
     if match:
         return "ShareCode", match.group(1)
     return None
@@ -4409,6 +4420,7 @@ Started {started}, ran {hours:.1f} hours. For improving the macro and fixing wha
 THE MACRO: a Python program (github.com/ExaltedTime/AdoptMeMacro, main.py; docs/ARCHITECTURE.md describes it) that plays Roblox's Adopt Me by itself: it reads the need icons on the bar at the top of the
 screen (hungry, thirsty, dirty, sleepy, ...), walks the character to the place that need is done and clicks, and checks the icon went away. It rejoins the game now and then, and collects a money tree, a lure
 and the pet pen on timers. Screens are 1920x1080 (the positions in events are in that space).
+PRIVACY: the frames are of the Roblox window only, but the game shows other players' names and chat; the private server link is not in any file here.
 
 THE FRAMES (frame_<n>_<seconds>.png): lossless screenshots, <seconds> from the start of the capture. Taken every {interval:g} s, thinned out to fit {zips} zips ({frames} saved, {dropped} thinned): what is
 left is spread over the run. Frames of the moments below were saved every 0.5 s for {burst:g} s and are never thinned, and so are the last {tail:g} s of the run.

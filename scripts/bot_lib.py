@@ -296,15 +296,17 @@ def parse_failure(line: str) -> Optional[Failure]:
 
 
 def failure_screenshot_path(failure: Failure) -> Optional[str]:
-    """The screenshot file of `failure` if it is one, still there, and inside the debug folder (a line is only text: it is not trusted with a path)."""
-    if not failure.screenshot:
+    """The screenshot file of `failure` if it is one: a .png, still there, and inside the failures folder (a line is only text: it is not trusted with a path, and nothing else of debug/ - the config
+    with the private server link - is ever sent)."""
+    if not failure.screenshot or not failure.screenshot.lower().endswith(".png"):
         return None
     path = os.path.normpath(os.path.join(cfg.DEBUG_DIR, failure.screenshot))
+    folder = os.path.normpath(cfg.FAILURE_DIR)
     try:
-        inside = os.path.commonpath([path, os.path.normpath(cfg.DEBUG_DIR)]) == os.path.normpath(cfg.DEBUG_DIR)
+        inside = os.path.commonpath([path, folder]) == folder
     except ValueError:                                  # (a path on another drive: Windows has no common path with it)
         return None
-    return path if inside and os.path.isfile(path) else None
+    return path if inside and os.path.isfile(path) and not os.path.islink(path) else None
 
 
 def read_new_lines(path: str, offset: int) -> tuple[list[str], int]:

@@ -178,12 +178,21 @@ def test_a_failures_screenshot_is_only_taken_from_inside_the_debug_folder(macro_
     assert bot_lib.failure_screenshot_path(bot_lib.Failure("t", 1, "r", "../secret.txt")) is None          # a line is only text
     assert bot_lib.failure_screenshot_path(bot_lib.Failure("t", 1, "r", "failures/gone/screen.png")) is None
     assert bot_lib.failure_screenshot_path(bot_lib.Failure("t", 1, "r", None)) is None
+    config = tmp_path / "debug" / ".config"
+    config.write_text('{"private_server_link": "secret"}')
+    assert bot_lib.failure_screenshot_path(bot_lib.Failure("t", 1, "r", ".config")) is None                 # (only a .png of the failures folder: never the config)
+    other = tmp_path / "debug" / "runs" / "x.png"
+    other.parent.mkdir(parents=True)
+    other.write_bytes(b"png")
+    assert bot_lib.failure_screenshot_path(bot_lib.Failure("t", 1, "r", "runs/x.png")) is None
+    assert bot_lib.failure_screenshot_path(bot_lib.Failure("t", 1, "r", "failures/f1/screen.png.txt")) is None
 
 
 @pytest.fixture
 def macro_paths(monkeypatch, tmp_path):
     (tmp_path / "debug").mkdir()
     monkeypatch.setattr(bot_lib.cfg, "DEBUG_DIR", str(tmp_path / "debug"))
+    monkeypatch.setattr(bot_lib.cfg, "FAILURE_DIR", str(tmp_path / "debug" / "failures"))
 
 
 def test_new_lines_are_read_from_where_the_last_look_ended(tmp_path):

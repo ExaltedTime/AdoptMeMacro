@@ -1494,6 +1494,26 @@ def click_need_button(need_name: str) -> bool:
 # MOVEMENT
 # ============================================================================
 
+def wait_for_white_to_pass(static: float, look: float = cfg.WHITE_LOOK) -> bool:
+    """Wait out a transition by its white screen (a door, a respawn, a teleport: detect_white_screen()) instead of a fixed time: for it to show - within `look` seconds - and then go (WHITE_CLEAR_LOOKS looks
+    in a row that are not white, WHITE_PASS_MAX at most), then WHITE_SETTLE more; True. When none shows in `look` seconds the wait is `static` seconds in all (what it was before, so that a transition without
+    a white screen costs no more than it did); False."""
+    started = time.time()
+    seen, clear = False, 0
+    while time.time() - started < cfg.WHITE_PASS_MAX:
+        if detect_white_screen(grab_screen()):
+            seen, clear = True, 0
+        elif seen:
+            clear += 1
+            if clear >= cfg.WHITE_CLEAR_LOOKS:
+                wait_interruptible(cfg.WHITE_SETTLE)
+                return True
+        elif time.time() - started >= look:
+            wait_interruptible(max(0.0, static - (time.time() - started)))
+            return False
+        wait_interruptible(cfg.WHITE_POLL)
+    return seen
+
 def respawn_character() -> None:
     """Respawn the character (ESC, R, ENTER), make sure the respawn dialog
     isn't left open (dismiss_stray_windows()), and wait for it to settle."""
@@ -1514,7 +1534,7 @@ def respawn_character() -> None:
     for _ in range(2):
         if dismiss_stray_windows() != "respawn_confirm":
             break
-    wait_interruptible(cfg.RESPAWN_WAIT)
+    wait_for_white_to_pass(cfg.RESPAWN_WAIT)                                                 # (the respawn's white screen and its fade, or the old fixed wait when none shows)
     logger.debug("Respawn complete")
 
 def close_open_windows() -> int:
@@ -3134,7 +3154,7 @@ def teleport_to(category_pos: Point) -> None:
             logger.debug(f"The teleport did not take after click {attempt + 1}")
         else:
             log_run_event("teleport: nothing happened after the dialog's Yes")
-    wait_interruptible(cfg.TELEPORT_WAIT)
+    wait_for_white_to_pass(cfg.TELEPORT_WAIT)                                                # (the teleport's white screen to fade, not a fixed time)
     logger.debug("Walking backward...")
     hold_key(cfg.KEYS["back"], cfg.TELEPORT_BACK_DURATION)
     wait_interruptible(cfg.TELEPORT_SETTLE_WAIT)
@@ -3996,6 +4016,8 @@ def open_pet_pen() -> bool:
             hold_key(cfg.KEYS[what], amount)
         elif kind == "press":
             pydirectinput.press(cfg.KEYS[what])
+        elif kind == "door":
+            wait_for_white_to_pass(amount, cfg.WHITE_LOOK + 1.0)                                      # (the door's white screen to fade: the yard has loaded then)
         else:
             wait_interruptible(amount)
     return look_until(lambda img: popup_visible(img, "pet_pen_title"), cfg.PET_PEN_OPEN_WAIT, cfg.PET_PEN_POLL) is not None

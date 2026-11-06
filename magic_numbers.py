@@ -666,7 +666,8 @@ PET_PEN_POLL = 0.5                        # seconds between looks while waiting 
 PET_PEN_ANIMATION_WAIT = 8.0              # seconds from the card's click to the age-up animation being over (the capture clicked NICE! 8 s after)
 PET_PEN_NICE_WAIT = 15.0                  # seconds to see the NICE! button in
 PET_PEN_NICE_TRIES = 3                    # clicks on it while it is still there
-PET_PEN_ROUTE = (("hold", "back", 0.7), ("press", "interact", 0), ("wait", "exit", 5.0), ("hold", "left", 2.23), ("hold", "back", 0.3), ("hold", "left", 0.18), ("press", "interact", 0))      # from the respawn in the house to the pen: out of the house (E at the door, the yard loads), then along the fence to the pen; the second E opens it (the capture of a person doing it)
+# (a ("door", name, seconds) step waits for the white screen of the door to come and go, and the seconds if none showed)
+PET_PEN_ROUTE = (("hold", "back", 0.7), ("press", "interact", 0), ("door", "exit", 5.0), ("hold", "left", 2.23), ("hold", "back", 0.3), ("hold", "left", 0.18), ("press", "interact", 0))      # from the respawn in the house to the pen: out of the house (E at the door, the yard loads), then along the fence to the pen; the second E opens it (the capture of a person doing it)
 PET_PEN_OPEN_WAIT = 4.0                   # seconds for the pen's screen to come up after that E
 PET_PEN_SLOTS = ((855, 415), (1045, 415), (855, 580), (1045, 580))      # the middles of the pen's four places (two above, two below)
 PET_PEN_SLOT_HALF = (95, 80)              # half the width and height of the box a place is looked at in
@@ -763,6 +764,12 @@ DISCONNECT_PANEL_MIN_FRACTION = 0.5
 WHITE_SCREEN_LEVEL = 250
 WHITE_SCREEN_MIN_FRACTION = 0.6
 WHITE_SCREEN_REJOIN_AFTER = 30.0
+# A door, a respawn and a teleport each show the white screen and fade out of it: wait_for_white_to_pass() waits for that, not for a fixed time.
+WHITE_POLL = 0.2                  # seconds between looks while the white screen is waited for
+WHITE_LOOK = 2.0                  # seconds the white screen is waited to show at all before the transition is taken as not having one (and the old fixed wait is used)
+WHITE_PASS_MAX = 15.0             # seconds at most, from the start, for it to go
+WHITE_CLEAR_LOOKS = 2             # looks in a row that are not white for it to be gone
+WHITE_SETTLE = 0.5                # seconds after it has gone, for the world to be usable
 ROBLOX_CRASH_WINDOW_TITLE = "Roblox Crash"
 
 # Optional: resume after Roblox loses focus instead of stopping (the "Resume after focus loss" checkbox).

@@ -64,6 +64,9 @@ def macro(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "hover_click", lambda x, y, duration=0: clicks.append((x, y)))
     monkeypatch.setattr(main, "clicks", clicks, raising=False)
     yield main
+    for handler in [h for h in main.logger.handlers if isinstance(h, main.MomentsLog)]:       # (a test that left the capture of the moments running)
+        main.logger.removeHandler(handler)
+        handler.close()
     main.STOP_EVENT.clear()
     main.close_output_log()
     main._NEED_STRIP_CACHE.update(strip=None, found=[], reuses=0)

@@ -353,6 +353,7 @@ class State:
     # The input capture that is running, if any (see toggle_input_capture()). A State field only so snapshot() sees it as text.
     capture: Optional[Any] = None
     moments: Optional[Any] = None               # the capture of the run's moments (start_moments()), None when there is none
+    moments_log: Optional[Any] = None           # its MomentsLog
     moments_marked: float = 0.0                 # when mark_moment() last marked it
     # The needs named by the last "detected:" line, and how many checks since then found exactly the same with no
     # handler run in between (not yet written to the run log - see note_repeat_check()).
@@ -386,6 +387,8 @@ class State:
     # True while a handler that wants the pet focused runs (see wanting_pet_focus()).
     pet_focus_wanted: bool = False
     task_board_wanted: bool = False
+    activity: str = ""                     # what the macro is doing now (task_unscrew(what=...)): a need handler, a side action, setup; "" between them
+    moments_notes: list = field(default_factory=list)       # (seconds into the run, the log line) of the moments start_moments() marked
     typing: bool = False                   # type_keys() is typing into a text box: the hotkeys (a letter each) are not acted on meanwhile
     # How many "quiet:" lines have been logged for the current stretch with no need resolved.
     quiet_reported: int = 0
@@ -1188,18 +1191,19 @@ def hover_click(x: float, y: float, duration: float = cfg.CLICK_MOVE_DURATION) -
 # unscrew() itself.
 
 @contextlib.contextmanager
-def task_unscrew(interruptible: bool = True) -> Iterator[None]:
+def task_unscrew(interruptible: bool = True, what: str = "") -> Iterator[None]:
     """Within this block wait_interruptible() runs unscrew(in_task=True) every
-    UNSCREW_TASK_INTERVAL; `interruptible` False (setup) only declines minigames.
+    UNSCREW_TASK_INTERVAL; `interruptible` False (setup) only declines minigames; `what` is noted as state.activity meanwhile (the moments capture says it with every frame).
     See docs/ARCHITECTURE.md#need-handlers.
     """
-    previous = (state.task_active, state.task_interruptible, state.task_thread)
+    previous = (state.task_active, state.task_interruptible, state.task_thread, state.activity)
     state.task_active, state.task_interruptible, state.task_thread = True, interruptible, threading.get_ident()
+    state.activity = what or state.activity
     state.last_task_unscrew = time.time()
     try:
         yield
     finally:
-        state.task_active, state.task_interruptible, state.task_thread = previous
+        state.task_active, state.task_interruptible, state.task_thread, state.activity = previous
 
 def task_unscrew_tick() -> None:
     """The hook in wait_interruptible(): run the in-task checks if one is due.
@@ -1652,7 +1656,7 @@ def setup_game() -> bool:
     """Lock the house, filter the backpack to favorites and disable trades. Run on demand
     and after a rejoin, not in the cycle. See docs/ARCHITECTURE.md#side-actions.
     """
-    with task_unscrew(interruptible=False):
+    with task_unscrew(interruptible=False, what="setup"):
         return _setup_steps()
 
 def leave_hub_and_setup() -> bool:
@@ -3240,7 +3244,7 @@ def process_needs() -> bool:
             state.need_cleared = True
             started = time.time()
             try:
-                with task_unscrew():
+                with task_unscrew(what=f"need handler: {need_name}"):
                     handled = handler.handle()
             except TaskInterrupted as interruption:
                 # A minigame or a rejoin took over (both respawn): not
@@ -3466,7 +3470,12 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
         run_stats.recoveries += 1
         if kind == "disconnect":
             run_stats.disconnects += 1
-    if not leave_and_rejoin(clean_leave=(kind != "disconnect")):
+    previous_activity, state.activity = state.activity, f"rejoin ({kind})"
+    try:
+        rejoined = leave_and_rejoin(clean_leave=(kind != "disconnect"))
+    finally:
+        state.activity = previous_activity
+    if not rejoined:
         log_failure("recovery: rejoin failed, will try again next cycle")
         return False
     try:
@@ -3717,7 +3726,7 @@ def run_side_action(action: Callable[[], bool]) -> bool:
     rejoin took over. See docs/ARCHITECTURE.md#side-actions.
     """
     try:
-        with task_unscrew():
+        with task_unscrew(what=f"side action: {action.__name__}"):
             return action()
     except TaskInterrupted as interruption:
         logger.debug(f"{action.__name__} interrupted by {interruption.reason}")
@@ -4000,15 +4009,18 @@ class InputCapture:
     frames are then saved twice as far apart, so what is left is spread evenly over the whole run. See docs/ARCHITECTURE.md#input-capture."""
 
     def __init__(self, folder: str, max_zips: Optional[int] = None, interval: Optional[float] = None, protected_max: Optional[int] = None,
-                 max_minutes: Optional[float] = None, inputs: bool = True) -> None:
+                 max_minutes: Optional[float] = None, inputs: bool = True, context: Optional[Callable[[], dict[str, Any]]] = None, reserve_bytes: int = 0) -> None:
         """`interval`: seconds between looks (CAPTURE_FRAME_INTERVAL); `protected_max`: most frames mark() and protect_tail() keep from being thinned (RUN_CAPTURE_PROTECTED); `max_minutes`: when it stops
-        by itself (CAPTURE_MAX_MINUTES); `inputs` False: no keys and mouse are recorded (the run's moments, see start_moments())."""
+        by itself (CAPTURE_MAX_MINUTES); `inputs` False: no keys and mouse are recorded (the run's moments, see start_moments()); `context`: called for every frame saved, its dict goes into the frame's line of
+        events.jsonl (what the macro was doing); `reserve_bytes`: room in the first zip for files that are added to the folder when it ends."""
         self.folder = folder
         self.max_zips = max_zips
         self.interval = interval or cfg.CAPTURE_FRAME_INTERVAL
         self.protected_max = protected_max or cfg.RUN_CAPTURE_PROTECTED
         self.max_minutes = max_minutes or cfg.CAPTURE_MAX_MINUTES
         self.inputs = inputs
+        self.context = context
+        self.reserve_bytes = reserve_bytes
         self.dropped = 0
         self._kept: list[tuple[str, int]] = []          # the frames on disk, oldest first, with their sizes
         self._gap = self.interval if max_zips else 0.0     # least seconds between two saved frames
@@ -4089,6 +4101,12 @@ class InputCapture:
             if len(self.protected) < self.protected_max and float(name[:-len(".png")].rsplit("_", 1)[1]) >= horizon:
                 self.protected.add(name)
 
+    def _context(self) -> dict[str, Any]:
+        try:
+            return self.context() if self.context is not None else {}
+        except Exception:
+            return {}
+
     def _emit(self, kind: str, **fields: Any) -> None:
         line = json.dumps({"t": round(time.time() - self.started, 3), "type": kind, **fields})
         with self._lock:
@@ -4155,7 +4173,7 @@ class InputCapture:
                     name = f"frame_{self.frames + 1:06d}_{seconds:.3f}.png"
                     if cv2.imwrite(os.path.join(self.folder, name), screen, [cv2.IMWRITE_PNG_COMPRESSION, 1]):
                         self.frames += 1
-                        self._emit("frame", file=name)
+                        self._emit("frame", file=name, **self._context())
                         last_small, last_saved = small, seconds
                         self._kept.append((name, os.path.getsize(os.path.join(self.folder, name))))
                         if bursting:
@@ -4174,7 +4192,7 @@ class InputCapture:
         far apart from now on - until the zips needed are few enough."""
         events = os.path.join(self.folder, "events.jsonl")
         while self.max_zips and len(self._kept) > 1 and len(plan_zip_parts(
-                [size for _, size in self._kept], os.path.getsize(events) if os.path.exists(events) else 0)) > self.max_zips:
+                [size for _, size in self._kept], (os.path.getsize(events) if os.path.exists(events) else 0) + self.reserve_bytes)) > self.max_zips:
             keep = [frame for i, frame in enumerate(self._kept) if i % 2 == 0 or i == len(self._kept) - 1 or frame[0] in self.protected]
             if len(keep) == len(self._kept):            # nothing went: the oldest frame that isn't protected (or the newest) goes
                 loose = [frame for frame in self._kept[:-1] if frame[0] not in self.protected]
@@ -4213,24 +4231,27 @@ def plan_zip_parts(frame_sizes: list[int], head: int = 0) -> list[list[int]]:
 
 def zip_capture(folder: str) -> list[str]:
     """Split a capture's files into zips of at most CAPTURE_ZIP_MB each, in <folder>/zips/ as
-    <name>_part01.zip, _part02.zip, ... (stored, not compressed: PNGs don't shrink). The first part also holds
+    <name>_part01.zip, _part02.zip, ... (the PNGs stored, not compressed: they don't shrink; the text files deflated). The first part also holds
     events.jsonl and info.json, which are small; the frames go in time order, none twice. Returns the zip paths."""
     out = os.path.join(folder, "zips")
     building = out + ".partial"                                                                  # (the zips are only in zips/ once all are made: /pull and OneDrive must not take half of them)
     shutil.rmtree(building, ignore_errors=True)
     os.makedirs(building)
     frames = sorted(f for f in os.listdir(folder) if f.startswith("frame_") and f.endswith(".png"))
-    head = sum(os.path.getsize(os.path.join(folder, f)) for f in ("info.json", "events.jsonl") if os.path.exists(os.path.join(folder, f)))
+    first = ["README.txt", "info.json", "events.jsonl"]                                           # (what a reader opens first)
+    heads = [f for f in first if os.path.exists(os.path.join(folder, f))] + sorted(
+        f for f in os.listdir(folder) if f not in first and not f.startswith("frame_") and os.path.isfile(os.path.join(folder, f)))
+    head = sum(os.path.getsize(os.path.join(folder, f)) for f in heads)
     plan = plan_zip_parts([os.path.getsize(os.path.join(folder, name)) for name in frames], head)
     parts = [[frames[i] for i in positions] for positions in plan]
-    parts[0] = ["info.json", "events.jsonl"] + parts[0]
+    parts[0] = heads + parts[0]
     paths = []
     for number, names in enumerate(parts, 1):
         path = os.path.join(out, f"{os.path.basename(folder)}_part{number:02d}.zip")
         with zipfile.ZipFile(os.path.join(building, os.path.basename(path)), "w", zipfile.ZIP_STORED) as z:
             for name in names:
                 if os.path.exists(os.path.join(folder, name)):
-                    z.write(os.path.join(folder, name), name)
+                    z.write(os.path.join(folder, name), name, compress_type=zipfile.ZIP_STORED if name.endswith(".png") else zipfile.ZIP_DEFLATED)
         paths.append(path)
     shutil.rmtree(out, ignore_errors=True)                                                       # (the zips of an earlier stop of the same folder)
     os.replace(building, out)
@@ -4279,16 +4300,39 @@ def toggle_input_capture() -> Optional[InputCapture]:
 # frames of failures, rejoins and disabled needs kept first (note_moment() marks them) and the last MOMENTS_TAIL seconds. A run shorter than MOMENTS_MIN_RUN leaves nothing; a longer one is zipped
 # into MOMENTS_DIR, to be sent for improving the macro. The game config's keep_moments switches it off.
 
+class MomentsLog(logging.Handler):
+    """Every line the macro prints or logs (the debug ones too), into output.log of the run's moments capture: two files of at most MOMENTS_LOG_MB / 2 each, so that the end of a long run is there."""
+    def __init__(self, folder: str) -> None:
+        super().__init__(logging.DEBUG)
+        self.files = logging.handlers.RotatingFileHandler(os.path.join(folder, "output.log"), maxBytes=int(cfg.MOMENTS_LOG_MB * 1024 * 1024 / 2), backupCount=1, encoding="utf-8")
+        self.files.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.files.emit(record)
+
+    def close(self) -> None:
+        self.files.close()
+        super().close()
+
+def moments_context() -> dict[str, Any]:
+    """What the macro is doing, for every frame of the moments capture: its activity, the needs it last saw and how the run is going."""
+    return {"activity": state.activity or "waiting for needs", "detected": list(run_stats.last_detected), "cycles": run_stats.cycles, "resolved": sum(run_stats.resolved.values()),
+            "failures": run_stats.failures, "disabled": sorted(state.disabled_needs), "task": state.task_active}
+
 def start_moments() -> None:
     """Start the capture of the run's moments (the loop starts it), unless keep_moments is off or the hotkey's capture is running (two recorders would only get in each other's way). Never raises."""
+    finish_moments()                                                   # (one left over from a loop that did not end properly)
     if not load_game_config()["keep_moments"] or (state.capture is not None and state.capture.running):
         return
     try:
         make_room_for_capture(cfg.MOMENTS_DIR, cfg.MOMENTS_KEEP)
         capture = InputCapture(os.path.join(cfg.MOMENTS_DIR, f"run{state.run_number}_{time.strftime('%Y%m%d_%H%M%S')}"), max_zips=cfg.MOMENTS_ZIPS, interval=cfg.MOMENTS_FRAME_INTERVAL,
-                               protected_max=cfg.MOMENTS_PROTECTED, max_minutes=cfg.MOMENTS_MAX_HOURS * 60, inputs=False)
+                               protected_max=cfg.MOMENTS_PROTECTED, max_minutes=cfg.MOMENTS_MAX_HOURS * 60, inputs=False, context=moments_context,
+                               reserve_bytes=int(cfg.MOMENTS_RESERVE_MB * 1024 * 1024))
         capture.start()
-        state.moments, state.moments_marked = capture, 0.0
+        state.moments, state.moments_marked, state.moments_notes = capture, 0.0, []
+        state.moments_log = MomentsLog(capture.folder)
+        logger.addHandler(state.moments_log)
     except Exception as error:
         logger.warning(f"Couldn't start the capture of the run's moments: {error}")
 
@@ -4301,22 +4345,110 @@ def note_moment(message: str) -> None:
         capture.note(message)
         if message.startswith(cfg.MOMENTS_MARK_PREFIXES) and time.time() - state.moments_marked >= cfg.MOMENTS_MARK_GAP:
             state.moments_marked = time.time()
+            state.moments_notes.append((round(time.time() - capture.started), message[:200]))
             capture.mark(message[:80])
     except Exception as error:
         logger.warning(f"The capture of the run's moments: {error}")
 
+def macro_version() -> str:
+    """The commit the macro is at (git's short hash, and whether files are changed), or "unknown"."""
+    try:
+        run = lambda *args: subprocess.run(["git", *args], cwd=cfg.SCRIPT_DIR, capture_output=True, text=True, timeout=10).stdout.strip()
+        return f"{run('rev-parse', '--short', 'HEAD')}{' (with changes)' if run('status', '--porcelain', '--untracked-files=no') else ''}"
+    except Exception:
+        return "unknown"
+
+def copy_tail(source: str, target: str, limit: int) -> None:
+    """The last `limit` bytes of the text file `source` into `target` (all of it when it is shorter); nothing if there is no source."""
+    try:
+        with open(source, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - limit))
+            data = f.read()
+        with open(target, "wb") as f:
+            f.write(data)
+    except OSError:
+        pass
+
+def write_moments_files(capture: InputCapture, seconds: float) -> None:
+    """The files of a kept run's moments besides the frames: README.txt (what everything is and what the macro is, for a reader with nothing else), the run's own log (run_log.txt), status.json,
+    config.json (the game config but for the private server link), failures.txt (what was saved for the run's failures), the commit in info.json. Never raises."""
+    folder = capture.folder
+    try:
+        run = state.run_number
+        copy_tail(os.path.join(cfg.RUNS_DIR, f"run{run}.txt"), os.path.join(folder, "run_log.txt"), int(cfg.MOMENTS_RUN_LOG_MB * 1024 * 1024))
+        copy_tail(cfg.STATUS_PATH, os.path.join(folder, "status.json"), 1024 * 1024)
+        config = {key: value for key, value in load_game_config().items() if key != "private_server_link"}
+        with open(os.path.join(folder, "config.json"), "w", encoding="utf-8") as f:
+            json.dump({"game_config": config, "enabled_needs": sorted(cfg.ENABLED_NEEDS), "disabled_this_run": sorted(state.disabled_needs), "run_stats": asdict(run_stats)}, f, indent=1, default=str)
+        failures = []
+        if os.path.isdir(cfg.FAILURE_DIR):
+            for name in sorted(os.listdir(cfg.FAILURE_DIR)):
+                if f"_run{run}_" in name and os.path.isfile(os.path.join(cfg.FAILURE_DIR, name, "info.txt")):
+                    with open(os.path.join(cfg.FAILURE_DIR, name, "info.txt"), encoding="utf-8", errors="replace") as f:
+                        failures.append(f"--- {name} (its screen.png, need_icons.png and state.json are in debug/failures/)\n{f.read()}")
+        with open(os.path.join(folder, "failures.txt"), "w", encoding="utf-8") as f:
+            f.write("\n".join(failures) or "no failure folders were saved for this run\n")
+        version = macro_version()
+        info_path = os.path.join(folder, "info.json")
+        with open(info_path, encoding="utf-8") as f:
+            info = json.load(f)
+        info.update(run=run, macro_version=version, run_seconds=round(seconds), moments=[{"seconds": t, "what": what} for t, what in state.moments_notes])
+        with open(info_path, "w", encoding="utf-8") as f:
+            json.dump(info, f, indent=1)
+        marks = "\n".join(f"  {t // 3600}:{t % 3600 // 60:02d}:{t % 60:02d}  {what}" for t, what in state.moments_notes) or "  (none: nothing went wrong enough to mark)"
+        with open(os.path.join(folder, "README.txt"), "w", encoding="utf-8") as f:
+            f.write(MOMENTS_README.format(run=run, version=version, hours=seconds / 3600, started=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(capture.started)), frames=capture.frames,
+                                          dropped=capture.dropped, zips=cfg.MOMENTS_ZIPS, marks=marks, tail=cfg.MOMENTS_TAIL, interval=cfg.MOMENTS_FRAME_INTERVAL, burst=cfg.RUN_CAPTURE_BURST))
+    except Exception as error:
+        logger.warning(f"Couldn't write the files of the run's moments: {error}")
+
+MOMENTS_README = """MOMENTS OF RUN {run} - Adopt Me macro, commit {version}
+Started {started}, ran {hours:.1f} hours. For improving the macro and fixing what failed; this folder is all that is needed.
+
+THE MACRO: a Python program (github.com/ExaltedTime/AdoptMeMacro, main.py; docs/ARCHITECTURE.md describes it) that plays Roblox's Adopt Me by itself: it reads the need icons on the bar at the top of the
+screen (hungry, thirsty, dirty, sleepy, ...), walks the character to the place that need is done and clicks, and checks the icon went away. It rejoins the game now and then, and collects a money tree, a lure
+and the pet pen on timers. Screens are 1920x1080 (the positions in events are in that space).
+
+THE FRAMES (frame_<n>_<seconds>.png): lossless screenshots, <seconds> from the start of the capture. Taken every {interval:g} s, thinned out to fit {zips} zips ({frames} saved, {dropped} thinned): what is
+left is spread over the run. Frames of the moments below were saved every 0.5 s for {burst:g} s and are never thinned, and so are the last {tail:g} s of the run.
+
+THE FILES:
+  events.jsonl   one JSON line per event, "t" = seconds from the start (the frames' clock):
+                 type "frame": a frame saved, with "activity" (what the macro was doing: a need handler, a side action, setup, a rejoin, or waiting for needs), "detected" (the needs it last saw on the
+                 bar), "cycles", "resolved" (needs resolved so far), "failures", "disabled" (needs switched off as stuck), "task" (a handler running);
+                 type "log": a line of the run log (what happened: needs detected and resolved, failures, rejoins, popups closed); type "mark": a moment kept (see below); "frame_dropped": thinned out.
+  output.log     everything the macro printed, debug lines too (the last part of the run when it was long), with times.
+  run_log.txt    the run's own log (the same lines as the "log" events, with their wall-clock times).
+  failures.txt   what the macro saved for each failure (reason, time, what was detected, disabled needs); their screenshots are in the macro's debug/failures folder and are not here.
+  status.json    the macro's status when the run ended. config.json: its settings (the private server link is left out), the enabled needs and the counts of the run.
+  info.json      the capture's facts, the commit, and the moments.
+
+THE MOMENTS KEPT (time into the capture, what was logged): a failure, a rejoin, a white screen, a recovery, a need disabled as stuck, or a quiet period (no need resolved for a while), at most one a minute:
+{marks}
+
+To read it: find a moment's time, open the frames around it (names carry the seconds), read events.jsonl and output.log around the same time, and compare what the macro logged with what the frames show.
+"""
+
 def finish_moments() -> None:
-    """Stop the capture of the run's moments (the loop's end): after MOMENTS_MIN_RUN seconds or more its tail is kept and it is zipped, else it is deleted. Never raises."""
+    """Stop the capture of the run's moments (the loop's end): after MOMENTS_MIN_RUN seconds or more its tail is kept, its files are written (write_moments_files()) and it is zipped, else it is deleted.
+    Never raises."""
     capture, state.moments = state.moments, None
     if capture is None:
         return
     try:
-        long = time.time() - capture.started >= cfg.MOMENTS_MIN_RUN
+        if state.moments_log is not None:
+            logger.removeHandler(state.moments_log)
+            state.moments_log.close()
+            state.moments_log = None
+        seconds = time.time() - capture.started
+        long = seconds >= cfg.MOMENTS_MIN_RUN
         if long:
             capture.protect_tail(cfg.MOMENTS_TAIL)
         capture.stopped_because = capture.stopped_because or "the run ended"
         summary = capture.stop()
         if long:
+            write_moments_files(capture, seconds)
             logger.info(f"Moments of the run: {summary}")
             zip_capture_in_background(capture.folder)
         else:

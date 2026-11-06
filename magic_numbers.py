@@ -277,6 +277,9 @@ MOMENTS_MAX_HOURS = 48                 # a run's capture stops by itself after t
 MOMENTS_MARK_PREFIXES = ("FAILURE", "scheduled rejoin", "white screen", "recovery complete", "disabled:", "quiet:")     # the run-log lines that are moments worth keeping frames of
 MOMENTS_MARK_GAP = 60.0                # at most one mark this often (a failure repeated every cycle is one moment)
 MOMENTS_TAIL = 90.0                    # seconds at the end of a run whose frames are kept
+MOMENTS_LOG_MB = 8                     # the most of the macro's output kept with a run's moments (the last part of it)
+MOMENTS_RUN_LOG_MB = 2                 # the most of the run's own log kept (its last part)
+MOMENTS_RESERVE_MB = 12                # room left in the first zip for those files (they are deflated, so they take less)
 MOMENTS_KEEP = 3                       # the moments of this many runs are kept (the oldest folders go)
 CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into zips of at most this size (chat attachments are limited to 30 MB)
 

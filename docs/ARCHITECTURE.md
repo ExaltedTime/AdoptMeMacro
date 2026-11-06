@@ -1271,7 +1271,7 @@ macro's files and grabs its screen; it connects out to Discord, so no port needs
 the commands. It is started by hand, next to the macro: `python scripts/discord_bot.py [path to bot_config.json]` (the old `bot/discord_bot.py` is a stub that runs it, so that a bot started with the old command - and the restart `/update` makes - still comes up; delete it once the new command is used).
 
 - **`scripts/bot_lib.py`** holds every decision that needs neither Discord nor Windows, as plain functions (`tests/test_bot.py` runs them anywhere, in CI too):
-  `load_config()` (a `ConfigError` saying what is wrong), `is_allowed()`, `status_text()`, `results_text()`, `tail_lines()`, `newest_report()`, `looks_blank()`,
+  `load_config()` (a `ConfigError` saying what is wrong), `is_allowed()`, `status_text()`, `tail_lines()`, `newest_report()`, `looks_blank()`,
   `main_py_in()`. The paths it reads are the macro's own (`STATUS_PATH`, `RUN_LOG_PATH`, `RUNS_DIR` of `magic_numbers.py`), so a moved file moves for both.
 - **`scripts/discord_bot.py`** is the glue that can't be tested away from Discord (discord.py, the screen grab, the process check): the commands below, registered
   for the one guild if `guild_id` is set (instant) or globally (up to an hour to show).
@@ -1405,6 +1405,9 @@ clicks instead of making them. They cover:
 - `test_loop.py` - the whole workflow loop run for a moment with the game stubbed out (idle respawns, the resource monitor starting and stopping, the report being written);
 - `test_capture.py` - the input capture against a made-up keyboard, mouse and screen (events, both coordinate systems, click frames, skipping unchanged frames, the summary, the zips, stopping by itself, the hotkey toggle and pruning, the frame budget, its thinning, the zip);
 - `test_need_handlers.py` - the catch, pet and ride needs as the game sees them (the order of keys, clicks and waits, with everything that touches the game recorded), that every constant and key their step tables name exists, and the inventory tour (its pictures, the end of the list, the limit, a backpack that does not open, a stop; the marker every time);
+- `test_moments.py` - the capture of a run's moments (what it keeps, marks and writes, the zips' text files) and the `report` command;
+- `test_setup.py` - Setup's steps against fakes of the backpack and the real crops of its screens;
+- `test_trades.py` - the trade phone, the offer lists, `/trades` and `/decline`, and recentering;
 - `test_pet_pen.py` - the Task Board's badge, the Pet Pen card and the NICE! button on real frames, and collecting the pen;
 - `test_features.py` - the daily money reset, the run-every-need sequence, and the like;
 - `test_config.py` - the real need tables in `magic_numbers.py`, without pinning any value: every entry is well formed (known keys, on-screen positions, movement keys, a `final_click` is on screen), has a handler, and the handler carries out exactly what the entry says (run over every need in the tables). The handler tests elsewhere use made-up entries; this is what keeps the real ones honest;

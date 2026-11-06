@@ -544,22 +544,21 @@ TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
 SICK_FINAL_CLICK_POS = (1045, 660)       # click after the sick need's walk
 
 # Whether a teleport-walk need flies by helicopter by default; an entry can
-# override it with `helicopter=True/False`. Only the Halloween bored, beach
-# and camping entries turn it on.
+# override it with `helicopter=True/False`. No entry turns it on now (the event's did: scripts/Halloween2026.py).
 HELICOPTER_REQUIRED = False
 HELICOPTER_FORWARD_DURATION = 1.0  # step forward this long after teleporting, before equipping
 HELICOPTER_HOLD_DURATION = 4.5     # then hold KEYS["helicopter"] this long (it was 0.5 s less, and the helicopter could be caught on a tree)
 
 # Every key the macro presses, by what it is for (code says cfg.KEYS["forward"], not "w"): the game's own bindings, then the macro's hotkeys.
 KEYS = {
-    "forward": "w", "left": "a", "back": "s", "right": "d",   # walking (every minigame walks with them; Stitches' Spotlight holds "right" all round the ring)
+    "forward": "w", "left": "a", "back": "s", "right": "d",   # walking
     "jump": "space",
     "backpack": "b",
     "mount": "e",                  # mounting a vehicle...
     "interact": "e",               # ...and collecting/harvesting (lure_collect(), tree_collect()): the same physical key, named for each use
     "speed_boost": "e",            # Stitches' Spotlight's speed boost ("Press E for a Speed Boost!"), pressed every STITCHES_BOOST_INTERVAL
     "zoom_in": "i",
-    "zoom_out": "o",               # zooms the camera out while held (the minigames hold it to see the whole room)
+    "zoom_out": "o",               # zooms the camera out while held (the event's players used it to see the whole room)
     "helicopter": "r",             # held to fly the equipped helicopter (also held briefly by ride)
     "camera_left": "left",         # the arrow keys turn the camera (Stitches' Spotlight turns it to keep the middle of the ring in view)
     "camera_right": "right",
@@ -584,8 +583,8 @@ HELD_KEYS = tuple(dict.fromkeys([*KEYS.values(), *(key for keys in KEY_SEQUENCES
 # wait for the need to clear. Each entry: where to teleport, the
 # (key, seconds) holds to perform in order, optionally a `final_click` (a need with one has a doctor's dialog to answer after the last hold:
 # its prompt is clicked, the dialog waited for and this is its Yes - sick; see TeleportWalkNeedHandler._open_dialog()), optionally `helicopter` (above) and optionally
-# `max_wait` (how long to wait for the need to clear afterwards; default NEED_GONE_MAX_WAIT). One table: the nursery's routes (bored, beach, school, camping, sick) are the ones from
-# before Halloween moved it, which it is back to; the event's own are kept in scripts/Halloween2026.py.
+# `max_wait` (how long to wait for the need to clear afterwards; default NEED_GONE_MAX_WAIT). One table: the nursery's routes (bored, beach, school, camping, sick); the
+# event's own routes are in scripts/Halloween2026.py.
 TELEPORT_WALK_NEEDS: dict[str, dict[str, Any]] = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["forward"], 16.0), (KEYS["left"], 10.0))),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["left"], 27.0),)),

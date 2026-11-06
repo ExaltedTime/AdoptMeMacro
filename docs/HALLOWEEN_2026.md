@@ -90,8 +90,8 @@ out, shrunk to `HAUNTLET_DIGIT_SIZE` and compared with the saved digit pictures 
 `HAUNTLET_DIGIT_MAX_DIFF`; on a 256-frame run (rooms 1-29, three layers of the hotel) every readable frame
 matched at 0.0 and the two most alike digits are 43.7 apart. No panel (the white transition, the lobby, a
 door close-up that hides it), no digit pieces, more than `HAUNTLET_ROOM_MAX_DIGITS`, or a piece that matches
-none of the digits all give `None` rather than a guess. `tests/test_hauntlet_2.py` runs a crop of each of the 29
-rooms (`tests/hauntlet_2/room_panels/`) back through the reader.
+none of the digits all give `None` rather than a guess. `tests/halloween2026/test_hauntlet_2.py` runs a crop of each of the 29
+rooms (`tests/halloween2026/hauntlet_2/room_panels/`) back through the reader.
 
 **Items.** `read_hauntlet_items()` returns the item slots along the bottom of the screen, left to right, as
 `HauntletItem(name, count, pos)`. The slots are round white-ringed icons about 115 px apart, found as circles in
@@ -176,7 +176,7 @@ Hotel": one doorway straight ahead, no TVs, the timer already showing; in both c
 doors that is still numbered 1), and any other room without TVs for `HAUNTLET_DOORS_TIMEOUT` is treated the same way: a single
 doorway ahead, walked to by holding forward only (no strafe) until a row of TVs is on screen (`hauntlet_walk(until_doors=True)`) or the
 number changes, after which the room is looked at at once. For a room other than 1, `no doors found in room N` is
-logged once per run as a failure, which keeps a screenshot of what the TVs were not found in. A white screen (a ghost took a heart, or the player died: the game whites the screen out and brings the player back to the room's start, `detect_white_screen()`) starts the room's clock over (`HauntletRun.look()`), so a room entered long ago and then reset is not taken for one without doors; `tests/hauntlet_2/white_after_a_ghost.png` is a real frame of it. After a walk the room is left alone for
+logged once per run as a failure, which keeps a screenshot of what the TVs were not found in. A white screen (a ghost took a heart, or the player died: the game whites the screen out and brings the player back to the room's start, `detect_white_screen()`) starts the room's clock over (`HauntletRun.look()`), so a room entered long ago and then reset is not taken for one without doors; `tests/halloween2026/hauntlet_2/white_after_a_ghost.png` is a real frame of it. After a walk the room is left alone for
 `HAUNTLET_RETRY_WAIT` seconds and then chosen from again if its number hasn't changed - the retry for a walk that got stuck.
 
 **The circles.** In front of every door there is a **purple circle** on the floor (a lilac ring, `find_door_circles()`: the ring-shaped pieces of `HAUNTLET_CIRCLE_HSV`, `HAUNTLET_CIRCLE_*`; badges and labels are smaller and don't count): **stepping into one picks that door**, and the player is then **held in place for a few moments**. `hauntlet_strafe()` therefore walks to the circle's middle, not to the TV above the door (in an angled room the two are far apart), when all three are seen. The circle the player stands on is mostly hidden: two circles seen and the player (the hearts) where the third would be is **standing in it** (`player_in_circle()`, `HAUNTLET_IN_CIRCLE`). `hauntlet_walk()` then notes the door as picked (`HauntletRun.picked`, until the room changes), does not take the still view for being stuck while the player stands in it - a step sideways would take the player out of the doorway (the lock only lasts `HAUNTLET_LOCK_WAIT` seconds, and the unsticking went on after it) - and gives the walk `HAUNTLET_CIRCLE_WAIT` seconds from the step in instead of `HAUNTLET_WALK_MAX`: in real runs the room changed 9-13 s after the step into the circle, and every walk had ended as one that "got nowhere" (and the next had stepped back) before that. A retry in a room with a door picked goes to that same door (`hauntlet_choose()` returns it at once, with no items used and no other door avoided): the choice was made when the circle was stepped in.
@@ -308,7 +308,7 @@ The red and the planks are not handled, and no candy corn is looked for: the mag
 
 Not yet known from play: whether D holds the character on the ring with these turns (the player has not been seen working in the game: a run capture of it
 is the next thing to look at, with the debug lines of the log), how the round goes when the red is on the ring, and what the speed boost is worth.
-The tests use frames of a round (`tests/stitches_spotlight/`) and a made-up camera.
+The tests use frames of a round (`tests/halloween2026/stitches_spotlight/`) and a made-up camera.
 
 ### Candy corn
 

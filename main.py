@@ -792,7 +792,7 @@ def reset_run_stats() -> None:
 # read and write this file, so every access goes through the functions below,
 # each holding this one lock - a reader can never see a half-written file (it
 # would read as "no config" and silently give the defaults: the private server
-# link gone, the minigames switched off).
+# link gone).
 GAME_CONFIG_LOCK = threading.Lock()
 
 def _read_game_config() -> dict[str, Any]:
@@ -1193,7 +1193,7 @@ def hover_click(x: float, y: float, duration: float = cfg.CLICK_MOVE_DURATION) -
 @contextlib.contextmanager
 def task_unscrew(interruptible: bool = True, what: str = "") -> Iterator[None]:
     """Within this block wait_interruptible() runs unscrew(in_task=True) every
-    UNSCREW_TASK_INTERVAL; `interruptible` False (setup) only declines minigames; `what` is noted as state.activity meanwhile (the moments capture says it with every frame).
+    UNSCREW_TASK_INTERVAL; `interruptible` False (setup) is never abandoned because of a popup; `what` is noted as state.activity meanwhile (the moments capture says it with every frame).
     See docs/ARCHITECTURE.md#need-handlers.
     """
     previous = (state.task_active, state.task_interruptible, state.task_thread, state.activity)
@@ -3247,7 +3247,7 @@ def process_needs() -> bool:
                 with task_unscrew(what=f"need handler: {need_name}"):
                     handled = handler.handle()
             except TaskInterrupted as interruption:
-                # A minigame or a rejoin took over (both respawn): not
+                # A rejoin took over (it respawns): not
                 # resolved, and not a failed attempt either - the next check
                 # sees what's still on screen. A popup that spoiled it (the
                 # character was respawned by task_unscrew_tick()) does count
@@ -3960,7 +3960,7 @@ def start_recording_if_requested() -> Optional[RunRecorder]:
 # INPUT CAPTURE
 # ============================================================================
 # Press HOTKEYS["capture"] (any window) to start recording what is on screen and every key, mouse button and mouse
-# movement; press it again to stop. For working out how something is played by hand (the Hauntlet 2 rooms, say):
+# movement; press it again to stop. For working out how something is done by hand (a walk to a need's place, say):
 # the frames are lossless PNGs and the events carry the same clock. See docs/ARCHITECTURE.md#input-capture.
 
 # Windows virtual-key codes the capture looks at, by the name written in the events.
@@ -4457,34 +4457,6 @@ def finish_moments() -> None:
         logger.warning(f"Couldn't finish the capture of the run's moments: {error}")
 
 # ============================================================================
-# HAUNTLET 2 READER
-# ============================================================================
-# What the Hauntlet 2 screen says, as plain values - no decisions and no input here. The room number first; see
-# docs/ARCHITECTURE.md#reading-hauntlet-2.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ============================================================================
 # WORKFLOWS
 # ============================================================================
 
@@ -4732,7 +4704,7 @@ def run_workflow_loop() -> None:
 #      need disabled as stuck drawn as a grey bar until the next rejoin;
 #   2. needs detected per check, over time;
 #   3. average seconds per resolved need, with how many there were;
-#   4. counts of failures by kind, popups, minigames and the like;
+#   4. counts of failures by kind, popups and the like;
 #   5. CPU and memory use: the script's, and the whole PC's as a second line.
 
 LINE_RE = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] \[RUN ([^\]]+)\] (.*)$")
@@ -5154,7 +5126,7 @@ def test_need_handler(name: str, handler_cls: Optional[Callable[[], NeedHandler]
 
 def run_all_need_handlers(handlers: Optional[dict[str, Callable[[], NeedHandler]]] = None) -> dict[str, str]:
     """Run need handlers once each (the Debug tab's "test every teleport handler": TELEPORT_HANDLERS, or any given), respawning after
-    each, minigame popups declined. Returns {need: "done" | "failed" | "interrupted by ..."}.
+    each. Returns {need: "done" | "failed" | "interrupted by ..."}.
     See docs/ARCHITECTURE.md#gui-internals.
     """
     handlers = TELEPORT_HANDLERS if handlers is None else handlers

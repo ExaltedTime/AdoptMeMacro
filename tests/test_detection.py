@@ -289,10 +289,6 @@ def test_backpack_title_marks_the_normal_backpack(macro):
     assert not macro.detect_backpack_open(blank())
 
 
-def with_popup_text(macro, img):
-    return put(img, reference(macro, "minigame_popup"), macro.cfg.POPUP_TEMPLATES["minigame_popup"]["box"])
-
-
 
 
 

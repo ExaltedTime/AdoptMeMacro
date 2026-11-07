@@ -56,6 +56,9 @@ STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     "task_board": {"box": (540, 300, 1000, 430), "close_pos": (1318, 369)},
     # The shop's ad that comes up over the game (a "Limited Time" ribbon over a product, a red X and a blue COOL button; the one seen was merch): its COOL closes it. Only the ribbon is the crop, as the product changes.
     "promo_limited_time": {"box": (560, 380, 1000, 480), "close_pos": (1085, 665)},
+    # The pet's question card ("Can <pet> have the ability to jump on people's heads?" with a Choose One list, Cancel and Submit): found by its red Cancel, closed by it. The choose need's own
+    # click is on this card's list, so it is left alone while the pet's view is wanted.
+    "choose_card": {"box": (700, 600, 1000, 720), "close_pos": (869, 659), "only_when_unwanted": True},
     "star_rewards_claim": {"box": (680, 410, 1080, 520), "close_pos": (959, 675)},   # the view that opens on its own once a day: no X, only the green CLAIM! button
     # "Are you sure you want to respawn your character?" - what respawn_character()'s esc, r, enter leaves
     # open when the Enter comes before the dialog does; "close_pos" is its Respawn button.
@@ -83,8 +86,8 @@ STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     # and the pet is picked again at once (dismiss_stray_windows() makes pet_repick() due): in a 10-hour run it stood over the yard for a while before a 20-minute stall.
     "pet_full_grown_notice": {"box": (700, 400, 1260, 560), "button": "okay"},
 }
-DIALOG_BUTTONS = {                              # (and the Task Board's wooden sign at the left edge - found by its wood brown, not by a crop: its background is the world - 100 x 60 to 110 x 80 on the captures; and the green NICE! of the Pet Pen's age-up screen: 270 x 67 on the capture)
-    "task_board": {"box": (0, 480, 200, 680), "hsv": (((0, 100, 60), (22, 255, 230)),), "size": ((90, 125), (45, 90))},
+DIALOG_BUTTONS: dict[str, dict[str, Any]] = {                              # (and the Task Board's wooden sign at the left edge - found by its wood brown, not by a crop: its background is the world - 100 x 60 to 110 x 80 on the captures; and the green NICE! of the Pet Pen's age-up screen: 270 x 67 on the capture)
+    "task_board": {"box": (0, 480, 200, 680), "hsv": (((0, 100, 60), (22, 255, 230)),), "size": ((90, 150), (45, 120)), "join": 15},      # (join: with its green check and the chick over it - the board when its tasks are done - the wood is in pieces: a 3.6 hour run found the sign in 50 of 177 frames without it, 157 with)
     "nice":    {"box": (800, 970, 1120, 1070), "hsv": (((45, 110, 130), (80, 255, 255)),), "size": ((240, 300), (50, 80))},                              # the buttons of those cards (measured on a real frame: Decline 174 x 47 and Accept 174 x 49 side by side, Okay 360 x 49)
     "decline": {"box": (700, 540, 1260, 790), "hsv": (((170, 150, 150), (180, 255, 255)), ((0, 150, 150), (5, 255, 255))), "size": ((150, 210), (30, 60))},
     "okay":    {"box": (700, 540, 1260, 790), "hsv": (((45, 110, 130), (80, 255, 255)),), "size": ((300, 420), (30, 60))},
@@ -179,6 +182,18 @@ SETUP_UI_WAIT = 5.0               # setup: seconds a button or window is waited 
 SETUP_LOOK_WAIT = 1.0             # setup: seconds a state that is probably there already (a label that says what it should) is looked for
 SETUP_POLL = 0.25                 # setup: seconds between looks while waiting
 SETUP_STRAY_TRIES = 3             # setup closes up to this many stray windows before it starts
+# Notices: the popups of an event (the Admin Abuse one on Saturdays: "An Adopt Me admin gave you: ...", "TRADE RECEIPT - YOU RECEIVED: ...") change with every event, so there is no crop of them: any one with a
+# single wide green button in the middle of the screen (Awesome!, Thanks!, Okay) and no red button beside it (a Yes/No, a Cancel/Submit) is closed by that button - see dismiss_notice().
+NOTICE_BOX = (650, 480, 1270, 720)       # where such a button is (the cards are in the middle of the screen)
+NOTICE_BUTTON_SIZE = ((110, 420), (30, 75))   # its width and height range, px (Awesome! 360 x 50, Thanks! 160 x 40)
+NOTICE_BUTTON_ASPECT = 3.5                # its width over its height at least (Awesome! 7.2, Thanks! 4.1; the backpack's green plus tile and tab icons, which joined are 3.0, and the tiles of its lists are no buttons)
+NOTICE_BUTTON_FILL = 0.4                  # the share of its box that is the button's green (a rounded button with its text)
+NOTICE_RED_MIN = (90, 30)                 # a red blob this size in the box is a No / Cancel: the card is a question, not a notice (confetti pieces are small)
+NOTICE_JOIN = 5                           # px the green is grown by first, so that confetti over the button does not split it
+NOTICE_MAX_CLICKS = 3                     # clicks within NOTICE_CLICK_WINDOW seconds that did not make it go: it is left alone for NOTICE_PAUSE seconds (a green button that is not a notice)
+NOTICE_CLICK_WINDOW = 60.0
+NOTICE_PAUSE = 300.0
+NOTICE_REPORT_INTERVAL = 600.0            # seconds between the failure reports (screenshot) of a closed notice: what it was is shown there, for a crop to be made if it needs one
 STRAY_CLOSE_SETTLE = 1.0          # after a click, before looking again
 # While a need handler (or setup) is running, the per-cycle checks (unscrew()) also run, this often.
 UNSCREW_TASK_INTERVAL = 4.0
@@ -558,8 +573,8 @@ RIDE_R_HOLD_DURATION = 1.5     # hold KEYS["helicopter"] this long after equippi
 TELEPORT_DIALOG_WAIT = 3.0        # seconds the teleport dialog's Yes is looked for after the Get More tile was clicked (the tile is clicked once more if it did not come up)
 TELEPORT_YES_TRIES = 2            # the teleport dialog's Yes is clicked this often at most, until the view changes or the screen goes white 
 TELEPORT_WAIT = 5.0               # wait after the teleport click, for it to take effect
-TELEPORT_SETTLE_WAIT = 7.0         # the fixed wait for the second load of a teleport, used when its white screen does not show
-TELEPORT_SECOND_WHITE_LOOK = 4.0      # a teleport comes in two loads: a white screen (3 s), a landing in a red room (1 to 3 s), a second white screen (about 4 s), then the park (a capture of the teleport tests; the walk back made in the red room was lost): the second one is looked for this long after the first has gone
+TELEPORT_SETTLE_WAIT = 7.0         # the fixed wait for the second load of a teleport (after the step back), used when its white screen does not show
+TELEPORT_SECOND_WHITE_LOOK = 6.0      # a teleport comes in two loads: a white screen (3 s), a landing (a red room for a pets-tab teleport, a street for a vehicles-tab one) and, when the player walks back out of it, a second white screen (about 4 s) and the real place (a capture of the teleport tests, and a run that did not walk back and stood in the red room): the second one is looked for this long after the step back
 GENERAL_TELEPORT_POS_2 = (895, 705)
 GENERAL_TELEPORT_POS_3 = (1048, 658)
 TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing spot
@@ -626,6 +641,7 @@ TELEPORT_WALK_NEEDS: dict[str, dict[str, Any]] = {
 WATCH_POLL_INTERVAL = 0.2           # how often the screen is looked at while waiting for the game's "Only Pets..." answer to a need button click
 DISABLED_NEEDS_REJOIN_THRESHOLD = 4  # this many needs disabled for the run (see NEED_STUCK_CHECKS) means something is
                                      # badly wrong: rejoin the game, run setup, and give every need a fresh chance
+NEED_HOPELESS_RETRY = 3600.0       # seconds a need that never worked stays disabled through rejoins; then one more chance (one failure puts it back)
 NEED_NEVER_WORKED_FAILS = 3        # a need that was not cleared this many times in a run, and never was, is disabled for it (camping: a wait of 75 s four times and no success in a 2 hour run)
 NEED_STUCK_CHECKS = 5            # an enabled need still on screen after this many attempts in a row is
                                   # disabled for the rest of the run - see record_detection()
@@ -785,6 +801,7 @@ WHITE_PASS_MAX = 15.0             # seconds at most, from the start, for it to g
 WHITE_CLEAR_LOOKS = 2             # looks in a row that are not white for it to be gone
 HOUSE_EXIT_BOX = (0, 1000, 200, 1080)   # in the player's house the game shows a red "Exit Home" button here, bottom left (a capture of the teleport tests: it is on in the house before a teleport, in the dialog's frames, and gone in the white screens, the red room and everywhere outside)
 HOUSE_EXIT_HSV = (((0, 150, 150), (8, 255, 255)), ((170, 150, 150), (180, 255, 255)))
+HOUSE_EXIT_MAX_PIXELS = 12000           # ...and no more than this: the red walls of the nursery's room (the landing of a pets-tab teleport) give about 16000 in the same box (the first runs with the check took that room for the house)
 HOUSE_EXIT_MIN_PIXELS = 3000            # red pixels in that box for the player to be in the house (about 8000 with the button, none without)
 WHITE_SETTLE = 0.5                # seconds after it has gone, for the world to be usable
 ROBLOX_CRASH_WINDOW_TITLE = "Roblox Crash"

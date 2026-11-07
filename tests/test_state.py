@@ -2345,3 +2345,14 @@ def test_a_game_that_is_updating_is_rejoined_after_three_minutes_and_not_after_h
     clock[0] += macro.cfg.SERVER_UPDATE_REJOIN_AFTER
     kind, reason = macro.rejoin_reason()
     assert kind == "white_screen" and "closing for an update" in reason
+
+
+def test_a_hopeless_need_gets_one_more_chance_after_the_retry_time_not_before(macro, monkeypatch):
+    now = [10000.0]
+    monkeypatch.setattr(macro.time, "time", lambda: now[0])
+    macro.mark_hopeless("sick")
+    now[0] += macro.cfg.NEED_HOPELESS_RETRY / 2
+    macro.mark_hopeless("pizza")
+    assert macro.release_hopeless_needs() == []
+    now[0] += macro.cfg.NEED_HOPELESS_RETRY / 2
+    assert macro.release_hopeless_needs() == ["sick"] and macro.state.hopeless == {"pizza"}      # (the older one only)

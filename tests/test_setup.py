@@ -329,6 +329,18 @@ def test_the_pet_to_level_is_not_the_add_tile_a_pet_in_the_pen_orange_framed_or_
     assert macro.first_listed_cell(frame("pets_grid"), stop_at_equipped=True) == ("pet", FIRST_PET)
 
 
+def test_a_pet_with_the_green_frame_anywhere_in_the_filtered_list_is_kept_not_swapped_for_the_first_pet(macro):
+    """The list is filtered to pets that still grow: the pet that is out showing in it means that it still grows, whichever cell it is in."""
+    real = frame("pets_tab_pen_and_equipped").copy()
+    half, xs, ys = macro.cfg.PET_CELL_HALF, macro.cfg.PET_GRID_X, macro.cfg.PET_GRID_Y
+    cell = lambda r, c: (slice(ys[r] - half, ys[r] + half), slice(xs[c] - half, xs[c] + half))
+    real[cell(2, 3)] = real[cell(0, 1)]                                                           # the equipped cell moves to the last row...
+    real[cell(0, 1)] = real[cell(2, 0)]                                                           # ...and a pet that can be picked is first
+    assert macro.pet_cell_state(real, 0, 1) == "pet" and macro.pet_cell_state(real, 2, 3) == "equipped"
+    assert macro.first_listed_cell(real, stop_at_equipped=True) == ("equipped", (xs[3], ys[2]))
+    assert macro.first_listed_cell(real) == ("pet", (xs[1], ys[0]))                               # (the pen's pick, which does not keep the equipped one, takes the first pet)
+
+
 def test_a_filters_panel_that_opens_scrolled_down_to_the_age_rows_is_scrolled_back_up_to_the_sort_first(macro, game, monkeypatch):
     backpack = Backpack(macro, game, monkeypatch, notches=2, start_turned=2)                    # (the game kept the panel where Setup or the pen left it)
     game.frames["world"] = frame("house_locked")

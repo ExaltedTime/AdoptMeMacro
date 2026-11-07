@@ -16,7 +16,7 @@ def shot(name):
 
 
 def test_the_sign_is_found_on_every_background_and_not_in_a_scene_without_it(macro):
-    for name in ("badge", "no_badge", "world_after", "board_pet_pen_ready", "board_other_alerts", "sign_stormy"):               # (the last: the Lightning Dimension update, a dark cloud round the sign and darker wood)
+    for name in ("badge", "no_badge", "world_after", "board_pet_pen_ready", "board_other_alerts", "sign_stormy", "sign_done"):               # (sign_stormy: the Lightning Dimension update, a dark cloud round the sign and darker wood; sign_done: its green check and a chick over the wood, which broke the blob in pieces - not found in 127 of 177 frames of a run before the pieces were joined)
         x, y = macro.find_task_board_button(shot(name))
         assert 40 <= x <= 90 and 530 <= y <= 590, name
     assert macro.find_task_board_button(shot("age_up_nice")) is None
@@ -133,14 +133,26 @@ def test_picking_again_sets_the_filter_and_equips_and_respawns(macro, monkeypatc
     assert macro.repick_pet() is True and calls == ["filter", "respawn"]
 
 
-def test_a_finished_setup_counts_as_the_pick_of_the_pet(macro, monkeypatch):
-    for name in ("lock_house", "set_backpack_filter", "disable_trades"):
-        monkeypatch.setattr(macro, name, lambda: True)
-    monkeypatch.setattr(macro, "respawn_character", lambda: None)
-    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: None)
+def test_the_pick_of_the_pet_is_stamped_when_the_backpack_is_looked_at_even_if_a_step_failed(macro, monkeypatch):
+    """A Setup that failed on some step used to leave pet_repicked alone, so the repick ran at once behind it: the backpack's steps twice."""
+    monkeypatch.setattr(macro, "grab_screen", lambda: None)
+    monkeypatch.setattr(macro, "find_pet_bar", lambda img: None)
+    monkeypatch.setattr(macro, "backpack_on_purpose", lambda: __import__("contextlib").nullcontext())
+    monkeypatch.setattr(macro.pydirectinput, "press", lambda key: None, raising=False)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "ensure_pets_tab", lambda: True)
+    monkeypatch.setattr(macro, "open_filter_panel", lambda *a: False)            # (the filters did not open: this pass fails)
+    monkeypatch.setattr(macro, "select_backpack_tab", lambda pos: None)
+    monkeypatch.setattr(macro, "choose_list_pet", lambda stop_at_equipped=False: None)
+    monkeypatch.setattr(macro, "close_backpack", lambda step: None)
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
     assert macro.load_game_config()["pet_repicked"] == 0.0
-    assert macro.setup_game() is True
+    assert macro.set_backpack_filter() is False
     assert macro.load_game_config()["pet_repicked"] > 0.0
+    macro.update_game_config(lambda c: c.update(level_growing_pet=False, pet_repicked=0.0))
+    monkeypatch.setattr(macro, "find_pet_bar", lambda img: (1, 1))                    # (a pet is out: no Alicorn to equip)
+    macro.set_backpack_filter()
+    assert macro.load_game_config()["pet_repicked"] == 0.0                         # (not levelling: nothing to wait an interval for)
 
 
 def test_the_friend_pill_of_a_pet_that_has_grown_up_is_found_with_its_place_and_no_other_screen_has_one(macro, monkeypatch):

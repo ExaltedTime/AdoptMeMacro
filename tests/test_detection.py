@@ -197,7 +197,8 @@ def test_stray_windows_are_recognised_and_closed(macro, monkeypatch, name):
 
 @pytest.mark.parametrize("shot, name, closed_at", [("star_rewards_claim", "star_rewards_claim", (959, 675)), ("star_rewards", "star_rewards", (1209, 441)),
                                                    ("trading_hub", "trading_hub", (1278, 339)), ("task_board_alerts", "task_board", (1318, 369)),
-                                                   ("trade_board", "trade_board", (1282, 339)), ("promo_limited_time", "promo_limited_time", (1085, 665))])
+                                                   ("trade_board", "trade_board", (1282, 339)), ("promo_limited_time", "promo_limited_time", (1085, 665)),
+                                                   ("choose_card_screen", "choose_card", (869, 659))])
 def test_each_stray_window_is_told_from_the_others_in_a_real_screenshot_and_closed_where_it_closes(macro, monkeypatch, shot, name, closed_at):
     """Real screenshots (the Roblox ones, which lack the window's title bar, with 23 rows added on top as the macro's frames have). The Star Rewards
     that opens by itself once a day has only a CLAIM! button (no X), the calendar one that the star icon opens has a red X: each is clicked where its
@@ -518,3 +519,73 @@ def test_the_age_up_screen_that_stays_over_the_game_is_closed_by_its_nice_button
     monkeypatch.setattr(macro, "grab_screen", lambda: screenshot("paycheck"))
     macro.clicks.clear()
     assert macro.dismiss_stray_windows() is None                                                   # (no other screen is taken for it)
+
+
+def test_the_pets_question_card_is_not_taken_for_anything_in_the_teleport_frames(macro):
+    """A run lost 13 minutes behind the pet's question card, closed by nothing (the crop is cut from a frame of it)."""
+    assert macro.popup_visible(screenshot("choose_card_screen"), "choose_card")
+    for frame in ("house_before", "dialog_nursery", "dialog_dealership", "white_first", "red_room", "red_room_stuck", "park_landing", "hospital_lobby", "house_idle"):
+        image = cv2.imread(os.path.join(os.path.dirname(__file__), "teleport", f"{frame}.png"))
+        assert not macro.popup_visible(image, "choose_card"), frame
+
+
+def test_the_pets_question_card_is_left_alone_while_the_pets_view_is_wanted(macro, monkeypatch):
+    monkeypatch.setattr(macro, "grab_screen", lambda: screenshot("choose_card_screen"))
+    monkeypatch.setattr(macro.time, "sleep", lambda s: None)
+    macro.state.pet_focus_wanted = True
+    assert macro.dismiss_stray_windows() is None and macro.clicks == []
+    macro.state.pet_focus_wanted = False
+    assert macro.dismiss_stray_windows() == "choose_card" and macro.clicks == [(869, 659)]
+
+
+# --- notices: the popups of an event, closed by their one green button, with no crop of them -------------------------------------------------------------
+
+def notice_screen(macro, button=((782, 635), (1142, 685)), red=None, extra_green=None):
+    """A dark screen with a card in the middle: a wide green button (Awesome!-sized by default, with white text on it) and optionally a red one beside it."""
+    screen = np.full((1080, 1920, 3), 30, np.uint8)
+    screen[420:700, 720:1200] = 255
+    (left, top), (right, bottom) = button
+    screen[top:bottom, left:right] = (85, 198, 74)                                           # (BGR of GREEN_BUTTON_COLOR)
+    screen[top + 15:bottom - 15, left + 120:right - 120] = 255
+    if red:
+        (rl, rt), (rr, rb) = red
+        screen[rt:rb, rl:rr] = (60, 50, 215)
+    return screen
+
+
+def test_a_lone_wide_green_button_in_the_middle_is_a_notice_whatever_it_says(macro):
+    assert macro.find_notice_button(notice_screen(macro)) == (962, 660)
+    assert macro.find_notice_button(notice_screen(macro, button=((880, 635), (1040, 675)))) == (960, 655)       # (a Thanks!-sized one)
+
+
+def test_a_question_a_backpack_and_an_empty_screen_are_no_notice(macro):
+    assert macro.find_notice_button(notice_screen(macro, button=((960, 635), (1140, 685)), red=((782, 635), (955, 685)))) is None      # (a No beside a Yes)
+    assert macro.find_notice_button(np.full((1080, 1920, 3), 30, np.uint8)) is None
+    for name in ("backpack_open", "teleport_nursery", "teleport_dealership", "paycheck", "cant_spawn_vehicle", "task_board_alerts", "star_rewards_claim"):
+        assert macro.find_notice_button(screenshot(name)) is None or name in ("paycheck", "star_rewards_claim", "cant_spawn_vehicle"), name        # (those three are notices with a green button of their own, closed by their own entries first)
+    for frame in ("house_before", "dialog_nursery", "dialog_dealership", "white_first", "red_room", "red_room_stuck", "park_landing", "hospital_lobby", "house_idle"):
+        image = cv2.imread(os.path.join(os.path.dirname(__file__), "teleport", f"{frame}.png"))
+        assert macro.find_notice_button(image) is None, frame
+
+
+def test_a_notice_is_closed_by_its_button_reported_once_and_left_alone_when_it_does_not_go(macro, monkeypatch):
+    clicks, events, reports = [], [], []
+    monkeypatch.setattr(macro, "grab_screen", lambda: notice_screen(macro))
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: clicks.append((x, y)))
+    monkeypatch.setattr(macro.time, "sleep", lambda s: None)
+    monkeypatch.setattr(macro, "log_run_event", events.append)
+    monkeypatch.setattr(macro, "save_failure_report", lambda reason: reports.append(reason))
+    for _ in range(macro.cfg.NOTICE_MAX_CLICKS):
+        assert macro.dismiss_notice() == "notice"
+    assert clicks == [(962, 660)] * macro.cfg.NOTICE_MAX_CLICKS and len(reports) == 1                 # (the screenshot of the first, not of every one)
+    assert macro.dismiss_notice() is None and len(clicks) == macro.cfg.NOTICE_MAX_CLICKS             # (still there after that many: not a notice, left alone)
+    assert any("left alone" in line for line in events)
+
+
+def test_a_notice_is_not_looked_for_while_something_is_open_on_purpose(macro, monkeypatch):
+    monkeypatch.setattr(macro, "grab_screen", lambda: notice_screen(macro))
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: macro.clicks.append((x, y)))
+    for attribute, value in (("backpack_wanted", 1), ("pet_focus_wanted", True), ("task_board_wanted", True)):
+        setattr(macro.state, attribute, value)
+        assert macro.dismiss_notice() is None, attribute
+        setattr(macro.state, attribute, 0 if attribute == "backpack_wanted" else False)

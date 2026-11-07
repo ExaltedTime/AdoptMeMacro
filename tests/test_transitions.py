@@ -87,7 +87,7 @@ def test_the_teleport_waits_for_its_first_and_its_second_white_screen(macro, mon
     monkeypatch.setattr(macro, "hold_key", lambda key, seconds: order.append("walk"))
     monkeypatch.setattr(macro, "wait_for_white_to_pass", lambda static, look=2.0, **kw: order.append("white") or calls.append((static, look)) or True)
     macro.teleport_to((1, 1))
-    assert order == ["white", "white", "walk"]                                                    # (the walk back is at the park, after both loads)
+    assert order == ["white", "walk", "white"]                                                    # (the walk back is the way out of the landing and starts the second load)
     assert calls == [(macro.cfg.TELEPORT_WAIT, 2.0), (macro.cfg.TELEPORT_SETTLE_WAIT, macro.cfg.TELEPORT_SECOND_WHITE_LOOK)]
 
 
@@ -106,11 +106,11 @@ def teleport_frame(name):
 @pytest.mark.parametrize("name, white, house", [
     ("house_before", False, True), ("dialog_nursery", False, True), ("dialog_dealership", False, True), ("house_idle", False, True),
     ("white_first", True, False), ("white_second", True, False),
-    ("red_room", False, False), ("park_landing", False, False), ("road_landing", False, False), ("hospital_lobby", False, False),
+    ("red_room", False, False), ("red_room_stuck", False, False), ("park_landing", False, False), ("road_landing", False, False), ("hospital_lobby", False, False),
 ])
 def test_each_moment_of_a_teleport_is_told_by_its_white_screen_and_the_houses_exit_button(macro, name, white, house):
     """The house shows its red Exit Home button, a white screen hides everything, and the red room and every place outside have none:
-    so "still in the house" after a teleport is a teleport that did not happen."""
+    so "still in the house" after a teleport is a teleport that did not happen. `red_room_stuck` is the nursery's room from a run that did not walk back out of it: its red walls fill the box more than the button does."""
     frame = teleport_frame(name)
     assert macro.detect_white_screen(frame) is white
     assert macro.in_house(frame) is house
@@ -148,10 +148,10 @@ def teleporting(macro, monkeypatch):
     return state
 
 
-def test_a_teleport_that_left_the_player_in_the_house_fails_before_any_walking(macro, teleporting):
+def test_a_teleport_that_left_the_player_in_the_house_fails_after_the_step_back(macro, teleporting):
     teleporting["house"] = [True, True]
     assert macro.teleport_to((1, 1)) is False
-    assert teleporting["walked"] == [] and "still in the house" in teleporting["lines"][0]
+    assert "still in the house" in teleporting["lines"][0]
 
 
 def test_a_teleport_whose_yes_took_nothing_fails_and_one_that_worked_walks_back(macro, teleporting):

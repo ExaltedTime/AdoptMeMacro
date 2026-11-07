@@ -380,6 +380,7 @@ class State:
     # the game config): relaunching the script gives every enabled need a fresh
     # chance.
     disabled_needs: set = field(default_factory=set)
+    hopeless_at: dict = field(default_factory=dict)  # {need: when it was disabled as hopeless}: after NEED_HOPELESS_RETRY seconds the next rejoin gives it one more chance
     hopeless: set = field(default_factory=set)       # needs disabled that had never worked in the run: a rejoin does not give them another chance (pizza and sick, 3 more failures each after every rejoin of a 10-hour run)
     # The in-task checks (see task_unscrew()): whether a need handler or setup
     # is running and its thread, whether it may be abandoned (setup may not), when the checks
@@ -397,6 +398,9 @@ class State:
     # True while a handler that wants the pet focused runs (see wanting_pet_focus()).
     pet_focus_wanted: bool = False
     task_board_wanted: bool = False
+    notice_clicks: list = field(default_factory=list)     # when dismiss_notice() clicked (a notice that does not go is left alone for a while)
+    notice_pause_until: float = 0.0
+    notice_reported: float = 0.0
     activity: str = ""                     # what the macro is doing now (task_unscrew(what=...)): a need handler, a side action, setup; "" between them
     moments_notes: list = field(default_factory=list)       # (seconds into the run, the log line) of the moments start_moments() marked
     typing: bool = False                   # type_keys() is typing into a text box: the hotkeys (a letter each) are not acted on meanwhile
@@ -581,6 +585,21 @@ def next_run_number() -> int:
     with open(cfg.RUN_COUNTER_PATH, "w", encoding="utf-8") as f:
         f.write(str(n))
     return n
+
+def mark_hopeless(need_name: str) -> None:
+    """Disable `need_name` for good in this run (it never worked): a rejoin does not give it a chance again until NEED_HOPELESS_RETRY seconds have gone by (a bug of the macro's own - a run lost every teleport need to
+    one for two hours - must not cost the rest of the run, with the needs showing every few minutes)."""
+    state.hopeless.add(need_name)
+    state.hopeless_at[need_name] = time.time()
+
+def release_hopeless_needs() -> list[str]:
+    """The needs that have been hopeless for NEED_HOPELESS_RETRY seconds or more, taken off the list (they get one more chance: a single failure puts one back). Returns their names."""
+    now = time.time()
+    due = sorted(n for n in state.hopeless if now - state.hopeless_at.get(n, now) >= cfg.NEED_HOPELESS_RETRY)
+    for need_name in due:
+        state.hopeless.discard(need_name)
+        state.hopeless_at.pop(need_name, None)
+    return due
 
 def reset_need_tracking() -> None:
     """Forget the stuck-need streaks (see record_detection())."""
@@ -1502,11 +1521,12 @@ def click_need_button(need_name: str) -> bool:
 # ============================================================================
 
 def in_house(img: Image) -> bool:
-    """True if the player is in their house: the red "Exit Home" button at the bottom left (HOUSE_EXIT_BOX) is on screen. It is hidden by a white screen, so it is looked at when one has gone."""
+    """True if the player is in their house: the red "Exit Home" button at the bottom left (HOUSE_EXIT_BOX) is on screen. It is hidden by a white screen, so it is looked at when one has gone; the red walls of the nursery's
+    room fill much more of the box than the button does (HOUSE_EXIT_MAX_PIXELS), and are not taken for it."""
     left, top, right, bottom = cfg.HOUSE_EXIT_BOX
     hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
     red = sum(int(np.count_nonzero(cv2.inRange(hsv, np.array(low), np.array(high)))) for low, high in cfg.HOUSE_EXIT_HSV)
-    return red >= cfg.HOUSE_EXIT_MIN_PIXELS
+    return cfg.HOUSE_EXIT_MIN_PIXELS <= red <= cfg.HOUSE_EXIT_MAX_PIXELS
 
 def wait_for_white_to_pass(static: float, look: float = cfg.WHITE_LOOK, *, what: str = "") -> bool:
     """Wait out a transition by its white screen (a door, a respawn, a teleport: detect_white_screen()) instead of a fixed time: for it to show - within `look` seconds - and then go (WHITE_CLEAR_LOOKS looks
@@ -1550,7 +1570,7 @@ def respawn_character() -> None:
     for _ in range(2):
         if dismiss_stray_windows() != "respawn_confirm":
             break
-    wait_for_white_to_pass(cfg.RESPAWN_WAIT, what="respawn")                                 # (the respawn's white screen and its fade, or the old fixed wait when none shows)
+    wait_for_white_to_pass(cfg.RESPAWN_WAIT)                                                 # (the respawn's white screen and its fade, or the old fixed wait when none shows: not logged when none shows - it is over before this look as often as not)
     if not in_house(grab_screen()):
         log_run_event("respawn: not in the house afterwards (no Exit Home button)")
     logger.debug("Respawn complete")
@@ -1707,8 +1727,11 @@ def setup_game() -> bool:
     """Lock the house, filter the backpack to favorites and disable trades. Run on demand
     and after a rejoin, not in the cycle. See docs/ARCHITECTURE.md#side-actions.
     """
+    log_run_event("setup: begins")
     with task_unscrew(interruptible=False, what="setup"):
-        return _setup_steps()
+        done = _setup_steps()
+    log_run_event(f"setup: ends, {'every step as it should be' if done else 'some step did not take'}")
+    return done
 
 def leave_hub_and_setup() -> bool:
     """The action of /sloop before the loop: leave the Trading Hub if the player is in it, then run Setup. A hub that cannot be left is an error (the status says so and the loop does not
@@ -1738,7 +1761,6 @@ def _setup_steps() -> bool:
     if failed:
         log_failure("setup: " + "; ".join(failed))
         return False
-    update_game_config(lambda c: c.update(pet_repicked=time.time()))                # (the pet was picked just now: pet_repick() waits its interval from here)
     logger.info("Setup complete")
     log_run_event("setup: the house is locked, the backpack is filtered to favorites and trades are set to No One")
     return True
@@ -1900,6 +1922,9 @@ def set_backpack_filter() -> bool:
     pet_out = bool(find_pet_bar(grab_screen()))
     growing = level_growing_pets()
     ok, panel_open = False, True
+    log_run_event("backpack: filters and pet looked at")
+    if growing:
+        update_game_config(lambda c: c.update(pet_repicked=time.time()))                        # (the pet is picked now, from Setup, a ride or the repick alike, and whether or not every step takes: pet_repick() waits its interval from here, not a second pass at once behind a Setup that failed)
     with backpack_on_purpose():
         logger.debug("Opening backpack...")
         pydirectinput.press(cfg.KEYS["backpack"])
@@ -1942,11 +1967,11 @@ def set_backpack_filter() -> bool:
         elif growing:
             select_backpack_tab(cfg.INVENTORY_PETS_TAB_POS)
             wait_interruptible(cfg.UI_SETTLE)
-            pick = choose_list_pet(stop_at_equipped=True)                                        # (not the Add tile, a grey pet in a listing or one in the pen; the equipped one is kept)
+            pick = choose_list_pet(stop_at_equipped=True)                                        # (not the Add tile, a grey pet in a listing or one in the pen; the equipped one is kept wherever it is in view)
             if pick is None:
                 log_run_event("setup: no pet that can be levelled was seen in the list - the pet that is out is kept")
             elif pick[0] == "equipped":
-                log_run_event("setup: the equipped pet is the first of the list - kept")
+                log_run_event("setup: the equipped pet is in the filtered list (it still grows) - kept")
             else:
                 equip_pet("the first pet of the list", lambda: pick[1])
         elif not pet_out:
@@ -3142,7 +3167,7 @@ class ChooseNeedHandler(NeedHandler):
         match, by_colour = found
         if not by_colour:
             logger.info(f"The choose button was found as a purple disc at {match}")
-            log_run_event("choose: the button was found by its shape and hue, not its exact colour")
+            logger.debug("choose: the button was found by its shape and hue, not its exact colour")          # (it always is, now: the exact colour has not matched since an update; not a line of the run log every time)
         logger.debug(f"Found at {match}, moving there slowly...")
         hover_click(*match, duration=cfg.CHOOSE_SLOW_MOVE_DURATION)
         wait_interruptible(cfg.UI_SETTLE)
@@ -3201,7 +3226,7 @@ def find_teleport_yes(img: Image) -> Optional[Point]:
 
 def teleport_to(category_pos: Point) -> bool:
     """Open the backpack, teleport via the category tab, walk back to clear the landing
-    spot. Shared by the teleport-walk needs. False (logged) when it can be told that the teleport did not happen: the dialog's Yes took nothing
+    spot - which is the way out of the landing, and starts the teleport's second load. Shared by the teleport-walk needs. False (logged) when it can be told that the teleport did not happen: the dialog's Yes took nothing
     after TELEPORT_YES_TRIES clicks, the dialog did not come up, or the player is still in the house (its Exit Home button) after both loads. A teleport comes with two
     white screens (a capture of the teleport tests), so each one that does not show is logged too. See docs/ARCHITECTURE.md#need-handlers.
     """
@@ -3237,13 +3262,12 @@ def teleport_to(category_pos: Point) -> bool:
     if not took:
         return False
     wait_for_white_to_pass(cfg.TELEPORT_WAIT, what="teleport, first load")                    # (the teleport's white screen to fade, not a fixed time)
-    wait_for_white_to_pass(cfg.TELEPORT_SETTLE_WAIT, cfg.TELEPORT_SECOND_WHITE_LOOK, what="teleport, second load")   # (the second load: a landing in a red room, then its own white screen; the walk back belongs at the park, so it comes after both; the fixed time when none shows)
+    logger.debug("Walking backward...")
+    hold_key(cfg.KEYS["back"], cfg.TELEPORT_BACK_DURATION)                                    # (the landing is a room or a street with a way out behind the player: walking back through it is what starts the second load - a run that did not walk back stood in the red room until the respawn)
+    wait_for_white_to_pass(cfg.TELEPORT_SETTLE_WAIT, cfg.TELEPORT_SECOND_WHITE_LOOK, what="teleport, second load")   # (the second load's white screen to show and go, not a fixed time; the fixed one when none shows)
     if started_in_house and in_house(grab_screen()):
         log_run_event("teleport: still in the house after both loads (the Exit Home button is on screen)")
         return False
-    logger.debug("Walking backward...")
-    hold_key(cfg.KEYS["back"], cfg.TELEPORT_BACK_DURATION)
-    wait_interruptible(cfg.UI_SETTLE)
     return True
 
 class TeleportWalkNeedHandler(NeedHandler):
@@ -3370,7 +3394,7 @@ def record_detection(detected: list[str]) -> None:
     for need_name in sorted(stuck):
         state.disabled_needs.add(need_name)
         if not run_stats.resolved.get(need_name):
-            state.hopeless.add(need_name)
+            mark_hopeless(need_name)
         logger.info(f"{need_name} still there after {cfg.NEED_STUCK_CHECKS} attempts in a row - disabling it for this run")
         log_run_event(f"disabled: {need_name}")
         log_failure(f"{need_name} stuck for {cfg.NEED_STUCK_CHECKS} attempts - disabled for this run "
@@ -3460,7 +3484,7 @@ def process_needs() -> bool:
                 log_run_event(f"not cleared: {need_name} ({seconds:.0f}s)")
                 if run_stats.failed[need_name] >= cfg.NEED_NEVER_WORKED_FAILS and not run_stats.resolved.get(need_name) and need_name not in state.disabled_needs:
                     state.disabled_needs.add(need_name)
-                    state.hopeless.add(need_name)                                              # (a need that has failed this often and never once worked costs its wait every time it comes)
+                    mark_hopeless(need_name)                                                   # (a need that has failed this often and never once worked costs its wait every time it comes)
                     log_run_event(f"disabled: {need_name}")
                     log_failure(f"{need_name} failed {run_stats.failed[need_name]} times and never worked in this run - disabled for this run")
                 write_status()
@@ -3480,6 +3504,56 @@ def process_needs() -> bool:
 # ============================================================================
 # Run at the top of every cycle by unscrew() and side_quest(): popups to
 # dismiss, recovering the game when it's gone wrong, and the timed chores.
+
+def find_notice_button(img: Image) -> Optional[Point]:
+    """The middle of the only wide green button (GREEN_BUTTON_COLOR, NOTICE_BUTTON_SIZE) in NOTICE_BOX when no red button (a No, a Cancel) is there too: what a notice of the game has - Awesome!, Thanks!, Okay - and
+    a question does not. Confetti over the button is grown over (NOTICE_JOIN). None if there is no such button, or more than one."""
+    left, top, right, bottom = cfg.NOTICE_BOX
+    band = img[top:bottom, left:right]
+    hsv = cv2.cvtColor(band, cv2.COLOR_BGR2HSV)
+    red = cv2.bitwise_or(cv2.inRange(hsv, (0, 150, 150), (8, 255, 255)), cv2.inRange(hsv, (170, 150, 150), (180, 255, 255)))
+    count, _, stats, _centres = cv2.connectedComponentsWithStats(red, connectivity=8)
+    if any(stats[i, cv2.CC_STAT_WIDTH] >= cfg.NOTICE_RED_MIN[0] and stats[i, cv2.CC_STAT_HEIGHT] >= cfg.NOTICE_RED_MIN[1] for i in range(1, count)):
+        return None
+    green = exact_color_mask(band, cfg.GREEN_BUTTON_COLOR, cfg.GREEN_BUTTON_TOLERANCE)
+    joined = cv2.dilate(green, np.ones((cfg.NOTICE_JOIN, cfg.NOTICE_JOIN), np.uint8))
+    count, _, stats, centres = cv2.connectedComponentsWithStats(joined, connectivity=8)
+    (min_w, max_w), (min_h, max_h) = cfg.NOTICE_BUTTON_SIZE
+    found = []
+    for i in range(1, count):
+        width, height = int(stats[i, cv2.CC_STAT_WIDTH]), int(stats[i, cv2.CC_STAT_HEIGHT])
+        x, y = int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP])
+        if min_w <= width <= max_w and min_h <= height <= max_h and width >= cfg.NOTICE_BUTTON_ASPECT * height and np.count_nonzero(green[y:y + height, x:x + width]) >= cfg.NOTICE_BUTTON_FILL * width * height:
+            found.append((left + x + width // 2, top + y + height // 2))
+    return found[0] if len(found) == 1 else None
+
+def dismiss_notice() -> Optional[str]:
+    """Close a notice of the game that is over the screen (find_notice_button(): the popups of an event change every time, so no crop of them) by clicking its button; "notice" when one was. Not while a handler
+    has something open on purpose (the backpack, the pet's view, the Task Board). A button that was clicked NOTICE_MAX_CLICKS times within NOTICE_CLICK_WINDOW seconds and is still there is not a notice: left alone
+    for NOTICE_PAUSE seconds. The first one in NOTICE_REPORT_INTERVAL seconds saves a failure report, so that what it was can be seen."""
+    if state.backpack_wanted or state.pet_focus_wanted or state.task_board_wanted:
+        return None
+    now = time.time()
+    if now < state.notice_pause_until:
+        return None
+    img = grab_screen()
+    point = find_notice_button(img)
+    if point is None:
+        return None
+    state.notice_clicks = [t for t in state.notice_clicks if now - t < cfg.NOTICE_CLICK_WINDOW]
+    if len(state.notice_clicks) >= cfg.NOTICE_MAX_CLICKS:
+        state.notice_pause_until = now + cfg.NOTICE_PAUSE
+        state.notice_clicks.clear()
+        log_run_event(f"notice: a green button at {point} was clicked {cfg.NOTICE_MAX_CLICKS} times and is still there - left alone for {cfg.NOTICE_PAUSE:.0f} s")
+        return None
+    state.notice_clicks.append(now)
+    log_run_event(f"notice: closed one by its green button at {point}")
+    if now - state.notice_reported >= cfg.NOTICE_REPORT_INTERVAL:
+        state.notice_reported = now
+        save_failure_report("notice: closed an unknown popup (its screen is here)")
+    hover_click(*point)
+    time.sleep(cfg.STRAY_CLOSE_SETTLE)
+    return "notice"
 
 def detect_paycheck() -> bool:
     """Detect the paycheck popup by the crop of its bank-card header and dismiss it. Returns
@@ -3686,6 +3760,9 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
         # The game was rejoined again while setup ran (its in-task checks do that on a disconnect), and that
         # nested recovery already ran setup itself - so this one carries on instead of ending the run.
         log_run_event(f"setup interrupted by {interruption.reason} - the nested recovery redid it")
+    again = release_hopeless_needs()
+    if again:
+        log_run_event(f"given another chance after {cfg.NEED_HOPELESS_RETRY / 3600:.0f} h: {', '.join(again)}")
     state.disabled_needs &= state.hopeless                                                   # (the others get a fresh chance after a rejoin; a need that never worked in the run does not)
     reset_need_tracking()
     log_run_event("recovery complete: rejoined, setup run, disabled needs cleared" + (f" (still disabled: {', '.join(sorted(state.disabled_needs))})" if state.disabled_needs else ""))
@@ -3779,12 +3856,14 @@ def wanting_pet_focus() -> Iterator[None]:
 
 
 def find_dialog_button(img: Image, spec: dict[str, Any]) -> Optional[Point]:
-    """The middle of the biggest blob of colour `spec` (DIALOG_BUTTONS: "box", "hsv" - one or two (low, high) ranges -, "size" - (width, height) ranges) in `img`, or None."""
+    """The middle of the biggest blob of colour `spec` (DIALOG_BUTTONS: "box", "hsv" - one or two (low, high) ranges -, "size" - (width, height) ranges, and "join": the px the blobs are grown by first) in `img`, or None."""
     left, top, right, bottom = spec["box"]
     hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(hsv, *spec["hsv"][0])
     for extra in spec["hsv"][1:]:
         mask = cv2.bitwise_or(mask, cv2.inRange(hsv, *extra))
+    if spec.get("join"):                                                                # (a blob something is drawn over - the Task Board's sign under a green check and a chick - is in pieces: grown together first)
+        mask = cv2.dilate(mask, np.ones((spec["join"], spec["join"]), np.uint8))
     count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
     (min_w, max_w), (min_h, max_h) = spec["size"]
     best: Optional[tuple[int, Point]] = None
@@ -3930,6 +4009,8 @@ def unscrew(in_task: bool = False, interruptible: bool = True) -> Optional[str]:
     backpack_open = False if (in_task and not interruptible) else close_backpack_if_stuck(in_task)
     closed = dismiss_stray_windows()
     paycheck = detect_paycheck() if not backpack_open else False
+    if not in_task and not closed and not paycheck and not backpack_open:
+        dismiss_notice()                                                                  # (after the paycheck, whose CASH OUT is a green button too, and at the top of a cycle only: a task may have a dialog open on purpose)
     if in_task and interruptible and (paycheck or (closed and cfg.STRAY_WINDOWS.get(closed, {}).get("abort_task"))):
         return "aborted"   # (not setup, which can't be abandoned halfway - that is `interruptible` False)
     return None
@@ -4110,14 +4191,18 @@ def cell_at_is_equipped(img: Image, point: Point) -> bool:
     return False
 
 def first_listed_cell(img: Image, stop_at_equipped: bool = False) -> Optional[tuple[str, Point]]:
-    """The first cell (rows from the top, left to right) of the small backpack's grid that can be picked - ("pet", its middle) - or, with `stop_at_equipped`, the equipped pet if it comes first: ("equipped", its
-    middle). None if there is neither."""
+    """The first cell (rows from the top, left to right) of the small backpack's grid that can be picked - ("pet", its middle) - or None. With `stop_at_equipped`, a cell with the green frame anywhere
+    in view wins instead: ("equipped", its middle). The list was filtered to pets that still grow (no egg, none full grown), so the pet that is out showing in it means that it still grows: it is kept,
+    not swapped for the first pet of the list."""
+    first_pet = None
     for row in range(len(cfg.PET_GRID_Y)):
         for column in range(len(cfg.PET_GRID_X)):
             state_here = pet_cell_state(img, row, column)
-            if state_here == "pet" or (stop_at_equipped and state_here == "equipped"):
+            if stop_at_equipped and state_here == "equipped":
                 return state_here, (cfg.PET_GRID_X[column], cfg.PET_GRID_Y[row])
-    return None
+            if state_here == "pet" and first_pet is None:
+                first_pet = state_here, (cfg.PET_GRID_X[column], cfg.PET_GRID_Y[row])
+    return first_pet
 
 def choose_list_pet(stop_at_equipped: bool = False) -> Optional[tuple[str, Point]]:
     """In the small backpack: first_listed_cell(), scrolling the list down (the wheel on its scroll bar) a notch at a time while there is none, until a scroll changes nothing (the end of the list) or

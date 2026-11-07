@@ -80,6 +80,8 @@ def test_the_teleport_waits_for_its_first_and_its_second_white_screen(macro, mon
     monkeypatch.setattr(macro, "grab_screen", lambda: None)
     monkeypatch.setattr(macro, "teleport_took", lambda before: True)
     monkeypatch.setattr(macro, "in_house", lambda img: False)
+    monkeypatch.setattr(macro, "find_teleport_yes", lambda img: (1, 1))
+    monkeypatch.setattr(macro, "look_until", lambda find, seconds, poll=0.3: find(None))
     monkeypatch.setattr(macro, "hold_key", lambda key, seconds: None)
     order = []
     monkeypatch.setattr(macro, "hold_key", lambda key, seconds: order.append("walk"))
@@ -128,13 +130,15 @@ def test_a_missing_white_screen_is_written_to_the_run_log_when_it_is_named(macro
 @pytest.fixture
 def teleporting(macro, monkeypatch):
     """teleport_to() with the game stubbed: `state` says whether the Yes took and whether the house is still on screen."""
-    state = {"took": True, "house": [True, False], "walked": []}
+    state = {"dialog": True, "took": True, "house": [True, False], "walked": []}
     monkeypatch.setattr(macro, "backpack_on_purpose", __import__("contextlib").nullcontext)
     monkeypatch.setattr(macro.pydirectinput, "press", lambda key: None, raising=False)
     monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
     monkeypatch.setattr(macro, "hover_click", lambda *a, **k: None)
     monkeypatch.setattr(macro, "grab_screen", lambda: None)
     monkeypatch.setattr(macro, "teleport_took", lambda before: state["took"])
+    monkeypatch.setattr(macro, "find_teleport_yes", lambda img: (1048, 658) if state["dialog"] else None)
+    monkeypatch.setattr(macro, "look_until", lambda find, seconds, poll=0.3: find(None))
     monkeypatch.setattr(macro, "wait_for_white_to_pass", lambda static, look=2.0, **kw: True)
     monkeypatch.setattr(macro, "hold_key", lambda key, seconds: state["walked"].append(key))
     monkeypatch.setattr(macro, "in_house", lambda img: state["house"].pop(0) if len(state["house"]) > 1 else state["house"][0])
@@ -166,3 +170,28 @@ def test_a_walk_need_whose_teleport_failed_respawns_and_fails_without_walking(ma
     monkeypatch.setattr(macro, "hold_key", lambda key, seconds: walked.append(key))
     assert macro.TeleportWalkNeedHandler("bored").handle() is False
     assert walked == [] and respawned == [1]
+
+
+@pytest.mark.parametrize("name, yes", [("dialog_nursery", True), ("dialog_dealership", True), ("house_before", False), ("white_first", False), ("red_room", False), ("hospital_lobby", False)])
+def test_the_teleport_dialogs_yes_is_found_where_it_is_clicked_and_nowhere_else(macro, name, yes):
+    found = macro.find_teleport_yes(teleport_frame(name))
+    assert (found is not None) is yes
+    if yes:
+        x, y = found
+        assert abs(x - macro.cfg.GENERAL_TELEPORT_POS_3[0]) <= 4 and abs(y - macro.cfg.GENERAL_TELEPORT_POS_3[1]) <= 4
+
+
+def test_a_teleport_whose_dialog_never_came_up_fails_without_clicking_a_yes(macro, teleporting):
+    teleporting["dialog"] = False
+    assert macro.teleport_to((1, 1)) is False
+    assert teleporting["walked"] == [] and "dialog did not come up" in teleporting["lines"][0]
+
+
+@pytest.mark.parametrize("name", ["dialog_nursery", "dialog_dealership"])
+def test_the_fixed_clicks_of_a_teleport_land_on_their_buttons_in_the_real_dialog_frames(macro, name):
+    """The category tabs and the Get More tile are fixed pixels: a coloured (saturated) button must be under each in the frames of the capture, so a moved backpack shows up here."""
+    hsv = cv2.cvtColor(teleport_frame(name), cv2.COLOR_BGR2HSV)
+    for pos in (macro.cfg.TELEPORT_PETS_TAB_POS, macro.cfg.TELEPORT_VEHICLES_TAB_POS, macro.cfg.GENERAL_TELEPORT_POS_2):
+        x, y = pos
+        patch = hsv[y - 22:y + 22, x - 22:x + 22, 1]
+        assert patch.mean() > 70, (name, pos, patch.mean())

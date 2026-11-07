@@ -100,6 +100,7 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     # The sick need's Yes/No dialog.
     "sick_dialog":     {"box": (700, 400, 1220, 700), "threshold": 0.8},
     "doctor_prompt":   {"box": (880, 420, 1050, 580), "threshold": 0.8},
+    "teleport_yes":    {"box": (900, 600, 1200, 720), "threshold": 0.8},       # the green Yes of the "Teleport to the Nursery / the Vehicle Dealership" dialog (a capture of the teleport tests)
     "doctor_prompt_e": {"box": (800, 330, 1120, 600), "threshold": 0.8},      # the same button since the Lightning Dimension update: an E, over the player's head behind the desk (a capture of the teleport tests)
     # The normal backpack's "BACKPACK" title, and the expanded one's BACK button.
     "backpack_normal": {"box": (700, 600, 1000, 690), "threshold": 0.8},
@@ -554,6 +555,7 @@ RIDE_R_HOLD_DURATION = 1.5     # hold KEYS["helicopter"] this long after equippi
 # landing spot. Only the category tab differs per destination (passed into
 # teleport_to() as `category_pos`); everything else is always the same,
 # hence "general".
+TELEPORT_DIALOG_WAIT = 3.0        # seconds the teleport dialog's Yes is looked for after the Get More tile was clicked (the tile is clicked once more if it did not come up)
 TELEPORT_YES_TRIES = 2            # the teleport dialog's Yes is clicked this often at most, until the view changes or the screen goes white 
 TELEPORT_WAIT = 5.0               # wait after the teleport click, for it to take effect
 TELEPORT_SETTLE_WAIT = 7.0         # the fixed wait for the second load of a teleport, used when its white screen does not show

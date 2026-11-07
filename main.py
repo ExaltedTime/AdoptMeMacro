@@ -3171,10 +3171,14 @@ def teleport_took(before: Image) -> bool:
             return True
     return False
 
+def find_teleport_yes(img: Image) -> Optional[Point]:
+    """Where the Yes of the teleport dialog is (its centre), else None."""
+    return popup_found(img, "teleport_yes")
+
 def teleport_to(category_pos: Point) -> bool:
     """Open the backpack, teleport via the category tab, walk back to clear the landing
     spot. Shared by the teleport-walk needs. False (logged) when it can be told that the teleport did not happen: the dialog's Yes took nothing
-    after TELEPORT_YES_TRIES clicks, or the player is still in the house (its Exit Home button) after both loads. A teleport comes with two
+    after TELEPORT_YES_TRIES clicks, the dialog did not come up, or the player is still in the house (its Exit Home button) after both loads. A teleport comes with two
     white screens (a capture of the teleport tests), so each one that does not show is logged too. See docs/ARCHITECTURE.md#need-handlers.
     """
     started_in_house = in_house(grab_screen())
@@ -3187,11 +3191,19 @@ def teleport_to(category_pos: Point) -> bool:
         logger.debug("Selecting category...")
         hover_click(*category_pos)
         wait_interruptible(cfg.UI_SETTLE)
-        hover_click(*cfg.GENERAL_TELEPORT_POS_2)
-        wait_interruptible(cfg.UI_SETTLE)
-        for attempt in range(cfg.TELEPORT_YES_TRIES):            # the dialog's Yes: clicked again if nothing teleported (the click can be lost)
+        yes = None
+        for _ in range(2):                                      # the "Get More" tile, clicked once more if the dialog did not come up (the click can be lost)
+            hover_click(*cfg.GENERAL_TELEPORT_POS_2)
+            wait_interruptible(cfg.UI_SETTLE)
+            yes = look_until(find_teleport_yes, cfg.TELEPORT_DIALOG_WAIT, 0.3)
+            if yes is not None:
+                break
+        if yes is None:
+            log_run_event("teleport: the dialog did not come up after the Get More tile was clicked twice")
+            return False
+        for attempt in range(cfg.TELEPORT_YES_TRIES):            # the dialog's Yes (where it was found): clicked again if nothing teleported (the click can be lost)
             before = grab_screen()
-            hover_click(*cfg.GENERAL_TELEPORT_POS_3)
+            hover_click(*yes)
             if teleport_took(before):
                 took = True
                 break

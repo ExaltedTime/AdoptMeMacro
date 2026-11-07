@@ -555,8 +555,8 @@ RIDE_R_HOLD_DURATION = 1.5     # hold KEYS["helicopter"] this long after equippi
 # hence "general".
 TELEPORT_YES_TRIES = 2            # the teleport dialog's Yes is clicked this often at most, until the view changes or the screen goes white 
 TELEPORT_WAIT = 5.0               # wait after the teleport click, for it to take effect
-TELEPORT_SETTLE_WAIT = 7.0         # wait after stepping back, for the landing to settle
-TELEPORT_SECOND_WHITE_LOOK = 6.0      # the teleport to the nursery comes in two loads - a white screen, a landing in a red room for 3 s, a second white screen (about 3.5 s) and then the park by the hospital (a capture of the teleport tests): after the back step the second one is waited for this long
+TELEPORT_SETTLE_WAIT = 7.0         # the fixed wait for the second load of a teleport, used when its white screen does not show
+TELEPORT_SECOND_WHITE_LOOK = 4.0      # a teleport comes in two loads: a white screen (3 s), a landing in a red room (1 to 3 s), a second white screen (about 4 s), then the park (a capture of the teleport tests; the walk back made in the red room was lost): the second one is looked for this long after the first has gone
 GENERAL_TELEPORT_POS_2 = (895, 705)
 GENERAL_TELEPORT_POS_3 = (1048, 658)
 TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing spot

@@ -3183,9 +3183,10 @@ def teleport_to(category_pos: Point) -> None:
         else:
             log_run_event("teleport: nothing happened after the dialog's Yes")
     wait_for_white_to_pass(cfg.TELEPORT_WAIT)                                                # (the teleport's white screen to fade, not a fixed time)
+    wait_for_white_to_pass(cfg.TELEPORT_SETTLE_WAIT, cfg.TELEPORT_SECOND_WHITE_LOOK)           # (the second load: a landing in a red room, then its own white screen; the walk back belongs at the park, so it comes after both; the fixed time when none shows)
     logger.debug("Walking backward...")
     hold_key(cfg.KEYS["back"], cfg.TELEPORT_BACK_DURATION)
-    wait_for_white_to_pass(cfg.TELEPORT_SETTLE_WAIT, cfg.TELEPORT_SECOND_WHITE_LOOK)           # (the second load of the nursery teleport: its white screen to show and go, not a fixed time; the fixed one when none shows)
+    wait_interruptible(cfg.UI_SETTLE)
 
 class TeleportWalkNeedHandler(NeedHandler):
     """Teleport, hold a sequence of keys, then wait for the need to clear; configured per

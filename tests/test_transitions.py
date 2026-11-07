@@ -78,5 +78,9 @@ def test_the_teleport_waits_for_its_first_and_its_second_white_screen(macro, mon
     monkeypatch.setattr(macro, "grab_screen", lambda: None)
     monkeypatch.setattr(macro, "teleport_took", lambda before: True)
     monkeypatch.setattr(macro, "hold_key", lambda key, seconds: None)
+    order = []
+    monkeypatch.setattr(macro, "hold_key", lambda key, seconds: order.append("walk"))
+    monkeypatch.setattr(macro, "wait_for_white_to_pass", lambda static, look=2.0: order.append("white") or calls.append((static, look)) or True)
     macro.teleport_to((1, 1))
+    assert order == ["white", "white", "walk"]                                                    # (the walk back is at the park, after both loads)
     assert calls == [(macro.cfg.TELEPORT_WAIT, 2.0), (macro.cfg.TELEPORT_SETTLE_WAIT, macro.cfg.TELEPORT_SECOND_WHITE_LOOK)]

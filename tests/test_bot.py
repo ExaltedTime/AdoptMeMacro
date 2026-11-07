@@ -682,14 +682,14 @@ def test_the_switches_are_read_from_the_game_config_with_the_defaults_for_what_i
     on_by_default = bot_lib.cfg.ENABLED_NEEDS
     states = bot_lib.switch_states(None)
     assert states["option:use_private_server"] is True and states["option:blackout_hotkey"] is True and states["option:record_next_run"] is False       # (on unless the config says otherwise)
-    assert states["option:side_quest"] is True and states["option:level_growing_pet"] is True and states["need:hungry"] is ("hungry" in on_by_default)
+    assert states["option:money_tree"] is True and states["option:lure"] is True and states["option:level_growing_pet"] is True and states["need:hungry"] is ("hungry" in on_by_default)
     assert set(states) == {f"need:{n}" for n in bot_lib.cfg.NEED_NAMES} | {f"option:{n}" for n in bot_lib.cfg.OPTION_SWITCHES}
-    states = bot_lib.switch_states({"needs_enabled": {"hungry": False, "beach": True}, "side_quest_enabled": False, "level_growing_pet": False})
+    states = bot_lib.switch_states({"needs_enabled": {"hungry": False, "beach": True}, "lure_enabled": False, "level_growing_pet": False})
     assert states["need:hungry"] is False and states["need:beach"] is True and states["need:sick"] is ("sick" in on_by_default)
-    assert states["option:side_quest"] is False and states["option:level_growing_pet"] is False
+    assert states["option:lure"] is False and states["option:level_growing_pet"] is False
     assert bot_lib.switch_states({"needs_enabled": "x"})["need:hungry"] is ("hungry" in on_by_default)                                  # (a bad config is the defaults)
     text = bot_lib.options_text(bot_lib.switch_states({"needs_enabled": {name: name != "hungry" for name in bot_lib.cfg.NEED_NAMES}}))
-    assert "side_quest on" in text and "level_growing_pet on" in text and text.splitlines()[1] == "Needs off: hungry"
+    assert "lure on" in text and "level_growing_pet on" in text and text.splitlines()[1] == "Needs off: hungry"
 
 
 # --- update and rollback ---

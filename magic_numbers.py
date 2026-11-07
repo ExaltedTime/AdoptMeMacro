@@ -79,6 +79,9 @@ STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     # height follows its text): Decline - never Accept, which is green - or Okay (a third as wide again as Accept). A card whose button is not found is left alone.
     "trade_request": {"box": (700, 560, 1260, 800), "button": "decline"},
     "trade_request_expired": {"box": (700, 380, 1240, 560), "button": "okay"},
+    # "Yay! Your pet is full grown! Add a new pet to continue earning XP." with its green Okay: the game says it when the pet that is OUT has grown as far as it does. It is closed by its Okay,
+    # and the pet is picked again at once (dismiss_stray_windows() makes pet_repick() due): in a 10-hour run it stood over the yard for a while before a 20-minute stall.
+    "pet_full_grown_notice": {"box": (700, 400, 1260, 560), "button": "okay"},
 }
 DIALOG_BUTTONS = {                              # (and the Task Board's wooden sign at the left edge - found by its wood brown, not by a crop: its background is the world - 100 x 60 to 110 x 80 on the captures; and the green NICE! of the Pet Pen's age-up screen: 270 x 67 on the capture)
     "task_board": {"box": (0, 480, 200, 680), "hsv": (((0, 100, 60), (22, 255, 230)),), "size": ((90, 125), (45, 90))},
@@ -97,6 +100,8 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     # The sick need's Yes/No dialog.
     "sick_dialog":     {"box": (700, 400, 1220, 700), "threshold": 0.8},
     "doctor_prompt":   {"box": (880, 420, 1050, 580), "threshold": 0.8},
+    "teleport_yes":    {"box": (900, 600, 1200, 720), "threshold": 0.8},       # the green Yes of the "Teleport to the Nursery / the Vehicle Dealership" dialog (a capture of the teleport tests)
+    "doctor_prompt_e": {"box": (800, 330, 1120, 600), "threshold": 0.8},      # the same button since the Lightning Dimension update: an E, over the player's head behind the desk (a capture of the teleport tests)
     # The normal backpack's "BACKPACK" title, and the expanded one's BACK button.
     "backpack_normal": {"box": (700, 600, 1000, 690), "threshold": 0.8},
     "backpack_back":   {"box": (700, 80, 1000, 200), "threshold": 0.8},
@@ -198,7 +203,7 @@ for _directory in (NEEDS_DIR, DEBUG_DIR, LOGS_DIR, RUNS_DIR):
 COMMANDS_DIR = os.path.join(DEBUG_DIR, "commands")          # the commands for the macro, one <time>-<id>.json file each, written by the Discord bot (see read_command_with_id()); the macro removes each once read and leaves a <time>-<id>.ack saying it was taken or why not
 COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus", "blackout", "test", "reset_config", "server_link", "trades", "decline", "capture", "recenter", "report")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, travel to / leave the Trading Hub, take pictures of the backpack's pets tab, or run Setup and then the loop (`sloop`), bring the Roblox window to the front (`focus`), blank / show the screen (`blackout`), run one need handler on its own or every teleport one (`test`, what the Debug tab's Test buttons do), reset the config (`reset_config`), save the private server link (`server_link`), take pictures of the offers on the two trade listings (`trades`), decline one of them (`decline`), or start the input capture (the capture hotkey's) and stop it again (`capture`), or close what is open and respawn (`recenter`), or draw the chart of a run (`report`, the newest in the log or the one named)
 NEED_NAMES = ("catch", "pet", "choose", "ride", "walk", "hungry", "thirsty", "dirty", "potty", "sleepy", "bored", "beach", "school", "cafe", "salon", "pizza", "camping", "sick")   # the Debug tab's need switches (the keys of main.py's NEED_HANDLER_CLASSES)
-OPTION_SWITCHES = {"side_quest": "side_quest_enabled", "resume_on_focus_loss": "resume_on_focus_loss", "record_next_run": "record_next_run",
+OPTION_SWITCHES = {"setup_next_loop": "setup_next_loop", "money_tree": "money_tree_enabled", "lure": "lure_enabled", "resume_on_focus_loss": "resume_on_focus_loss", "record_next_run": "record_next_run",
                    "use_private_server": "use_private_server", "pet_pen": "pet_pen_enabled", "blackout_hotkey": "blackout_hotkey_enabled", "new_need_hotkey": "new_need_hotkey_enabled", "level_growing_pet": "level_growing_pet", "keep_moments": "keep_moments"}   # the other switches a command may change: name -> the game config's key ("show_debug_lines" too, which is only in the window)
 SHOW_DEBUG_LINES_OPTION = "show_debug_lines"
 TEST_ALL_TELEPORTS = "teleports"                       # the `test` command's handler for the Debug tab's "Test every teleport handler" (the others are NEED_NAMES)
@@ -550,13 +555,15 @@ RIDE_R_HOLD_DURATION = 1.5     # hold KEYS["helicopter"] this long after equippi
 # landing spot. Only the category tab differs per destination (passed into
 # teleport_to() as `category_pos`); everything else is always the same,
 # hence "general".
+TELEPORT_DIALOG_WAIT = 3.0        # seconds the teleport dialog's Yes is looked for after the Get More tile was clicked (the tile is clicked once more if it did not come up)
 TELEPORT_YES_TRIES = 2            # the teleport dialog's Yes is clicked this often at most, until the view changes or the screen goes white 
 TELEPORT_WAIT = 5.0               # wait after the teleport click, for it to take effect
-TELEPORT_SETTLE_WAIT = 7.0         # wait after stepping back, for the landing to settle
+TELEPORT_SETTLE_WAIT = 7.0         # the fixed wait for the second load of a teleport, used when its white screen does not show
+TELEPORT_SECOND_WHITE_LOOK = 4.0      # a teleport comes in two loads: a white screen (3 s), a landing in a red room (1 to 3 s), a second white screen (about 4 s), then the park (a capture of the teleport tests; the walk back made in the red room was lost): the second one is looked for this long after the first has gone
 GENERAL_TELEPORT_POS_2 = (895, 705)
 GENERAL_TELEPORT_POS_3 = (1048, 658)
 TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing spot
-TELEPORT_WALK_STEP_GAP = 4.0      # pause between consecutive steps of a teleport-walk need's sequence
+TELEPORT_WALK_STEP_GAP = 4.0      # pause between consecutive steps of a teleport-walk need's sequence. Do not shorten it: shorter gaps made the routes break often (the routes were tuned with it)
 SICK_PRE_CLICK_WAIT = 2.0         # after the sick need's walk, before the doctor's prompt is looked for (let the character come to rest)
 SICK_PROMPT_LOOK = 3.0            # how long the doctor's prompt (POPUP_TEMPLATES["doctor_prompt"]) is looked for before the need is given up
 SICK_CONFIRM_WAIT = 7.0           # how long the doctor's dialog (POPUP_TEMPLATES["sick_dialog"]) is looked for after the prompt was clicked (it took about 2.5 s) before the need is given up
@@ -765,11 +772,20 @@ DISCONNECT_PANEL_MIN_FRACTION = 0.5
 WHITE_SCREEN_LEVEL = 250
 WHITE_SCREEN_MIN_FRACTION = 0.6
 WHITE_SCREEN_REJOIN_AFTER = 30.0
+# "The server is closing for an update" - blue letters at the bottom of an otherwise white screen (the game updating; 3 times in a 2-hour run, each followed by a rejoin after the 30 s above). The servers take a
+# while to come back, so the rejoin waits SERVER_UPDATE_REJOIN_AFTER seconds from the first sight of it instead. Found by the blue of the letters (nothing else white has blue letters there), not by a crop.
+SERVER_CLOSING_BOX = (640, 840, 1280, 920)
+SERVER_CLOSING_MIN_PIXELS = 200           # blue pixels (blue at least SERVER_CLOSING_BLUE_LEAD over red, and at least 140) in that box
+SERVER_CLOSING_BLUE_LEAD = 60
+SERVER_UPDATE_REJOIN_AFTER = 180.0
 # A door, a respawn and a teleport each show the white screen and fade out of it: wait_for_white_to_pass() waits for that, not for a fixed time.
 WHITE_POLL = 0.2                  # seconds between looks while the white screen is waited for
 WHITE_LOOK = 2.0                  # seconds the white screen is waited to show at all before the transition is taken as not having one (and the old fixed wait is used)
 WHITE_PASS_MAX = 15.0             # seconds at most, from the start, for it to go
 WHITE_CLEAR_LOOKS = 2             # looks in a row that are not white for it to be gone
+HOUSE_EXIT_BOX = (0, 1000, 200, 1080)   # in the player's house the game shows a red "Exit Home" button here, bottom left (a capture of the teleport tests: it is on in the house before a teleport, in the dialog's frames, and gone in the white screens, the red room and everywhere outside)
+HOUSE_EXIT_HSV = (((0, 150, 150), (8, 255, 255)), ((170, 150, 150), (180, 255, 255)))
+HOUSE_EXIT_MIN_PIXELS = 3000            # red pixels in that box for the player to be in the house (about 8000 with the button, none without)
 WHITE_SETTLE = 0.5                # seconds after it has gone, for the world to be usable
 ROBLOX_CRASH_WINDOW_TITLE = "Roblox Crash"
 

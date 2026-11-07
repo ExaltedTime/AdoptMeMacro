@@ -380,6 +380,7 @@ class State:
     # the game config): relaunching the script gives every enabled need a fresh
     # chance.
     disabled_needs: set = field(default_factory=set)
+    hopeless: set = field(default_factory=set)       # needs disabled that had never worked in the run: a rejoin does not give them another chance (pizza and sick, 3 more failures each after every rejoin of a 10-hour run)
     # The in-task checks (see task_unscrew()): whether a need handler or setup
     # is running and its thread, whether it may be abandoned (setup may not), when the checks
     # last ran, and whether they are running now.
@@ -813,8 +814,10 @@ def _read_game_config() -> dict[str, Any]:
         "lure_timer": time.time(),  # due immediately on a fresh config
         "tree_timer": time.time(),  # likewise
         "money_reset_boundary": None,   # the last daily MONEY_RESET_HOUR reset side_quest() has dealt with (None: not yet)
-        "side_quest_enabled": True, # whether side_quest() is allowed to run at all
+        "money_tree_enabled": True, # whether side_quest() tends the money tree
+        "lure_enabled": True,       # whether side_quest() tends the lure
         "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
+        "setup_next_loop": False,   # run Setup at the next pass of the loop (once; cleared when it runs)
         "record_next_run": False,   # record the next run as a low quality video; cleared when that run starts
         "blackout_hotkey_enabled": True,   # whether HOTKEYS["blackout"] blanks the screen (off: that key can be typed in Roblox)
         "keep_moments": True,              # whether the loop captures the run's moments (start_moments()), kept when the run lasted MOMENTS_MIN_RUN seconds or more
@@ -834,6 +837,10 @@ def _read_game_config() -> dict[str, Any]:
             config = json.load(f)
     except (FileNotFoundError, ValueError):
         return defaults
+    if "side_quest_enabled" in config:                      # (one switch for both, before they were two: it is carried over to each, once)
+        for key in ("money_tree_enabled", "lure_enabled"):
+            config.setdefault(key, config["side_quest_enabled"])
+        del config["side_quest_enabled"]
     return {**defaults, **config}
 
 def load_game_config() -> dict[str, Any]:
@@ -1494,10 +1501,17 @@ def click_need_button(need_name: str) -> bool:
 # MOVEMENT
 # ============================================================================
 
-def wait_for_white_to_pass(static: float, look: float = cfg.WHITE_LOOK) -> bool:
+def in_house(img: Image) -> bool:
+    """True if the player is in their house: the red "Exit Home" button at the bottom left (HOUSE_EXIT_BOX) is on screen. It is hidden by a white screen, so it is looked at when one has gone."""
+    left, top, right, bottom = cfg.HOUSE_EXIT_BOX
+    hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
+    red = sum(int(np.count_nonzero(cv2.inRange(hsv, np.array(low), np.array(high)))) for low, high in cfg.HOUSE_EXIT_HSV)
+    return red >= cfg.HOUSE_EXIT_MIN_PIXELS
+
+def wait_for_white_to_pass(static: float, look: float = cfg.WHITE_LOOK, *, what: str = "") -> bool:
     """Wait out a transition by its white screen (a door, a respawn, a teleport: detect_white_screen()) instead of a fixed time: for it to show - within `look` seconds - and then go (WHITE_CLEAR_LOOKS looks
     in a row that are not white, WHITE_PASS_MAX at most), then WHITE_SETTLE more; True. When none shows in `look` seconds the wait is `static` seconds in all (what it was before, so that a transition without
-    a white screen costs no more than it did); False."""
+    a white screen costs no more than it did); False, and with `what` named a line in the run log: a transition that should have a white screen and had none is a sign that it did not happen."""
     started = time.time()
     seen, clear = False, 0
     while time.time() - started < cfg.WHITE_PASS_MAX:
@@ -1509,6 +1523,8 @@ def wait_for_white_to_pass(static: float, look: float = cfg.WHITE_LOOK) -> bool:
                 wait_interruptible(cfg.WHITE_SETTLE)
                 return True
         elif time.time() - started >= look:
+            if what:
+                log_run_event(f"{what}: no white screen showed in {look:.0f} s")
             wait_interruptible(max(0.0, static - (time.time() - started)))
             return False
         wait_interruptible(cfg.WHITE_POLL)
@@ -1534,7 +1550,9 @@ def respawn_character() -> None:
     for _ in range(2):
         if dismiss_stray_windows() != "respawn_confirm":
             break
-    wait_for_white_to_pass(cfg.RESPAWN_WAIT)                                                 # (the respawn's white screen and its fade, or the old fixed wait when none shows)
+    wait_for_white_to_pass(cfg.RESPAWN_WAIT, what="respawn")                                 # (the respawn's white screen and its fade, or the old fixed wait when none shows)
+    if not in_house(grab_screen()):
+        log_run_event("respawn: not in the house afterwards (no Exit Home button)")
     logger.debug("Respawn complete")
 
 def close_open_windows() -> int:
@@ -1951,7 +1969,7 @@ def equip_pet(what: str, where: Callable[[], Optional[Point]]) -> bool:
     logger.debug("Equipping the pet...")
     hover_click(*button)
     wait_interruptible(cfg.UI_SETTLE)
-    equipped = wait_for_template("pet_unequip") is not None
+    equipped = look_until(lambda img: popup_visible(img, "pet_unequip") or cell_at_is_equipped(img, point), cfg.SETUP_UI_WAIT, cfg.SETUP_POLL) is not None     # (the card says Unequip - or it has closed and the pet's cell has the green frame: in a 10-hour run 3 Equips that took were called failures, 8 s each)
     if equipped:
         log_run_event(f"setup: {what} is equipped")
     else:
@@ -3159,10 +3177,18 @@ def teleport_took(before: Image) -> bool:
             return True
     return False
 
-def teleport_to(category_pos: Point) -> None:
+def find_teleport_yes(img: Image) -> Optional[Point]:
+    """Where the Yes of the teleport dialog is (its centre), else None."""
+    return popup_found(img, "teleport_yes")
+
+def teleport_to(category_pos: Point) -> bool:
     """Open the backpack, teleport via the category tab, walk back to clear the landing
-    spot. Shared by the teleport-walk needs. See docs/ARCHITECTURE.md#need-handlers.
+    spot. Shared by the teleport-walk needs. False (logged) when it can be told that the teleport did not happen: the dialog's Yes took nothing
+    after TELEPORT_YES_TRIES clicks, the dialog did not come up, or the player is still in the house (its Exit Home button) after both loads. A teleport comes with two
+    white screens (a capture of the teleport tests), so each one that does not show is logged too. See docs/ARCHITECTURE.md#need-handlers.
     """
+    started_in_house = in_house(grab_screen())
+    took = False
     with backpack_on_purpose():
         logger.debug("Opening backpack...")
         pydirectinput.press(cfg.KEYS["backpack"])
@@ -3171,20 +3197,36 @@ def teleport_to(category_pos: Point) -> None:
         logger.debug("Selecting category...")
         hover_click(*category_pos)
         wait_interruptible(cfg.UI_SETTLE)
-        hover_click(*cfg.GENERAL_TELEPORT_POS_2)
-        wait_interruptible(cfg.UI_SETTLE)
-        for attempt in range(cfg.TELEPORT_YES_TRIES):            # the dialog's Yes: clicked again if nothing teleported (the click can be lost)
+        yes = None
+        for _ in range(2):                                      # the "Get More" tile, clicked once more if the dialog did not come up (the click can be lost)
+            hover_click(*cfg.GENERAL_TELEPORT_POS_2)
+            wait_interruptible(cfg.UI_SETTLE)
+            yes = look_until(find_teleport_yes, cfg.TELEPORT_DIALOG_WAIT, 0.3)
+            if yes is not None:
+                break
+        if yes is None:
+            log_run_event("teleport: the dialog did not come up after the Get More tile was clicked twice")
+            return False
+        for attempt in range(cfg.TELEPORT_YES_TRIES):            # the dialog's Yes (where it was found): clicked again if nothing teleported (the click can be lost)
             before = grab_screen()
-            hover_click(*cfg.GENERAL_TELEPORT_POS_3)
+            hover_click(*yes)
             if teleport_took(before):
+                took = True
                 break
             logger.debug(f"The teleport did not take after click {attempt + 1}")
         else:
             log_run_event("teleport: nothing happened after the dialog's Yes")
-    wait_for_white_to_pass(cfg.TELEPORT_WAIT)                                                # (the teleport's white screen to fade, not a fixed time)
+    if not took:
+        return False
+    wait_for_white_to_pass(cfg.TELEPORT_WAIT, what="teleport, first load")                    # (the teleport's white screen to fade, not a fixed time)
+    wait_for_white_to_pass(cfg.TELEPORT_SETTLE_WAIT, cfg.TELEPORT_SECOND_WHITE_LOOK, what="teleport, second load")   # (the second load: a landing in a red room, then its own white screen; the walk back belongs at the park, so it comes after both; the fixed time when none shows)
+    if started_in_house and in_house(grab_screen()):
+        log_run_event("teleport: still in the house after both loads (the Exit Home button is on screen)")
+        return False
     logger.debug("Walking backward...")
     hold_key(cfg.KEYS["back"], cfg.TELEPORT_BACK_DURATION)
-    wait_interruptible(cfg.TELEPORT_SETTLE_WAIT)
+    wait_interruptible(cfg.UI_SETTLE)
+    return True
 
 class TeleportWalkNeedHandler(NeedHandler):
     """Teleport, hold a sequence of keys, then wait for the need to clear; configured per
@@ -3201,7 +3243,10 @@ class TeleportWalkNeedHandler(NeedHandler):
         if not focus_roblox():
             return False
 
-        teleport_to(self.config["teleport_pos"])
+        if not teleport_to(self.config["teleport_pos"]):
+            logger.debug(f"The {self.name} teleport did not happen - the need failed")      # (no walking blind from the house)
+            respawn_character()
+            return False
 
         helicopter = self.config.get("helicopter", cfg.HELICOPTER_REQUIRED)
         if helicopter:
@@ -3306,6 +3351,8 @@ def record_detection(detected: list[str]) -> None:
     stuck = {n for n, count in state.attempt_streaks.items() if count >= cfg.NEED_STUCK_CHECKS} & (enabled_needs() - state.disabled_needs)
     for need_name in sorted(stuck):
         state.disabled_needs.add(need_name)
+        if not run_stats.resolved.get(need_name):
+            state.hopeless.add(need_name)
         logger.info(f"{need_name} still there after {cfg.NEED_STUCK_CHECKS} attempts in a row - disabling it for this run")
         log_run_event(f"disabled: {need_name}")
         log_failure(f"{need_name} stuck for {cfg.NEED_STUCK_CHECKS} attempts - disabled for this run "
@@ -3394,7 +3441,8 @@ def process_needs() -> bool:
                 run_stats.failed[need_name] = run_stats.failed.get(need_name, 0) + 1
                 log_run_event(f"not cleared: {need_name} ({seconds:.0f}s)")
                 if run_stats.failed[need_name] >= cfg.NEED_NEVER_WORKED_FAILS and not run_stats.resolved.get(need_name) and need_name not in state.disabled_needs:
-                    state.disabled_needs.add(need_name)                                              # (a need that has failed this often and never once worked costs its wait every time it comes)
+                    state.disabled_needs.add(need_name)
+                    state.hopeless.add(need_name)                                              # (a need that has failed this often and never once worked costs its wait every time it comes)
                     log_run_event(f"disabled: {need_name}")
                     log_failure(f"{need_name} failed {run_stats.failed[need_name]} times and never worked in this run - disabled for this run")
                 write_status()
@@ -3541,6 +3589,13 @@ def detect_white_screen(img: Image) -> bool:
 
 ROBLOX_NOT_RUNNING = "Roblox isn't running"
 
+def server_closing_visible(img: Image) -> bool:
+    """Whether the white screen of the game's update shows its blue "The server is closing for an update" (SERVER_CLOSING_BOX: enough blue pixels)."""
+    left, top, right, bottom = cfg.SERVER_CLOSING_BOX
+    band = img[top:bottom, left:right].astype(np.int16)
+    blue = (band[:, :, 0] >= 140) & (band[:, :, 0] - band[:, :, 2] >= cfg.SERVER_CLOSING_BLUE_LEAD)
+    return int(np.count_nonzero(blue)) >= cfg.SERVER_CLOSING_MIN_PIXELS
+
 def rejoin_reason() -> Optional[tuple[str, str]]:
     """Why the game needs rejoining now, as (kind, reason), or None - in priority order
     "disconnect", "white_screen", "stuck", "stalled", "scheduled". See docs/ARCHITECTURE.md#stuck-needs.
@@ -3557,10 +3612,14 @@ def rejoin_reason() -> Optional[tuple[str, str]]:
         state.white_since = None
     elif state.white_since is None:
         state.white_since = time.time()
-    elif time.time() - state.white_since >= cfg.WHITE_SCREEN_REJOIN_AFTER:
-        return "white_screen", f"the screen has been white for {cfg.WHITE_SCREEN_REJOIN_AFTER:g}s"
-    if len(state.disabled_needs) >= cfg.DISABLED_NEEDS_REJOIN_THRESHOLD:
-        return "stuck", f"{len(state.disabled_needs)} needs disabled ({', '.join(sorted(state.disabled_needs))})"
+    else:
+        updating = server_closing_visible(screen)                                           # (the game is updating: its servers are back in a few minutes, not in half a minute)
+        wait = cfg.SERVER_UPDATE_REJOIN_AFTER if updating else cfg.WHITE_SCREEN_REJOIN_AFTER
+        if time.time() - state.white_since >= wait:
+            return "white_screen", (f"the server is closing for an update: {wait:g}s of it" if updating else f"the screen has been white for {wait:g}s")
+    disabled_now = state.disabled_needs - state.hopeless                                          # (needs that never worked are not what a rejoin is for)
+    if len(disabled_now) >= cfg.DISABLED_NEEDS_REJOIN_THRESHOLD:
+        return "stuck", f"{len(disabled_now)} needs disabled ({', '.join(sorted(disabled_now))})"
     if state.last_progress is not None and time.time() - state.last_progress >= cfg.NO_PROGRESS_REJOIN_INTERVAL:
         return "stalled", f"no need resolved for {cfg.NO_PROGRESS_REJOIN_INTERVAL / 60:g} minutes"
     if state.last_rejoin is not None and time.time() - state.last_rejoin >= cfg.REJOIN_INTERVAL:
@@ -3609,9 +3668,9 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
         # The game was rejoined again while setup ran (its in-task checks do that on a disconnect), and that
         # nested recovery already ran setup itself - so this one carries on instead of ending the run.
         log_run_event(f"setup interrupted by {interruption.reason} - the nested recovery redid it")
-    state.disabled_needs.clear()
+    state.disabled_needs &= state.hopeless                                                   # (the others get a fresh chance after a rejoin; a need that never worked in the run does not)
     reset_need_tracking()
-    log_run_event("recovery complete: rejoined, setup run, disabled needs cleared")
+    log_run_event("recovery complete: rejoined, setup run, disabled needs cleared" + (f" (still disabled: {', '.join(sorted(state.disabled_needs))})" if state.disabled_needs else ""))
     logger.info("Recovery complete - carrying on")
     write_status()
     return True
@@ -3621,8 +3680,9 @@ def detect_sick_dialog(img: Image) -> bool:
     return popup_visible(img, "sick_dialog")
 
 def find_doctor_prompt(img: Image) -> Optional[Point]:
-    """Where the hand button over the player's head is (its centre) when the player stands in front of Doctor Heart, else None."""
-    return popup_found(img, "doctor_prompt")
+    """Where the button over the player's head is (its centre) when the player stands in front of Doctor Heart, else None: a hand
+    (`doctor_prompt`) before the Lightning Dimension update, an E (`doctor_prompt_e`) since."""
+    return popup_found(img, "doctor_prompt_e") or popup_found(img, "doctor_prompt")
 
 # directory -> (the files' names and modification times, {name: image}) - see load_templates().
 _TEMPLATE_CACHE: dict[str, tuple[Any, dict[str, Image]]] = {}
@@ -3736,6 +3796,8 @@ def dismiss_stray_windows() -> Optional[str]:
             log_run_event(f"stray window closed: {name}" + (" (trading is not set to No One)" if name.startswith("trade_request") else ""))
             hover_click(*button)
             time.sleep(cfg.STRAY_CLOSE_SETTLE)
+            if name == "pet_full_grown_notice":
+                update_game_config(lambda c: c.update(pet_repicked=0.0))                      # (the pet that is out has grown up: pick another at the next cycle)
             return name
         logger.debug(f"Stray window open: {name}, closing it...")
         log_run_event(f"stray window closed: {name}")
@@ -3745,6 +3807,14 @@ def dismiss_stray_windows() -> Optional[str]:
         hover_click(*config["close_pos"])
         time.sleep(cfg.STRAY_CLOSE_SETTLE)
         return name
+    if not state.task_board_wanted:                                                       # (the pen's own age-up screen is closed by collect_pet_pen())
+        nice = find_dialog_button(img, cfg.DIALOG_BUTTONS["nice"])
+        if nice is not None:
+            logger.debug("The age-up screen is up: pressing its NICE!...")
+            log_run_event("stray window closed: age_up_screen")
+            hover_click(*nice)
+            time.sleep(cfg.STRAY_CLOSE_SETTLE)
+            return "age_up_screen"
     return None
 
 def in_trading_hub(img: Image) -> bool:
@@ -3842,7 +3912,7 @@ def unscrew(in_task: bool = False, interruptible: bool = True) -> Optional[str]:
     backpack_open = False if (in_task and not interruptible) else close_backpack_if_stuck(in_task)
     closed = dismiss_stray_windows()
     paycheck = detect_paycheck() if not backpack_open else False
-    if in_task and interruptible and (paycheck or (closed and cfg.STRAY_WINDOWS[closed].get("abort_task"))):
+    if in_task and interruptible and (paycheck or (closed and cfg.STRAY_WINDOWS.get(closed, {}).get("abort_task"))):
         return "aborted"   # (not setup, which can't be abandoned halfway - that is `interruptible` False)
     return None
 
@@ -3882,23 +3952,20 @@ def reset_money_if_due(config: dict[str, Any]) -> dict[str, Any]:
     return update_game_config(lambda c: c.update(money_collected=0, money_reset_boundary=boundary))
 
 def side_quest() -> None:
-    """Once per cycle after unscrew(), unless side_quest_enabled is off: tend the money tree and
-    the lure from the persisted state, saving each success at once.
+    """Once per cycle after unscrew(): tend the money tree and the lure (each unless its own switch, money_tree_enabled or lure_enabled, is off) from the persisted state, saving each success at once.
     See docs/ARCHITECTURE.md#side-actions.
     """
     config = reset_money_if_due(load_game_config())
-    if not config["side_quest_enabled"]:
-        return
     now = time.time()
 
-    if config["money_collected"] < cfg.MONEY_COLLECTED_TARGET and now >= config["tree_timer"]:
+    if config["money_tree_enabled"] and config["money_collected"] < cfg.MONEY_COLLECTED_TARGET and now >= config["tree_timer"]:
         if run_side_action(tree_collect):
             def harvested(c):
                 c["money_collected"] += cfg.TREE_HARVEST_YIELD
                 c["tree_timer"] = time.time() + cfg.TREE_CHECK_INTERVAL
             update_game_config(harvested)
 
-    if now >= config["lure_timer"]:
+    if config["lure_enabled"] and now >= config["lure_timer"]:
         if run_side_action(lure_collect):
             update_game_config(lambda c: c.update(lure_timer=time.time() + cfg.LURE_RECOLLECT_INTERVAL))
 
@@ -4016,6 +4083,14 @@ def pet_cell_state(img: Image, row: int, column: int) -> str:
         return "equipped"
     return "pen" if orange >= cfg.PET_CELL_ORANGE_MIN else "pet"
 
+def cell_at_is_equipped(img: Image, point: Point) -> bool:
+    """Whether the cell of the pets grid at `point` (the middle of a cell, or near it) now has the green frame of the equipped pet; False for a point that is not in the grid."""
+    for row, y in enumerate(cfg.PET_GRID_Y):
+        for column, x in enumerate(cfg.PET_GRID_X):
+            if abs(point[0] - x) <= cfg.PET_CELL_HALF and abs(point[1] - y) <= cfg.PET_CELL_HALF:
+                return pet_cell_state(img, row, column) == "equipped"
+    return False
+
 def first_listed_cell(img: Image, stop_at_equipped: bool = False) -> Optional[tuple[str, Point]]:
     """The first cell (rows from the top, left to right) of the small backpack's grid that can be picked - ("pet", its middle) - or, with `stop_at_equipped`, the equipped pet if it comes first: ("equipped", its
     middle). None if there is neither."""
@@ -4062,7 +4137,10 @@ def open_pet_pen() -> bool:
         elif kind == "press":
             pydirectinput.press(cfg.KEYS[what])
         elif kind == "door":
-            wait_for_white_to_pass(amount, cfg.WHITE_LOOK + 1.0)                                      # (the door's white screen to fade: the yard has loaded then)
+            if not wait_for_white_to_pass(amount, cfg.WHITE_LOOK + 1.0, what=f"the pen's {what} door"):      # (the door's white screen to fade: the yard has loaded then)
+                logger.debug("No white screen at the door")
+            elif in_house(grab_screen()):
+                log_run_event(f"the pen's {what} door: still in the house afterwards (the Exit Home button is on screen)")
         else:
             wait_interruptible(amount)
     return look_until(lambda img: popup_visible(img, "pet_pen_title"), cfg.PET_PEN_OPEN_WAIT, cfg.PET_PEN_POLL) is not None
@@ -4954,6 +5032,18 @@ def run_full_cycle() -> None:
             logger.info(f"Waiting for a need... {format_duration(time.time() - waiting_since)}", extra={"status": True})      # (a line the console overwrites)
             wait_interruptible(min(1.0, deadline - time.time()))
 
+def run_setup_if_requested() -> None:
+    """The Settings tab's "Run Setup at the next loop" (the `setup_next_loop` switch): clear it, untick its checkbox and run Setup once. A Setup that did not take is logged (setup_game() keeps the
+    pictures); the loop goes on."""
+    if not load_game_config()["setup_next_loop"]:
+        return
+    update_game_config(lambda c: c.update(setup_next_loop=False))
+    if state.macro_window is not None:
+        state.macro_window.run_on_ui_thread(lambda: state.macro_window.config_flag_vars["setup_next_loop"].set(False), timeout=1.0)
+    log_run_event("setup: asked for at the next loop")
+    if not setup_game():
+        log_run_event("setup: some step did not take (see the failures)")
+
 def run_workflow_loop() -> None:
     """Respawn once, then repeat the workflow until a stop request, which propagates (bare
     finally, not except) so the GUI reports [STOPPED]. See docs/ARCHITECTURE.md#the-workflow-lifecycle.
@@ -4988,6 +5078,7 @@ def run_workflow_loop() -> None:
                 if needs_respawn:
                     respawn_character()
                     needs_respawn = False
+                run_setup_if_requested()
                 run_full_cycle()
                 wait_interruptible(cfg.LOOP_DELAY)
             except FocusLost:
@@ -6111,37 +6202,25 @@ class AdoptMeGUI:
         tk.Label(btn_frame, text="Functions", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"),
                  bg=self.bg, fg=self.accent).pack(anchor=tk.W)
 
-        for label, action in (("Respawn", respawn_character), ("Setup", setup_game), ("Leave & rejoin", leave_and_rejoin),
-                              ("Go to the Trading Hub", travel_to_trade_hub), ("Leave the Trading Hub", leave_trade_hub)):
+        for label, action in (("Respawn", respawn_character), ("Leave & rejoin", leave_and_rejoin)):
             btn = tk.Button(btn_frame, text=label, command=lambda a=action: self.run_async(a),  # type: ignore[misc]
                             font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_RESPAWN_COLOR, fg=self.fg,
                             height=cfg.GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
             btn.pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
             self.action_buttons.append(btn)
 
+        # Setup is not a button: it is ticked here and runs once, at the next pass of the loop (a loop that is running takes it at its next cycle)
+        self.config_flag_vars: dict[str, tk.BooleanVar] = {}
+        self.add_config_checkbox(btn_frame, "Run Setup at the next loop (once)", "setup_next_loop", load_game_config())
+
         # Settings tab
         # Persisted switches (see load_game_config()). Deliberately not in
         # action_buttons: they must stay usable while a workflow is running,
         # which is safe since update_game_config() is locked.
-        config = load_game_config()
-        self.config_flag_vars: dict[str, tk.BooleanVar] = {}
-        for label, key in (("Run side quest", "side_quest_enabled"),
-                           ("Resume after focus loss", "resume_on_focus_loss")):
-            self.add_config_checkbox(options_tab, label, key, config)
+        self.build_settings_tab(options_tab)
 
-        self.add_config_checkbox(options_tab, "Rejoin the private server (off: a public one)", "use_private_server", config)
-        tk.Label(options_tab, text="Private server link", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
-                 bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X)
-        self.server_link_var = tk.StringVar(value=config["private_server_link"])
-        server_link_entry = tk.Entry(options_tab, textvariable=self.server_link_var, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
-                                     bg=cfg.GUI_CONSOLE_BG, fg=cfg.GUI_CONSOLE_FG, insertbackground=cfg.GUI_CONSOLE_FG)
-        server_link_entry.pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
-        server_link_entry.bind("<FocusOut>", lambda e: self.save_server_link())
-        server_link_entry.bind("<Return>", lambda e: self.save_server_link())
-
-        # Debug tab: two subtabs - the need handlers (one button each, regardless
-        # of whether it's in ENABLED_NEEDS, so any can be run on its own, plus
-        # one that runs them all in turn) and everything else.
+        # Debug tab: the need handlers (a switch and a Test button each, regardless of whether it's in
+        # ENABLED_NEEDS, so any can be run on its own, plus one that runs them all in turn).
         self.build_debug_tab(debug_tab)
 
         # Debug console
@@ -6231,7 +6310,7 @@ class AdoptMeGUI:
                 final_status = "[STOPPED]"
                 mark_stopped()
             except TaskInterrupted as interruption:
-                # The GUI's Setup button ran setup_game() with the in-task checks on, and a disconnect made them
+                # A Setup run with the in-task checks on (the bot's /setup), and a disconnect made them
                 # rejoin the game - which ran setup itself. The action is done, not crashed.
                 record(log_run_event, f"interrupted by {interruption.reason}")
                 final_status = "[DONE]"
@@ -6322,15 +6401,14 @@ class AdoptMeGUI:
         logger.info("Config reset to defaults")
 
     def build_debug_tab(self, parent: Any) -> None:
-        """The Debug tab: an Options subtab (build_other_tab()) and a Needs one
-        (build_needs_tab())."""
+        """The Debug tab: an Options subtab (build_debug_options()) and a Needs one (build_needs_tab())."""
         subtabs = ttk.Notebook(parent)
         subtabs.pack(fill=tk.BOTH, expand=True)
+        options_tab = tk.Frame(subtabs, bg=self.bg)
         needs_tab = tk.Frame(subtabs, bg=self.bg)
-        other_tab = tk.Frame(subtabs, bg=self.bg)
-        subtabs.add(other_tab, text="Options")
+        subtabs.add(options_tab, text="Options")
         subtabs.add(needs_tab, text="Needs")
-        self.build_other_tab(other_tab)
+        self.build_debug_options(options_tab)
         self.build_needs_tab(needs_tab)
 
     def build_needs_tab(self, parent: Any) -> None:
@@ -6365,33 +6443,62 @@ class AdoptMeGUI:
         update_game_config(lambda c: c.setdefault("needs_enabled", {}).update({name: value}))
         logger.info(f"{name} need {'on' if value else 'off'}")
 
-    def build_other_tab(self, parent: Any) -> None:
-        """Fill the Options subtab: record the next run, show the debug lines in the output or not, refresh the debug
-        folder, reset the config."""
-        self.add_config_checkbox(parent, "Record the next run (low quality video)", "record_next_run", load_game_config())
-        self.add_config_checkbox(parent, "Capture the moments of a run (kept when it lasts over an hour)", "keep_moments", load_game_config())
-        self.add_config_checkbox(parent, "Collect the Pet Pen when the Task Board says it is ready", "pet_pen_enabled", load_game_config())
-        self.add_config_checkbox(parent, "Setup levels a pet that still grows (no eggs, none full grown)", "level_growing_pet", load_game_config())
-        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['blackout'].upper()} blanks the screen in Roblox (off: type it)", "blackout_hotkey_enabled", load_game_config())
-        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['new_need'].upper()} teaches a new need icon in Roblox (off: type it)", "new_need_hotkey_enabled", load_game_config())
+    def add_section(self, parent: Any, title: str) -> None:
+        """A heading of the Settings tab, with a line under it."""
+        tk.Label(parent, text=title, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"), bg=self.bg, fg=self.accent, anchor=tk.W
+                 ).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=(cfg.GUI_ROW_SPACING, 0))
+        tk.Frame(parent, bg=self.accent, height=cfg.GUI_DIVIDER_HEIGHT).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
+
+    def add_hint(self, parent: Any, text: str) -> None:
+        """A line of small print on the Settings tab."""
+        tk.Label(parent, text=text, font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W, justify=tk.LEFT
+                 ).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
+
+    def build_settings_tab(self, parent: Any) -> None:
+        """Fill the Settings tab, in three groups: what the loop does, the rejoin and the keys (the debugging options are on the Debug tab). Every checkbox is a persisted switch (add_config_checkbox()), usable while a run goes on."""
+        config = load_game_config()
+        self.add_section(parent, "The loop")
+        for label, key in (("Tend the money tree", "money_tree_enabled"),
+                           ("Tend the lure", "lure_enabled"),
+                           ("Resume after focus loss (take Roblox's focus back instead of stopping)", "resume_on_focus_loss"),
+                           ("Collect the Pet Pen when the Task Board says it is ready", "pet_pen_enabled"),
+                           ("Setup levels a pet that still grows (no eggs, none full grown)", "level_growing_pet")):
+            self.add_config_checkbox(parent, label, key, config)
+
+        self.add_section(parent, "Rejoin")
+        self.add_config_checkbox(parent, "Rejoin the private server (off: a public one)", "use_private_server", config)
+        self.add_hint(parent, "Private server link")
+        self.server_link_var = tk.StringVar(value=config["private_server_link"])
+        server_link_entry = tk.Entry(parent, textvariable=self.server_link_var, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
+                                     bg=cfg.GUI_CONSOLE_BG, fg=cfg.GUI_CONSOLE_FG, insertbackground=cfg.GUI_CONSOLE_FG)
+        server_link_entry.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+        server_link_entry.bind("<FocusOut>", lambda e: self.save_server_link())
+        server_link_entry.bind("<Return>", lambda e: self.save_server_link())
+
+        self.add_section(parent, "Keys")
+        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['blackout'].upper()} blanks the screen in Roblox (off: type it)", "blackout_hotkey_enabled", config)
+        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['new_need'].upper()} teaches a new need icon in Roblox (off: type it)", "new_need_hotkey_enabled", config)
+        self.add_hint(parent, f"{cfg.HOTKEYS['stop'].upper()} stops, anywhere. {cfg.HOTKEYS['capture'].upper()} starts / stops an input capture (in Roblox). "
+                              f"{cfg.HOTKEYS['screenshot'].upper()} saves a screenshot to debug/screenshots (in Roblox)")
+
+    def build_debug_options(self, parent: Any) -> None:
+        """Fill the Debug tab's Options subtab: record the next run, capture the moments, show the debug lines in the output, refresh the debug folder, reset the config."""
+        config = load_game_config()
+        self.add_config_checkbox(parent, "Record the next run (low quality video)", "record_next_run", config)
+        self.add_config_checkbox(parent, "Capture the moments of a run (kept when it lasts over an hour)", "keep_moments", config)
         self.show_debug_var = tk.BooleanVar(value=True)
         tk.Checkbutton(parent, text="Show debug lines in the output", variable=self.show_debug_var, command=self.set_debug_lines_shown,
                        font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.bg, fg=self.fg,
                        selectcolor=self.bg, activebackground=self.bg, activeforeground=self.fg,
                        anchor=tk.W, cursor="hand2").pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
-        tk.Label(parent, text=f"Press {cfg.HOTKEYS['capture'].upper()} anywhere to start / stop capturing screenshots and input",
-                 font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
-        tk.Label(parent, text=f"Press {cfg.HOTKEYS['screenshot'].upper()} in Roblox to save a screenshot of the whole screen in debug/screenshots",
-                 font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
-        tk.Label(parent, text=f"Press {cfg.HOTKEYS['blackout'].upper()} in Roblox to blank / show the screen while the loop runs (the macro still sees it)",
-                 font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
-        tk.Button(parent, text="Refresh debug", command=self.refresh_debug_folder,
-                  font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.accent, fg=self.fg, cursor="hand2"
-                  ).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
-        tk.Button(parent, text="Reset Config", command=self.reset_config,
-                  font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_STOP_COLOR, fg=self.fg,
-                  height=cfg.GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2"
-                  ).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+        buttons = tk.Frame(parent, bg=self.bg)
+        buttons.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+        buttons.grid_columnconfigure(0, weight=1, uniform="settings")
+        buttons.grid_columnconfigure(1, weight=1, uniform="settings")
+        tk.Button(buttons, text="Refresh debug", command=self.refresh_debug_folder, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
+                  bg=self.accent, fg=self.fg, cursor="hand2").grid(row=0, column=0, sticky=tk.EW, padx=(0, cfg.GUI_WIDGET_SPACING))
+        tk.Button(buttons, text="Reset Config", command=self.reset_config, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
+                  bg=cfg.GUI_STOP_COLOR, fg=self.fg, cursor="hand2").grid(row=0, column=1, sticky=tk.EW, padx=(cfg.GUI_WIDGET_SPACING, 0))
 
     def refresh_debug_folder(self) -> None:
         """Ask, then empty the debug folder (refresh_debug()). Not while a run

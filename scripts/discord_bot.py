@@ -1108,7 +1108,7 @@ def build(config: bot_lib.Config) -> discord.Client:
     async def need_command(interaction: discord.Interaction, need: app_commands.Choice[str], on: bool) -> None:
         await change_switch(interaction, "need", need.value, on)
 
-    @command("option", "Switch an option on or off (side quest, recording, hotkeys, debug lines in the output...)")
+    @command("option", "Switch an option on or off (money tree, lure, recording, hotkeys, debug lines...)")
     @app_commands.choices(option=option_choices)
     async def option_command(interaction: discord.Interaction, option: app_commands.Choice[str], on: bool) -> None:
         await change_switch(interaction, "option", option.value, on)

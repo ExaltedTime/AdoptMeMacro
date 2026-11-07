@@ -362,7 +362,7 @@ def walker(macro, monkeypatch):
     list of max_wait values wait_until_need_gone() was called with."""
     waited = []
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
-    monkeypatch.setattr(macro, "teleport_to", lambda pos: None)
+    monkeypatch.setattr(macro, "teleport_to", lambda pos: True)
     monkeypatch.setattr(macro, "hold_key", lambda key, duration: None)
     monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
     monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=60.0, **kw: waited.append(max_wait))
@@ -943,7 +943,7 @@ def sick_run(macro, world, monkeypatch):
         run["screen"] = run["after_back_out"]
 
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
-    monkeypatch.setattr(macro, "teleport_to", lambda pos: None)
+    monkeypatch.setattr(macro, "teleport_to", lambda pos: True)
     monkeypatch.setattr(macro, "hold_key", lambda key, duration: None)
     monkeypatch.setattr(macro, "grab_screen", lambda: run["screen"])
     monkeypatch.setattr(macro, "dismiss_stray_windows", back_out)
@@ -1501,17 +1501,17 @@ def test_a_set_command_changes_the_switch_and_its_checkbox(macro, monkeypatch, t
     class Var:
         def __init__(self): self.value = None
         def set(self, value): self.value = value
-    gui.need_vars, gui.config_flag_vars, gui.show_debug_var = {"hungry": Var()}, {"side_quest_enabled": Var()}, Var()
+    gui.need_vars, gui.config_flag_vars, gui.show_debug_var = {"hungry": Var()}, {"lure_enabled": Var()}, Var()
     changes = []
     gui.set_need_enabled = lambda name, value: changes.append(("need", name, value))
     gui.set_config_flag = lambda key, value: changes.append((key, value))
     gui.set_debug_lines_shown = lambda: changes.append(("debug lines", gui.show_debug_var.value))
-    for kind, name, value in (("need", "hungry", False), ("option", "side_quest", False), ("option", "show_debug_lines", False),
+    for kind, name, value in (("need", "hungry", False), ("option", "lure", False), ("option", "show_debug_lines", False),
                               ("option", "level_growing_pet", True)):
         write_command(macro, "set", kind=kind, name=name, value=value)
         gui.poll_commands()
-    assert changes == [("need", "hungry", False), ("side_quest_enabled", False), ("debug lines", False), ("level_growing_pet", True)]
-    assert gui.need_vars["hungry"].value is False and gui.config_flag_vars["side_quest_enabled"].value is False
+    assert changes == [("need", "hungry", False), ("lure_enabled", False), ("debug lines", False), ("level_growing_pet", True)]
+    assert gui.need_vars["hungry"].value is False and gui.config_flag_vars["lure_enabled"].value is False
     assert gui.show_debug_var.value is False                                              # (a switch with no checkbox of its own, like the stitches one, is only persisted)
 
 
@@ -2295,3 +2295,53 @@ def test_teaching_new_needs_asks_for_each_icon_on_the_bar_that_matches_nothing_a
     monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(0, icon, "potty", 0.99)]))
     asked.clear()
     assert macro.teach_new_needs() == 0 and asked == []
+
+
+def test_a_need_that_never_worked_stays_disabled_after_a_rejoin_and_does_not_count_for_the_stuck_rejoin(macro, monkeypatch):
+    macro.run_stats.resolved = {"hungry": 3, "beach": 1}                                       # (beach has worked in this run, sick never)
+    macro.state.attempted_last, macro.state.attempt_streaks = {"sick", "beach"}, {"sick": macro.cfg.NEED_STUCK_CHECKS - 1, "beach": macro.cfg.NEED_STUCK_CHECKS - 1}
+    monkeypatch.setattr(macro, "log_failure", lambda text, screenshot=True: None)
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    monkeypatch.setattr(macro, "enabled_needs", lambda: {"sick", "beach", "hungry"})
+    macro.record_detection(["sick", "beach"])                                                    # (both are stuck now: sick never worked, beach did)
+    assert macro.state.disabled_needs == {"sick", "beach"} and macro.state.hopeless == {"sick"}
+    macro.state.disabled_needs &= macro.state.hopeless                                           # (what a recovery keeps)
+    assert macro.state.disabled_needs == {"sick"}
+    monkeypatch.setattr(macro.gw, "getAllWindows", lambda: [type("W", (), {"title": "Roblox"})()])
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((1080, 1920, 3), np.uint8))
+    macro.state.last_rejoin = macro.state.last_progress = time.time()
+    macro.state.hopeless = {"pizza", "sick"}
+    macro.state.disabled_needs = {"a", "b", "pizza", "sick"}
+    assert macro.rejoin_reason() is None                                                         # (two that can be helped and two that never worked: no rejoin for them)
+    macro.state.disabled_needs = {"a", "b", "c", "d", "pizza", "sick"}
+    reason = macro.rejoin_reason()
+    assert reason is not None and reason[0] == "stuck" and reason[1].startswith("4 needs disabled")
+
+
+def update_screen():
+    """The game's update: a white screen with blue letters at the bottom."""
+    img = np.full((1080, 1920, 3), 255, np.uint8)
+    img[868:892, 760:1180] = (220, 140, 30)                                                    # (BGR: blue letters; a block stands for them)
+    return img
+
+
+def test_the_server_closing_text_is_told_by_its_blue_on_white_and_not_by_other_white_screens(macro):
+    assert macro.server_closing_visible(update_screen()) is True
+    assert macro.server_closing_visible(np.full((1080, 1920, 3), 255, np.uint8)) is False            # (a plain white screen)
+    green = np.full((1080, 1920, 3), 255, np.uint8)
+    green[868:892, 760:1180] = (70, 180, 90)                                                      # (the respawn's green "Your pets have earned" text)
+    assert macro.server_closing_visible(green) is False
+
+
+def test_a_game_that_is_updating_is_rejoined_after_three_minutes_and_not_after_half_a_minute(macro, monkeypatch):
+    clock = [1000.0]
+    window = type("Window", (), {"title": "Roblox"})()
+    monkeypatch.setattr(macro.time, "time", lambda: clock[0])
+    monkeypatch.setattr(macro.gw, "getAllWindows", lambda: [window])
+    monkeypatch.setattr(macro, "grab_screen", update_screen)
+    assert macro.rejoin_reason() is None
+    clock[0] += macro.cfg.WHITE_SCREEN_REJOIN_AFTER + 5
+    assert macro.rejoin_reason() is None                                                           # (past the 30 s of a plain white screen: waiting for the update)
+    clock[0] += macro.cfg.SERVER_UPDATE_REJOIN_AFTER
+    kind, reason = macro.rejoin_reason()
+    assert kind == "white_screen" and "closing for an update" in reason

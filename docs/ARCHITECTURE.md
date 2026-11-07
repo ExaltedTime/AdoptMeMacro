@@ -530,6 +530,8 @@ was - which closes nothing in the daily view, the one the macro meets (real scre
 `STRAY_WINDOWS`. `setup_game()` also closes any before it starts, since an open
 one would take its clicks.
 
+Three more entries are popups of an event (the Admin Abuse one) and of the pet, found in the frames of a 3.6 hour run (`tests/popups/trade_receipt_screen.png`, `admin_gift_screen.png`, `choose_card_screen.png`; the crops are cut from them): **`trade_receipt`** ("TRADE RECEIPT - YOU RECEIVED: <item>" with confetti, closed by its Thanks!; it stood over the game for 4.6 minutes, and over the teleport dialog, which then "did not come up", the ride's backpack and Setup's pets tab), **`admin_gift`** ("An Adopt Me admin gave you: <item>", closed by its Awesome!; 19 minutes, in which no need could be detected or done and the run rejoined for "no need resolved for 20 minutes") and **`choose_card`** (the pet's question card, "Can <pet> have the ability to jump on people's heads?" with a Choose One list, Cancel and Submit: found by its red Cancel, which closes it; 13 minutes, in which the button needs found no buttons; `only_when_unwanted`, so the choose need, whose click is on that card, is not interrupted). A popup of another kind will do the same until it is added: the failure screenshots of a run (`failures/`) and the "no need detected for 4 min" lines show them, and the crop of a line of its text and its close position are all an entry needs.
+
 Two more entries are the **character menu** (`character_menu.png`: the five
 buttons Profile / Emotions / Dances / Actions / Activities; a click in the
 middle of the screen dismisses it) and the **pet focus view** (`pet_focus.png`:

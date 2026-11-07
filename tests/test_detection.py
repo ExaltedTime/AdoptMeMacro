@@ -197,7 +197,8 @@ def test_stray_windows_are_recognised_and_closed(macro, monkeypatch, name):
 
 @pytest.mark.parametrize("shot, name, closed_at", [("star_rewards_claim", "star_rewards_claim", (959, 675)), ("star_rewards", "star_rewards", (1209, 441)),
                                                    ("trading_hub", "trading_hub", (1278, 339)), ("task_board_alerts", "task_board", (1318, 369)),
-                                                   ("trade_board", "trade_board", (1282, 339)), ("promo_limited_time", "promo_limited_time", (1085, 665))])
+                                                   ("trade_board", "trade_board", (1282, 339)), ("promo_limited_time", "promo_limited_time", (1085, 665)),
+                                                   ("trade_receipt_screen", "trade_receipt", (1030, 650)), ("admin_gift_screen", "admin_gift", (960, 657)), ("choose_card_screen", "choose_card", (869, 659))])
 def test_each_stray_window_is_told_from_the_others_in_a_real_screenshot_and_closed_where_it_closes(macro, monkeypatch, shot, name, closed_at):
     """Real screenshots (the Roblox ones, which lack the window's title bar, with 23 rows added on top as the macro's frames have). The Star Rewards
     that opens by itself once a day has only a CLAIM! button (no X), the calendar one that the star icon opens has a red X: each is clicked where its
@@ -518,3 +519,22 @@ def test_the_age_up_screen_that_stays_over_the_game_is_closed_by_its_nice_button
     monkeypatch.setattr(macro, "grab_screen", lambda: screenshot("paycheck"))
     macro.clicks.clear()
     assert macro.dismiss_stray_windows() is None                                                   # (no other screen is taken for it)
+
+
+def test_the_event_popups_and_the_pets_question_card_are_not_taken_for_each_other_or_for_anything_in_the_teleport_frames(macro):
+    """A run lost 20 minutes behind the admin's gift, four behind a trade receipt and 13 behind the pet's question card (all three found in the run's frames, closed by nothing)."""
+    names = ("trade_receipt", "admin_gift", "choose_card")
+    for shot in ("trade_receipt_screen", "admin_gift_screen", "choose_card_screen"):
+        assert {k for k in names if macro.popup_visible(screenshot(shot), k)} == {shot[:-7]}
+    for frame in ("house_before", "dialog_nursery", "dialog_dealership", "white_first", "red_room", "red_room_stuck", "park_landing", "hospital_lobby", "house_idle"):
+        image = __import__("cv2").imread(os.path.join(os.path.dirname(__file__), "teleport", f"{frame}.png"))
+        assert not any(macro.popup_visible(image, k) for k in names), frame
+
+
+def test_the_pets_question_card_is_left_alone_while_the_pets_view_is_wanted(macro, monkeypatch):
+    monkeypatch.setattr(macro, "grab_screen", lambda: screenshot("choose_card_screen"))
+    monkeypatch.setattr(macro.time, "sleep", lambda s: None)
+    macro.state.pet_focus_wanted = True
+    assert macro.dismiss_stray_windows() is None and macro.clicks == []
+    macro.state.pet_focus_wanted = False
+    assert macro.dismiss_stray_windows() == "choose_card" and macro.clicks == [(869, 659)]

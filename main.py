@@ -1551,7 +1551,7 @@ def respawn_character() -> None:
     for _ in range(2):
         if dismiss_stray_windows() != "respawn_confirm":
             break
-    wait_for_white_to_pass(cfg.RESPAWN_WAIT, what="respawn")                                 # (the respawn's white screen and its fade, or the old fixed wait when none shows)
+    wait_for_white_to_pass(cfg.RESPAWN_WAIT)                                                 # (the respawn's white screen and its fade, or the old fixed wait when none shows: not logged when none shows - it is over before this look as often as not)
     if not in_house(grab_screen()):
         log_run_event("respawn: not in the house afterwards (no Exit Home button)")
     logger.debug("Respawn complete")
@@ -3784,12 +3784,14 @@ def wanting_pet_focus() -> Iterator[None]:
 
 
 def find_dialog_button(img: Image, spec: dict[str, Any]) -> Optional[Point]:
-    """The middle of the biggest blob of colour `spec` (DIALOG_BUTTONS: "box", "hsv" - one or two (low, high) ranges -, "size" - (width, height) ranges) in `img`, or None."""
+    """The middle of the biggest blob of colour `spec` (DIALOG_BUTTONS: "box", "hsv" - one or two (low, high) ranges -, "size" - (width, height) ranges, and "join": the px the blobs are grown by first) in `img`, or None."""
     left, top, right, bottom = spec["box"]
     hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(hsv, *spec["hsv"][0])
     for extra in spec["hsv"][1:]:
         mask = cv2.bitwise_or(mask, cv2.inRange(hsv, *extra))
+    if spec.get("join"):                                                                # (a blob something is drawn over - the Task Board's sign under a green check and a chick - is in pieces: grown together first)
+        mask = cv2.dilate(mask, np.ones((spec["join"], spec["join"]), np.uint8))
     count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
     (min_w, max_w), (min_h, max_h) = spec["size"]
     best: Optional[tuple[int, Point]] = None

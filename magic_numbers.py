@@ -56,6 +56,12 @@ STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     "task_board": {"box": (540, 300, 1000, 430), "close_pos": (1318, 369)},
     # The shop's ad that comes up over the game (a "Limited Time" ribbon over a product, a red X and a blue COOL button; the one seen was merch): its COOL closes it. Only the ribbon is the crop, as the product changes.
     "promo_limited_time": {"box": (560, 380, 1000, 480), "close_pos": (1085, 665)},
+    # Popups of the Admin Abuse event and the like, over the middle of the game until they are closed (a run lost 20 minutes behind the second one):
+    "trade_receipt": {"box": (800, 440, 1130, 540), "close_pos": (1030, 650)},       # "TRADE RECEIPT - YOU RECEIVED: <item>" with confetti, closed by its Thanks!
+    "admin_gift": {"box": (700, 430, 1220, 520), "close_pos": (960, 657)},          # "An Adopt Me admin gave you: <item>", closed by its Awesome!
+    # The pet's question card ("Can <pet> have the ability to jump on people's heads?" with a Choose One list, Cancel and Submit): found by its red Cancel, closed by it. The choose need's own
+    # click is on this card's list, so it is left alone while the pet's view is wanted.
+    "choose_card": {"box": (700, 600, 1000, 720), "close_pos": (869, 659), "only_when_unwanted": True},
     "star_rewards_claim": {"box": (680, 410, 1080, 520), "close_pos": (959, 675)},   # the view that opens on its own once a day: no X, only the green CLAIM! button
     # "Are you sure you want to respawn your character?" - what respawn_character()'s esc, r, enter leaves
     # open when the Enter comes before the dialog does; "close_pos" is its Respawn button.
@@ -83,8 +89,8 @@ STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     # and the pet is picked again at once (dismiss_stray_windows() makes pet_repick() due): in a 10-hour run it stood over the yard for a while before a 20-minute stall.
     "pet_full_grown_notice": {"box": (700, 400, 1260, 560), "button": "okay"},
 }
-DIALOG_BUTTONS = {                              # (and the Task Board's wooden sign at the left edge - found by its wood brown, not by a crop: its background is the world - 100 x 60 to 110 x 80 on the captures; and the green NICE! of the Pet Pen's age-up screen: 270 x 67 on the capture)
-    "task_board": {"box": (0, 480, 200, 680), "hsv": (((0, 100, 60), (22, 255, 230)),), "size": ((90, 125), (45, 90))},
+DIALOG_BUTTONS: dict[str, dict[str, Any]] = {                              # (and the Task Board's wooden sign at the left edge - found by its wood brown, not by a crop: its background is the world - 100 x 60 to 110 x 80 on the captures; and the green NICE! of the Pet Pen's age-up screen: 270 x 67 on the capture)
+    "task_board": {"box": (0, 480, 200, 680), "hsv": (((0, 100, 60), (22, 255, 230)),), "size": ((90, 150), (45, 120)), "join": 15},      # (join: with its green check and the chick over it - the board when its tasks are done - the wood is in pieces: a 3.6 hour run found the sign in 50 of 177 frames without it, 157 with)
     "nice":    {"box": (800, 970, 1120, 1070), "hsv": (((45, 110, 130), (80, 255, 255)),), "size": ((240, 300), (50, 80))},                              # the buttons of those cards (measured on a real frame: Decline 174 x 47 and Accept 174 x 49 side by side, Okay 360 x 49)
     "decline": {"box": (700, 540, 1260, 790), "hsv": (((170, 150, 150), (180, 255, 255)), ((0, 150, 150), (5, 255, 255))), "size": ((150, 210), (30, 60))},
     "okay":    {"box": (700, 540, 1260, 790), "hsv": (((45, 110, 130), (80, 255, 255)),), "size": ((300, 420), (30, 60))},

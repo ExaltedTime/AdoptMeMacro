@@ -16,7 +16,7 @@ def shot(name):
 
 
 def test_the_sign_is_found_on_every_background_and_not_in_a_scene_without_it(macro):
-    for name in ("badge", "no_badge", "world_after", "board_pet_pen_ready", "board_other_alerts", "sign_stormy"):               # (the last: the Lightning Dimension update, a dark cloud round the sign and darker wood)
+    for name in ("badge", "no_badge", "world_after", "board_pet_pen_ready", "board_other_alerts", "sign_stormy", "sign_done"):               # (sign_stormy: the Lightning Dimension update, a dark cloud round the sign and darker wood; sign_done: its green check and a chick over the wood, which broke the blob in pieces - not found in 127 of 177 frames of a run before the pieces were joined)
         x, y = macro.find_task_board_button(shot(name))
         assert 40 <= x <= 90 and 530 <= y <= 590, name
     assert macro.find_task_board_button(shot("age_up_nice")) is None

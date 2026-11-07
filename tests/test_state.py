@@ -362,7 +362,7 @@ def walker(macro, monkeypatch):
     list of max_wait values wait_until_need_gone() was called with."""
     waited = []
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
-    monkeypatch.setattr(macro, "teleport_to", lambda pos: None)
+    monkeypatch.setattr(macro, "teleport_to", lambda pos: True)
     monkeypatch.setattr(macro, "hold_key", lambda key, duration: None)
     monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
     monkeypatch.setattr(macro, "wait_until_need_gone", lambda name, max_wait=60.0, **kw: waited.append(max_wait))
@@ -943,7 +943,7 @@ def sick_run(macro, world, monkeypatch):
         run["screen"] = run["after_back_out"]
 
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
-    monkeypatch.setattr(macro, "teleport_to", lambda pos: None)
+    monkeypatch.setattr(macro, "teleport_to", lambda pos: True)
     monkeypatch.setattr(macro, "hold_key", lambda key, duration: None)
     monkeypatch.setattr(macro, "grab_screen", lambda: run["screen"])
     monkeypatch.setattr(macro, "dismiss_stray_windows", back_out)

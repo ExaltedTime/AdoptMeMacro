@@ -50,8 +50,10 @@ def test_without_a_white_screen_the_wait_is_the_old_fixed_one_and_no_longer(macr
 
 def test_the_respawn_the_teleport_and_the_pens_door_wait_for_it(macro, monkeypatch):
     calls = []
-    monkeypatch.setattr(macro, "wait_for_white_to_pass", lambda static, look=2.0: calls.append((static, look)) or True)
+    monkeypatch.setattr(macro, "wait_for_white_to_pass", lambda static, look=2.0, **kw: calls.append((static, look)) or True)
     monkeypatch.setattr(macro, "focus_roblox_click", lambda: True)
+    monkeypatch.setattr(macro, "in_house", lambda img: True)
+    monkeypatch.setattr(macro, "grab_screen", lambda: None)
     monkeypatch.setattr(macro, "key_down", lambda key: None)
     monkeypatch.setattr(macro, "key_up", lambda key: None)
     monkeypatch.setattr(macro.time, "sleep", lambda s: None)
@@ -70,17 +72,97 @@ def test_the_respawn_the_teleport_and_the_pens_door_wait_for_it(macro, monkeypat
 
 def test_the_teleport_waits_for_its_first_and_its_second_white_screen(macro, monkeypatch):
     calls = []
-    monkeypatch.setattr(macro, "wait_for_white_to_pass", lambda static, look=2.0: calls.append((static, look)) or True)
+    monkeypatch.setattr(macro, "wait_for_white_to_pass", lambda static, look=2.0, **kw: calls.append((static, look)) or True)
     monkeypatch.setattr(macro, "backpack_on_purpose", __import__("contextlib").nullcontext)
     monkeypatch.setattr(macro.pydirectinput, "press", lambda key: None, raising=False)
     monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
     monkeypatch.setattr(macro, "hover_click", lambda *a, **k: None)
     monkeypatch.setattr(macro, "grab_screen", lambda: None)
     monkeypatch.setattr(macro, "teleport_took", lambda before: True)
+    monkeypatch.setattr(macro, "in_house", lambda img: False)
     monkeypatch.setattr(macro, "hold_key", lambda key, seconds: None)
     order = []
     monkeypatch.setattr(macro, "hold_key", lambda key, seconds: order.append("walk"))
-    monkeypatch.setattr(macro, "wait_for_white_to_pass", lambda static, look=2.0: order.append("white") or calls.append((static, look)) or True)
+    monkeypatch.setattr(macro, "wait_for_white_to_pass", lambda static, look=2.0, **kw: order.append("white") or calls.append((static, look)) or True)
     macro.teleport_to((1, 1))
     assert order == ["white", "white", "walk"]                                                    # (the walk back is at the park, after both loads)
     assert calls == [(macro.cfg.TELEPORT_WAIT, 2.0), (macro.cfg.TELEPORT_SETTLE_WAIT, macro.cfg.TELEPORT_SECOND_WHITE_LOOK)]
+
+
+# --- the frames of a capture of the teleport tests (tests/teleport/): what each moment of a teleport looks like -----------------------------
+
+import os
+import cv2
+
+TELEPORT_FRAMES = os.path.join(os.path.dirname(__file__), "teleport")
+
+
+def teleport_frame(name):
+    return cv2.imread(os.path.join(TELEPORT_FRAMES, f"{name}.png"))
+
+
+@pytest.mark.parametrize("name, white, house", [
+    ("house_before", False, True), ("dialog_nursery", False, True), ("dialog_dealership", False, True), ("house_idle", False, True),
+    ("white_first", True, False), ("white_second", True, False),
+    ("red_room", False, False), ("park_landing", False, False), ("road_landing", False, False), ("hospital_lobby", False, False),
+])
+def test_each_moment_of_a_teleport_is_told_by_its_white_screen_and_the_houses_exit_button(macro, name, white, house):
+    """The house shows its red Exit Home button, a white screen hides everything, and the red room and every place outside have none:
+    so "still in the house" after a teleport is a teleport that did not happen."""
+    frame = teleport_frame(name)
+    assert macro.detect_white_screen(frame) is white
+    assert macro.in_house(frame) is house
+
+
+def test_a_missing_white_screen_is_written_to_the_run_log_when_it_is_named(macro, clock, monkeypatch):
+    frames, waited = clock
+    lines = []
+    monkeypatch.setattr(macro, "log_run_event", lines.append)
+    frames[:] = [SCENE]
+    assert macro.wait_for_white_to_pass(static=1.0, what="respawn") is False
+    assert len(lines) == 1 and lines[0].startswith("respawn: no white screen")
+    frames[:] = [SCENE, WHITE, SCENE, SCENE]
+    assert macro.wait_for_white_to_pass(static=1.0, what="respawn") is True and len(lines) == 1      # (one that showed is not logged)
+
+
+@pytest.fixture
+def teleporting(macro, monkeypatch):
+    """teleport_to() with the game stubbed: `state` says whether the Yes took and whether the house is still on screen."""
+    state = {"took": True, "house": [True, False], "walked": []}
+    monkeypatch.setattr(macro, "backpack_on_purpose", __import__("contextlib").nullcontext)
+    monkeypatch.setattr(macro.pydirectinput, "press", lambda key: None, raising=False)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "hover_click", lambda *a, **k: None)
+    monkeypatch.setattr(macro, "grab_screen", lambda: None)
+    monkeypatch.setattr(macro, "teleport_took", lambda before: state["took"])
+    monkeypatch.setattr(macro, "wait_for_white_to_pass", lambda static, look=2.0, **kw: True)
+    monkeypatch.setattr(macro, "hold_key", lambda key, seconds: state["walked"].append(key))
+    monkeypatch.setattr(macro, "in_house", lambda img: state["house"].pop(0) if len(state["house"]) > 1 else state["house"][0])
+    lines = []
+    monkeypatch.setattr(macro, "log_run_event", lines.append)
+    state["lines"] = lines
+    return state
+
+
+def test_a_teleport_that_left_the_player_in_the_house_fails_before_any_walking(macro, teleporting):
+    teleporting["house"] = [True, True]
+    assert macro.teleport_to((1, 1)) is False
+    assert teleporting["walked"] == [] and "still in the house" in teleporting["lines"][0]
+
+
+def test_a_teleport_whose_yes_took_nothing_fails_and_one_that_worked_walks_back(macro, teleporting):
+    teleporting["took"] = False
+    assert macro.teleport_to((1, 1)) is False and teleporting["walked"] == []
+    teleporting["took"] = True
+    teleporting["house"] = [True, False]
+    assert macro.teleport_to((1, 1)) is True and teleporting["walked"] == [macro.cfg.KEYS["back"]]
+
+
+def test_a_walk_need_whose_teleport_failed_respawns_and_fails_without_walking(macro, monkeypatch):
+    walked, respawned = [], []
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "teleport_to", lambda pos: False)
+    monkeypatch.setattr(macro, "respawn_character", lambda: respawned.append(1))
+    monkeypatch.setattr(macro, "hold_key", lambda key, seconds: walked.append(key))
+    assert macro.TeleportWalkNeedHandler("bored").handle() is False
+    assert walked == [] and respawned == [1]

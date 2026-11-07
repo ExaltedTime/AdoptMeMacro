@@ -45,7 +45,7 @@ def test_the_handler_carries_out_the_real_entry(macro, monkeypatch, name):
     entry = cfg.TELEPORT_WALK_NEEDS[name]
     held, teleports, waited = [], [], []
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
-    monkeypatch.setattr(macro, "teleport_to", lambda pos: teleports.append(pos))
+    monkeypatch.setattr(macro, "teleport_to", lambda pos: teleports.append(pos) or True)
     monkeypatch.setattr(macro, "equip_favorite_vehicle", lambda: None)
     monkeypatch.setattr(macro, "hold_key", lambda key, duration: held.append((key, duration)))
     monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)

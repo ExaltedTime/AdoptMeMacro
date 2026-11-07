@@ -1495,10 +1495,17 @@ def click_need_button(need_name: str) -> bool:
 # MOVEMENT
 # ============================================================================
 
-def wait_for_white_to_pass(static: float, look: float = cfg.WHITE_LOOK) -> bool:
+def in_house(img: Image) -> bool:
+    """True if the player is in their house: the red "Exit Home" button at the bottom left (HOUSE_EXIT_BOX) is on screen. It is hidden by a white screen, so it is looked at when one has gone."""
+    left, top, right, bottom = cfg.HOUSE_EXIT_BOX
+    hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
+    red = sum(int(np.count_nonzero(cv2.inRange(hsv, np.array(low), np.array(high)))) for low, high in cfg.HOUSE_EXIT_HSV)
+    return red >= cfg.HOUSE_EXIT_MIN_PIXELS
+
+def wait_for_white_to_pass(static: float, look: float = cfg.WHITE_LOOK, *, what: str = "") -> bool:
     """Wait out a transition by its white screen (a door, a respawn, a teleport: detect_white_screen()) instead of a fixed time: for it to show - within `look` seconds - and then go (WHITE_CLEAR_LOOKS looks
     in a row that are not white, WHITE_PASS_MAX at most), then WHITE_SETTLE more; True. When none shows in `look` seconds the wait is `static` seconds in all (what it was before, so that a transition without
-    a white screen costs no more than it did); False."""
+    a white screen costs no more than it did); False, and with `what` named a line in the run log: a transition that should have a white screen and had none is a sign that it did not happen."""
     started = time.time()
     seen, clear = False, 0
     while time.time() - started < cfg.WHITE_PASS_MAX:
@@ -1510,6 +1517,8 @@ def wait_for_white_to_pass(static: float, look: float = cfg.WHITE_LOOK) -> bool:
                 wait_interruptible(cfg.WHITE_SETTLE)
                 return True
         elif time.time() - started >= look:
+            if what:
+                log_run_event(f"{what}: no white screen showed in {look:.0f} s")
             wait_interruptible(max(0.0, static - (time.time() - started)))
             return False
         wait_interruptible(cfg.WHITE_POLL)
@@ -1535,7 +1544,9 @@ def respawn_character() -> None:
     for _ in range(2):
         if dismiss_stray_windows() != "respawn_confirm":
             break
-    wait_for_white_to_pass(cfg.RESPAWN_WAIT)                                                 # (the respawn's white screen and its fade, or the old fixed wait when none shows)
+    wait_for_white_to_pass(cfg.RESPAWN_WAIT, what="respawn")                                 # (the respawn's white screen and its fade, or the old fixed wait when none shows)
+    if not in_house(grab_screen()):
+        log_run_event("respawn: not in the house afterwards (no Exit Home button)")
     logger.debug("Respawn complete")
 
 def close_open_windows() -> int:
@@ -3160,10 +3171,14 @@ def teleport_took(before: Image) -> bool:
             return True
     return False
 
-def teleport_to(category_pos: Point) -> None:
+def teleport_to(category_pos: Point) -> bool:
     """Open the backpack, teleport via the category tab, walk back to clear the landing
-    spot. Shared by the teleport-walk needs. See docs/ARCHITECTURE.md#need-handlers.
+    spot. Shared by the teleport-walk needs. False (logged) when it can be told that the teleport did not happen: the dialog's Yes took nothing
+    after TELEPORT_YES_TRIES clicks, or the player is still in the house (its Exit Home button) after both loads. A teleport comes with two
+    white screens (a capture of the teleport tests), so each one that does not show is logged too. See docs/ARCHITECTURE.md#need-handlers.
     """
+    started_in_house = in_house(grab_screen())
+    took = False
     with backpack_on_purpose():
         logger.debug("Opening backpack...")
         pydirectinput.press(cfg.KEYS["backpack"])
@@ -3178,15 +3193,22 @@ def teleport_to(category_pos: Point) -> None:
             before = grab_screen()
             hover_click(*cfg.GENERAL_TELEPORT_POS_3)
             if teleport_took(before):
+                took = True
                 break
             logger.debug(f"The teleport did not take after click {attempt + 1}")
         else:
             log_run_event("teleport: nothing happened after the dialog's Yes")
-    wait_for_white_to_pass(cfg.TELEPORT_WAIT)                                                # (the teleport's white screen to fade, not a fixed time)
-    wait_for_white_to_pass(cfg.TELEPORT_SETTLE_WAIT, cfg.TELEPORT_SECOND_WHITE_LOOK)           # (the second load: a landing in a red room, then its own white screen; the walk back belongs at the park, so it comes after both; the fixed time when none shows)
+    if not took:
+        return False
+    wait_for_white_to_pass(cfg.TELEPORT_WAIT, what="teleport, first load")                    # (the teleport's white screen to fade, not a fixed time)
+    wait_for_white_to_pass(cfg.TELEPORT_SETTLE_WAIT, cfg.TELEPORT_SECOND_WHITE_LOOK, what="teleport, second load")   # (the second load: a landing in a red room, then its own white screen; the walk back belongs at the park, so it comes after both; the fixed time when none shows)
+    if started_in_house and in_house(grab_screen()):
+        log_run_event("teleport: still in the house after both loads (the Exit Home button is on screen)")
+        return False
     logger.debug("Walking backward...")
     hold_key(cfg.KEYS["back"], cfg.TELEPORT_BACK_DURATION)
     wait_interruptible(cfg.UI_SETTLE)
+    return True
 
 class TeleportWalkNeedHandler(NeedHandler):
     """Teleport, hold a sequence of keys, then wait for the need to clear; configured per
@@ -3203,7 +3225,10 @@ class TeleportWalkNeedHandler(NeedHandler):
         if not focus_roblox():
             return False
 
-        teleport_to(self.config["teleport_pos"])
+        if not teleport_to(self.config["teleport_pos"]):
+            logger.debug(f"The {self.name} teleport did not happen - the need failed")      # (no walking blind from the house)
+            respawn_character()
+            return False
 
         helicopter = self.config.get("helicopter", cfg.HELICOPTER_REQUIRED)
         if helicopter:
@@ -4097,7 +4122,10 @@ def open_pet_pen() -> bool:
         elif kind == "press":
             pydirectinput.press(cfg.KEYS[what])
         elif kind == "door":
-            wait_for_white_to_pass(amount, cfg.WHITE_LOOK + 1.0)                                      # (the door's white screen to fade: the yard has loaded then)
+            if not wait_for_white_to_pass(amount, cfg.WHITE_LOOK + 1.0, what=f"the pen's {what} door"):      # (the door's white screen to fade: the yard has loaded then)
+                logger.debug("No white screen at the door")
+            elif in_house(grab_screen()):
+                log_run_event(f"the pen's {what} door: still in the house afterwards (the Exit Home button is on screen)")
         else:
             wait_interruptible(amount)
     return look_until(lambda img: popup_visible(img, "pet_pen_title"), cfg.PET_PEN_OPEN_WAIT, cfg.PET_PEN_POLL) is not None

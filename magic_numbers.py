@@ -781,6 +781,9 @@ WHITE_POLL = 0.2                  # seconds between looks while the white screen
 WHITE_LOOK = 2.0                  # seconds the white screen is waited to show at all before the transition is taken as not having one (and the old fixed wait is used)
 WHITE_PASS_MAX = 15.0             # seconds at most, from the start, for it to go
 WHITE_CLEAR_LOOKS = 2             # looks in a row that are not white for it to be gone
+HOUSE_EXIT_BOX = (0, 1000, 200, 1080)   # in the player's house the game shows a red "Exit Home" button here, bottom left (a capture of the teleport tests: it is on in the house before a teleport, in the dialog's frames, and gone in the white screens, the red room and everywhere outside)
+HOUSE_EXIT_HSV = (((0, 150, 150), (8, 255, 255)), ((170, 150, 150), (180, 255, 255)))
+HOUSE_EXIT_MIN_PIXELS = 3000            # red pixels in that box for the player to be in the house (about 8000 with the button, none without)
 WHITE_SETTLE = 0.5                # seconds after it has gone, for the world to be usable
 ROBLOX_CRASH_WINDOW_TITLE = "Roblox Crash"
 

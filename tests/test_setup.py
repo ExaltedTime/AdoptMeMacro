@@ -261,9 +261,26 @@ def test_setup_runs_its_steps_after_the_respawn_and_says_which_did_not_take(macr
     monkeypatch.setattr(macro, "log_failure", lambda text: failures.append(text))
     monkeypatch.setattr(macro, "log_run_event", lambda text: None)
     assert macro._setup_steps() is False
-    assert order == ["respawn", "pen", "lock", "filter", "trades"] and failures == ["setup: the backpack is not filtered to favorites"]       # (every step ran, the failure has a screenshot)
+    assert order == ["pen", "lock", "filter", "trades"] and failures == ["setup: the backpack is not filtered to favorites"]       # (every step ran, the failure has a screenshot)
     monkeypatch.setattr(macro, "set_backpack_filter", lambda: True)
     assert macro._setup_steps() is True
+
+
+def test_setup_respawns_once_before_the_pens_walk_and_once_after_it_not_three_times(macro, monkeypatch):
+    """The pen's walk starts with a respawn and ends with one back in the house: Setup's own respawn in front of them was a third, for nothing."""
+    order = []
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: None)
+    monkeypatch.setattr(macro, "respawn_character", lambda: order.append("respawn"))
+    monkeypatch.setattr(macro, "switch_pen_pets", lambda: order.append("pen walk") or True)
+    monkeypatch.setattr(macro, "lock_house", lambda: True)
+    monkeypatch.setattr(macro, "set_backpack_filter", lambda: True)
+    monkeypatch.setattr(macro, "disable_trades", lambda: True)
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    macro.update_game_config(lambda c: c.update(pet_pen_enabled=True))
+    assert macro._setup_steps() is True and order == ["pen walk", "respawn"]                    # (switch_pen_pets() starts with open_pet_pen()'s own respawn, not stubbed here)
+    order.clear()
+    macro.update_game_config(lambda c: c.update(pet_pen_enabled=False))
+    assert macro._setup_steps() is True and order == ["respawn"]                                # (no pen: the one respawn is Setup's own)
 
 
 def test_setup_from_outside_is_an_error_when_a_step_did_not_take(macro, monkeypatch):

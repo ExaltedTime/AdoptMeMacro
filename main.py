@@ -1724,13 +1724,14 @@ def setup_or_fail() -> bool:
     return True
 
 def _setup_steps() -> bool:
-    """Respawn, then lock the house, set the backpack's filter and the trade setting - each looked at first and left as it is when it is what it should be, clicked when it is not, and
+    """Respawn (the pen's check does it when it is on: its walk starts with one and ends with one back in the house), then lock the house, set the backpack's filter and the trade setting - each looked at first and left as it is when it is what it should be, clicked when it is not, and
     looked at again after (a step that did not take is a failure with a screenshot, and the others still run). True if every one is as it should be."""
     for _ in range(cfg.SETUP_STRAY_TRIES):
         if not dismiss_stray_windows():
             break
-    respawn_character()
-    if not check_pet_pen():                                                  # (not a failed Setup: said in the log, and looked at again when a pet shows Friend)
+    if not load_game_config()["pet_pen_enabled"]:
+        respawn_character()                                                  # (the pen's walk starts with a respawn of its own, and ends with one back in the house: no third one here)
+    elif not check_pet_pen():                                                # (not a failed Setup: said in the log, and looked at again when a pet shows Friend)
         log_run_event("setup: the pet pen could not be checked")
     failed = [name for name, step in (("the house is not locked", lock_house), ("the backpack is not filtered to favorites", set_backpack_filter),
                                       ("trades are not set to No One", disable_trades)) if not step()]
@@ -5049,17 +5050,18 @@ def run_full_cycle() -> None:
             logger.info(f"Waiting for a need... {format_duration(time.time() - waiting_since)}", extra={"status": True})      # (a line the console overwrites)
             wait_interruptible(min(1.0, deadline - time.time()))
 
-def run_setup_if_requested() -> None:
+def run_setup_if_requested() -> bool:
     """The Settings tab's "Run Setup at the next loop" (the `setup_next_loop` switch): clear it, untick its checkbox and run Setup once. A Setup that did not take is logged (setup_game() keeps the
-    pictures); the loop goes on."""
+    pictures); the loop goes on. True if it ran (it respawns by itself, so the loop's own respawn before it is left out)."""
     if not load_game_config()["setup_next_loop"]:
-        return
+        return False
     update_game_config(lambda c: c.update(setup_next_loop=False))
     if state.macro_window is not None:
         state.macro_window.run_on_ui_thread(lambda: state.macro_window.config_flag_vars["setup_next_loop"].set(False), timeout=1.0)
     log_run_event("setup: asked for at the next loop")
     if not setup_game():
         log_run_event("setup: some step did not take (see the failures)")
+    return True
 
 def run_workflow_loop() -> None:
     """Respawn once, then repeat the workflow until a stop request, which propagates (bare
@@ -5093,9 +5095,11 @@ def run_workflow_loop() -> None:
             logger.info(f"[LOOP {loop_num}]")
             try:
                 if needs_respawn:
-                    respawn_character()
+                    if not run_setup_if_requested():                           # (Setup respawns by itself: not twice)
+                        respawn_character()
                     needs_respawn = False
-                run_setup_if_requested()
+                else:
+                    run_setup_if_requested()
                 run_full_cycle()
                 wait_interruptible(cfg.LOOP_DELAY)
             except FocusLost:

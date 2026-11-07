@@ -1502,11 +1502,12 @@ def click_need_button(need_name: str) -> bool:
 # ============================================================================
 
 def in_house(img: Image) -> bool:
-    """True if the player is in their house: the red "Exit Home" button at the bottom left (HOUSE_EXIT_BOX) is on screen. It is hidden by a white screen, so it is looked at when one has gone."""
+    """True if the player is in their house: the red "Exit Home" button at the bottom left (HOUSE_EXIT_BOX) is on screen. It is hidden by a white screen, so it is looked at when one has gone; the red walls of the nursery's
+    room fill much more of the box than the button does (HOUSE_EXIT_MAX_PIXELS), and are not taken for it."""
     left, top, right, bottom = cfg.HOUSE_EXIT_BOX
     hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
     red = sum(int(np.count_nonzero(cv2.inRange(hsv, np.array(low), np.array(high)))) for low, high in cfg.HOUSE_EXIT_HSV)
-    return red >= cfg.HOUSE_EXIT_MIN_PIXELS
+    return cfg.HOUSE_EXIT_MIN_PIXELS <= red <= cfg.HOUSE_EXIT_MAX_PIXELS
 
 def wait_for_white_to_pass(static: float, look: float = cfg.WHITE_LOOK, *, what: str = "") -> bool:
     """Wait out a transition by its white screen (a door, a respawn, a teleport: detect_white_screen()) instead of a fixed time: for it to show - within `look` seconds - and then go (WHITE_CLEAR_LOOKS looks
@@ -3206,7 +3207,7 @@ def find_teleport_yes(img: Image) -> Optional[Point]:
 
 def teleport_to(category_pos: Point) -> bool:
     """Open the backpack, teleport via the category tab, walk back to clear the landing
-    spot. Shared by the teleport-walk needs. False (logged) when it can be told that the teleport did not happen: the dialog's Yes took nothing
+    spot - which is the way out of the landing, and starts the teleport's second load. Shared by the teleport-walk needs. False (logged) when it can be told that the teleport did not happen: the dialog's Yes took nothing
     after TELEPORT_YES_TRIES clicks, the dialog did not come up, or the player is still in the house (its Exit Home button) after both loads. A teleport comes with two
     white screens (a capture of the teleport tests), so each one that does not show is logged too. See docs/ARCHITECTURE.md#need-handlers.
     """
@@ -3242,13 +3243,12 @@ def teleport_to(category_pos: Point) -> bool:
     if not took:
         return False
     wait_for_white_to_pass(cfg.TELEPORT_WAIT, what="teleport, first load")                    # (the teleport's white screen to fade, not a fixed time)
-    wait_for_white_to_pass(cfg.TELEPORT_SETTLE_WAIT, cfg.TELEPORT_SECOND_WHITE_LOOK, what="teleport, second load")   # (the second load: a landing in a red room, then its own white screen; the walk back belongs at the park, so it comes after both; the fixed time when none shows)
+    logger.debug("Walking backward...")
+    hold_key(cfg.KEYS["back"], cfg.TELEPORT_BACK_DURATION)                                    # (the landing is a room or a street with a way out behind the player: walking back through it is what starts the second load - a run that did not walk back stood in the red room until the respawn)
+    wait_for_white_to_pass(cfg.TELEPORT_SETTLE_WAIT, cfg.TELEPORT_SECOND_WHITE_LOOK, what="teleport, second load")   # (the second load's white screen to show and go, not a fixed time; the fixed one when none shows)
     if started_in_house and in_house(grab_screen()):
         log_run_event("teleport: still in the house after both loads (the Exit Home button is on screen)")
         return False
-    logger.debug("Walking backward...")
-    hold_key(cfg.KEYS["back"], cfg.TELEPORT_BACK_DURATION)
-    wait_interruptible(cfg.UI_SETTLE)
     return True
 
 class TeleportWalkNeedHandler(NeedHandler):

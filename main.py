@@ -1947,11 +1947,11 @@ def set_backpack_filter() -> bool:
         elif growing:
             select_backpack_tab(cfg.INVENTORY_PETS_TAB_POS)
             wait_interruptible(cfg.UI_SETTLE)
-            pick = choose_list_pet(stop_at_equipped=True)                                        # (not the Add tile, a grey pet in a listing or one in the pen; the equipped one is kept)
+            pick = choose_list_pet(stop_at_equipped=True)                                        # (not the Add tile, a grey pet in a listing or one in the pen; the equipped one is kept wherever it is in view)
             if pick is None:
                 log_run_event("setup: no pet that can be levelled was seen in the list - the pet that is out is kept")
             elif pick[0] == "equipped":
-                log_run_event("setup: the equipped pet is the first of the list - kept")
+                log_run_event("setup: the equipped pet is in the filtered list (it still grows) - kept")
             else:
                 equip_pet("the first pet of the list", lambda: pick[1])
         elif not pet_out:
@@ -4115,14 +4115,18 @@ def cell_at_is_equipped(img: Image, point: Point) -> bool:
     return False
 
 def first_listed_cell(img: Image, stop_at_equipped: bool = False) -> Optional[tuple[str, Point]]:
-    """The first cell (rows from the top, left to right) of the small backpack's grid that can be picked - ("pet", its middle) - or, with `stop_at_equipped`, the equipped pet if it comes first: ("equipped", its
-    middle). None if there is neither."""
+    """The first cell (rows from the top, left to right) of the small backpack's grid that can be picked - ("pet", its middle) - or None. With `stop_at_equipped`, a cell with the green frame anywhere
+    in view wins instead: ("equipped", its middle). The list was filtered to pets that still grow (no egg, none full grown), so the pet that is out showing in it means that it still grows: it is kept,
+    not swapped for the first pet of the list."""
+    first_pet = None
     for row in range(len(cfg.PET_GRID_Y)):
         for column in range(len(cfg.PET_GRID_X)):
             state_here = pet_cell_state(img, row, column)
-            if state_here == "pet" or (stop_at_equipped and state_here == "equipped"):
+            if stop_at_equipped and state_here == "equipped":
                 return state_here, (cfg.PET_GRID_X[column], cfg.PET_GRID_Y[row])
-    return None
+            if state_here == "pet" and first_pet is None:
+                first_pet = state_here, (cfg.PET_GRID_X[column], cfg.PET_GRID_Y[row])
+    return first_pet
 
 def choose_list_pet(stop_at_equipped: bool = False) -> Optional[tuple[str, Point]]:
     """In the small backpack: first_listed_cell(), scrolling the list down (the wheel on its scroll bar) a notch at a time while there is none, until a scroll changes nothing (the end of the list) or

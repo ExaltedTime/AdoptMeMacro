@@ -6401,8 +6401,15 @@ class AdoptMeGUI:
         logger.info("Config reset to defaults")
 
     def build_debug_tab(self, parent: Any) -> None:
-        """The Debug tab: the needs (build_needs_tab())."""
-        self.build_needs_tab(parent)
+        """The Debug tab: an Options subtab (build_debug_options()) and a Needs one (build_needs_tab())."""
+        subtabs = ttk.Notebook(parent)
+        subtabs.pack(fill=tk.BOTH, expand=True)
+        options_tab = tk.Frame(subtabs, bg=self.bg)
+        needs_tab = tk.Frame(subtabs, bg=self.bg)
+        subtabs.add(options_tab, text="Options")
+        subtabs.add(needs_tab, text="Needs")
+        self.build_debug_options(options_tab)
+        self.build_needs_tab(needs_tab)
 
     def build_needs_tab(self, parent: Any) -> None:
         """Fill the Needs subtab: a button that runs every teleport handler in turn, then a two-column grid with a switch
@@ -6448,8 +6455,7 @@ class AdoptMeGUI:
                  ).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
 
     def build_settings_tab(self, parent: Any) -> None:
-        """Fill the Settings tab, in four groups: what the loop does, the rejoin, the keys, and debugging (record the next run, capture the moments, show the debug lines, refresh the
-        debug folder, reset the config). Every checkbox is a persisted switch (add_config_checkbox()), usable while a run goes on."""
+        """Fill the Settings tab, in three groups: what the loop does, the rejoin and the keys (the debugging options are on the Debug tab). Every checkbox is a persisted switch (add_config_checkbox()), usable while a run goes on."""
         config = load_game_config()
         self.add_section(parent, "The loop")
         for label, key in (("Tend the money tree", "money_tree_enabled"),
@@ -6475,7 +6481,9 @@ class AdoptMeGUI:
         self.add_hint(parent, f"{cfg.HOTKEYS['stop'].upper()} stops, anywhere. {cfg.HOTKEYS['capture'].upper()} starts / stops an input capture (in Roblox). "
                               f"{cfg.HOTKEYS['screenshot'].upper()} saves a screenshot to debug/screenshots (in Roblox)")
 
-        self.add_section(parent, "Debugging")
+    def build_debug_options(self, parent: Any) -> None:
+        """Fill the Debug tab's Options subtab: record the next run, capture the moments, show the debug lines in the output, refresh the debug folder, reset the config."""
+        config = load_game_config()
         self.add_config_checkbox(parent, "Record the next run (low quality video)", "record_next_run", config)
         self.add_config_checkbox(parent, "Capture the moments of a run (kept when it lasts over an hour)", "keep_moments", config)
         self.show_debug_var = tk.BooleanVar(value=True)

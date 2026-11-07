@@ -973,7 +973,7 @@ actually on disk (so an old config missing a newer key still works), and
 - **`needs_enabled`** - `{need: on or off}`, the switches next to the Test buttons on the Debug tab. A need that isn't in it
   follows `ENABLED_NEEDS`, so by default they are all on; **Reset Config** puts them back.
 - **`record_next_run`** - the **Record the next run (low quality video)**
-  checkbox on the Settings tab (default off); see [Recording a run](#recording-a-run). Cleared, and
+  checkbox on the Debug tab's Options subtab (default off); see [Recording a run](#recording-a-run). Cleared, and
   the checkbox unticked, when the run that it was for starts.
 - **`blackout_hotkey_enabled`** - the **H blanks the screen in Roblox (off: type it)** checkbox on the Settings tab (default on; the label names
   `HOTKEYS["blackout"]`). Off, the key does nothing here and can be typed in the game, and a blank screen is taken away when it is turned off; see
@@ -1022,7 +1022,7 @@ clicked in the meantime.
 `AdoptMeGUI.create_ui()` builds the whole panel. A few things worth
 knowing if you're modifying it:
 
-- **The three tabs.** *Main*: the loop and stop buttons, the **Respawn** and **Leave & rejoin** buttons and the **Run Setup at the next loop (once)** checkbox (Setup is no longer a button: see `setup_next_loop` under [Persisted game config](#persisted-game-config)). The Trading Hub trips have no button either; they are the bot's `/trade_hub` and `/leave_trade_hub`. *Settings* (`build_settings_tab()`), in four groups under headings (`add_section()`): **The loop** (the money tree, the lure, resume after focus loss, the Pet Pen, Setup levelling a growing pet), **Rejoin** (private server or public, and the link), **Keys** (the two hotkey switches, with a line saying what the stop, capture and screenshot keys do) and **Debugging** (record the next run, capture the moments, show the debug lines, **Refresh debug**, **Reset Config**). *Debug* (`build_debug_tab()`): the needs, a switch and a Test button each, and the test of every teleport handler. Every checkbox of the Main and Settings tabs is a persisted switch made by `add_config_checkbox()`, and is also an `option` of the bot's `/option`.
+- **The three tabs.** *Main*: the loop and stop buttons, the **Respawn** and **Leave & rejoin** buttons and the **Run Setup at the next loop (once)** checkbox (Setup is no longer a button: see `setup_next_loop` under [Persisted game config](#persisted-game-config)). The Trading Hub trips have no button either; they are the bot's `/trade_hub` and `/leave_trade_hub`. *Settings* (`build_settings_tab()`), in three groups under headings (`add_section()`): **The loop** (the money tree, the lure, resume after focus loss, the Pet Pen, Setup levelling a growing pet), **Rejoin** (private server or public, and the link), **Keys** (the two hotkey switches, with a line saying what the stop, capture and screenshot keys do); the debugging options are not here. *Debug* (`build_debug_tab()`), two subtabs: *Options* (`build_debug_options()`: record the next run, capture the moments, show the debug lines, **Refresh debug**, **Reset Config**) and *Needs* (`build_needs_tab()`: a switch and a Test button for each need, and the test of every teleport handler). Every checkbox of the Main, Settings and Debug tabs is a persisted switch made by `add_config_checkbox()`, and is also an `option` of the bot's `/option`.
 
 - **`run_async(func)`** is how every long-running action is started: it
   disables every button in `self.action_buttons`, runs `func` on a
@@ -1068,7 +1068,7 @@ knowing if you're modifying it:
 - **`DebugCapture`** is a `logging.Handler` on `logger` for the lifetime of the GUI: every record logged anywhere in the macro shows up in
   the on-screen console (`self.debug_text`) - `emit()` only queues (from any thread) and the Tk thread puts the queue on the widget every
   `CONSOLE_DRAIN_INTERVAL_MS`, since Tk isn't thread-safe - each line starting with the time (`[HH:MM:SS]`), in the colour of its level
-  (`GUI_CONSOLE_LEVEL_COLORS`: the debug lines are dimmer). The **Show debug lines in the output** checkbox on the Settings tab raises the handler's level to INFO to
+  (`GUI_CONSOLE_LEVEL_COLORS`: the debug lines are dimmer). The **Show debug lines in the output** checkbox on the Debug tab's Options subtab raises the handler's level to INFO to
   leave them out (`output.log` keeps them either way). The widget keeps only its last `CONSOLE_MAX_LINES` lines (`trim()`) - it would otherwise
   hold everything logged, about 25 MB of memory per 100,000 lines - while `output.log` keeps all of it. A record with `extra={"status": True}` is a
   status line: it replaces the previous status line instead of adding one, and goes into `output.log` only the first time (this is the
@@ -1076,7 +1076,7 @@ knowing if you're modifying it:
 
 ### The moments of a run
 
-While the loop runs, `start_moments()` (called by `run_workflow_loop()`; the game config's `keep_moments`, a checkbox of the Settings tab and the `keep_moments` switch of `/option`) records the game into `MOMENTS_DIR/run<N>_<time>/`: an `InputCapture` with no inputs (`inputs` False), looking every `MOMENTS_FRAME_INTERVAL` seconds and kept to `MOMENTS_ZIPS` zips however long the run goes - when it would need more, every other frame is deleted and the frames are saved twice as far apart, so what is left is spread over the whole run (`reserve_bytes` keeps room in the first zip for the text files below). It is not started while the hotkey's capture runs, and that capture's start ends it (`finish_moments()`).
+While the loop runs, `start_moments()` (called by `run_workflow_loop()`; the game config's `keep_moments`, a checkbox of the Debug tab's Options subtab and the `keep_moments` switch of `/option`) records the game into `MOMENTS_DIR/run<N>_<time>/`: an `InputCapture` with no inputs (`inputs` False), looking every `MOMENTS_FRAME_INTERVAL` seconds and kept to `MOMENTS_ZIPS` zips however long the run goes - when it would need more, every other frame is deleted and the frames are saved twice as far apart, so what is left is spread over the whole run (`reserve_bytes` keeps room in the first zip for the text files below). It is not started while the hotkey's capture runs, and that capture's start ends it (`finish_moments()`).
 
 What the macro was doing is with it, so that the zips can be sent on their own:
 
@@ -1152,7 +1152,7 @@ taskbar lands above it and Windows decides when, so a single raise is either too
 
 ### Recording a run
 
-Tick **Record the next run (low quality video)** on the Settings tab (the
+Tick **Record the next run (low quality video)** on the Debug tab's Options subtab (the
 `record_next_run` config switch) and the next time the loop starts it records
 the Roblox window to `debug/recordings/run<N>_<time>.mp4` - then clears the
 switch, so it's one run only. `start_recording_if_requested()` starts a
@@ -1214,7 +1214,7 @@ Everything below is in `debug/` (git-ignored) so a run that broke while you
 were away can be read back afterwards. The folder has `failures/` (`FAILURE_DIR`), `logs/` (`LOGS_DIR`: every text and json file - `output.log`, `run_log.txt` (all runs, the whole log),
 `run_counter.txt`, `status.json`), **`runs/`** (`RUNS_DIR`: what belongs to one run - its own log, `run<N>.txt`, and its chart, `run<N>.png`, side by side) `recordings/` for the
 videos, `captures/` for the input captures (see [Input capture](#input-capture)), the pictures of the last inventory tour (`inventory/`), those of the screenshot key (`screenshots/`), the commands the Discord bot leaves (`commands/`, with the macro's answers) and the macro's error output when the bot started it (`MACRO_STDERR_PATH`, `logs/macro_stderr.log`; **Refresh debug** empties it instead of deleting it, since the macro keeps it open and Windows will not delete an open file - `empty_logs_folder()`), and the game config (`.config`) in `debug/` itself. The Debug tab's
-Settings tab's **Refresh debug** button (`refresh_debug()`, after a confirmation, not while a
+Debug tab's Options subtab's **Refresh debug** button (`refresh_debug()`, after a confirmation, not while a
 run is going) empties all of it except `.config`; run numbers start from 1
 again, since the counter goes with the logs.
 
@@ -1329,7 +1329,7 @@ the commands. It is started by hand, next to the macro: `python scripts/discord_
 | `/restart` | stops the macro as `/exit` does and starts it again as it was (with its loop only if the loop was going), then restarts the bot itself, as `/update` does but with no change of code; one at a time with `/update` and `/rollback`; a macro that was not running is not started |
 | `/rollback` | goes back to the commit the PC was on before the last `/update`, and restarts the macro the same way |
 | `/need <need> <on>` | switches a need on or off, as the Debug tab's checkbox does (the command goes through a command file; a macro that is not running is started first - see below); says what the game config shows a moment later |
-| `/option <option> <on>` | the other switches (every checkbox of the Main and Settings tabs): `setup_next_loop`, `money_tree`, `lure`, `resume_on_focus_loss`, `use_private_server`, `record_next_run`, `blackout_hotkey`, `new_need_hotkey`, `level_growing_pet`, `pet_pen`, `keep_moments` and `show_debug_lines` (the output's debug lines, which is only a checkbox and so is not confirmed) |
+| `/option <option> <on>` | the other switches (every checkbox of the Main and Settings tabs and the Debug tab's Options subtab): `setup_next_loop`, `money_tree`, `lure`, `resume_on_focus_loss`, `use_private_server`, `record_next_run`, `blackout_hotkey`, `new_need_hotkey`, `level_growing_pet`, `pet_pen`, `keep_moments` and `show_debug_lines` (the output's debug lines, which is only a checkbox and so is not confirmed) |
 | `/test <handler>` | what the Debug tab's Test button of a need does (`test_need_handler()`), or `teleports` for its "Test every teleport handler" (`TEST_ALL_TELEPORTS`); the macro's loop is stopped first and not started again, and the channel is told how it ended (`test` command, queued as `test:<handler>` in `OUTSIDE_ACTIONS`) |
 | `/reset_config <sure>` | Reset Config (`reset_game_config()`: totals, timers and switches back to their defaults, the private server link kept), only with `sure` true and not while the macro runs anything (`reset_config` command: `.done` says `given up` if it did) |
 | `/server_link` | opens a box (`LinkBox`, a Discord modal) for the private server link, so that the link is not a message or an argument shown in the channel; it is saved as the box in the Settings tab does; the macro drops a link `parse_server_link()` does not know (only 32 ASCII letters and digits are taken as the code) and nothing says the link back (`server_link` command) |

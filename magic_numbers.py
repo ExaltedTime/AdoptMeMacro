@@ -641,6 +641,7 @@ TELEPORT_WALK_NEEDS: dict[str, dict[str, Any]] = {
 WATCH_POLL_INTERVAL = 0.2           # how often the screen is looked at while waiting for the game's "Only Pets..." answer to a need button click
 DISABLED_NEEDS_REJOIN_THRESHOLD = 4  # this many needs disabled for the run (see NEED_STUCK_CHECKS) means something is
                                      # badly wrong: rejoin the game, run setup, and give every need a fresh chance
+NEED_HOPELESS_RETRY = 3600.0       # seconds a need that never worked stays disabled through rejoins; then one more chance (one failure puts it back)
 NEED_NEVER_WORKED_FAILS = 3        # a need that was not cleared this many times in a run, and never was, is disabled for it (camping: a wait of 75 s four times and no success in a 2 hour run)
 NEED_STUCK_CHECKS = 5            # an enabled need still on screen after this many attempts in a row is
                                   # disabled for the rest of the run - see record_detection()

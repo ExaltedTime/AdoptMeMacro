@@ -1880,6 +1880,16 @@ def level_growing_pets() -> bool:
     """Whether Setup is to leave the pets that cannot grow out of the backpack and equip the first that can (the game config's level_growing_pet, the Options subtab's checkbox)."""
     return bool(load_game_config()["level_growing_pet"])
 
+def ensure_pets_tab() -> bool:
+    """In the open backpack: the pets tab selected (it is the one the Age rows of the filters are for; the backpack opens on the tab it was last left on, a vehicle's after a ride). Clicked when it is not, up to twice, and looked at after.
+    True if it is selected."""
+    for _ in range(2):
+        if is_backpack_tab_selected(cfg.INVENTORY_PETS_TAB_POS):
+            return True
+        hover_click(*cfg.INVENTORY_PETS_TAB_POS)
+        wait_interruptible(cfg.UI_SETTLE)
+    return is_backpack_tab_selected(cfg.INVENTORY_PETS_TAB_POS)
+
 def set_backpack_filter() -> bool:
     """Set the backpack's filters: open it and the FILTERS panel, with the sort Favorites (left alone when it says so, else chosen: choose_sort_favorites()) and, when level_growing_pets(), Egg and
     Full Grown unticked in the Age rows (untick_egg_and_full_grown()); if anything was changed it is confirmed and the panel is opened again to see that both took, and the panel is
@@ -1893,6 +1903,9 @@ def set_backpack_filter() -> bool:
         logger.debug("Opening backpack...")
         pydirectinput.press(cfg.KEYS["backpack"])
         wait_interruptible(cfg.UI_SETTLE)
+        on_pets = ensure_pets_tab() if growing else True                                          # (the Age rows are the pets tab's: not ticked on another one)
+        if growing and not on_pets:
+            log_setup_problem("setup: the backpack's pets tab could not be selected")
         if open_filter_panel():
             changed, sound = False, True
             if not scroll_filters_to_top():
@@ -1900,7 +1913,9 @@ def set_backpack_filter() -> bool:
             if not sort_is_favorites():
                 sound = choose_sort_favorites()
                 changed = sound
-            if growing:                                                                           # (whether or not the sort took: a pet that has grown up must not be the first of the list)
+            if growing and not on_pets:
+                sound = False
+            elif growing:                                                                         # (whether or not the sort took: a pet that has grown up must not be the first of the list)
                 aged = untick_egg_and_full_grown()
                 sound = sound and aged is not None
                 changed = changed or bool(aged)
@@ -1921,7 +1936,9 @@ def set_backpack_filter() -> bool:
             if panel_open:
                 hover_click(*cfg.SETUP_FILTER_CANCEL_POS)                                         # (a panel only looked at - or one that could not be set - is left as it was)
                 wait_interruptible(cfg.UI_SETTLE)
-        if growing:
+        if growing and not on_pets:
+            log_run_event("setup: not on the pets tab - no pet is equipped from the list")
+        elif growing:
             select_backpack_tab(cfg.INVENTORY_PETS_TAB_POS)
             wait_interruptible(cfg.UI_SETTLE)
             pick = choose_list_pet(stop_at_equipped=True)                                        # (not the Add tile, a grey pet in a listing or one in the pen; the equipped one is kept)

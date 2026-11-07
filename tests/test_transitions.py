@@ -66,3 +66,17 @@ def test_the_respawn_the_teleport_and_the_pens_door_wait_for_it(macro, monkeypat
     monkeypatch.setattr(macro, "look_until", lambda *a, **k: (1, 1))
     assert macro.open_pet_pen() is True
     assert len(calls) == 1 and calls[0][0] == 5.0                                                 # (the door of the route: 5 s only when no white screen shows)
+
+
+def test_the_teleport_waits_for_its_first_and_its_second_white_screen(macro, monkeypatch):
+    calls = []
+    monkeypatch.setattr(macro, "wait_for_white_to_pass", lambda static, look=2.0: calls.append((static, look)) or True)
+    monkeypatch.setattr(macro, "backpack_on_purpose", __import__("contextlib").nullcontext)
+    monkeypatch.setattr(macro.pydirectinput, "press", lambda key: None, raising=False)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "hover_click", lambda *a, **k: None)
+    monkeypatch.setattr(macro, "grab_screen", lambda: None)
+    monkeypatch.setattr(macro, "teleport_took", lambda before: True)
+    monkeypatch.setattr(macro, "hold_key", lambda key, seconds: None)
+    macro.teleport_to((1, 1))
+    assert calls == [(macro.cfg.TELEPORT_WAIT, 2.0), (macro.cfg.TELEPORT_SETTLE_WAIT, macro.cfg.TELEPORT_SECOND_WHITE_LOOK)]

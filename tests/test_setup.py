@@ -323,3 +323,18 @@ def test_a_filters_panel_that_opens_scrolled_down_to_the_age_rows_is_scrolled_ba
     game.clicks.clear(), game.scrolls.clear(), game.log.clear()
     game.state = "world"
     assert macro.set_backpack_filter() is False and stuck.applied["sort"] == "default"
+
+
+def test_an_equip_that_took_is_seen_by_the_green_frame_of_the_cell_when_the_card_has_closed(macro, monkeypatch):
+    after = frame("pets_tab_after_equip")                                                       # (a 10-hour run: the card is gone after Equip and the porcupine has the green frame)
+    assert macro.cell_at_is_equipped(after, (895, 787)) is True and macro.cell_at_is_equipped(after, (975, 787)) is False
+    assert macro.cell_at_is_equipped(after, (100, 100)) is False
+    card, clicks = frame("pet_card_equip"), []
+    frames = [frame("pets_grid"), card, after]
+    monkeypatch.setattr(macro, "select_backpack_tab", lambda pos: None)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: clicks.append((x, y)))
+    monkeypatch.setattr(macro, "grab_screen", lambda: frames.pop(0) if len(frames) > 1 else frames[0])
+    monkeypatch.setattr(macro, "find_equip_button", lambda img: (1060, 815))
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    assert macro.equip_pet("a pet", lambda: (895, 787)) is True and clicks == [(895, 787), (1060, 815)]

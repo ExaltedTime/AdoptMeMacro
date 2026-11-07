@@ -380,6 +380,7 @@ class State:
     # the game config): relaunching the script gives every enabled need a fresh
     # chance.
     disabled_needs: set = field(default_factory=set)
+    hopeless: set = field(default_factory=set)       # needs disabled that had never worked in the run: a rejoin does not give them another chance (pizza and sick, 3 more failures each after every rejoin of a 10-hour run)
     # The in-task checks (see task_unscrew()): whether a need handler or setup
     # is running and its thread, whether it may be abandoned (setup may not), when the checks
     # last ran, and whether they are running now.
@@ -1951,7 +1952,7 @@ def equip_pet(what: str, where: Callable[[], Optional[Point]]) -> bool:
     logger.debug("Equipping the pet...")
     hover_click(*button)
     wait_interruptible(cfg.UI_SETTLE)
-    equipped = wait_for_template("pet_unequip") is not None
+    equipped = look_until(lambda img: popup_visible(img, "pet_unequip") or cell_at_is_equipped(img, point), cfg.SETUP_UI_WAIT, cfg.SETUP_POLL) is not None     # (the card says Unequip - or it has closed and the pet's cell has the green frame: in a 10-hour run 3 Equips that took were called failures, 8 s each)
     if equipped:
         log_run_event(f"setup: {what} is equipped")
     else:
@@ -3306,6 +3307,8 @@ def record_detection(detected: list[str]) -> None:
     stuck = {n for n, count in state.attempt_streaks.items() if count >= cfg.NEED_STUCK_CHECKS} & (enabled_needs() - state.disabled_needs)
     for need_name in sorted(stuck):
         state.disabled_needs.add(need_name)
+        if not run_stats.resolved.get(need_name):
+            state.hopeless.add(need_name)
         logger.info(f"{need_name} still there after {cfg.NEED_STUCK_CHECKS} attempts in a row - disabling it for this run")
         log_run_event(f"disabled: {need_name}")
         log_failure(f"{need_name} stuck for {cfg.NEED_STUCK_CHECKS} attempts - disabled for this run "
@@ -3394,7 +3397,8 @@ def process_needs() -> bool:
                 run_stats.failed[need_name] = run_stats.failed.get(need_name, 0) + 1
                 log_run_event(f"not cleared: {need_name} ({seconds:.0f}s)")
                 if run_stats.failed[need_name] >= cfg.NEED_NEVER_WORKED_FAILS and not run_stats.resolved.get(need_name) and need_name not in state.disabled_needs:
-                    state.disabled_needs.add(need_name)                                              # (a need that has failed this often and never once worked costs its wait every time it comes)
+                    state.disabled_needs.add(need_name)
+                    state.hopeless.add(need_name)                                              # (a need that has failed this often and never once worked costs its wait every time it comes)
                     log_run_event(f"disabled: {need_name}")
                     log_failure(f"{need_name} failed {run_stats.failed[need_name]} times and never worked in this run - disabled for this run")
                 write_status()
@@ -3559,8 +3563,9 @@ def rejoin_reason() -> Optional[tuple[str, str]]:
         state.white_since = time.time()
     elif time.time() - state.white_since >= cfg.WHITE_SCREEN_REJOIN_AFTER:
         return "white_screen", f"the screen has been white for {cfg.WHITE_SCREEN_REJOIN_AFTER:g}s"
-    if len(state.disabled_needs) >= cfg.DISABLED_NEEDS_REJOIN_THRESHOLD:
-        return "stuck", f"{len(state.disabled_needs)} needs disabled ({', '.join(sorted(state.disabled_needs))})"
+    disabled_now = state.disabled_needs - state.hopeless                                          # (needs that never worked are not what a rejoin is for)
+    if len(disabled_now) >= cfg.DISABLED_NEEDS_REJOIN_THRESHOLD:
+        return "stuck", f"{len(disabled_now)} needs disabled ({', '.join(sorted(disabled_now))})"
     if state.last_progress is not None and time.time() - state.last_progress >= cfg.NO_PROGRESS_REJOIN_INTERVAL:
         return "stalled", f"no need resolved for {cfg.NO_PROGRESS_REJOIN_INTERVAL / 60:g} minutes"
     if state.last_rejoin is not None and time.time() - state.last_rejoin >= cfg.REJOIN_INTERVAL:
@@ -3609,9 +3614,9 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
         # The game was rejoined again while setup ran (its in-task checks do that on a disconnect), and that
         # nested recovery already ran setup itself - so this one carries on instead of ending the run.
         log_run_event(f"setup interrupted by {interruption.reason} - the nested recovery redid it")
-    state.disabled_needs.clear()
+    state.disabled_needs &= state.hopeless                                                   # (the others get a fresh chance after a rejoin; a need that never worked in the run does not)
     reset_need_tracking()
-    log_run_event("recovery complete: rejoined, setup run, disabled needs cleared")
+    log_run_event("recovery complete: rejoined, setup run, disabled needs cleared" + (f" (still disabled: {', '.join(sorted(state.disabled_needs))})" if state.disabled_needs else ""))
     logger.info("Recovery complete - carrying on")
     write_status()
     return True
@@ -4015,6 +4020,14 @@ def pet_cell_state(img: Image, row: int, column: int) -> str:
     if green >= cfg.PET_CELL_GREEN_BORDER_MIN and green >= orange:                                  # (a gold pet's background is orange too: the green frame wins when it is the stronger)
         return "equipped"
     return "pen" if orange >= cfg.PET_CELL_ORANGE_MIN else "pet"
+
+def cell_at_is_equipped(img: Image, point: Point) -> bool:
+    """Whether the cell of the pets grid at `point` (the middle of a cell, or near it) now has the green frame of the equipped pet; False for a point that is not in the grid."""
+    for row, y in enumerate(cfg.PET_GRID_Y):
+        for column, x in enumerate(cfg.PET_GRID_X):
+            if abs(point[0] - x) <= cfg.PET_CELL_HALF and abs(point[1] - y) <= cfg.PET_CELL_HALF:
+                return pet_cell_state(img, row, column) == "equipped"
+    return False
 
 def first_listed_cell(img: Image, stop_at_equipped: bool = False) -> Optional[tuple[str, Point]]:
     """The first cell (rows from the top, left to right) of the small backpack's grid that can be picked - ("pet", its middle) - or, with `stop_at_equipped`, the equipped pet if it comes first: ("equipped", its

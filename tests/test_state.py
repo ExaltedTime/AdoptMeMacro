@@ -2295,3 +2295,24 @@ def test_teaching_new_needs_asks_for_each_icon_on_the_bar_that_matches_nothing_a
     monkeypatch.setattr(macro, "identify_icons", lambda found, img: iter([(0, icon, "potty", 0.99)]))
     asked.clear()
     assert macro.teach_new_needs() == 0 and asked == []
+
+
+def test_a_need_that_never_worked_stays_disabled_after_a_rejoin_and_does_not_count_for_the_stuck_rejoin(macro, monkeypatch):
+    macro.run_stats.resolved = {"hungry": 3, "beach": 1}                                       # (beach has worked in this run, sick never)
+    macro.state.attempted_last, macro.state.attempt_streaks = {"sick", "beach"}, {"sick": macro.cfg.NEED_STUCK_CHECKS - 1, "beach": macro.cfg.NEED_STUCK_CHECKS - 1}
+    monkeypatch.setattr(macro, "log_failure", lambda text, screenshot=True: None)
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    monkeypatch.setattr(macro, "enabled_needs", lambda: {"sick", "beach", "hungry"})
+    macro.record_detection(["sick", "beach"])                                                    # (both are stuck now: sick never worked, beach did)
+    assert macro.state.disabled_needs == {"sick", "beach"} and macro.state.hopeless == {"sick"}
+    macro.state.disabled_needs &= macro.state.hopeless                                           # (what a recovery keeps)
+    assert macro.state.disabled_needs == {"sick"}
+    monkeypatch.setattr(macro.gw, "getAllWindows", lambda: [type("W", (), {"title": "Roblox"})()])
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((1080, 1920, 3), np.uint8))
+    macro.state.last_rejoin = macro.state.last_progress = time.time()
+    macro.state.hopeless = {"pizza", "sick"}
+    macro.state.disabled_needs = {"a", "b", "pizza", "sick"}
+    assert macro.rejoin_reason() is None                                                         # (two that can be helped and two that never worked: no rejoin for them)
+    macro.state.disabled_needs = {"a", "b", "c", "d", "pizza", "sick"}
+    reason = macro.rejoin_reason()
+    assert reason is not None and reason[0] == "stuck" and reason[1].startswith("4 needs disabled")

@@ -367,6 +367,13 @@ def test_the_doctors_prompt_and_dialog_are_told_apart_on_real_screenshots(macro,
         assert abs(x - 965) <= 3 and abs(y - 498) <= 3
 
 
+def test_the_doctors_prompt_is_found_as_the_e_button_of_the_update(macro):
+    """The Lightning Dimension update made the hand an E, behind the desk (the sick need's capture: the prompt was not found and the need failed)."""
+    x, y = macro.find_doctor_prompt(sick_screen("at_the_doctor_e"))
+    assert abs(x - 966) <= 3 and abs(y - 415) <= 3
+    assert not macro.detect_sick_dialog(sick_screen("at_the_doctor_e"))
+
+
 # --- popup_found() / popup_visible(): one lookup for every crop in ref/popups --------------------------------
 
 @pytest.mark.parametrize("name", ["paycheck", "sick_dialog", "backpack_normal", "backpack_back"])

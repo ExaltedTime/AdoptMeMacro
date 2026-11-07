@@ -3637,8 +3637,9 @@ def detect_sick_dialog(img: Image) -> bool:
     return popup_visible(img, "sick_dialog")
 
 def find_doctor_prompt(img: Image) -> Optional[Point]:
-    """Where the hand button over the player's head is (its centre) when the player stands in front of Doctor Heart, else None."""
-    return popup_found(img, "doctor_prompt")
+    """Where the button over the player's head is (its centre) when the player stands in front of Doctor Heart, else None: a hand
+    (`doctor_prompt`) before the Lightning Dimension update, an E (`doctor_prompt_e`) since."""
+    return popup_found(img, "doctor_prompt_e") or popup_found(img, "doctor_prompt")
 
 # directory -> (the files' names and modification times, {name: image}) - see load_templates().
 _TEMPLATE_CACHE: dict[str, tuple[Any, dict[str, Image]]] = {}

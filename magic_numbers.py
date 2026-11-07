@@ -56,9 +56,6 @@ STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     "task_board": {"box": (540, 300, 1000, 430), "close_pos": (1318, 369)},
     # The shop's ad that comes up over the game (a "Limited Time" ribbon over a product, a red X and a blue COOL button; the one seen was merch): its COOL closes it. Only the ribbon is the crop, as the product changes.
     "promo_limited_time": {"box": (560, 380, 1000, 480), "close_pos": (1085, 665)},
-    # Popups of the Admin Abuse event and the like, over the middle of the game until they are closed (a run lost 20 minutes behind the second one):
-    "trade_receipt": {"box": (800, 440, 1130, 540), "close_pos": (1030, 650)},       # "TRADE RECEIPT - YOU RECEIVED: <item>" with confetti, closed by its Thanks!
-    "admin_gift": {"box": (700, 430, 1220, 520), "close_pos": (960, 657)},          # "An Adopt Me admin gave you: <item>", closed by its Awesome!
     # The pet's question card ("Can <pet> have the ability to jump on people's heads?" with a Choose One list, Cancel and Submit): found by its red Cancel, closed by it. The choose need's own
     # click is on this card's list, so it is left alone while the pet's view is wanted.
     "choose_card": {"box": (700, 600, 1000, 720), "close_pos": (869, 659), "only_when_unwanted": True},
@@ -185,6 +182,18 @@ SETUP_UI_WAIT = 5.0               # setup: seconds a button or window is waited 
 SETUP_LOOK_WAIT = 1.0             # setup: seconds a state that is probably there already (a label that says what it should) is looked for
 SETUP_POLL = 0.25                 # setup: seconds between looks while waiting
 SETUP_STRAY_TRIES = 3             # setup closes up to this many stray windows before it starts
+# Notices: the popups of an event (the Admin Abuse one on Saturdays: "An Adopt Me admin gave you: ...", "TRADE RECEIPT - YOU RECEIVED: ...") change with every event, so there is no crop of them: any one with a
+# single wide green button in the middle of the screen (Awesome!, Thanks!, Okay) and no red button beside it (a Yes/No, a Cancel/Submit) is closed by that button - see dismiss_notice().
+NOTICE_BOX = (650, 480, 1270, 720)       # where such a button is (the cards are in the middle of the screen)
+NOTICE_BUTTON_SIZE = ((110, 420), (30, 75))   # its width and height range, px (Awesome! 360 x 50, Thanks! 160 x 40)
+NOTICE_BUTTON_ASPECT = 3.5                # its width over its height at least (Awesome! 7.2, Thanks! 4.1; the backpack's green plus tile and tab icons, which joined are 3.0, and the tiles of its lists are no buttons)
+NOTICE_BUTTON_FILL = 0.4                  # the share of its box that is the button's green (a rounded button with its text)
+NOTICE_RED_MIN = (90, 30)                 # a red blob this size in the box is a No / Cancel: the card is a question, not a notice (confetti pieces are small)
+NOTICE_JOIN = 5                           # px the green is grown by first, so that confetti over the button does not split it
+NOTICE_MAX_CLICKS = 3                     # clicks within NOTICE_CLICK_WINDOW seconds that did not make it go: it is left alone for NOTICE_PAUSE seconds (a green button that is not a notice)
+NOTICE_CLICK_WINDOW = 60.0
+NOTICE_PAUSE = 300.0
+NOTICE_REPORT_INTERVAL = 600.0            # seconds between the failure reports (screenshot) of a closed notice: what it was is shown there, for a crop to be made if it needs one
 STRAY_CLOSE_SETTLE = 1.0          # after a click, before looking again
 # While a need handler (or setup) is running, the per-cycle checks (unscrew()) also run, this often.
 UNSCREW_TASK_INTERVAL = 4.0

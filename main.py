@@ -397,6 +397,9 @@ class State:
     # True while a handler that wants the pet focused runs (see wanting_pet_focus()).
     pet_focus_wanted: bool = False
     task_board_wanted: bool = False
+    notice_clicks: list = field(default_factory=list)     # when dismiss_notice() clicked (a notice that does not go is left alone for a while)
+    notice_pause_until: float = 0.0
+    notice_reported: float = 0.0
     activity: str = ""                     # what the macro is doing now (task_unscrew(what=...)): a need handler, a side action, setup; "" between them
     moments_notes: list = field(default_factory=list)       # (seconds into the run, the log line) of the moments start_moments() marked
     typing: bool = False                   # type_keys() is typing into a text box: the hotkeys (a letter each) are not acted on meanwhile
@@ -3148,7 +3151,7 @@ class ChooseNeedHandler(NeedHandler):
         match, by_colour = found
         if not by_colour:
             logger.info(f"The choose button was found as a purple disc at {match}")
-            log_run_event("choose: the button was found by its shape and hue, not its exact colour")
+            logger.debug("choose: the button was found by its shape and hue, not its exact colour")          # (it always is, now: the exact colour has not matched since an update; not a line of the run log every time)
         logger.debug(f"Found at {match}, moving there slowly...")
         hover_click(*match, duration=cfg.CHOOSE_SLOW_MOVE_DURATION)
         wait_interruptible(cfg.UI_SETTLE)
@@ -3485,6 +3488,56 @@ def process_needs() -> bool:
 # ============================================================================
 # Run at the top of every cycle by unscrew() and side_quest(): popups to
 # dismiss, recovering the game when it's gone wrong, and the timed chores.
+
+def find_notice_button(img: Image) -> Optional[Point]:
+    """The middle of the only wide green button (GREEN_BUTTON_COLOR, NOTICE_BUTTON_SIZE) in NOTICE_BOX when no red button (a No, a Cancel) is there too: what a notice of the game has - Awesome!, Thanks!, Okay - and
+    a question does not. Confetti over the button is grown over (NOTICE_JOIN). None if there is no such button, or more than one."""
+    left, top, right, bottom = cfg.NOTICE_BOX
+    band = img[top:bottom, left:right]
+    hsv = cv2.cvtColor(band, cv2.COLOR_BGR2HSV)
+    red = cv2.bitwise_or(cv2.inRange(hsv, (0, 150, 150), (8, 255, 255)), cv2.inRange(hsv, (170, 150, 150), (180, 255, 255)))
+    count, _, stats, _centres = cv2.connectedComponentsWithStats(red, connectivity=8)
+    if any(stats[i, cv2.CC_STAT_WIDTH] >= cfg.NOTICE_RED_MIN[0] and stats[i, cv2.CC_STAT_HEIGHT] >= cfg.NOTICE_RED_MIN[1] for i in range(1, count)):
+        return None
+    green = exact_color_mask(band, cfg.GREEN_BUTTON_COLOR, cfg.GREEN_BUTTON_TOLERANCE)
+    joined = cv2.dilate(green, np.ones((cfg.NOTICE_JOIN, cfg.NOTICE_JOIN), np.uint8))
+    count, _, stats, centres = cv2.connectedComponentsWithStats(joined, connectivity=8)
+    (min_w, max_w), (min_h, max_h) = cfg.NOTICE_BUTTON_SIZE
+    found = []
+    for i in range(1, count):
+        width, height = int(stats[i, cv2.CC_STAT_WIDTH]), int(stats[i, cv2.CC_STAT_HEIGHT])
+        x, y = int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP])
+        if min_w <= width <= max_w and min_h <= height <= max_h and width >= cfg.NOTICE_BUTTON_ASPECT * height and np.count_nonzero(green[y:y + height, x:x + width]) >= cfg.NOTICE_BUTTON_FILL * width * height:
+            found.append((left + x + width // 2, top + y + height // 2))
+    return found[0] if len(found) == 1 else None
+
+def dismiss_notice() -> Optional[str]:
+    """Close a notice of the game that is over the screen (find_notice_button(): the popups of an event change every time, so no crop of them) by clicking its button; "notice" when one was. Not while a handler
+    has something open on purpose (the backpack, the pet's view, the Task Board). A button that was clicked NOTICE_MAX_CLICKS times within NOTICE_CLICK_WINDOW seconds and is still there is not a notice: left alone
+    for NOTICE_PAUSE seconds. The first one in NOTICE_REPORT_INTERVAL seconds saves a failure report, so that what it was can be seen."""
+    if state.backpack_wanted or state.pet_focus_wanted or state.task_board_wanted:
+        return None
+    now = time.time()
+    if now < state.notice_pause_until:
+        return None
+    img = grab_screen()
+    point = find_notice_button(img)
+    if point is None:
+        return None
+    state.notice_clicks = [t for t in state.notice_clicks if now - t < cfg.NOTICE_CLICK_WINDOW]
+    if len(state.notice_clicks) >= cfg.NOTICE_MAX_CLICKS:
+        state.notice_pause_until = now + cfg.NOTICE_PAUSE
+        state.notice_clicks.clear()
+        log_run_event(f"notice: a green button at {point} was clicked {cfg.NOTICE_MAX_CLICKS} times and is still there - left alone for {cfg.NOTICE_PAUSE:.0f} s")
+        return None
+    state.notice_clicks.append(now)
+    log_run_event(f"notice: closed one by its green button at {point}")
+    if now - state.notice_reported >= cfg.NOTICE_REPORT_INTERVAL:
+        state.notice_reported = now
+        save_failure_report("notice: closed an unknown popup (its screen is here)")
+    hover_click(*point)
+    time.sleep(cfg.STRAY_CLOSE_SETTLE)
+    return "notice"
 
 def detect_paycheck() -> bool:
     """Detect the paycheck popup by the crop of its bank-card header and dismiss it. Returns
@@ -3937,6 +3990,8 @@ def unscrew(in_task: bool = False, interruptible: bool = True) -> Optional[str]:
     backpack_open = False if (in_task and not interruptible) else close_backpack_if_stuck(in_task)
     closed = dismiss_stray_windows()
     paycheck = detect_paycheck() if not backpack_open else False
+    if not in_task and not closed and not paycheck and not backpack_open:
+        dismiss_notice()                                                                  # (after the paycheck, whose CASH OUT is a green button too, and at the top of a cycle only: a task may have a dialog open on purpose)
     if in_task and interruptible and (paycheck or (closed and cfg.STRAY_WINDOWS.get(closed, {}).get("abort_task"))):
         return "aborted"   # (not setup, which can't be abandoned halfway - that is `interruptible` False)
     return None

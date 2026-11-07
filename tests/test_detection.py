@@ -487,3 +487,27 @@ def test_a_white_screen_is_told_by_every_channel_being_light_over_most_of_the_pi
     tinted[:, :, 0] = 200                                                                   # (one channel under the level: not white)
     assert macro.detect_white_screen(tinted) is False
     assert macro.detect_white_screen(np.zeros((100, 100, 3), np.uint8)) is False
+
+
+def test_the_notice_that_the_pet_out_is_full_grown_is_closed_by_its_okay_and_asks_for_another_pet(macro, monkeypatch):
+    screen = screenshot("pet_full_grown_notice")
+    monkeypatch.setattr(macro, "grab_screen", lambda: screen)
+    monkeypatch.setattr(macro.time, "sleep", lambda s: None)
+    macro.update_game_config(lambda c: c.update(pet_repicked=macro.time.time()))
+    assert macro.dismiss_stray_windows() == "pet_full_grown_notice"
+    x, y = macro.clicks[0]
+    assert 900 <= x <= 1020 and 630 <= y <= 680                                                    # (its Okay button)
+    assert macro.load_game_config()["pet_repicked"] == 0.0                                          # (the pet is picked again at the next cycle)
+
+
+def test_the_age_up_screen_that_stays_over_the_game_is_closed_by_its_nice_button_but_not_while_the_pen_has_it(macro, monkeypatch):
+    screen = screenshot("age_up_stuck")
+    monkeypatch.setattr(macro, "grab_screen", lambda: screen)
+    monkeypatch.setattr(macro.time, "sleep", lambda s: None)
+    macro.state.task_board_wanted = True
+    assert macro.dismiss_stray_windows() is None and macro.clicks == []
+    macro.state.task_board_wanted = False
+    assert macro.dismiss_stray_windows() == "age_up_screen" and abs(macro.clicks[0][0] - 960) <= 20 and abs(macro.clicks[0][1] - 1016) <= 20
+    monkeypatch.setattr(macro, "grab_screen", lambda: screenshot("paycheck"))
+    macro.clicks.clear()
+    assert macro.dismiss_stray_windows() is None                                                   # (no other screen is taken for it)

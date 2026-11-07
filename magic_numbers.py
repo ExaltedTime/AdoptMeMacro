@@ -79,6 +79,9 @@ STRAY_WINDOWS: dict[str, dict[str, Any]] = {
     # height follows its text): Decline - never Accept, which is green - or Okay (a third as wide again as Accept). A card whose button is not found is left alone.
     "trade_request": {"box": (700, 560, 1260, 800), "button": "decline"},
     "trade_request_expired": {"box": (700, 380, 1240, 560), "button": "okay"},
+    # "Yay! Your pet is full grown! Add a new pet to continue earning XP." with its green Okay: the game says it when the pet that is OUT has grown as far as it does. It is closed by its Okay,
+    # and the pet is picked again at once (dismiss_stray_windows() makes pet_repick() due): in a 10-hour run it stood over the yard for a while before a 20-minute stall.
+    "pet_full_grown_notice": {"box": (700, 400, 1260, 560), "button": "okay"},
 }
 DIALOG_BUTTONS = {                              # (and the Task Board's wooden sign at the left edge - found by its wood brown, not by a crop: its background is the world - 100 x 60 to 110 x 80 on the captures; and the green NICE! of the Pet Pen's age-up screen: 270 x 67 on the capture)
     "task_board": {"box": (0, 480, 200, 680), "hsv": (((0, 100, 60), (22, 255, 230)),), "size": ((90, 125), (45, 90))},

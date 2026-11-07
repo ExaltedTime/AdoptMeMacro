@@ -3741,6 +3741,8 @@ def dismiss_stray_windows() -> Optional[str]:
             log_run_event(f"stray window closed: {name}" + (" (trading is not set to No One)" if name.startswith("trade_request") else ""))
             hover_click(*button)
             time.sleep(cfg.STRAY_CLOSE_SETTLE)
+            if name == "pet_full_grown_notice":
+                update_game_config(lambda c: c.update(pet_repicked=0.0))                      # (the pet that is out has grown up: pick another at the next cycle)
             return name
         logger.debug(f"Stray window open: {name}, closing it...")
         log_run_event(f"stray window closed: {name}")
@@ -3750,6 +3752,14 @@ def dismiss_stray_windows() -> Optional[str]:
         hover_click(*config["close_pos"])
         time.sleep(cfg.STRAY_CLOSE_SETTLE)
         return name
+    if not state.task_board_wanted:                                                       # (the pen's own age-up screen is closed by collect_pet_pen())
+        nice = find_dialog_button(img, cfg.DIALOG_BUTTONS["nice"])
+        if nice is not None:
+            logger.debug("The age-up screen is up: pressing its NICE!...")
+            log_run_event("stray window closed: age_up_screen")
+            hover_click(*nice)
+            time.sleep(cfg.STRAY_CLOSE_SETTLE)
+            return "age_up_screen"
     return None
 
 def in_trading_hub(img: Image) -> bool:
@@ -3847,7 +3857,7 @@ def unscrew(in_task: bool = False, interruptible: bool = True) -> Optional[str]:
     backpack_open = False if (in_task and not interruptible) else close_backpack_if_stuck(in_task)
     closed = dismiss_stray_windows()
     paycheck = detect_paycheck() if not backpack_open else False
-    if in_task and interruptible and (paycheck or (closed and cfg.STRAY_WINDOWS[closed].get("abort_task"))):
+    if in_task and interruptible and (paycheck or (closed and cfg.STRAY_WINDOWS.get(closed, {}).get("abort_task"))):
         return "aborted"   # (not setup, which can't be abandoned halfway - that is `interruptible` False)
     return None
 

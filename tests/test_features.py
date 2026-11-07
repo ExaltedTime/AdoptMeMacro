@@ -325,3 +325,13 @@ def test_setup_asked_for_runs_once_at_the_next_loop_and_is_cleared(macro, config
     macro.run_setup_if_requested()
     macro.run_setup_if_requested()
     assert ran == [1] and macro.load_game_config()["setup_next_loop"] is False
+
+
+def test_setup_asked_for_says_that_it_ran_so_the_loop_leaves_out_its_own_respawn(macro, config_file, monkeypatch):
+    """run_setup_if_requested() is True when Setup ran (it respawns by itself); the loop respawns itself only when it is False."""
+    seen = []
+    monkeypatch.setattr(macro, "setup_game", lambda: seen.append("setup") or True)
+    monkeypatch.setattr(macro, "respawn_character", lambda: seen.append("respawn"))
+    config_file(setup_next_loop=True)
+    assert macro.run_setup_if_requested() is True and seen == ["setup"]
+    assert macro.run_setup_if_requested() is False

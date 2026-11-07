@@ -261,9 +261,26 @@ def test_setup_runs_its_steps_after_the_respawn_and_says_which_did_not_take(macr
     monkeypatch.setattr(macro, "log_failure", lambda text: failures.append(text))
     monkeypatch.setattr(macro, "log_run_event", lambda text: None)
     assert macro._setup_steps() is False
-    assert order == ["respawn", "pen", "lock", "filter", "trades"] and failures == ["setup: the backpack is not filtered to favorites"]       # (every step ran, the failure has a screenshot)
+    assert order == ["pen", "lock", "filter", "trades"] and failures == ["setup: the backpack is not filtered to favorites"]       # (every step ran, the failure has a screenshot)
     monkeypatch.setattr(macro, "set_backpack_filter", lambda: True)
     assert macro._setup_steps() is True
+
+
+def test_setup_respawns_once_before_the_pens_walk_and_once_after_it_not_three_times(macro, monkeypatch):
+    """The pen's walk starts with a respawn and ends with one back in the house: Setup's own respawn in front of them was a third, for nothing."""
+    order = []
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: None)
+    monkeypatch.setattr(macro, "respawn_character", lambda: order.append("respawn"))
+    monkeypatch.setattr(macro, "switch_pen_pets", lambda: order.append("pen walk") or True)
+    monkeypatch.setattr(macro, "lock_house", lambda: True)
+    monkeypatch.setattr(macro, "set_backpack_filter", lambda: True)
+    monkeypatch.setattr(macro, "disable_trades", lambda: True)
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    macro.update_game_config(lambda c: c.update(pet_pen_enabled=True))
+    assert macro._setup_steps() is True and order == ["pen walk", "respawn"]                    # (switch_pen_pets() starts with open_pet_pen()'s own respawn, not stubbed here)
+    order.clear()
+    macro.update_game_config(lambda c: c.update(pet_pen_enabled=False))
+    assert macro._setup_steps() is True and order == ["respawn"]                                # (no pen: the one respawn is Setup's own)
 
 
 def test_setup_from_outside_is_an_error_when_a_step_did_not_take(macro, monkeypatch):
@@ -338,3 +355,26 @@ def test_an_equip_that_took_is_seen_by_the_green_frame_of_the_cell_when_the_card
     monkeypatch.setattr(macro, "find_equip_button", lambda img: (1060, 815))
     monkeypatch.setattr(macro, "log_run_event", lambda text: None)
     assert macro.equip_pet("a pet", lambda: (895, 787)) is True and clicks == [(895, 787), (1060, 815)]
+
+
+def test_the_pets_tab_is_selected_before_the_filters_age_is_touched(macro, game, monkeypatch):
+    """The backpack opens on the tab it was last left on (a vehicle's after a ride): the Age rows are the pets tab's, so the tab is clicked first and looked at."""
+    cfg = macro.cfg
+    Backpack(macro, game, monkeypatch, notches=2)
+    game.frames["world"] = frame("house_locked")
+    selected = []
+    monkeypatch.setattr(macro, "is_backpack_tab_selected", lambda pos: bool(selected))
+    original = macro.hover_click
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: (selected.append(1) if (x, y) == cfg.INVENTORY_PETS_TAB_POS else None) or original(x, y, duration))
+    assert macro.set_backpack_filter() is True
+    assert game.clicks[0] == cfg.INVENTORY_PETS_TAB_POS and cfg.SETUP_BACKPACK_SETTINGS_POS in game.clicks[1:2]
+
+
+def test_a_backpack_whose_pets_tab_cannot_be_selected_is_not_filtered_by_age(macro, game, monkeypatch):
+    backpack = Backpack(macro, game, monkeypatch, notches=2)
+    game.frames["world"] = frame("house_locked")
+    monkeypatch.setattr(macro, "is_backpack_tab_selected", lambda pos: False)
+    assert macro.set_backpack_filter() is False
+    assert "setup: the backpack's pets tab could not be selected" in texts(game)
+    assert backpack.applied["egg"] is True and backpack.applied["fg"] is True                  # (the Age boxes were left alone)
+    assert not game.equip_tab                                                                  # (and no pet was picked from the list)

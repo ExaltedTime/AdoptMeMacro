@@ -690,14 +690,16 @@ def switch_command(kind: str, name: str, value: bool) -> dict[str, Any]:
     return {"kind": kind, "name": name, "value": bool(value)}
 
 
-# The game config's defaults for the switches (main.py's _read_game_config(): side quest, the private server and the blackout key on, the rest off), for a config that doesn't have them yet.
-OPTION_DEFAULTS = {"side_quest_enabled": True, "use_private_server": True, "blackout_hotkey_enabled": True, "new_need_hotkey_enabled": True, "level_growing_pet": True, "pet_pen_enabled": True, "keep_moments": True}
+# The game config's defaults for the switches (main.py's _read_game_config(): the money tree, the lure, the private server and the blackout key on, the rest off), for a config that doesn't have them yet.
+OPTION_DEFAULTS = {"money_tree_enabled": True, "lure_enabled": True, "use_private_server": True, "blackout_hotkey_enabled": True, "new_need_hotkey_enabled": True, "level_growing_pet": True, "pet_pen_enabled": True, "keep_moments": True}
 
 
 def switch_states(config: Optional[dict[str, Any]]) -> dict[str, bool]:
-    """Every switch the bot can change, as {"need:hungry": True, "option:side_quest": True, ...}, from the game config (None: not there - the
+    """Every switch the bot can change, as {"need:hungry": True, "option:lure": True, ...}, from the game config (None: not there - the
     defaults). `show_debug_lines` is not kept in the config and isn't listed."""
     config = config or {}
+    if "side_quest_enabled" in config:                                  # (an older config: the one switch for the money tree and the lure)
+        config = {"money_tree_enabled": config["side_quest_enabled"], "lure_enabled": config["side_quest_enabled"], **config}
     flags = config["needs_enabled"] if isinstance(config.get("needs_enabled"), dict) else {}
     states = {f"need:{name}": bool(flags.get(name, name in cfg.ENABLED_NEEDS)) for name in cfg.NEED_NAMES}
     for name, key in cfg.OPTION_SWITCHES.items():

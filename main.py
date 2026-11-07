@@ -814,8 +814,10 @@ def _read_game_config() -> dict[str, Any]:
         "lure_timer": time.time(),  # due immediately on a fresh config
         "tree_timer": time.time(),  # likewise
         "money_reset_boundary": None,   # the last daily MONEY_RESET_HOUR reset side_quest() has dealt with (None: not yet)
-        "side_quest_enabled": True, # whether side_quest() is allowed to run at all
+        "money_tree_enabled": True, # whether side_quest() tends the money tree
+        "lure_enabled": True,       # whether side_quest() tends the lure
         "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
+        "setup_next_loop": False,   # run Setup at the next pass of the loop (once; cleared when it runs)
         "record_next_run": False,   # record the next run as a low quality video; cleared when that run starts
         "blackout_hotkey_enabled": True,   # whether HOTKEYS["blackout"] blanks the screen (off: that key can be typed in Roblox)
         "keep_moments": True,              # whether the loop captures the run's moments (start_moments()), kept when the run lasted MOMENTS_MIN_RUN seconds or more
@@ -835,6 +837,10 @@ def _read_game_config() -> dict[str, Any]:
             config = json.load(f)
     except (FileNotFoundError, ValueError):
         return defaults
+    if "side_quest_enabled" in config:                      # (one switch for both, before they were two: it is carried over to each, once)
+        for key in ("money_tree_enabled", "lure_enabled"):
+            config.setdefault(key, config["side_quest_enabled"])
+        del config["side_quest_enabled"]
     return {**defaults, **config}
 
 def load_game_config() -> dict[str, Any]:
@@ -3946,23 +3952,20 @@ def reset_money_if_due(config: dict[str, Any]) -> dict[str, Any]:
     return update_game_config(lambda c: c.update(money_collected=0, money_reset_boundary=boundary))
 
 def side_quest() -> None:
-    """Once per cycle after unscrew(), unless side_quest_enabled is off: tend the money tree and
-    the lure from the persisted state, saving each success at once.
+    """Once per cycle after unscrew(): tend the money tree and the lure (each unless its own switch, money_tree_enabled or lure_enabled, is off) from the persisted state, saving each success at once.
     See docs/ARCHITECTURE.md#side-actions.
     """
     config = reset_money_if_due(load_game_config())
-    if not config["side_quest_enabled"]:
-        return
     now = time.time()
 
-    if config["money_collected"] < cfg.MONEY_COLLECTED_TARGET and now >= config["tree_timer"]:
+    if config["money_tree_enabled"] and config["money_collected"] < cfg.MONEY_COLLECTED_TARGET and now >= config["tree_timer"]:
         if run_side_action(tree_collect):
             def harvested(c):
                 c["money_collected"] += cfg.TREE_HARVEST_YIELD
                 c["tree_timer"] = time.time() + cfg.TREE_CHECK_INTERVAL
             update_game_config(harvested)
 
-    if now >= config["lure_timer"]:
+    if config["lure_enabled"] and now >= config["lure_timer"]:
         if run_side_action(lure_collect):
             update_game_config(lambda c: c.update(lure_timer=time.time() + cfg.LURE_RECOLLECT_INTERVAL))
 
@@ -5029,6 +5032,18 @@ def run_full_cycle() -> None:
             logger.info(f"Waiting for a need... {format_duration(time.time() - waiting_since)}", extra={"status": True})      # (a line the console overwrites)
             wait_interruptible(min(1.0, deadline - time.time()))
 
+def run_setup_if_requested() -> None:
+    """The Settings tab's "Run Setup at the next loop" (the `setup_next_loop` switch): clear it, untick its checkbox and run Setup once. A Setup that did not take is logged (setup_game() keeps the
+    pictures); the loop goes on."""
+    if not load_game_config()["setup_next_loop"]:
+        return
+    update_game_config(lambda c: c.update(setup_next_loop=False))
+    if state.macro_window is not None:
+        state.macro_window.run_on_ui_thread(lambda: state.macro_window.config_flag_vars["setup_next_loop"].set(False), timeout=1.0)
+    log_run_event("setup: asked for at the next loop")
+    if not setup_game():
+        log_run_event("setup: some step did not take (see the failures)")
+
 def run_workflow_loop() -> None:
     """Respawn once, then repeat the workflow until a stop request, which propagates (bare
     finally, not except) so the GUI reports [STOPPED]. See docs/ARCHITECTURE.md#the-workflow-lifecycle.
@@ -5063,6 +5078,7 @@ def run_workflow_loop() -> None:
                 if needs_respawn:
                     respawn_character()
                     needs_respawn = False
+                run_setup_if_requested()
                 run_full_cycle()
                 wait_interruptible(cfg.LOOP_DELAY)
             except FocusLost:
@@ -6186,37 +6202,25 @@ class AdoptMeGUI:
         tk.Label(btn_frame, text="Functions", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"),
                  bg=self.bg, fg=self.accent).pack(anchor=tk.W)
 
-        for label, action in (("Respawn", respawn_character), ("Setup", setup_game), ("Leave & rejoin", leave_and_rejoin),
-                              ("Go to the Trading Hub", travel_to_trade_hub), ("Leave the Trading Hub", leave_trade_hub)):
+        for label, action in (("Respawn", respawn_character), ("Leave & rejoin", leave_and_rejoin)):
             btn = tk.Button(btn_frame, text=label, command=lambda a=action: self.run_async(a),  # type: ignore[misc]
                             font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_RESPAWN_COLOR, fg=self.fg,
                             height=cfg.GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
             btn.pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
             self.action_buttons.append(btn)
 
+        # Setup is not a button: it is ticked here and runs once, at the next pass of the loop (a loop that is running takes it at its next cycle)
+        self.config_flag_vars: dict[str, tk.BooleanVar] = {}
+        self.add_config_checkbox(btn_frame, "Run Setup at the next loop (once)", "setup_next_loop", load_game_config())
+
         # Settings tab
         # Persisted switches (see load_game_config()). Deliberately not in
         # action_buttons: they must stay usable while a workflow is running,
         # which is safe since update_game_config() is locked.
-        config = load_game_config()
-        self.config_flag_vars: dict[str, tk.BooleanVar] = {}
-        for label, key in (("Run side quest", "side_quest_enabled"),
-                           ("Resume after focus loss", "resume_on_focus_loss")):
-            self.add_config_checkbox(options_tab, label, key, config)
+        self.build_settings_tab(options_tab)
 
-        self.add_config_checkbox(options_tab, "Rejoin the private server (off: a public one)", "use_private_server", config)
-        tk.Label(options_tab, text="Private server link", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
-                 bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X)
-        self.server_link_var = tk.StringVar(value=config["private_server_link"])
-        server_link_entry = tk.Entry(options_tab, textvariable=self.server_link_var, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
-                                     bg=cfg.GUI_CONSOLE_BG, fg=cfg.GUI_CONSOLE_FG, insertbackground=cfg.GUI_CONSOLE_FG)
-        server_link_entry.pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
-        server_link_entry.bind("<FocusOut>", lambda e: self.save_server_link())
-        server_link_entry.bind("<Return>", lambda e: self.save_server_link())
-
-        # Debug tab: two subtabs - the need handlers (one button each, regardless
-        # of whether it's in ENABLED_NEEDS, so any can be run on its own, plus
-        # one that runs them all in turn) and everything else.
+        # Debug tab: the need handlers (a switch and a Test button each, regardless of whether it's in
+        # ENABLED_NEEDS, so any can be run on its own, plus one that runs them all in turn).
         self.build_debug_tab(debug_tab)
 
         # Debug console
@@ -6306,7 +6310,7 @@ class AdoptMeGUI:
                 final_status = "[STOPPED]"
                 mark_stopped()
             except TaskInterrupted as interruption:
-                # The GUI's Setup button ran setup_game() with the in-task checks on, and a disconnect made them
+                # A Setup run with the in-task checks on (the bot's /setup), and a disconnect made them
                 # rejoin the game - which ran setup itself. The action is done, not crashed.
                 record(log_run_event, f"interrupted by {interruption.reason}")
                 final_status = "[DONE]"
@@ -6397,16 +6401,8 @@ class AdoptMeGUI:
         logger.info("Config reset to defaults")
 
     def build_debug_tab(self, parent: Any) -> None:
-        """The Debug tab: an Options subtab (build_other_tab()) and a Needs one
-        (build_needs_tab())."""
-        subtabs = ttk.Notebook(parent)
-        subtabs.pack(fill=tk.BOTH, expand=True)
-        needs_tab = tk.Frame(subtabs, bg=self.bg)
-        other_tab = tk.Frame(subtabs, bg=self.bg)
-        subtabs.add(other_tab, text="Options")
-        subtabs.add(needs_tab, text="Needs")
-        self.build_other_tab(other_tab)
-        self.build_needs_tab(needs_tab)
+        """The Debug tab: the needs (build_needs_tab())."""
+        self.build_needs_tab(parent)
 
     def build_needs_tab(self, parent: Any) -> None:
         """Fill the Needs subtab: a button that runs every teleport handler in turn, then a two-column grid with a switch
@@ -6440,33 +6436,61 @@ class AdoptMeGUI:
         update_game_config(lambda c: c.setdefault("needs_enabled", {}).update({name: value}))
         logger.info(f"{name} need {'on' if value else 'off'}")
 
-    def build_other_tab(self, parent: Any) -> None:
-        """Fill the Options subtab: record the next run, show the debug lines in the output or not, refresh the debug
-        folder, reset the config."""
-        self.add_config_checkbox(parent, "Record the next run (low quality video)", "record_next_run", load_game_config())
-        self.add_config_checkbox(parent, "Capture the moments of a run (kept when it lasts over an hour)", "keep_moments", load_game_config())
-        self.add_config_checkbox(parent, "Collect the Pet Pen when the Task Board says it is ready", "pet_pen_enabled", load_game_config())
-        self.add_config_checkbox(parent, "Setup levels a pet that still grows (no eggs, none full grown)", "level_growing_pet", load_game_config())
-        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['blackout'].upper()} blanks the screen in Roblox (off: type it)", "blackout_hotkey_enabled", load_game_config())
-        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['new_need'].upper()} teaches a new need icon in Roblox (off: type it)", "new_need_hotkey_enabled", load_game_config())
+    def add_section(self, parent: Any, title: str) -> None:
+        """A heading of the Settings tab, with a line under it."""
+        tk.Label(parent, text=title, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"), bg=self.bg, fg=self.accent, anchor=tk.W
+                 ).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=(cfg.GUI_ROW_SPACING, 0))
+        tk.Frame(parent, bg=self.accent, height=cfg.GUI_DIVIDER_HEIGHT).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
+
+    def add_hint(self, parent: Any, text: str) -> None:
+        """A line of small print on the Settings tab."""
+        tk.Label(parent, text=text, font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W, justify=tk.LEFT
+                 ).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
+
+    def build_settings_tab(self, parent: Any) -> None:
+        """Fill the Settings tab, in four groups: what the loop does, the rejoin, the keys, and debugging (record the next run, capture the moments, show the debug lines, refresh the
+        debug folder, reset the config). Every checkbox is a persisted switch (add_config_checkbox()), usable while a run goes on."""
+        config = load_game_config()
+        self.add_section(parent, "The loop")
+        for label, key in (("Tend the money tree", "money_tree_enabled"),
+                           ("Tend the lure", "lure_enabled"),
+                           ("Resume after focus loss (take Roblox's focus back instead of stopping)", "resume_on_focus_loss"),
+                           ("Collect the Pet Pen when the Task Board says it is ready", "pet_pen_enabled"),
+                           ("Setup levels a pet that still grows (no eggs, none full grown)", "level_growing_pet")):
+            self.add_config_checkbox(parent, label, key, config)
+
+        self.add_section(parent, "Rejoin")
+        self.add_config_checkbox(parent, "Rejoin the private server (off: a public one)", "use_private_server", config)
+        self.add_hint(parent, "Private server link")
+        self.server_link_var = tk.StringVar(value=config["private_server_link"])
+        server_link_entry = tk.Entry(parent, textvariable=self.server_link_var, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
+                                     bg=cfg.GUI_CONSOLE_BG, fg=cfg.GUI_CONSOLE_FG, insertbackground=cfg.GUI_CONSOLE_FG)
+        server_link_entry.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+        server_link_entry.bind("<FocusOut>", lambda e: self.save_server_link())
+        server_link_entry.bind("<Return>", lambda e: self.save_server_link())
+
+        self.add_section(parent, "Keys")
+        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['blackout'].upper()} blanks the screen in Roblox (off: type it)", "blackout_hotkey_enabled", config)
+        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['new_need'].upper()} teaches a new need icon in Roblox (off: type it)", "new_need_hotkey_enabled", config)
+        self.add_hint(parent, f"{cfg.HOTKEYS['stop'].upper()} stops, anywhere. {cfg.HOTKEYS['capture'].upper()} starts / stops an input capture (in Roblox). "
+                              f"{cfg.HOTKEYS['screenshot'].upper()} saves a screenshot to debug/screenshots (in Roblox)")
+
+        self.add_section(parent, "Debugging")
+        self.add_config_checkbox(parent, "Record the next run (low quality video)", "record_next_run", config)
+        self.add_config_checkbox(parent, "Capture the moments of a run (kept when it lasts over an hour)", "keep_moments", config)
         self.show_debug_var = tk.BooleanVar(value=True)
         tk.Checkbutton(parent, text="Show debug lines in the output", variable=self.show_debug_var, command=self.set_debug_lines_shown,
                        font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.bg, fg=self.fg,
                        selectcolor=self.bg, activebackground=self.bg, activeforeground=self.fg,
                        anchor=tk.W, cursor="hand2").pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
-        tk.Label(parent, text=f"Press {cfg.HOTKEYS['capture'].upper()} anywhere to start / stop capturing screenshots and input",
-                 font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
-        tk.Label(parent, text=f"Press {cfg.HOTKEYS['screenshot'].upper()} in Roblox to save a screenshot of the whole screen in debug/screenshots",
-                 font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
-        tk.Label(parent, text=f"Press {cfg.HOTKEYS['blackout'].upper()} in Roblox to blank / show the screen while the loop runs (the macro still sees it)",
-                 font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
-        tk.Button(parent, text="Refresh debug", command=self.refresh_debug_folder,
-                  font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.accent, fg=self.fg, cursor="hand2"
-                  ).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
-        tk.Button(parent, text="Reset Config", command=self.reset_config,
-                  font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_STOP_COLOR, fg=self.fg,
-                  height=cfg.GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2"
-                  ).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+        buttons = tk.Frame(parent, bg=self.bg)
+        buttons.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+        buttons.grid_columnconfigure(0, weight=1, uniform="settings")
+        buttons.grid_columnconfigure(1, weight=1, uniform="settings")
+        tk.Button(buttons, text="Refresh debug", command=self.refresh_debug_folder, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
+                  bg=self.accent, fg=self.fg, cursor="hand2").grid(row=0, column=0, sticky=tk.EW, padx=(0, cfg.GUI_WIDGET_SPACING))
+        tk.Button(buttons, text="Reset Config", command=self.reset_config, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
+                  bg=cfg.GUI_STOP_COLOR, fg=self.fg, cursor="hand2").grid(row=0, column=1, sticky=tk.EW, padx=(cfg.GUI_WIDGET_SPACING, 0))
 
     def refresh_debug_folder(self) -> None:
         """Ask, then empty the debug folder (refresh_debug()). Not while a run

@@ -1501,17 +1501,17 @@ def test_a_set_command_changes_the_switch_and_its_checkbox(macro, monkeypatch, t
     class Var:
         def __init__(self): self.value = None
         def set(self, value): self.value = value
-    gui.need_vars, gui.config_flag_vars, gui.show_debug_var = {"hungry": Var()}, {"side_quest_enabled": Var()}, Var()
+    gui.need_vars, gui.config_flag_vars, gui.show_debug_var = {"hungry": Var()}, {"lure_enabled": Var()}, Var()
     changes = []
     gui.set_need_enabled = lambda name, value: changes.append(("need", name, value))
     gui.set_config_flag = lambda key, value: changes.append((key, value))
     gui.set_debug_lines_shown = lambda: changes.append(("debug lines", gui.show_debug_var.value))
-    for kind, name, value in (("need", "hungry", False), ("option", "side_quest", False), ("option", "show_debug_lines", False),
+    for kind, name, value in (("need", "hungry", False), ("option", "lure", False), ("option", "show_debug_lines", False),
                               ("option", "level_growing_pet", True)):
         write_command(macro, "set", kind=kind, name=name, value=value)
         gui.poll_commands()
-    assert changes == [("need", "hungry", False), ("side_quest_enabled", False), ("debug lines", False), ("level_growing_pet", True)]
-    assert gui.need_vars["hungry"].value is False and gui.config_flag_vars["side_quest_enabled"].value is False
+    assert changes == [("need", "hungry", False), ("lure_enabled", False), ("debug lines", False), ("level_growing_pet", True)]
+    assert gui.need_vars["hungry"].value is False and gui.config_flag_vars["lure_enabled"].value is False
     assert gui.show_debug_var.value is False                                              # (a switch with no checkbox of its own, like the stitches one, is only persisted)
 
 

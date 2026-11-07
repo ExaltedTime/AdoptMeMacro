@@ -293,3 +293,35 @@ def test_a_button_scan_that_finds_all_five_does_not_wait_or_log(macro, monkeypat
     waits = scans(monkeypatch, macro, FIVE)
     assert macro.refresh_button_mapping() is True and waits == []
     assert not os.path.exists(macro.cfg.RUN_LOG_PATH) or "button scan" not in open(macro.cfg.RUN_LOG_PATH).read()
+
+
+def test_the_money_tree_and_the_lure_have_a_switch_each(macro, config_file, monkeypatch):
+    done = []
+    monkeypatch.setattr(macro, "run_side_action", lambda action: done.append(action.__name__) or False)
+    for tree, lure, expected in ((True, True, ["tree_collect", "lure_collect"]), (False, True, ["lure_collect"]), (True, False, ["tree_collect"]), (False, False, [])):
+        config_file(tree_timer=0, lure_timer=0, money_collected=0, money_tree_enabled=tree, lure_enabled=lure, money_reset_boundary=stamp(2099, 1, 1, 17))
+        done.clear()
+        macro.side_quest()
+        assert done == expected
+
+
+def test_the_old_side_quest_switch_is_carried_over_to_both(macro, config_file):
+    config_file()
+    write = lambda **values: open(macro.cfg.GAME_CONFIG_PATH, "w").write(__import__("json").dumps(values))      # (an older file: only the old key)
+    write(side_quest_enabled=False)
+    config = macro.load_game_config()
+    assert config["money_tree_enabled"] is False and config["lure_enabled"] is False and "side_quest_enabled" not in config
+    write(side_quest_enabled=False, lure_enabled=True)                                 # (one already set is left)
+    assert macro.load_game_config()["lure_enabled"] is True
+
+
+def test_setup_asked_for_runs_once_at_the_next_loop_and_is_cleared(macro, config_file, monkeypatch):
+    ran = []
+    monkeypatch.setattr(macro, "setup_game", lambda: ran.append(1) or True)
+    config_file(setup_next_loop=False)
+    macro.run_setup_if_requested()
+    assert ran == []
+    config_file(setup_next_loop=True)
+    macro.run_setup_if_requested()
+    macro.run_setup_if_requested()
+    assert ran == [1] and macro.load_game_config()["setup_next_loop"] is False

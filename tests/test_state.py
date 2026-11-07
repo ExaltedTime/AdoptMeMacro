@@ -2316,3 +2316,32 @@ def test_a_need_that_never_worked_stays_disabled_after_a_rejoin_and_does_not_cou
     macro.state.disabled_needs = {"a", "b", "c", "d", "pizza", "sick"}
     reason = macro.rejoin_reason()
     assert reason is not None and reason[0] == "stuck" and reason[1].startswith("4 needs disabled")
+
+
+def update_screen():
+    """The game's update: a white screen with blue letters at the bottom."""
+    img = np.full((1080, 1920, 3), 255, np.uint8)
+    img[868:892, 760:1180] = (220, 140, 30)                                                    # (BGR: blue letters; a block stands for them)
+    return img
+
+
+def test_the_server_closing_text_is_told_by_its_blue_on_white_and_not_by_other_white_screens(macro):
+    assert macro.server_closing_visible(update_screen()) is True
+    assert macro.server_closing_visible(np.full((1080, 1920, 3), 255, np.uint8)) is False            # (a plain white screen)
+    green = np.full((1080, 1920, 3), 255, np.uint8)
+    green[868:892, 760:1180] = (70, 180, 90)                                                      # (the respawn's green "Your pets have earned" text)
+    assert macro.server_closing_visible(green) is False
+
+
+def test_a_game_that_is_updating_is_rejoined_after_three_minutes_and_not_after_half_a_minute(macro, monkeypatch):
+    clock = [1000.0]
+    window = type("Window", (), {"title": "Roblox"})()
+    monkeypatch.setattr(macro.time, "time", lambda: clock[0])
+    monkeypatch.setattr(macro.gw, "getAllWindows", lambda: [window])
+    monkeypatch.setattr(macro, "grab_screen", update_screen)
+    assert macro.rejoin_reason() is None
+    clock[0] += macro.cfg.WHITE_SCREEN_REJOIN_AFTER + 5
+    assert macro.rejoin_reason() is None                                                           # (past the 30 s of a plain white screen: waiting for the update)
+    clock[0] += macro.cfg.SERVER_UPDATE_REJOIN_AFTER
+    kind, reason = macro.rejoin_reason()
+    assert kind == "white_screen" and "closing for an update" in reason

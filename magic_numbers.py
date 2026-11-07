@@ -768,6 +768,12 @@ DISCONNECT_PANEL_MIN_FRACTION = 0.5
 WHITE_SCREEN_LEVEL = 250
 WHITE_SCREEN_MIN_FRACTION = 0.6
 WHITE_SCREEN_REJOIN_AFTER = 30.0
+# "The server is closing for an update" - blue letters at the bottom of an otherwise white screen (the game updating; 3 times in a 2-hour run, each followed by a rejoin after the 30 s above). The servers take a
+# while to come back, so the rejoin waits SERVER_UPDATE_REJOIN_AFTER seconds from the first sight of it instead. Found by the blue of the letters (nothing else white has blue letters there), not by a crop.
+SERVER_CLOSING_BOX = (640, 840, 1280, 920)
+SERVER_CLOSING_MIN_PIXELS = 200           # blue pixels (blue at least SERVER_CLOSING_BLUE_LEAD over red, and at least 140) in that box
+SERVER_CLOSING_BLUE_LEAD = 60
+SERVER_UPDATE_REJOIN_AFTER = 180.0
 # A door, a respawn and a teleport each show the white screen and fade out of it: wait_for_white_to_pass() waits for that, not for a fixed time.
 WHITE_POLL = 0.2                  # seconds between looks while the white screen is waited for
 WHITE_LOOK = 2.0                  # seconds the white screen is waited to show at all before the transition is taken as not having one (and the old fixed wait is used)

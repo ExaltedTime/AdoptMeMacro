@@ -3545,6 +3545,13 @@ def detect_white_screen(img: Image) -> bool:
 
 ROBLOX_NOT_RUNNING = "Roblox isn't running"
 
+def server_closing_visible(img: Image) -> bool:
+    """Whether the white screen of the game's update shows its blue "The server is closing for an update" (SERVER_CLOSING_BOX: enough blue pixels)."""
+    left, top, right, bottom = cfg.SERVER_CLOSING_BOX
+    band = img[top:bottom, left:right].astype(np.int16)
+    blue = (band[:, :, 0] >= 140) & (band[:, :, 0] - band[:, :, 2] >= cfg.SERVER_CLOSING_BLUE_LEAD)
+    return int(np.count_nonzero(blue)) >= cfg.SERVER_CLOSING_MIN_PIXELS
+
 def rejoin_reason() -> Optional[tuple[str, str]]:
     """Why the game needs rejoining now, as (kind, reason), or None - in priority order
     "disconnect", "white_screen", "stuck", "stalled", "scheduled". See docs/ARCHITECTURE.md#stuck-needs.
@@ -3561,8 +3568,11 @@ def rejoin_reason() -> Optional[tuple[str, str]]:
         state.white_since = None
     elif state.white_since is None:
         state.white_since = time.time()
-    elif time.time() - state.white_since >= cfg.WHITE_SCREEN_REJOIN_AFTER:
-        return "white_screen", f"the screen has been white for {cfg.WHITE_SCREEN_REJOIN_AFTER:g}s"
+    else:
+        updating = server_closing_visible(screen)                                           # (the game is updating: its servers are back in a few minutes, not in half a minute)
+        wait = cfg.SERVER_UPDATE_REJOIN_AFTER if updating else cfg.WHITE_SCREEN_REJOIN_AFTER
+        if time.time() - state.white_since >= wait:
+            return "white_screen", (f"the server is closing for an update: {wait:g}s of it" if updating else f"the screen has been white for {wait:g}s")
     disabled_now = state.disabled_needs - state.hopeless                                          # (needs that never worked are not what a rejoin is for)
     if len(disabled_now) >= cfg.DISABLED_NEEDS_REJOIN_THRESHOLD:
         return "stuck", f"{len(disabled_now)} needs disabled ({', '.join(sorted(disabled_now))})"

@@ -1707,8 +1707,11 @@ def setup_game() -> bool:
     """Lock the house, filter the backpack to favorites and disable trades. Run on demand
     and after a rejoin, not in the cycle. See docs/ARCHITECTURE.md#side-actions.
     """
+    log_run_event("setup: begins")
     with task_unscrew(interruptible=False, what="setup"):
-        return _setup_steps()
+        done = _setup_steps()
+    log_run_event(f"setup: ends, {'every step as it should be' if done else 'some step did not take'}")
+    return done
 
 def leave_hub_and_setup() -> bool:
     """The action of /sloop before the loop: leave the Trading Hub if the player is in it, then run Setup. A hub that cannot be left is an error (the status says so and the loop does not
@@ -1738,7 +1741,6 @@ def _setup_steps() -> bool:
     if failed:
         log_failure("setup: " + "; ".join(failed))
         return False
-    update_game_config(lambda c: c.update(pet_repicked=time.time()))                # (the pet was picked just now: pet_repick() waits its interval from here)
     logger.info("Setup complete")
     log_run_event("setup: the house is locked, the backpack is filtered to favorites and trades are set to No One")
     return True
@@ -1900,6 +1902,9 @@ def set_backpack_filter() -> bool:
     pet_out = bool(find_pet_bar(grab_screen()))
     growing = level_growing_pets()
     ok, panel_open = False, True
+    log_run_event("backpack: filters and pet looked at")
+    if growing:
+        update_game_config(lambda c: c.update(pet_repicked=time.time()))                        # (the pet is picked now, from Setup, a ride or the repick alike, and whether or not every step takes: pet_repick() waits its interval from here, not a second pass at once behind a Setup that failed)
     with backpack_on_purpose():
         logger.debug("Opening backpack...")
         pydirectinput.press(cfg.KEYS["backpack"])

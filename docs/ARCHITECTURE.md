@@ -960,7 +960,7 @@ actually on disk (so an old config missing a newer key still works), and
   `lure_collect()` are next due. Both default to "due immediately"
   (`time.time()`) when the config is fresh.
 - **`keep_moments`** - on/off (default on): whether the loop captures the run's moments, see [The moments of a run](#the-moments-of-a-run).
-- **`level_growing_pet`** - on/off (default on): Setup filters the eggs and full-grown pets out of the backpack and equips the first pet left, and `pet_repick()` does the same again every `PET_REPICK_INTERVAL` (`pet_repicked`: when it last did, a timestamp).
+- **`level_growing_pet`** - on/off (default on): Setup filters the eggs and full-grown pets out of the backpack and equips the first pet left, and `pet_repick()` does the same again every `PET_REPICK_INTERVAL` (`pet_repicked`: when it last did, a timestamp). `set_backpack_filter()` stamps `pet_repicked` whenever it runs with the option on, whether or not every step took (it used to be stamped at the end of a Setup that took, so a Setup that failed on one step was followed at once by the repick, and the backpack's steps ran twice). The run log shows each pass: `setup: begins` / `setup: ends, ...` and `backpack: filters and pet looked at`, so a doubled pass can be told from a Setup that ran twice.
 - **`pet_pen_enabled`** - on/off (default on) for `pet_pen()` (`pet_pen_looked`: when it last opened the Task Board, a timestamp). Both are in [Side actions](#side-actions).
 - **`money_tree_enabled`** and **`lure_enabled`** - on/off switches (default on) for the two halves of
   `side_quest()`: the money tree and the lure. They are checkboxes on the Settings tab, and can be flipped while a

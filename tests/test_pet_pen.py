@@ -65,6 +65,7 @@ def test_a_ready_pet_pen_is_collected_through_the_card_and_the_nice_button(macro
     assert 840 <= macro.clicks[1][0] <= 1080 and 440 <= macro.clicks[1][1] <= 500
     assert abs(macro.clicks[2][0] - 959) < 10 and log == ["pet pen: pets aged up"]
     assert macro.state.task_board_wanted is False
+    assert macro.load_game_config()["pet_pen_swap"] is True                                      # (a collect that aged pets up always sends the macro to look at the pen: the full-grown ones are replaced)
 
 
 def test_a_board_without_the_card_is_closed_again_and_one_that_does_not_open_is_a_failure(macro, screens):
@@ -359,3 +360,83 @@ def test_two_full_grown_pets_are_both_taken_out_even_when_the_pen_is_slow_to_mov
     monkeypatch.setattr(macro, "log_failure", lambda text: put.append("failure"))
     assert macro.switch_pen_pets() is True
     assert "failure" not in put and put.count(1) == 2
+
+
+def pen_with_grown_slots(macro, slots):
+    """The real frame of a pen with one full-grown pet (slot 0), with its place copied into the other `slots` as well: a pen with several. (Only one place of a pen with a full-grown pet was captured.)"""
+    frame = shot("pen_full_grown").copy()
+    half_x, half_y = macro.cfg.PET_PEN_SLOT_HALF
+    cx, cy = macro.cfg.PET_PEN_SLOTS[0]
+    place = shot("pen_full_grown")[cy - half_y:cy + half_y, cx - half_x:cx + half_x]
+    for slot in slots:
+        x, y = macro.cfg.PET_PEN_SLOTS[slot]
+        frame[y - half_y:y + half_y, x - half_x:x + half_x] = place
+    return frame
+
+
+def test_the_full_grown_sign_is_found_in_every_place_of_the_pen_and_only_where_it_is(macro):
+    assert macro.full_grown_slots(pen_with_grown_slots(macro, [1, 2, 3])) == [0, 1, 2, 3]
+    assert macro.full_grown_slots(pen_with_grown_slots(macro, [1])) == [0, 1]
+    assert macro.full_grown_slots(pen_with_grown_slots(macro, [3])) == [0, 3]
+    assert macro.full_grown_slots(shot("pen_after_add")) == []
+
+
+def test_two_full_grown_pets_are_both_taken_out_and_two_others_put_in_on_the_real_frames(macro, monkeypatch):
+    """The pets of a pen grew up and were not replaced: the pen with two full-grown pets, played through with the real frames of a pen taking one out, putting one in and its small backpack."""
+    frames = {"pen2": pen_with_grown_slots(macro, [1]), "pen1": shot("pen_full_grown"), "free": shot("pen_add_pet"), "backpack": shot("pen_backpack"), "full": shot("pen_after_add")}
+    stage = ["pen2"]
+    put_in = []
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "open_pet_pen", lambda: True)
+    monkeypatch.setattr(macro, "ensure_pen_age_filter", lambda: True)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "grab_screen", lambda: frames[stage[0]])
+    log, failures = [], []
+    monkeypatch.setattr(macro, "log_run_event", log.append)
+    monkeypatch.setattr(macro, "log_failure", lambda reason, screenshot=True: failures.append(reason))
+    x_first = (macro.cfg.PET_PEN_SLOTS[0][0] + macro.cfg.PET_PEN_X_OFFSET[0], macro.cfg.PET_PEN_SLOTS[0][1] + macro.cfg.PET_PEN_X_OFFSET[1])
+
+    def click(x, y, duration=0):
+        macro.clicks.append((x, y))
+        if (x, y) == x_first and stage[0] == "pen2":
+            stage[0] = "pen1"                                                                  # (the other moves up into the first place)
+        elif (x, y) == x_first and stage[0] == "pen1":
+            stage[0] = "free"
+        elif stage[0] == "free" and abs(x - 857) < 15:                                         # (Add Pet)
+            stage[0] = "backpack"
+        elif stage[0] == "backpack" and (x, y) == (1055, 787):
+            put_in.append(1)
+            stage[0] = "free" if len(put_in) < 2 else "full"
+    monkeypatch.setattr(macro, "hover_click", click)
+    assert macro.switch_pen_pets() is True and failures == []
+    assert macro.clicks.count(x_first) == 2 and len(put_in) == 2
+    assert log == ["pet pen: 2 full-grown pet(s) switched"] and macro.clicks[-1] == macro.cfg.PET_PEN_CLOSE_POS
+
+
+def test_the_pen_is_looked_at_every_half_hour_whether_or_not_a_pet_was_seen_to_grow_up(macro, monkeypatch):
+    tried = []
+    monkeypatch.setattr(macro, "run_side_action", lambda action: tried.append(action.__name__) or True)
+    now = time.time()
+    macro.update_game_config(lambda c: c.update(pet_pen_enabled=True, pet_pen_swap=False, pet_pen_swap_tried=now - macro.cfg.PET_PEN_SWAP_INTERVAL / 2))
+    macro.pet_pen_swap_due()
+    assert tried == []                                                                           # (nothing grew up, not yet half an hour)
+    macro.update_game_config(lambda c: c.update(pet_pen_swap_tried=now - macro.cfg.PET_PEN_SWAP_INTERVAL - 1))
+    macro.pet_pen_swap_due()
+    assert tried == ["switch_pen_pets"]                                                          # (the half hour: looked at all the same)
+    macro.pet_pen_swap_due()
+    assert len(tried) == 1                                                                       # (and the interval starts again)
+    macro.update_game_config(lambda c: c.update(pet_pen_swap=True, pet_pen_swap_tried=now - macro.cfg.PET_PEN_SWAP_RETRY - 1))
+    macro.pet_pen_swap_due()
+    assert len(tried) == 2                                                                       # (a pet that grew up: after the retry time, long before the half hour)
+    macro.update_game_config(lambda c: c.update(pet_pen_enabled=False, pet_pen_swap_tried=0.0))
+    macro.pet_pen_swap_due()
+    assert len(tried) == 2                                                                       # (switched off: never)
+
+
+def test_the_debug_button_switches_the_pen_at_once_and_respawns(macro, monkeypatch):
+    seen = []
+    monkeypatch.setattr(macro, "switch_pen_pets", lambda: seen.append("switch") or True)
+    monkeypatch.setattr(macro, "respawn_character", lambda: seen.append("respawn"))
+    macro.update_game_config(lambda c: c.update(pet_pen_enabled=False, pet_pen_swap=True))        # (whatever the switches say)
+    assert macro.switch_pen_now() is True and seen == ["switch", "respawn"]
+    assert macro.load_game_config()["pet_pen_swap"] is False and macro.load_game_config()["pet_pen_swap_tried"] > 0

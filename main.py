@@ -842,6 +842,7 @@ def _read_game_config() -> dict[str, Any]:
         "blackout_hotkey_enabled": True,   # whether HOTKEYS["blackout"] blanks the screen (off: that key can be typed in Roblox)
         "keep_moments": True,              # whether the loop captures the run's moments (start_moments()), kept when the run lasted MOMENTS_MIN_RUN seconds or more
         "pet_pen_enabled": True,           # whether pet_pen() collects the Pet Pen when the Task Board says it is ready
+        "pet_outgrown": False,             # the game said the pet that is out is full grown ("Yay! Your pet is full grown!"): the next pick does not keep it, even if it still shows in the list
         "pet_repicked": 0.0,               # when pet_repick() last picked the pet to level
         "pet_pen_looked": 0.0,
         "pet_pen_swap": False,             # a pet of the pen reached Friend: pet_pen_swap_due() switches the full-grown ones out
@@ -1975,7 +1976,10 @@ def pick_pet_in_open_backpack(growing: bool, on_pets: bool, pet_out: bool) -> No
     elif growing:
         select_backpack_tab(cfg.INVENTORY_PETS_TAB_POS)
         wait_interruptible(cfg.UI_SETTLE)
-        pick = choose_list_pet(stop_at_equipped=True)                                        # (not the Add tile, a grey pet in a listing or one in the pen; the equipped one is kept wherever it is in view)
+        outgrown = bool(load_game_config()["pet_outgrown"])
+        pick = choose_list_pet(stop_at_equipped=not outgrown)                                # (not the Add tile, a grey pet in a listing or one in the pen; the equipped one is kept wherever it is in view - unless the game said it is full grown: then another)
+        if outgrown:
+            update_game_config(lambda c: c.update(pet_outgrown=False))
         if pick is None:
             log_run_event("setup: no pet that can be levelled was seen in the list - the pet that is out is kept")
         elif pick[0] == "equipped":
@@ -3933,7 +3937,7 @@ def dismiss_stray_windows() -> Optional[str]:
             hover_click(*button)
             time.sleep(cfg.STRAY_CLOSE_SETTLE)
             if name == "pet_full_grown_notice":
-                update_game_config(lambda c: c.update(pet_repicked=0.0))                      # (the pet that is out has grown up: pick another at the next cycle)
+                update_game_config(lambda c: c.update(pet_repicked=0.0, pet_outgrown=True))   # (the pet that is out has grown up: pick another at the next cycle, and not this one again)
             return name
         logger.debug(f"Stray window open: {name}, closing it...")
         log_run_event(f"stray window closed: {name}")
@@ -4389,11 +4393,21 @@ def check_pet_pen() -> bool:
     respawn_character()
     return done
 
+def switch_pen_now() -> bool:
+    """The Debug tab's "Switch the Pet Pen's full-grown pets now": switch_pen_pets() at once, whether or not a growing up was seen or the pen is switched on, then a respawn back in the house (as Setup's check does); what it
+    did is in the run log (`pet pen: ...`) and, for a pet that did not go out, a failure with its screenshot. True when the pen is as it should be."""
+    with task_unscrew(interruptible=False, what="debug: switch the pen"):
+        done = switch_pen_pets()
+        update_game_config(lambda c: c.update(pet_pen_swap_tried=time.time(), **({"pet_pen_swap": False} if done else {})))
+        respawn_character()
+    return done
+
 def pet_pen_swap_due() -> None:
-    """Once per cycle after pet_pen(): when the age-up screen showed a pet that reached Friend (the game config's pet_pen_swap) and PET_PEN_SWAP_RETRY seconds have passed since the last try, switch_pen_pets(); the flag is cleared
-    once it came through."""
+    """Once per cycle after pet_pen(): switch_pen_pets() when pets grew up - the age-up screen showed a pet that reached Friend or any pets aged up (the game config's pet_pen_swap) and PET_PEN_SWAP_RETRY seconds have passed
+    since the last try - and in any case every PET_PEN_SWAP_INTERVAL seconds, whether or not a growing up was seen (a notice can be missed: a pet that grew was left in the pen). The flag is cleared once it came through."""
     config = load_game_config()
-    if not config["pet_pen_enabled"] or not config["pet_pen_swap"] or time.time() - config["pet_pen_swap_tried"] < cfg.PET_PEN_SWAP_RETRY:
+    since = time.time() - config["pet_pen_swap_tried"]
+    if not config["pet_pen_enabled"] or not ((config["pet_pen_swap"] and since >= cfg.PET_PEN_SWAP_RETRY) or since >= cfg.PET_PEN_SWAP_INTERVAL):
         return
     done = run_side_action(switch_pen_pets)
     update_game_config(lambda c: c.update(pet_pen_swap_tried=time.time(), **({"pet_pen_swap": False} if done else {})))
@@ -6647,6 +6661,10 @@ class AdoptMeGUI:
         buttons.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
         buttons.grid_columnconfigure(0, weight=1, uniform="settings")
         buttons.grid_columnconfigure(1, weight=1, uniform="settings")
+        pen_button = tk.Button(parent, text="Switch the Pet Pen's full-grown pets now", command=lambda: self.run_async(switch_pen_now), font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
+                               bg=cfg.GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
+        pen_button.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+        self.action_buttons.append(pen_button)
         tk.Button(buttons, text="Refresh debug", command=self.refresh_debug_folder, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
                   bg=self.accent, fg=self.fg, cursor="hand2").grid(row=0, column=0, sticky=tk.EW, padx=(0, cfg.GUI_WIDGET_SPACING))
         tk.Button(buttons, text="Reset Config", command=self.reset_config, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),

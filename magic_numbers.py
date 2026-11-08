@@ -722,6 +722,7 @@ PET_GRID_SCROLL_MAX = 40                   # most scrolls looking for a pet that
 PET_PEN_BACKPACK_CLOSE_POS = (1188, 640)  # the small backpack's red X (from the picture; not clicked in the capture)
 PET_PEN_FILTER_BUTTON_POS = (956, 640)    # the orange filter button in the small backpack's header (it opens the same FILTERS panel as the big backpack's, in the same place)
 PET_PEN_UI_SETTLE = 1.5                   # seconds after a click in the pen's screens
+PET_PEN_SWAP_INTERVAL = 30 * 60           # seconds between looks at the pen for full-grown pets whether or not one was seen to grow up
 PET_PEN_SWAP_RETRY = 10 * 60              # seconds before a swap that did not come through is tried again
 PET_REPICK_INTERVAL = 30 * 60            # seconds between the loop's picks of the pet to level (see pet_repick(): a pet that has grown up is no longer in the filtered list)
 TREE_CHECK_INTERVAL = 10 * 60          # seconds (10 minutes) between tree harvests

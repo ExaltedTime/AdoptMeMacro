@@ -397,3 +397,20 @@ def test_the_equip_button_is_found_when_the_card_opens_to_the_right_of_a_pet_in_
     x, y = macro.find_equip_button(frame("pets_card_equip_far"))
     assert abs(x - 1220) <= 12 and abs(y - 805) <= 12
     assert macro.find_equip_button(frame("pets_grid")) is None                                  # (the green plus tile of the list is no Equip button)
+
+
+def test_a_pet_the_game_called_full_grown_is_not_kept_by_the_pick_even_if_it_still_shows_in_the_list(macro, monkeypatch):
+    """Run 6: after "Yay! Your pet is full grown!" the repick found the equipped pet in the filtered list and kept it. The notice says to pick another."""
+    seen = []
+    monkeypatch.setattr(macro, "select_backpack_tab", lambda pos: None)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    monkeypatch.setattr(macro, "choose_list_pet", lambda stop_at_equipped=False: seen.append(stop_at_equipped) or ("pet", (975, 787)))
+    monkeypatch.setattr(macro, "equip_pet", lambda what, where: seen.append(("equip", where())) or True)
+    macro.update_game_config(lambda c: c.update(pet_outgrown=False))
+    macro.pick_pet_in_open_backpack(True, True, True)
+    assert seen[0] is True                                                                     # (an ordinary pick keeps the equipped pet)
+    seen.clear()
+    macro.update_game_config(lambda c: c.update(pet_outgrown=True))
+    macro.pick_pet_in_open_backpack(True, True, True)
+    assert seen[0] is False and ("equip", (975, 787)) in seen and macro.load_game_config()["pet_outgrown"] is False      # (not kept this time, and asked once)

@@ -399,6 +399,7 @@ class State:
     # True while a handler that wants the pet focused runs (see wanting_pet_focus()).
     pet_focus_wanted: bool = False
     task_board_wanted: bool = False
+    pen_notes: list = field(default_factory=list)        # what switch_pen_pets() and put_a_pet_in_the_pen() said (pen_note()), for the Debug button to show in the console
     notice_clicks: list = field(default_factory=list)     # when dismiss_notice() clicked (a notice that does not go is left alone for a while)
     notice_pause_until: float = 0.0
     notice_reported: float = 0.0
@@ -4326,11 +4327,11 @@ def put_a_pet_in_the_pen() -> bool:
     not come up or no pet fits."""
     add = popup_found(grab_screen(), "pet_pen_add")
     if add is None:
-        log_run_event("pet pen: no free place to put a pet in")
+        pen_note("pet pen: no free place to put a pet in")
         return False
     hover_click(*add)
     if look_until(lambda img: popup_visible(img, "pet_backpack_title"), cfg.PET_PEN_OPEN_WAIT, cfg.PET_PEN_POLL) is None:
-        log_run_event("pet pen: the backpack did not come up after Add Pet")
+        pen_note("pet pen: the backpack did not come up after Add Pet")
         return False
     if not ensure_pen_age_filter():
         hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
@@ -4338,17 +4339,22 @@ def put_a_pet_in_the_pen() -> bool:
         return False
     pet = choose_pen_pet()
     if pet is None:
-        log_run_event("pet pen: no pet fits (all in a trade listing, equipped or none left)")
+        pen_note("pet pen: no pet fits (all in a trade listing, equipped or none left)")
         hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
         wait_interruptible(cfg.PET_PEN_UI_SETTLE)
         return False
     hover_click(*pet)
     wait_interruptible(cfg.PET_PEN_UI_SETTLE)
     if popup_visible(grab_screen(), "pet_backpack_title"):
-        log_run_event("pet pen: the pet clicked did not go in")
+        pen_note("pet pen: the pet clicked did not go in")
         hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
         return False
     return True
+
+def pen_note(text: str) -> None:
+    """A line of the pen's switch, in the run log and kept in state.pen_notes (switch_pen_now() shows them in the console)."""
+    state.pen_notes.append(text)
+    log_run_event(text)
 
 def switch_pen_pets() -> bool:
     """The pen's full-grown pets out and others in: the pen opened (open_pet_pen()), the red X of each place with the "Full grown!" sign clicked (the rest move up, so each time it is looked at again), then a pet that fits put in
@@ -4357,9 +4363,10 @@ def switch_pen_pets() -> bool:
     if not focus_roblox():
         return False
     if not open_pet_pen():
-        log_run_event("pet pen: it did not open")
+        pen_note("pet pen: it did not open")
         return False
     out = 0
+    look_until(lambda img: bool(full_grown_slots(img)), cfg.PET_PEN_LOAD_WAIT, cfg.PET_PEN_POLL)     # (the pen's title is up before its places are: read at once, a pen of four full-grown pets was "none full grown" and left as it was)
     for _ in range(len(cfg.PET_PEN_SLOTS)):
         grown = full_grown_slots(grab_screen())
         if not grown:
@@ -4372,13 +4379,13 @@ def switch_pen_pets() -> bool:
             return False
         out += 1
     if out == 0:
-        log_run_event("pet pen: no pet in it is full grown")
+        pen_note("pet pen: no pet in it is full grown")
     for _ in range(out):
         if not put_a_pet_in_the_pen():
             break
     else:
         if out:
-            log_run_event(f"pet pen: {out} full-grown pet(s) switched")
+            pen_note(f"pet pen: {out} full-grown pet(s) switched")
     hover_click(*cfg.PET_PEN_CLOSE_POS)
     wait_interruptible(cfg.PET_PEN_UI_SETTLE)
     return True
@@ -4396,10 +4403,18 @@ def check_pet_pen() -> bool:
 def switch_pen_now() -> bool:
     """The Debug tab's "Switch the Pet Pen's full-grown pets now": switch_pen_pets() at once, whether or not a growing up was seen or the pen is switched on, then a respawn back in the house (as Setup's check does); what it
     did is in the run log (`pet pen: ...`) and, for a pet that did not go out, a failure with its screenshot. True when the pen is as it should be."""
+    state.pen_notes.clear()
     with task_unscrew(interruptible=False, what="debug: switch the pen"):
         done = switch_pen_pets()
         update_game_config(lambda c: c.update(pet_pen_swap_tried=time.time(), **({"pet_pen_swap": False} if done else {})))
         respawn_character()
+    logger.info("Pet Pen: " + ("; ".join(state.pen_notes) if state.pen_notes else "nothing was said") + (" - done" if done else " - NOT as it should be"))
+    return done
+
+def switch_pen_and_respawn() -> bool:
+    """switch_pen_pets() and a respawn after it: the pen is opened outside the house, and a character left in the yard would start the next need from there (the walks are timed from the house)."""
+    done = switch_pen_pets()
+    respawn_character()
     return done
 
 def pet_pen_swap_due() -> None:
@@ -4409,7 +4424,7 @@ def pet_pen_swap_due() -> None:
     since = time.time() - config["pet_pen_swap_tried"]
     if not config["pet_pen_enabled"] or not ((config["pet_pen_swap"] and since >= cfg.PET_PEN_SWAP_RETRY) or since >= cfg.PET_PEN_SWAP_INTERVAL):
         return
-    done = run_side_action(switch_pen_pets)
+    done = run_side_action(switch_pen_and_respawn)
     update_game_config(lambda c: c.update(pet_pen_swap_tried=time.time(), **({"pet_pen_swap": False} if done else {})))
 
 def pet_pen() -> None:

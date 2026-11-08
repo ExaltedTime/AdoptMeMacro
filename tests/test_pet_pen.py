@@ -256,7 +256,7 @@ def test_nothing_fits_the_pet_stays_out_and_a_swap_is_asked_for_by_friend_and_tr
     monkeypatch.setattr(macro, "run_side_action", lambda action: tried.append(action.__name__) or False)
     macro.pet_pen_swap_due()
     macro.pet_pen_swap_due()
-    assert tried == ["switch_pen_pets"] and macro.load_game_config()["pet_pen_swap"] is True                  # (failed: asked for again, but not at once)
+    assert tried == ["switch_pen_and_respawn"] and macro.load_game_config()["pet_pen_swap"] is True                  # (failed: asked for again, but not at once)
     macro.update_game_config(lambda c: c.update(pet_pen_swap_tried=time.time() - macro.cfg.PET_PEN_SWAP_RETRY - 1))
     monkeypatch.setattr(macro, "run_side_action", lambda action: tried.append(action.__name__) or True)
     macro.pet_pen_swap_due()
@@ -422,7 +422,7 @@ def test_the_pen_is_looked_at_every_half_hour_whether_or_not_a_pet_was_seen_to_g
     assert tried == []                                                                           # (nothing grew up, not yet half an hour)
     macro.update_game_config(lambda c: c.update(pet_pen_swap_tried=now - macro.cfg.PET_PEN_SWAP_INTERVAL - 1))
     macro.pet_pen_swap_due()
-    assert tried == ["switch_pen_pets"]                                                          # (the half hour: looked at all the same)
+    assert tried == ["switch_pen_and_respawn"]                                                          # (the half hour: looked at all the same)
     macro.pet_pen_swap_due()
     assert len(tried) == 1                                                                       # (and the interval starts again)
     macro.update_game_config(lambda c: c.update(pet_pen_swap=True, pet_pen_swap_tried=now - macro.cfg.PET_PEN_SWAP_RETRY - 1))
@@ -440,3 +440,37 @@ def test_the_debug_button_switches_the_pen_at_once_and_respawns(macro, monkeypat
     macro.update_game_config(lambda c: c.update(pet_pen_enabled=False, pet_pen_swap=True))        # (whatever the switches say)
     assert macro.switch_pen_now() is True and seen == ["switch", "respawn"]
     assert macro.load_game_config()["pet_pen_swap"] is False and macro.load_game_config()["pet_pen_swap_tried"] > 0
+
+
+def test_a_real_pen_with_four_full_grown_pets_is_read_and_the_red_x_of_each_is_where_it_is_clicked(macro):
+    """A screenshot of the pen (taken with the screenshot key) with all four places full grown: the signs are found in all of them and each place's red X is under the position that takes the pet out."""
+    import cv2
+    frame = shot("pen_four_full_grown")
+    assert macro.popup_visible(frame, "pet_pen_title") and not macro.popup_visible(frame, "pet_pen_add")
+    assert macro.full_grown_slots(frame) == [0, 1, 2, 3]
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    for x, y in macro.cfg.PET_PEN_SLOTS:
+        cx, cy = x + macro.cfg.PET_PEN_X_OFFSET[0], y + macro.cfg.PET_PEN_X_OFFSET[1]
+        patch = hsv[cy - 10:cy + 10, cx - 10:cx + 10]
+        red = ((patch[:, :, 0] < 8) | (patch[:, :, 0] > 170)) & (patch[:, :, 1] > 150)
+        assert red.mean() > 0.3, (cx, cy)                                                      # (the X is a red disc with a white cross: 40% red)
+
+
+def test_a_pen_whose_places_show_up_after_its_title_is_waited_for_not_taken_for_having_no_full_grown_pet(macro, monkeypatch):
+    """The title is up before the places are: read at once, a pen of four full-grown pets was left as it was."""
+    looks = iter([[], [], [0], [0], []])
+    clock = [0.0]
+    taken = []
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "open_pet_pen", lambda: True)
+    monkeypatch.setattr(macro, "grab_screen", lambda: None)
+    monkeypatch.setattr(macro, "full_grown_slots", lambda img: next(looks, []))
+    monkeypatch.setattr(macro.time, "time", lambda: clock[0])
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: clock.__setitem__(0, clock[0] + s))
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: taken.append((x, y)))
+    monkeypatch.setattr(macro, "put_a_pet_in_the_pen", lambda: True)
+    notes = []
+    monkeypatch.setattr(macro, "log_run_event", notes.append)
+    assert macro.switch_pen_pets() is True
+    assert taken[0][0] == macro.cfg.PET_PEN_SLOTS[0][0] + macro.cfg.PET_PEN_X_OFFSET[0]          # (the X of the first place was clicked)
+    assert "pet pen: no pet in it is full grown" not in notes

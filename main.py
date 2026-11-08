@@ -842,6 +842,7 @@ def _read_game_config() -> dict[str, Any]:
         "blackout_hotkey_enabled": True,   # whether HOTKEYS["blackout"] blanks the screen (off: that key can be typed in Roblox)
         "keep_moments": True,              # whether the loop captures the run's moments (start_moments()), kept when the run lasted MOMENTS_MIN_RUN seconds or more
         "pet_pen_enabled": True,           # whether pet_pen() collects the Pet Pen when the Task Board says it is ready
+        "pet_outgrown": False,             # the game said the pet that is out is full grown ("Yay! Your pet is full grown!"): the next pick does not keep it, even if it still shows in the list
         "pet_repicked": 0.0,               # when pet_repick() last picked the pet to level
         "pet_pen_looked": 0.0,
         "pet_pen_swap": False,             # a pet of the pen reached Friend: pet_pen_swap_due() switches the full-grown ones out
@@ -1975,7 +1976,10 @@ def pick_pet_in_open_backpack(growing: bool, on_pets: bool, pet_out: bool) -> No
     elif growing:
         select_backpack_tab(cfg.INVENTORY_PETS_TAB_POS)
         wait_interruptible(cfg.UI_SETTLE)
-        pick = choose_list_pet(stop_at_equipped=True)                                        # (not the Add tile, a grey pet in a listing or one in the pen; the equipped one is kept wherever it is in view)
+        outgrown = bool(load_game_config()["pet_outgrown"])
+        pick = choose_list_pet(stop_at_equipped=not outgrown)                                # (not the Add tile, a grey pet in a listing or one in the pen; the equipped one is kept wherever it is in view - unless the game said it is full grown: then another)
+        if outgrown:
+            update_game_config(lambda c: c.update(pet_outgrown=False))
         if pick is None:
             log_run_event("setup: no pet that can be levelled was seen in the list - the pet that is out is kept")
         elif pick[0] == "equipped":
@@ -3933,7 +3937,7 @@ def dismiss_stray_windows() -> Optional[str]:
             hover_click(*button)
             time.sleep(cfg.STRAY_CLOSE_SETTLE)
             if name == "pet_full_grown_notice":
-                update_game_config(lambda c: c.update(pet_repicked=0.0))                      # (the pet that is out has grown up: pick another at the next cycle)
+                update_game_config(lambda c: c.update(pet_repicked=0.0, pet_outgrown=True))   # (the pet that is out has grown up: pick another at the next cycle, and not this one again)
             return name
         logger.debug(f"Stray window open: {name}, closing it...")
         log_run_event(f"stray window closed: {name}")

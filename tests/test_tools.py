@@ -49,3 +49,33 @@ def test_the_constants_check_names_a_key_label_that_does_not_exist_and_a_key_wri
     monkeypatch.setattr(check_constants, "CODE", ["main.py"])
     messages = [m for _, _, m in sorted(check_constants.key_problems())]                      # (by line)
     assert messages == ["KEYS['sideways'] is not in the table", "a key written as 'a': use cfg.KEYS, cfg.KEY_SEQUENCES or cfg.HOTKEYS", "a key written as 'e': use cfg.KEYS, cfg.KEY_SEQUENCES or cfg.HOTKEYS"]
+
+
+SAMPLE_LOG = """[2026-11-07 21:10:20] [RUN 4] LOOP started
+[2026-11-07 21:12:00] [RUN 4] resolved: dirty (26s)
+[2026-11-07 21:13:00] [RUN 4] resolved: dirty (28s)
+[2026-11-07 21:14:00] [RUN 4] resolved: sick (60s)
+[2026-11-07 21:20:00] [RUN 4] sick: the doctor's prompt is not on screen
+[2026-11-07 21:20:05] [RUN 4] FAILURE: sick handler could not resolve it (screenshot: failures/a/screen.png)
+[2026-11-07 21:21:00] [RUN 4] FAILURE: ride still showing after 75.0s (screenshot: failures/b/screen.png)
+[2026-11-07 21:22:00] [RUN 4] teleport: still in the house after both loads (the Exit Home button is on screen)
+[2026-11-07 21:23:00] [RUN 4] notice: closed one by its green button at (962, 660)
+[2026-11-07 21:24:00] [RUN 4] scheduled rejoin: 2 hour(s) since the last rejoin
+[2026-11-07 21:30:00] [RUN 4] resolved: dirty (30s)
+[2026-11-07 21:40:00] [RUN 5] LOOP started
+"""
+
+
+def test_the_run_summary_counts_what_was_resolved_what_failed_and_the_longest_quiet_stretch():
+    sys.path.insert(0, conftest.ROOT + "/tools")
+    try:
+        import run_summary
+    finally:
+        sys.path.pop(0)
+    text = run_summary.summarise(SAMPLE_LOG.splitlines(), run="4")
+    assert "run 4: 2026-11-07 21:10 to 21:30" in text and "4 needs resolved, 2 failures" in text          # (the line of run 5 is left out)
+    assert "dirty         3     28s" in text                                                      # (three of them, 28 s on average)
+    assert "sick handler could not resolve it" in text and "ride still showing after Ns" in text       # (the numbers of a kind are folded together)
+    assert "teleport: still in the house" in text and "notice: closed one" in text and "scheduled rejoin" in text
+    assert "longest stretches" in text and "16.0 min from 21:14:00" in text
+    assert "no lines of a run" in run_summary.summarise([], "")

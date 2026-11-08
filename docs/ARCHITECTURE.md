@@ -1459,6 +1459,8 @@ an entry of its own, so they don't depend on the real table) or reads the consta
 not "5 minutes"). Waits are tested on a fake clock (`fake_clock`), not by timing
 them, and the loop test runs until it has seen what it checks instead of for a
 fixed time, so a slow machine only makes it slower.
+`python tools/run_summary.py debug/run_log.txt` (or a moments folder or zip, `--run N` for one run of a log with several) prints a run as text: the needs resolved with their mean times, the failures by kind (the numbers of a kind folded together), the rejoins, notices, setup problems, teleport checks, needs disabled and the three longest stretches without a need resolved; the first look at a run sent for analysis. (`tests/test_tools.py` runs it on a small log.)
+
 `python tools/retune_check.py` runs the suite against changed copies of the repo
 and names any test that breaks - run it when a change could depend on tuned
 values, not on every commit (about 30 runs, about 15 minutes with the 4 workers each uses; `python tools/retune_check.py timings_x20` runs just that one).

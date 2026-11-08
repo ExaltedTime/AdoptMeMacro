@@ -699,6 +699,7 @@ PET_PEN_NICE_WAIT = 15.0                  # seconds to see the NICE! button in
 PET_PEN_NICE_TRIES = 3                    # clicks on it while it is still there
 # (a ("door", name, seconds) step waits for the white screen of the door to come and go, and the seconds if none showed)
 PET_PEN_ROUTE = (("hold", "back", 0.7), ("press", "interact", 0), ("door", "exit", 5.0), ("hold", "left", 2.23), ("hold", "back", 0.3), ("hold", "left", 0.18), ("press", "interact", 0))      # from the respawn in the house to the pen: out of the house (E at the door, the yard loads), then along the fence to the pen; the second E opens it (the capture of a person doing it)
+PET_PEN_LOAD_WAIT = 5.0                   # seconds the pen's places are waited for to show a full-grown sign, once its title is up, before the pen is taken for having none
 PET_PEN_OPEN_WAIT = 4.0                   # seconds for the pen's screen to come up after that E
 PET_PEN_SLOTS = ((855, 415), (1045, 415), (855, 580), (1045, 580))      # the middles of the pen's four places (two above, two below)
 PET_PEN_SLOT_HALF = (95, 80)              # half the width and height of the box a place is looked at in

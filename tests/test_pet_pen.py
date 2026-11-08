@@ -454,3 +454,23 @@ def test_a_real_pen_with_four_full_grown_pets_is_read_and_the_red_x_of_each_is_w
         patch = hsv[cy - 10:cy + 10, cx - 10:cx + 10]
         red = ((patch[:, :, 0] < 8) | (patch[:, :, 0] > 170)) & (patch[:, :, 1] > 150)
         assert red.mean() > 0.3, (cx, cy)                                                      # (the X is a red disc with a white cross: 40% red)
+
+
+def test_a_pen_whose_places_show_up_after_its_title_is_waited_for_not_taken_for_having_no_full_grown_pet(macro, monkeypatch):
+    """The title is up before the places are: read at once, a pen of four full-grown pets was left as it was."""
+    looks = iter([[], [], [0], [0], []])
+    clock = [0.0]
+    taken = []
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "open_pet_pen", lambda: True)
+    monkeypatch.setattr(macro, "grab_screen", lambda: None)
+    monkeypatch.setattr(macro, "full_grown_slots", lambda img: next(looks, []))
+    monkeypatch.setattr(macro.time, "time", lambda: clock[0])
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: clock.__setitem__(0, clock[0] + s))
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: taken.append((x, y)))
+    monkeypatch.setattr(macro, "put_a_pet_in_the_pen", lambda: True)
+    notes = []
+    monkeypatch.setattr(macro, "log_run_event", notes.append)
+    assert macro.switch_pen_pets() is True
+    assert taken[0][0] == macro.cfg.PET_PEN_SLOTS[0][0] + macro.cfg.PET_PEN_X_OFFSET[0]          # (the X of the first place was clicked)
+    assert "pet pen: no pet in it is full grown" not in notes

@@ -343,3 +343,19 @@ def test_the_sign_is_found_by_its_title_where_the_colours_behind_it_are_wood_too
         x, y = macro.find_task_board_button(frame)
         assert 40 <= x <= 90 and 530 <= y <= 600, need
     assert macro.find_task_board_button(shot("age_up_nice")) is None
+
+
+def test_two_full_grown_pets_are_both_taken_out_even_when_the_pen_is_slow_to_move_the_others_up(macro, monkeypatch):
+    states = iter([[0, 1], [0, 1], [0], [0], []])            # the looks at the pen: two grown; still two just after the first X (the others have not moved yet); then one; then none
+    taken, put = [], []
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "open_pet_pen", lambda: True)
+    monkeypatch.setattr(macro, "grab_screen", lambda: None)
+    monkeypatch.setattr(macro, "full_grown_slots", lambda img: next(states, []))
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: taken.append((x, y)))
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "put_a_pet_in_the_pen", lambda: put.append(1) or True)
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    monkeypatch.setattr(macro, "log_failure", lambda text: put.append("failure"))
+    assert macro.switch_pen_pets() is True
+    assert "failure" not in put and put.count(1) == 2

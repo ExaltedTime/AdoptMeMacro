@@ -4169,6 +4169,7 @@ def collect_pet_pen() -> bool:
             wait_interruptible(cfg.UI_SETTLE)
             if find_dialog_button(grab_screen(), cfg.DIALOG_BUTTONS["nice"]) is None:
                 log_run_event("pet pen: pets aged up")
+                update_game_config(lambda c: c.update(pet_pen_swap=True))                       # (always looked at after a collect: the pets that grew up are taken out, all of them - the Friend pill is only seen for one)
                 return True
         log_run_event("pet pen: the NICE! button did not go")
         return False
@@ -4362,7 +4363,7 @@ def switch_pen_pets() -> bool:
         x, y = cfg.PET_PEN_SLOTS[grown[0]]
         hover_click(x + cfg.PET_PEN_X_OFFSET[0], y + cfg.PET_PEN_X_OFFSET[1])
         wait_interruptible(cfg.PET_PEN_UI_SETTLE)
-        if len(full_grown_slots(grab_screen())) >= len(grown):
+        if look_until(lambda img: len(full_grown_slots(img)) < len(grown), cfg.PET_PEN_OPEN_WAIT, cfg.PET_PEN_POLL) is None:       # (the others move up: waited for, not looked at once - with two full grown the second was taken for "did not go out")
             log_failure("pet pen: a full-grown pet did not go out of the pen")
             return False
         out += 1

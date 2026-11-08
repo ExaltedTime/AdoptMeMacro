@@ -690,7 +690,7 @@ asks `rejoin_reason()` whether the game needs rejoining. In order:
    real white transition in `tests/icon_detection/` is 93% white, every other
    screenshot under 10%). It is looked for wherever `rejoin_reason()` is
    asked, which is every cycle and every `UNSCREW_TASK_INTERVAL` mid-task, and
-   the clock (`state.white_since`) restarts whenever the screen isn't white.
+   the clock (`state.white_since`) restarts whenever the screen isn't a *loading* white screen: `loading_white_screen()` is `detect_white_screen()` with nothing of the world on it (`WHITE_BARE_BOX`, at most `WHITE_BARE_MAX_SATURATED` saturated pixels, the update's blue letters not counted). The pizza need's walk ends on a big white plaza, white to `detect_white_screen()` but with the pet's name pill, the E button and the character on it (about 8000 saturated pixels, against 1450 to 2600 on a loading screen), and 30 seconds of it were taken for a loading screen and rejoined in the middle of the need (run 2, `tests/teleport/white_plaza_pizza.png`); the same goes for a white screen with a popup on it (22000 and more).
    (Needs stay visible on the white screen, so nothing else notices it.) It is the game's own doing and nothing the macro can help, so a rejoin that works is not a failure: the run log gets `white screen: ... - rejoining` and no screenshot, and the report counts them.
 3. *Stuck* - `DISABLED_NEEDS_REJOIN_THRESHOLD` needs have been disabled as
    stuck.

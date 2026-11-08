@@ -3682,6 +3682,18 @@ def detect_white_screen(img: Image) -> bool:
     white = cv2.countNonZero(cv2.inRange(img, (cfg.WHITE_SCREEN_LEVEL,) * 3, (cfg.PIXEL_MAX,) * 3))        # (every channel at least the level: one pass, not a minimum over a copy of the picture)
     return bool(white / (img.shape[0] * img.shape[1]) >= cfg.WHITE_SCREEN_MIN_FRACTION)
 
+def loading_white_screen(img: Image) -> bool:
+    """detect_white_screen() and nothing of the world on it: a loading screen is white and bare (its saturated pixels, in WHITE_BARE_BOX, are the few of the HUD), while the pizza need's walk ends on a big white
+    plaza where the pet's name pill, the E button and the character show (about 8000 of them, 1450 to 2600 on a loading screen, 22000 and more with a popup on it). Only a loading screen is a reason to rejoin."""
+    if not detect_white_screen(img):
+        return False
+    left, top, right, bottom = cfg.WHITE_BARE_BOX
+    hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
+    colourful = (hsv[:, :, 1] > 90) & (hsv[:, :, 2] > 120)
+    cl, ct, cr, cb = cfg.SERVER_CLOSING_BOX                                              # (the update's blue letters are what a white screen of that kind has: not counted)
+    colourful[max(0, ct - top):max(0, cb - top), max(0, cl - left):max(0, cr - left)] = False
+    return int(np.count_nonzero(colourful)) <= cfg.WHITE_BARE_MAX_SATURATED
+
 ROBLOX_NOT_RUNNING = "Roblox isn't running"
 
 def server_closing_visible(img: Image) -> bool:
@@ -3703,7 +3715,7 @@ def rejoin_reason() -> Optional[tuple[str, str]]:
     screen = grab_screen()
     if detect_disconnect(screen):
         return "disconnect", "disconnected from the game"
-    if not detect_white_screen(screen):
+    if not loading_white_screen(screen):                                                    # (a white world, the pizza plaza, is not a loading screen: 30 s of it was taken for one and rejoined in the middle of the pizza need)
         state.white_since = None
     elif state.white_since is None:
         state.white_since = time.time()

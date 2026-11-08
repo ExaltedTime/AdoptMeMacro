@@ -788,6 +788,8 @@ DISCONNECT_PANEL_MIN_FRACTION = 0.5
 # in a row, the game is rejoined (see detect_white_screen()). A normal scene, even a bright one, has far less.
 WHITE_SCREEN_LEVEL = 250
 WHITE_SCREEN_MIN_FRACTION = 0.6
+WHITE_BARE_BOX = (200, 140, 1500, 1000)   # loading_white_screen() looks here (not the HUD at the top, nor the macro's window at the right) for what is not white...
+WHITE_BARE_MAX_SATURATED = 6000          # ...saturated pixels at most this many: the plaza of the pizza need, white too, has about 8000 (the pet's pill, the E button, the character); a loading screen 1450 to 2600
 WHITE_SCREEN_REJOIN_AFTER = 30.0
 # "The server is closing for an update" - blue letters at the bottom of an otherwise white screen (the game updating; 3 times in a 2-hour run, each followed by a rejoin after the 30 s above). The servers take a
 # while to come back, so the rejoin waits SERVER_UPDATE_REJOIN_AFTER seconds from the first sight of it instead. Found by the blue of the letters (nothing else white has blue letters there), not by a crop.

@@ -1963,23 +1963,28 @@ def set_backpack_filter() -> bool:
             if panel_open:
                 hover_click(*cfg.SETUP_FILTER_CANCEL_POS)                                         # (a panel only looked at - or one that could not be set - is left as it was)
                 wait_interruptible(cfg.UI_SETTLE)
-        if growing and not on_pets:
-            log_run_event("setup: not on the pets tab - no pet is equipped from the list")
-        elif growing:
-            select_backpack_tab(cfg.INVENTORY_PETS_TAB_POS)
-            wait_interruptible(cfg.UI_SETTLE)
-            pick = choose_list_pet(stop_at_equipped=True)                                        # (not the Add tile, a grey pet in a listing or one in the pen; the equipped one is kept wherever it is in view)
-            if pick is None:
-                log_run_event("setup: no pet that can be levelled was seen in the list - the pet that is out is kept")
-            elif pick[0] == "equipped":
-                log_run_event("setup: the equipped pet is in the filtered list (it still grows) - kept")
-            else:
-                equip_pet("the first pet of the list", lambda: pick[1])
-        elif not pet_out:
-            log_run_event("setup: the pet is not out - equipping the Alicorn")
-            equip_pet("the Alicorn", lambda: wait_for_template("pet_alicorn"))
+        pick_pet_in_open_backpack(growing, on_pets, pet_out)
         close_backpack("setup")
     return ok
+
+def pick_pet_in_open_backpack(growing: bool, on_pets: bool, pet_out: bool) -> None:
+    """The pet part of Setup, in the open backpack: with `growing` (level_growing_pets()) on the pets tab, the equipped pet is kept when its green frame shows in the filtered list (it still grows), else the first pet
+    of the list is equipped; without `growing`, the Alicorn when no pet is out (`pet_out`). Nothing is equipped from another tab than the pets one (`on_pets`)."""
+    if growing and not on_pets:
+        log_run_event("setup: not on the pets tab - no pet is equipped from the list")
+    elif growing:
+        select_backpack_tab(cfg.INVENTORY_PETS_TAB_POS)
+        wait_interruptible(cfg.UI_SETTLE)
+        pick = choose_list_pet(stop_at_equipped=True)                                        # (not the Add tile, a grey pet in a listing or one in the pen; the equipped one is kept wherever it is in view)
+        if pick is None:
+            log_run_event("setup: no pet that can be levelled was seen in the list - the pet that is out is kept")
+        elif pick[0] == "equipped":
+            log_run_event("setup: the equipped pet is in the filtered list (it still grows) - kept")
+        else:
+            equip_pet("the first pet of the list", lambda: pick[1])
+    elif not pet_out:
+        log_run_event("setup: the pet is not out - equipping the Alicorn")
+        equip_pet("the Alicorn", lambda: wait_for_template("pet_alicorn"))
 
 def find_equip_button(img: Image) -> Optional[Point]:
     """The middle of the green Equip button of the backpack's card of the item clicked, or None (an item that is equipped has another button, an Unequip): the blob of GREEN_BUTTON_COLOR of the

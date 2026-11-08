@@ -511,8 +511,8 @@ backpack's settings button, which expands the backpack.
 `rejoin_game()` is the automatic recovery - see
 [Automatic recovery](#stuck-needs).
 
-**Stray windows.** Two windows have been seen open on their own, covering
-the screen: the Trading Hub (how it got opened isn't known; a misclicking
+**Stray windows.** The first two windows seen open on their own, covering
+the screen (more are listed below): the Trading Hub (how it got opened isn't known; a misclicking
 `choose` is the suspect; it throws up a "Go
 to the Trading Hub to edit listings!" popup on top) and the Star Rewards, which
 opens once a day, at no known moment. The Star Rewards hides the need icons;
@@ -694,7 +694,7 @@ asks `rejoin_reason()` whether the game needs rejoining. In order:
    the clock (`state.white_since`) restarts whenever the screen isn't a *loading* white screen: `loading_white_screen()` is `detect_white_screen()` with nothing of the world on it (`WHITE_BARE_BOX`, at most `WHITE_BARE_MAX_SATURATED` saturated pixels, the update's blue letters not counted). The pizza need's walk ends on a big white plaza, white to `detect_white_screen()` but with the pet's name pill, the E button and the character on it (about 8000 saturated pixels, against 1450 to 2600 on a loading screen), and 30 seconds of it were taken for a loading screen and rejoined in the middle of the need (run 2, `tests/teleport/white_plaza_pizza.png`); the same goes for a white screen with a popup on it (22000 and more).
    (Needs stay visible on the white screen, so nothing else notices it.) It is the game's own doing and nothing the macro can help, so a rejoin that works is not a failure: the run log gets `white screen: ... - rejoining` and no screenshot, and the report counts them.
 3. *Stuck* - `DISABLED_NEEDS_REJOIN_THRESHOLD` needs have been disabled as
-   stuck.
+   stuck, or one need that worked in the run has stayed disabled for `STUCK_NEED_REJOIN_AFTER` (`state.disabled_at`; run 4's ride was disabled after 26 minutes of tries and worked after the next rejoin). A need that never worked (`state.hopeless`) is not what a rejoin is for.
 4. *Stalled* - no need has been resolved for `NO_PROGRESS_REJOIN_INTERVAL`
    (`NO_PROGRESS_REJOIN_INTERVAL`; `state.last_progress`, set when the loop starts, whenever a need is
    resolved and by every successful `leave_and_rejoin()`): the game is up but
@@ -964,7 +964,7 @@ actually on disk (so an old config missing a newer key still works), and
   (`time.time()`) when the config is fresh.
 - **`keep_moments`** - on/off (default on): whether the loop captures the run's moments, see [The moments of a run](#the-moments-of-a-run).
 - **`level_growing_pet`** - on/off (default on): Setup filters the eggs and full-grown pets out of the backpack and equips the first pet left, and `pet_repick()` does the same again every `PET_REPICK_INTERVAL` (`pet_repicked`: when it last did, a timestamp). `set_backpack_filter()` stamps `pet_repicked` whenever it runs with the option on, whether or not every step took (it used to be stamped at the end of a Setup that took, so a Setup that failed on one step was followed at once by the repick, and the backpack's steps ran twice). The run log shows each pass: `setup: begins` / `setup: ends, ...` and `backpack: filters and pet looked at`, so a doubled pass can be told from a Setup that ran twice.
-- **`pet_pen_enabled`** - on/off (default on) for `pet_pen()` (`pet_pen_looked`: when it last opened the Task Board, a timestamp). Both are in [Side actions](#side-actions).
+- **`pet_pen_enabled`** - on/off (default on) for `pet_pen()` (`pet_pen_looked`: when it last opened the Task Board, a timestamp). `pet_pen_swap` is the flag that the pen's full-grown pets are to be taken out (set after a collect that aged pets up and by a Friend pill; cleared when `switch_pen_pets()` came through) and `pet_pen_swap_tried` when that was last tried (a timestamp). Both are in [Side actions](#side-actions).
 - **`money_tree_enabled`** and **`lure_enabled`** - on/off switches (default on) for the two halves of
   `side_quest()`: the money tree and the lure. They are checkboxes on the Settings tab, and can be flipped while a
   workflow runs. A config file from before the split has one `side_quest_enabled`, which is carried over to both once, when the file is read.
@@ -1181,7 +1181,7 @@ exact values and rationale):
 | Window / coordinates | `REFERENCE_WIDTH`, `REFERENCE_HEIGHT`, `REFERENCE_CENTER_X/Y`, `ROBLOX_RECT_TTL` |
 | Key bindings | `KEYS` (every key the macro presses, by what it is for: walking, jump, backpack, mount, interact, speed boost, zoom, helicopter, camera turn), `KEY_SEQUENCES` (respawn, leaving the game), `HOTKEYS` (stop, capture, blackout), and the derived `MOVE_KEYS` and `HELD_KEYS`; `STOP_HOTKEY_POLL_INTERVAL` |
 | Timing | `WATCH_POLL_INTERVAL`, `NEED_WATCH_JOIN_TIMEOUT`, `RESPAWN_WAIT`, `WALK_TO_BUTTONS_DURATION`, `NEED_CHECK_RETRY_DELAY`, `LOOP_DELAY`, `STOP_CHECK_INTERVAL`, `STOP_CLICK_GRACE`, `NEED_GONE_*` |
-| Stuck needs | `NEED_STUCK_CHECKS` |
+| Stuck needs | `NEED_STUCK_CHECKS`, `NEED_NEVER_WORKED_FAILS`, `NEED_HOPELESS_RETRY`, `STUCK_NEED_REJOIN_AFTER` |
 | Pet focusing | `FOCUS_PET_REGION_TOP_PERCENT`, `FOCUS_PET_FRAME_GAP`, `FOCUS_PET_DIFF_THRESHOLD`, `FOCUS_PET_MERGE_KERNEL`, `FOCUS_PET_MIN_AREA` |
 | Screen positions | `CATCH_*_POS`, `EMPTY_POS`, `RIDE_*_POS`, `LURE_NEW_POS_*`, `SETUP_*_POS` |
 | Side quest / setup | `TREE_HARVEST_YIELD`, `MONEY_COLLECTED_TARGET`, `TREE_CHECK_INTERVAL`, `MONEY_RESET_HOUR`, `LURE_RECOLLECT_INTERVAL`, `LURE_COLLECT_*`, `TREE_COLLECT_*` |
@@ -1194,7 +1194,8 @@ exact values and rationale):
 | Input capture | `HOTKEYS["capture"]`, `HOTKEYS["screenshot"]`, `SCREENSHOTS_DIR`, `CAPTURES_DIR`, `RUN_CAPTURE_BURST`, `RUN_CAPTURE_PROTECTED`, `CAPTURE_FRAME_INTERVAL`, `CAPTURE_CHANGE_LEVEL`, `CAPTURE_CHANGE_FRACTION`, `CAPTURE_MAX_SKIP`, `CAPTURE_POLL_INTERVAL`, `CAPTURE_MOVE_INTERVAL`, `CAPTURE_MAX_MINUTES`, `CAPTURE_MIN_FREE_MB`, `MAX_CAPTURES`, `CAPTURE_ZIP_MB` |
 | Backpack tabs | `TAB_HALF_SIZE`, `TAB_SELECTED_*` (a category tab that is orange is already selected) |
 | Blanking the screen | `BLACKOUT_*` |
-| Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog, doctor-prompt and backpack crops) |
+| Popup crops | `STRAY_WINDOWS`, `STRAY_WINDOW_MATCH_THRESHOLD`, `POPUP_TEMPLATES` (box and threshold of the paycheck, sick-dialog, doctor-prompt, teleport-Yes and backpack crops), `NOTICE_*` (the notice checker) |
+| Transitions | `WHITE_*` (`WHITE_POLL`, `WHITE_LOOK`, `WHITE_BARE_*`, ...), `HOUSE_EXIT_*`, `TELEPORT_*` (`TELEPORT_DIALOG_*`, `TELEPORT_SECOND_WHITE_LOOK`, ...), `SERVER_CLOSING_*` |
 | Color ranges (HSV) | `PURPLE_RANGE`, `WHITE_RANGE` (button detection) |
 | GUI | colors/fonts (`GUI_BG`, `GUI_FONT`, ...) and layout spacing (`GUI_OUTER_PADDING`, `GUI_ROW_SPACING`, ...) for the `tkinter` panel |
 

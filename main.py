@@ -4036,7 +4036,7 @@ def leave_hub_if_in() -> bool:
 
 def unscrew(in_task: bool = False, interruptible: bool = True) -> Optional[str]:
     """The per-cycle checks (at the top of every cycle; with `in_task` also during a task): rejoin, backpack, stray windows, then the paycheck popup - in that order, since the green
-    buttons of the earlier ones look like CASH OUT. Returns "rejoined" or "aborted" (the callers abandon the task) or None. See docs/ARCHITECTURE.md#need-handlers.
+    buttons of the earlier ones look like CASH OUT - and, at the top of a cycle only, any other notice with one green button (dismiss_notice()). Returns "rejoined" or "aborted" (the callers abandon the task) or None. See docs/ARCHITECTURE.md#need-handlers.
     """
     if in_task:
         if rejoin_game(kinds=("disconnect", "white_screen")):

@@ -3010,10 +3010,25 @@ STEP_ACTIONS: dict[str, Callable[..., Optional[bool]]] = {
     "focus_pet": lambda duration: focus_pet(getattr(cfg, duration)),
     "click_centre": lambda duration: hover_click(cfg.REFERENCE_CENTER_X, cfg.REFERENCE_CENTER_Y, duration=getattr(cfg, duration)),
     "equip_vehicle": lambda: equip_favorite_vehicle(),
+    "takeoff": lambda: take_off(),
     "swipe_down": lambda: pet_swipe_down(),
     "with_backpack": lambda steps: run_steps_with_backpack(steps),                                # the steps with the backpack open on purpose (the in-task check leaves it alone)
     "repeat": lambda count, label, steps: repeat_steps(getattr(cfg, count), label, steps),
 }
+
+def take_off() -> bool:
+    """Hold the helicopter key (RIDE_R_HOLD_DURATION) and look whether the view changed (screen_changed(): a helicopter that rises takes the camera with it); when it did not, hold it again, RIDE_TAKEOFF_RETRIES times at
+    most. In a run, 10 rides in a row ran as always and the need did not clear: the frames show the helicopter on the ground beside a house the whole time, where those that cleared had it high over the
+    neighbourhood. Always True: a ride that cannot lift off is left to the need's wait, as before."""
+    for attempt in range(cfg.RIDE_TAKEOFF_RETRIES + 1):
+        before = grab_screen()
+        logger.debug(f"Holding the helicopter key for {cfg.RIDE_R_HOLD_DURATION}s...")
+        hold_key(cfg.KEYS["helicopter"], cfg.RIDE_R_HOLD_DURATION)
+        wait_interruptible(cfg.UI_SETTLE)
+        if screen_changed(before, grab_screen()):
+            return True
+        log_run_event(f"ride: the view did not change after the helicopter key (try {attempt + 1} of {cfg.RIDE_TAKEOFF_RETRIES + 1})")
+    return True
 
 def run_steps(steps: Sequence[tuple[Any, ...]]) -> bool:
     """Do the steps in order (see STEP_ACTIONS); False as soon as one says it was not done."""
@@ -3189,7 +3204,7 @@ class RideNeedHandler(SequenceNeedHandler):
         ("say", "Pressing e..."), ("press", "mount"), ("wait", "RIDE_WAIT_AFTER_E"),
         ("say", "Walking forward for {RIDE_FORWARD_DURATION}s..."), ("hold", "forward", "RIDE_FORWARD_DURATION"),       # a little way on after mounting, before the backpack
         ("equip_vehicle",),
-        ("say", "Holding the helicopter key for {RIDE_R_HOLD_DURATION}s..."), ("hold", "helicopter", "RIDE_R_HOLD_DURATION"),   # briefly before starting to move
+        ("takeoff",),                                                                                                   # the helicopter key, held till the view moves (briefly before starting to move)
         ("walk", ("forward", "back"), "NEED_GONE_MAX_WAIT", "ride"),                                                    # back and forth (not left and right) while riding
     )
 

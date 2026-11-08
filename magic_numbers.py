@@ -562,6 +562,7 @@ RIDE_FORWARD_DURATION = 2.0    # walk forward briefly after mounting, before the
 RIDE_VEHICLES_POS = (816, 804)
 RIDE_FIRST_VEHICLE_POS = (976, 708)
 RIDE_EQUIP_POS = (1062, 814)
+RIDE_TAKEOFF_RETRIES = 2           # times the helicopter key is held again when the view did not change after it (the helicopter did not lift off)
 RIDE_R_HOLD_DURATION = 1.5     # hold KEYS["helicopter"] this long after equipping, before walking back and forth
 
 # Backpack-teleport sequence, shared by every teleport destination: open

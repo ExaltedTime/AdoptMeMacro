@@ -3037,7 +3037,8 @@ def take_off() -> bool:
         wait_interruptible(cfg.UI_SETTLE)
         if screen_changed(before, grab_screen()):
             return True
-        log_run_event(f"ride: the view did not change after the helicopter key (try {attempt + 1} of {cfg.RIDE_TAKEOFF_RETRIES + 1})")
+        logger.debug(f"The view did not change after the helicopter key (try {attempt + 1} of {cfg.RIDE_TAKEOFF_RETRIES + 1})")
+    log_run_event(f"ride: the view did not change after the helicopter key, {cfg.RIDE_TAKEOFF_RETRIES + 1} tries")                 # (one line, and only when none of them moved it: the check is coarse, a ride that went on to clear is no failure)
     return True
 
 def run_steps(steps: Sequence[tuple[Any, ...]]) -> bool:

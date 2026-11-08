@@ -97,7 +97,7 @@ def test_a_helicopter_that_does_not_lift_off_is_held_for_again_a_limited_number_
     monkeypatch.setattr(macro, "log_run_event", lines.append)
     monkeypatch.setattr(macro, "screen_changed", lambda before, after: False)
     assert macro.take_off() is True                                                              # (never fails the ride: its own wait goes on)
-    assert events.count(("hold", cfg.KEYS["helicopter"], cfg.RIDE_R_HOLD_DURATION)) == cfg.RIDE_TAKEOFF_RETRIES + 1 and len(lines) == cfg.RIDE_TAKEOFF_RETRIES + 1
+    assert events.count(("hold", cfg.KEYS["helicopter"], cfg.RIDE_R_HOLD_DURATION)) == cfg.RIDE_TAKEOFF_RETRIES + 1 and len(lines) == 1
     events.clear()
     changes = iter([False, True])
     monkeypatch.setattr(macro, "screen_changed", lambda before, after: next(changes))

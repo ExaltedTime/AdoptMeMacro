@@ -4393,11 +4393,21 @@ def check_pet_pen() -> bool:
     respawn_character()
     return done
 
+def switch_pen_now() -> bool:
+    """The Debug tab's "Switch the Pet Pen's full-grown pets now": switch_pen_pets() at once, whether or not a growing up was seen or the pen is switched on, then a respawn back in the house (as Setup's check does); what it
+    did is in the run log (`pet pen: ...`) and, for a pet that did not go out, a failure with its screenshot. True when the pen is as it should be."""
+    with task_unscrew(interruptible=False, what="debug: switch the pen"):
+        done = switch_pen_pets()
+        update_game_config(lambda c: c.update(pet_pen_swap_tried=time.time(), **({"pet_pen_swap": False} if done else {})))
+        respawn_character()
+    return done
+
 def pet_pen_swap_due() -> None:
-    """Once per cycle after pet_pen(): when the age-up screen showed a pet that reached Friend (the game config's pet_pen_swap) and PET_PEN_SWAP_RETRY seconds have passed since the last try, switch_pen_pets(); the flag is cleared
-    once it came through."""
+    """Once per cycle after pet_pen(): switch_pen_pets() when pets grew up - the age-up screen showed a pet that reached Friend or any pets aged up (the game config's pet_pen_swap) and PET_PEN_SWAP_RETRY seconds have passed
+    since the last try - and in any case every PET_PEN_SWAP_INTERVAL seconds, whether or not a growing up was seen (a notice can be missed: a pet that grew was left in the pen). The flag is cleared once it came through."""
     config = load_game_config()
-    if not config["pet_pen_enabled"] or not config["pet_pen_swap"] or time.time() - config["pet_pen_swap_tried"] < cfg.PET_PEN_SWAP_RETRY:
+    since = time.time() - config["pet_pen_swap_tried"]
+    if not config["pet_pen_enabled"] or not ((config["pet_pen_swap"] and since >= cfg.PET_PEN_SWAP_RETRY) or since >= cfg.PET_PEN_SWAP_INTERVAL):
         return
     done = run_side_action(switch_pen_pets)
     update_game_config(lambda c: c.update(pet_pen_swap_tried=time.time(), **({"pet_pen_swap": False} if done else {})))
@@ -6651,6 +6661,10 @@ class AdoptMeGUI:
         buttons.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
         buttons.grid_columnconfigure(0, weight=1, uniform="settings")
         buttons.grid_columnconfigure(1, weight=1, uniform="settings")
+        pen_button = tk.Button(parent, text="Switch the Pet Pen's full-grown pets now", command=lambda: self.run_async(switch_pen_now), font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
+                               bg=cfg.GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
+        pen_button.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+        self.action_buttons.append(pen_button)
         tk.Button(buttons, text="Refresh debug", command=self.refresh_debug_folder, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
                   bg=self.accent, fg=self.fg, cursor="hand2").grid(row=0, column=0, sticky=tk.EW, padx=(0, cfg.GUI_WIDGET_SPACING))
         tk.Button(buttons, text="Reset Config", command=self.reset_config, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),

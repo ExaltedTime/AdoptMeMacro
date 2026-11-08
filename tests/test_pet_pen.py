@@ -411,3 +411,32 @@ def test_two_full_grown_pets_are_both_taken_out_and_two_others_put_in_on_the_rea
     assert macro.switch_pen_pets() is True and failures == []
     assert macro.clicks.count(x_first) == 2 and len(put_in) == 2
     assert log == ["pet pen: 2 full-grown pet(s) switched"] and macro.clicks[-1] == macro.cfg.PET_PEN_CLOSE_POS
+
+
+def test_the_pen_is_looked_at_every_half_hour_whether_or_not_a_pet_was_seen_to_grow_up(macro, monkeypatch):
+    tried = []
+    monkeypatch.setattr(macro, "run_side_action", lambda action: tried.append(action.__name__) or True)
+    now = time.time()
+    macro.update_game_config(lambda c: c.update(pet_pen_enabled=True, pet_pen_swap=False, pet_pen_swap_tried=now - macro.cfg.PET_PEN_SWAP_INTERVAL / 2))
+    macro.pet_pen_swap_due()
+    assert tried == []                                                                           # (nothing grew up, not yet half an hour)
+    macro.update_game_config(lambda c: c.update(pet_pen_swap_tried=now - macro.cfg.PET_PEN_SWAP_INTERVAL - 1))
+    macro.pet_pen_swap_due()
+    assert tried == ["switch_pen_pets"]                                                          # (the half hour: looked at all the same)
+    macro.pet_pen_swap_due()
+    assert len(tried) == 1                                                                       # (and the interval starts again)
+    macro.update_game_config(lambda c: c.update(pet_pen_swap=True, pet_pen_swap_tried=now - macro.cfg.PET_PEN_SWAP_RETRY - 1))
+    macro.pet_pen_swap_due()
+    assert len(tried) == 2                                                                       # (a pet that grew up: after the retry time, long before the half hour)
+    macro.update_game_config(lambda c: c.update(pet_pen_enabled=False, pet_pen_swap_tried=0.0))
+    macro.pet_pen_swap_due()
+    assert len(tried) == 2                                                                       # (switched off: never)
+
+
+def test_the_debug_button_switches_the_pen_at_once_and_respawns(macro, monkeypatch):
+    seen = []
+    monkeypatch.setattr(macro, "switch_pen_pets", lambda: seen.append("switch") or True)
+    monkeypatch.setattr(macro, "respawn_character", lambda: seen.append("respawn"))
+    macro.update_game_config(lambda c: c.update(pet_pen_enabled=False, pet_pen_swap=True))        # (whatever the switches say)
+    assert macro.switch_pen_now() is True and seen == ["switch", "respawn"]
+    assert macro.load_game_config()["pet_pen_swap"] is False and macro.load_game_config()["pet_pen_swap_tried"] > 0

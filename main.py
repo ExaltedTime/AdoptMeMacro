@@ -399,6 +399,8 @@ class State:
     # True while a handler that wants the pet focused runs (see wanting_pet_focus()).
     pet_focus_wanted: bool = False
     task_board_wanted: bool = False
+    phase_shots: list = field(default_factory=list)      # (seconds into the capture, label, PNG bytes) of the screens taken during the need that runs: kept in the moments when it fails (phase_shot())
+    phase_ok: dict = field(default_factory=dict)          # {need: executions that went well since one of them was kept}
     pen_notes: list = field(default_factory=list)        # what switch_pen_pets() and put_a_pet_in_the_pen() said (pen_note()), for the Debug button to show in the console
     notice_clicks: list = field(default_factory=list)     # when dismiss_notice() clicked (a notice that does not go is left alone for a while)
     notice_pause_until: float = 0.0
@@ -3035,9 +3037,11 @@ def take_off() -> bool:
         logger.debug(f"Holding the helicopter key for {cfg.RIDE_R_HOLD_DURATION}s...")
         hold_key(cfg.KEYS["helicopter"], cfg.RIDE_R_HOLD_DURATION)
         wait_interruptible(cfg.UI_SETTLE)
+        phase_shot(f"after the helicopter key (try {attempt + 1})")
         if screen_changed(before, grab_screen()):
             return True
-        log_run_event(f"ride: the view did not change after the helicopter key (try {attempt + 1} of {cfg.RIDE_TAKEOFF_RETRIES + 1})")
+        logger.debug(f"The view did not change after the helicopter key (try {attempt + 1} of {cfg.RIDE_TAKEOFF_RETRIES + 1})")
+    log_run_event(f"ride: the view did not change after the helicopter key, {cfg.RIDE_TAKEOFF_RETRIES + 1} tries")                 # (one line, and only when none of them moved it: the check is coarse, a ride that went on to clear is no failure)
     return True
 
 def run_steps(steps: Sequence[tuple[Any, ...]]) -> bool:
@@ -3288,9 +3292,11 @@ def teleport_to(category_pos: Point) -> bool:
     if not took:
         return False
     wait_for_white_to_pass(cfg.TELEPORT_WAIT, what="teleport, first load")                    # (the teleport's white screen to fade, not a fixed time)
+    phase_shot("the landing, after the first load")
     logger.debug("Walking backward...")
     hold_key(cfg.KEYS["back"], cfg.TELEPORT_BACK_DURATION)                                    # (the landing is a room or a street with a way out behind the player: walking back through it is what starts the second load - a run that did not walk back stood in the red room until the respawn)
     wait_for_white_to_pass(cfg.TELEPORT_SETTLE_WAIT, cfg.TELEPORT_SECOND_WHITE_LOOK, what="teleport, second load")   # (the second load's white screen to show and go, not a fixed time; the fixed one when none shows)
+    phase_shot("after the step back and the second load")
     if started_in_house and in_house(grab_screen()):
         log_run_event("teleport: still in the house after both loads (the Exit Home button is on screen)")
         return False
@@ -3328,7 +3334,10 @@ class TeleportWalkNeedHandler(NeedHandler):
             if i:
                 wait_interruptible(cfg.TELEPORT_WALK_STEP_GAP)
             logger.debug(f"Holding {key} for {duration}s...")
+            phase_shot(f"before step {i + 1}: {key} {duration}s")
             hold_key(key, duration)
+
+        phase_shot("after the last step")
 
         if helicopter:
             logger.debug("Arrived, pressing space...")
@@ -3358,6 +3367,7 @@ class TeleportWalkNeedHandler(NeedHandler):
         if detect_pet_focus(grab_screen()):                      # (it hides the prompt)
             log_run_event(f"{self.name}: the pet view is open - backing out of it")
             dismiss_stray_windows()
+        phase_shot("at the doctor's desk, before the prompt is looked for")
         prompt = look_until(find_doctor_prompt, cfg.SICK_PROMPT_LOOK, cfg.SICK_LOOK_INTERVAL)
         if prompt is None:
             log_run_event(f"{self.name}: the doctor's prompt is not on screen")
@@ -3481,6 +3491,7 @@ def process_needs() -> bool:
             state.need_cleared = True
             started = time.time()
             try:
+                phase_reset()
                 with task_unscrew(what=f"need handler: {need_name}"):
                     handled = handler.handle()
             except TaskInterrupted as interruption:
@@ -3490,6 +3501,7 @@ def process_needs() -> bool:
                 # character was respawned by task_unscrew_tick()) does count
                 # as an attempt, so a need it keeps spoiling is disabled like
                 # any other stuck need instead of being retried forever.
+                phase_reset()
                 if interruption.reason != "a popup":
                     attempted.discard(need_name)
                 logger.debug(f"{need_name} interrupted by {interruption.reason}")
@@ -3498,6 +3510,7 @@ def process_needs() -> bool:
             if not handled:
                 logger.debug(f"Could not resolve '{need_name}' this pass, skipping")
                 run_stats.failed[need_name] = run_stats.failed.get(need_name, 0) + 1
+                phase_commit(f"{need_name} could not be resolved")
                 log_failure(f"{need_name} handler could not resolve it")
                 continue
 
@@ -3508,6 +3521,7 @@ def process_needs() -> bool:
                 # as a failure): not resolved. The character is respawned all the same, since it was moved.
                 logger.debug(f"{need_name} was not cleared, counting it as failed")
                 run_stats.failed[need_name] = run_stats.failed.get(need_name, 0) + 1
+                phase_commit(f"{need_name} was not cleared")
                 log_run_event(f"not cleared: {need_name} ({seconds:.0f}s)")
                 if run_stats.failed[need_name] >= cfg.NEED_NEVER_WORKED_FAILS and not run_stats.resolved.get(need_name) and need_name not in state.disabled_needs:
                     state.disabled_needs.add(need_name)
@@ -3520,6 +3534,7 @@ def process_needs() -> bool:
             run_stats.resolved[need_name] = run_stats.resolved.get(need_name, 0) + 1
             run_stats.last_resolved = {"need": need_name, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
             state.last_progress = time.time()
+            phase_done_well(need_name)
             log_run_event(f"resolved: {need_name} ({seconds:.0f}s)")
             write_status()
             return True
@@ -4362,11 +4377,16 @@ def switch_pen_pets() -> bool:
     could not be taken out."""
     if not focus_roblox():
         return False
+    phase_reset()
     if not open_pet_pen():
         pen_note("pet pen: it did not open")
+        phase_shot("the pen did not open")
+        phase_commit("the pet pen switch")
         return False
+    phase_shot("the pen opened")
     out = 0
     look_until(lambda img: bool(full_grown_slots(img)), cfg.PET_PEN_LOAD_WAIT, cfg.PET_PEN_POLL)     # (the pen's title is up before its places are: read at once, a pen of four full-grown pets was "none full grown" and left as it was)
+    phase_shot("the pen after the wait for its places")
     for _ in range(len(cfg.PET_PEN_SLOTS)):
         grown = full_grown_slots(grab_screen())
         if not grown:
@@ -4376,7 +4396,10 @@ def switch_pen_pets() -> bool:
         wait_interruptible(cfg.PET_PEN_UI_SETTLE)
         if look_until(lambda img: len(full_grown_slots(img)) < len(grown), cfg.PET_PEN_OPEN_WAIT, cfg.PET_PEN_POLL) is None:       # (the others move up: waited for, not looked at once - with two full grown the second was taken for "did not go out")
             log_failure("pet pen: a full-grown pet did not go out of the pen")
+            phase_shot("a full-grown pet did not go out")
+            phase_commit("the pet pen switch")
             return False
+        phase_shot(f"after the X of place {grown[0]}")
         out += 1
     if out == 0:
         pen_note("pet pen: no pet in it is full grown")
@@ -4386,6 +4409,8 @@ def switch_pen_pets() -> bool:
     else:
         if out:
             pen_note(f"pet pen: {out} full-grown pet(s) switched")
+    phase_shot("before the pen is closed")
+    phase_commit("the pet pen switch")
     hover_click(*cfg.PET_PEN_CLOSE_POS)
     wait_interruptible(cfg.PET_PEN_UI_SETTLE)
     return True
@@ -4670,6 +4695,21 @@ class InputCapture:
         self._burst_until = time.time() + cfg.RUN_CAPTURE_BURST
         self.shot_now.set()
 
+    def keep_frame(self, png: bytes, seconds: float, label: str) -> None:
+        """Save a screen taken earlier (`seconds` into the capture, as PNG bytes) as a frame the thinning keeps, with its `label` in events.jsonl: the screens of the phases of a need that failed (phase_commit()).
+        Only on a capture with a budget, and while its protected frames are not used up."""
+        if not self.running or not self.max_zips or len(self.protected) >= self.protected_max:
+            return
+        with self._lock:
+            self._phase_frames = getattr(self, "_phase_frames", 0) + 1
+            name = f"frame_p{self._phase_frames:05d}_{seconds:.3f}.png"
+        with open(os.path.join(self.folder, name), "wb") as f:
+            f.write(png)
+        self._emit("frame", file=name, label=label, **self._context())
+        self._kept.append((name, len(png)))
+        self.protected.add(name)
+        self._keep_within_budget()
+
     def note(self, text: str) -> None:
         """A line of the run's log into events.jsonl (a "log" line), so that the frames and what the macro was doing are on one clock."""
         self._emit("log", text=text)
@@ -4916,6 +4956,47 @@ def start_moments() -> None:
     except Exception as error:
         logger.warning(f"Couldn't start the capture of the run's moments: {error}")
 
+def phase_shot(label: str) -> None:
+    """A screen at a phase of the need that runs (the landing of a teleport, the end of each step of a walk, the pen opened ...), kept in memory as a PNG: if the need fails (phase_commit()) they go into the run's moments with
+    their labels, so that a failing attempt can be compared with a good one (where did the walk end, which way was the camera). The need's executions that went well discard them (one in PHASE_KEEP_GOOD_EVERY is kept as the
+    good one to compare with). Nothing without a moments capture; never raises."""
+    capture = state.moments
+    if capture is None or len(state.phase_shots) >= cfg.PHASE_SHOTS_MAX:
+        return
+    try:
+        ok, png = cv2.imencode(".png", grab_screen(), [cv2.IMWRITE_PNG_COMPRESSION, 1])
+        if ok:
+            state.phase_shots.append((round(time.time() - capture.started, 3), label, png.tobytes()))
+    except Exception as error:
+        logger.debug(f"A screen of a phase was not taken: {error}")
+
+def phase_reset() -> None:
+    """Forget the screens of the phases (a need is starting)."""
+    state.phase_shots.clear()
+
+def phase_commit(why: str) -> None:
+    """Put the screens of the phases of the need that ran into the moments capture (labelled with `why` and the phase), and forget them. Never raises."""
+    capture, shots = state.moments, list(state.phase_shots)
+    state.phase_shots.clear()
+    if capture is None or not shots:
+        return
+    try:
+        capture.note(f"phase screens kept: {why} ({len(shots)})")
+        for seconds, label, png in shots:
+            capture.keep_frame(png, seconds, f"{why}: {label}")
+    except Exception as error:
+        logger.debug(f"The screens of the phases were not kept: {error}")
+
+def phase_done_well(need_name: str) -> None:
+    """A need went well: its screens are dropped, but one execution in PHASE_KEEP_GOOD_EVERY is kept, as the good one to compare a failing one with."""
+    count = state.phase_ok.get(need_name, 0) + 1
+    if count >= cfg.PHASE_KEEP_GOOD_EVERY:
+        state.phase_ok[need_name] = 0
+        phase_commit(f"{need_name} went well")
+    else:
+        state.phase_ok[need_name] = count
+        phase_reset()
+
 def note_moment(message: str) -> None:
     """A line of the run log for the moments capture (log_run_event() calls it); one that starts as MOMENTS_MARK_PREFIXES says is also a moment to keep (at most one every MOMENTS_MARK_GAP seconds). Never raises."""
     capture = state.moments
@@ -4998,14 +5079,14 @@ screen (hungry, thirsty, dirty, sleepy, ...), walks the character to the place t
 and the pet pen on timers. Screens are 1920x1080 (the positions in events are in that space).
 PRIVACY: the frames are of the Roblox window only, but the game shows other players' names and chat; the private server link is not in any file here.
 
-THE FRAMES (frame_<n>_<seconds>.png): lossless screenshots, <seconds> from the start of the capture. Taken every {interval:g} s, thinned out to fit {zips} zips ({frames} saved, {dropped} thinned): what is
+THE FRAMES (frame_<n>_<seconds>.png; frame_p<n>_<seconds>.png are the screens of the phases of one need, see below): lossless screenshots, <seconds> from the start of the capture. Taken every {interval:g} s, thinned out to fit {zips} zips ({frames} saved, {dropped} thinned): what is
 left is spread over the run. Frames of the moments below were saved every 0.5 s for {burst:g} s and are never thinned, and so are the last {tail:g} s of the run.
 
 THE FILES:
   events.jsonl   one JSON line per event, "t" = seconds from the start (the frames' clock):
                  type "frame": a frame saved, with "activity" (what the macro was doing: a need handler, a side action, setup, a rejoin, or waiting for needs), "detected" (the needs it last saw on the
                  bar), "cycles", "resolved" (needs resolved so far), "failures", "disabled" (needs switched off as stuck), "task" (a handler running);
-                 type "log": a line of the run log (what happened: needs detected and resolved, failures, rejoins, popups closed); type "mark": a moment kept (see below); "frame_dropped": thinned out.
+                 type "log": a line of the run log (what happened: needs detected and resolved, failures, rejoins, popups closed); a frame line with a "label" is a screen of a phase of a need that went wrong (or one in a while that went well, to compare with): the landing of a teleport, the screen before each step of its walk, after the last one, the doctor's desk, the pet pen; "phase screens kept: ..." log lines say which need and why; type "mark": a moment kept (see below); "frame_dropped": thinned out.
   output.log     everything the macro printed, debug lines too (the last part of the run when it was long), with times.
   run_log.txt    the run's own log (the same lines as the "log" events, with their wall-clock times).
   failures.txt   what the macro saved for each failure (reason, time, what was detected, disabled needs); failure_<folder>.jpg are their screenshots (the game window, JPEG; at most {shots} of them, spread over the run).

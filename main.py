@@ -380,6 +380,7 @@ class State:
     # the game config): relaunching the script gives every enabled need a fresh
     # chance.
     disabled_needs: set = field(default_factory=set)
+    disabled_at: dict = field(default_factory=dict)  # {need: when it was disabled}: one that worked in the run and has stayed disabled STUCK_NEED_REJOIN_AFTER seconds is a reason to rejoin (run 4: the ride, 26 minutes of tries, then fine after the scheduled rejoin)
     hopeless_at: dict = field(default_factory=dict)  # {need: when it was disabled as hopeless}: after NEED_HOPELESS_RETRY seconds the next rejoin gives it one more chance
     hopeless: set = field(default_factory=set)       # needs disabled that had never worked in the run: a rejoin does not give them another chance (pizza and sick, 3 more failures each after every rejoin of a 10-hour run)
     # The in-task checks (see task_unscrew()): whether a need handler or setup
@@ -1962,23 +1963,28 @@ def set_backpack_filter() -> bool:
             if panel_open:
                 hover_click(*cfg.SETUP_FILTER_CANCEL_POS)                                         # (a panel only looked at - or one that could not be set - is left as it was)
                 wait_interruptible(cfg.UI_SETTLE)
-        if growing and not on_pets:
-            log_run_event("setup: not on the pets tab - no pet is equipped from the list")
-        elif growing:
-            select_backpack_tab(cfg.INVENTORY_PETS_TAB_POS)
-            wait_interruptible(cfg.UI_SETTLE)
-            pick = choose_list_pet(stop_at_equipped=True)                                        # (not the Add tile, a grey pet in a listing or one in the pen; the equipped one is kept wherever it is in view)
-            if pick is None:
-                log_run_event("setup: no pet that can be levelled was seen in the list - the pet that is out is kept")
-            elif pick[0] == "equipped":
-                log_run_event("setup: the equipped pet is in the filtered list (it still grows) - kept")
-            else:
-                equip_pet("the first pet of the list", lambda: pick[1])
-        elif not pet_out:
-            log_run_event("setup: the pet is not out - equipping the Alicorn")
-            equip_pet("the Alicorn", lambda: wait_for_template("pet_alicorn"))
+        pick_pet_in_open_backpack(growing, on_pets, pet_out)
         close_backpack("setup")
     return ok
+
+def pick_pet_in_open_backpack(growing: bool, on_pets: bool, pet_out: bool) -> None:
+    """The pet part of Setup, in the open backpack: with `growing` (level_growing_pets()) on the pets tab, the equipped pet is kept when its green frame shows in the filtered list (it still grows), else the first pet
+    of the list is equipped; without `growing`, the Alicorn when no pet is out (`pet_out`). Nothing is equipped from another tab than the pets one (`on_pets`)."""
+    if growing and not on_pets:
+        log_run_event("setup: not on the pets tab - no pet is equipped from the list")
+    elif growing:
+        select_backpack_tab(cfg.INVENTORY_PETS_TAB_POS)
+        wait_interruptible(cfg.UI_SETTLE)
+        pick = choose_list_pet(stop_at_equipped=True)                                        # (not the Add tile, a grey pet in a listing or one in the pen; the equipped one is kept wherever it is in view)
+        if pick is None:
+            log_run_event("setup: no pet that can be levelled was seen in the list - the pet that is out is kept")
+        elif pick[0] == "equipped":
+            log_run_event("setup: the equipped pet is in the filtered list (it still grows) - kept")
+        else:
+            equip_pet("the first pet of the list", lambda: pick[1])
+    elif not pet_out:
+        log_run_event("setup: the pet is not out - equipping the Alicorn")
+        equip_pet("the Alicorn", lambda: wait_for_template("pet_alicorn"))
 
 def find_equip_button(img: Image) -> Optional[Point]:
     """The middle of the green Equip button of the backpack's card of the item clicked, or None (an item that is equipped has another button, an Unequip): the blob of GREEN_BUTTON_COLOR of the
@@ -2867,7 +2873,7 @@ def find_pet_bar(img: Image) -> list[Point]:
         x, y, w, h, area = (int(v) for v in stats[i])
         if not cfg.PET_BAR_AREA[0] <= area <= cfg.PET_BAR_AREA[1] or not cfg.PET_BAR_ASPECT[0] <= w / h <= cfg.PET_BAR_ASPECT[1]:
             continue
-        beside = img[y:y + h, x + w:x + w + int(w * 0.9)]
+        beside = img[y:y + h, x + w:x + w + int(w * cfg.PET_BAR_WHITE_REACH)]
         if beside.size == 0 or float((beside.min(axis=2) >= cfg.PET_BAR_WHITE_LEVEL).mean()) < cfg.PET_BAR_WHITE_FRACTION:
             continue
         if best is None or area > best[0]:
@@ -3009,10 +3015,25 @@ STEP_ACTIONS: dict[str, Callable[..., Optional[bool]]] = {
     "focus_pet": lambda duration: focus_pet(getattr(cfg, duration)),
     "click_centre": lambda duration: hover_click(cfg.REFERENCE_CENTER_X, cfg.REFERENCE_CENTER_Y, duration=getattr(cfg, duration)),
     "equip_vehicle": lambda: equip_favorite_vehicle(),
+    "takeoff": lambda: take_off(),
     "swipe_down": lambda: pet_swipe_down(),
     "with_backpack": lambda steps: run_steps_with_backpack(steps),                                # the steps with the backpack open on purpose (the in-task check leaves it alone)
     "repeat": lambda count, label, steps: repeat_steps(getattr(cfg, count), label, steps),
 }
+
+def take_off() -> bool:
+    """Hold the helicopter key (RIDE_R_HOLD_DURATION) and look whether the view changed (screen_changed(): a helicopter that rises takes the camera with it); when it did not, hold it again, RIDE_TAKEOFF_RETRIES times at
+    most. In a run, 10 rides in a row ran as always and the need did not clear: the frames show the helicopter on the ground beside a house the whole time, where those that cleared had it high over the
+    neighbourhood. Always True: a ride that cannot lift off is left to the need's wait, as before."""
+    for attempt in range(cfg.RIDE_TAKEOFF_RETRIES + 1):
+        before = grab_screen()
+        logger.debug(f"Holding the helicopter key for {cfg.RIDE_R_HOLD_DURATION}s...")
+        hold_key(cfg.KEYS["helicopter"], cfg.RIDE_R_HOLD_DURATION)
+        wait_interruptible(cfg.UI_SETTLE)
+        if screen_changed(before, grab_screen()):
+            return True
+        log_run_event(f"ride: the view did not change after the helicopter key (try {attempt + 1} of {cfg.RIDE_TAKEOFF_RETRIES + 1})")
+    return True
 
 def run_steps(steps: Sequence[tuple[Any, ...]]) -> bool:
     """Do the steps in order (see STEP_ACTIONS); False as soon as one says it was not done."""
@@ -3188,7 +3209,7 @@ class RideNeedHandler(SequenceNeedHandler):
         ("say", "Pressing e..."), ("press", "mount"), ("wait", "RIDE_WAIT_AFTER_E"),
         ("say", "Walking forward for {RIDE_FORWARD_DURATION}s..."), ("hold", "forward", "RIDE_FORWARD_DURATION"),       # a little way on after mounting, before the backpack
         ("equip_vehicle",),
-        ("say", "Holding the helicopter key for {RIDE_R_HOLD_DURATION}s..."), ("hold", "helicopter", "RIDE_R_HOLD_DURATION"),   # briefly before starting to move
+        ("takeoff",),                                                                                                   # the helicopter key, held till the view moves (briefly before starting to move)
         ("walk", ("forward", "back"), "NEED_GONE_MAX_WAIT", "ride"),                                                    # back and forth (not left and right) while riding
     )
 
@@ -3244,7 +3265,7 @@ def teleport_to(category_pos: Point) -> bool:
         for _ in range(2):                                      # the "Get More" tile, clicked once more if the dialog did not come up (the click can be lost)
             hover_click(*cfg.GENERAL_TELEPORT_POS_2)
             wait_interruptible(cfg.UI_SETTLE)
-            yes = look_until(find_teleport_yes, cfg.TELEPORT_DIALOG_WAIT, 0.3)
+            yes = look_until(find_teleport_yes, cfg.TELEPORT_DIALOG_WAIT, cfg.TELEPORT_DIALOG_POLL)
             if yes is not None:
                 break
         if yes is None:
@@ -3328,7 +3349,7 @@ class TeleportWalkNeedHandler(NeedHandler):
         'e' (that focuses the pet) - and wait for the dialog. Returns whether it came up (the Yes is next); False means
         the need is given up at once. See docs/ARCHITECTURE.md#need-handlers.
         """
-        wait_interruptible(cfg.SICK_PRE_CLICK_WAIT)
+        wait_for_white_to_pass(cfg.SICK_PRE_CLICK_WAIT)                                          # (the hospital's door can still be showing its white screen: 8 of 24 sick needs of a 10 hour run found no prompt behind it)
         if detect_pet_focus(grab_screen()):                      # (it hides the prompt)
             log_run_event(f"{self.name}: the pet view is open - backing out of it")
             dismiss_stray_windows()
@@ -3393,6 +3414,7 @@ def record_detection(detected: list[str]) -> None:
     stuck = {n for n, count in state.attempt_streaks.items() if count >= cfg.NEED_STUCK_CHECKS} & (enabled_needs() - state.disabled_needs)
     for need_name in sorted(stuck):
         state.disabled_needs.add(need_name)
+        state.disabled_at.setdefault(need_name, time.time())
         if not run_stats.resolved.get(need_name):
             mark_hopeless(need_name)
         logger.info(f"{need_name} still there after {cfg.NEED_STUCK_CHECKS} attempts in a row - disabling it for this run")
@@ -3484,6 +3506,7 @@ def process_needs() -> bool:
                 log_run_event(f"not cleared: {need_name} ({seconds:.0f}s)")
                 if run_stats.failed[need_name] >= cfg.NEED_NEVER_WORKED_FAILS and not run_stats.resolved.get(need_name) and need_name not in state.disabled_needs:
                     state.disabled_needs.add(need_name)
+                    state.disabled_at.setdefault(need_name, time.time())
                     mark_hopeless(need_name)                                                   # (a need that has failed this often and never once worked costs its wait every time it comes)
                     log_run_event(f"disabled: {need_name}")
                     log_failure(f"{need_name} failed {run_stats.failed[need_name]} times and never worked in this run - disabled for this run")
@@ -3511,7 +3534,7 @@ def find_notice_button(img: Image) -> Optional[Point]:
     left, top, right, bottom = cfg.NOTICE_BOX
     band = img[top:bottom, left:right]
     hsv = cv2.cvtColor(band, cv2.COLOR_BGR2HSV)
-    red = cv2.bitwise_or(cv2.inRange(hsv, (0, 150, 150), (8, 255, 255)), cv2.inRange(hsv, (170, 150, 150), (180, 255, 255)))
+    red = cv2.bitwise_or(cv2.inRange(hsv, *cfg.NOTICE_RED_HSV[0]), cv2.inRange(hsv, *cfg.NOTICE_RED_HSV[1]))
     count, _, stats, _centres = cv2.connectedComponentsWithStats(red, connectivity=8)
     if any(stats[i, cv2.CC_STAT_WIDTH] >= cfg.NOTICE_RED_MIN[0] and stats[i, cv2.CC_STAT_HEIGHT] >= cfg.NOTICE_RED_MIN[1] for i in range(1, count)):
         return None
@@ -3679,13 +3702,25 @@ def detect_white_screen(img: Image) -> bool:
     white = cv2.countNonZero(cv2.inRange(img, (cfg.WHITE_SCREEN_LEVEL,) * 3, (cfg.PIXEL_MAX,) * 3))        # (every channel at least the level: one pass, not a minimum over a copy of the picture)
     return bool(white / (img.shape[0] * img.shape[1]) >= cfg.WHITE_SCREEN_MIN_FRACTION)
 
+def loading_white_screen(img: Image) -> bool:
+    """detect_white_screen() and nothing of the world on it: a loading screen is white and bare (its saturated pixels, in WHITE_BARE_BOX, are the few of the HUD), while the pizza need's walk ends on a big white
+    plaza where the pet's name pill, the E button and the character show (about 8000 of them, 1450 to 2600 on a loading screen, 22000 and more with a popup on it). Only a loading screen is a reason to rejoin."""
+    if not detect_white_screen(img):
+        return False
+    left, top, right, bottom = cfg.WHITE_BARE_BOX
+    hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
+    colourful = (hsv[:, :, 1] > cfg.WHITE_BARE_MIN_SATURATION) & (hsv[:, :, 2] > cfg.WHITE_BARE_MIN_VALUE)
+    cl, ct, cr, cb = cfg.SERVER_CLOSING_BOX                                              # (the update's blue letters are what a white screen of that kind has: not counted)
+    colourful[max(0, ct - top):max(0, cb - top), max(0, cl - left):max(0, cr - left)] = False
+    return int(np.count_nonzero(colourful)) <= cfg.WHITE_BARE_MAX_SATURATED
+
 ROBLOX_NOT_RUNNING = "Roblox isn't running"
 
 def server_closing_visible(img: Image) -> bool:
     """Whether the white screen of the game's update shows its blue "The server is closing for an update" (SERVER_CLOSING_BOX: enough blue pixels)."""
     left, top, right, bottom = cfg.SERVER_CLOSING_BOX
     band = img[top:bottom, left:right].astype(np.int16)
-    blue = (band[:, :, 0] >= 140) & (band[:, :, 0] - band[:, :, 2] >= cfg.SERVER_CLOSING_BLUE_LEAD)
+    blue = (band[:, :, 0] >= cfg.SERVER_CLOSING_BLUE_MIN) & (band[:, :, 0] - band[:, :, 2] >= cfg.SERVER_CLOSING_BLUE_LEAD)
     return int(np.count_nonzero(blue)) >= cfg.SERVER_CLOSING_MIN_PIXELS
 
 def rejoin_reason() -> Optional[tuple[str, str]]:
@@ -3700,7 +3735,7 @@ def rejoin_reason() -> Optional[tuple[str, str]]:
     screen = grab_screen()
     if detect_disconnect(screen):
         return "disconnect", "disconnected from the game"
-    if not detect_white_screen(screen):
+    if not loading_white_screen(screen):                                                    # (a white world, the pizza plaza, is not a loading screen: 30 s of it was taken for one and rejoined in the middle of the pizza need)
         state.white_since = None
     elif state.white_since is None:
         state.white_since = time.time()
@@ -3712,6 +3747,9 @@ def rejoin_reason() -> Optional[tuple[str, str]]:
     disabled_now = state.disabled_needs - state.hopeless                                          # (needs that never worked are not what a rejoin is for)
     if len(disabled_now) >= cfg.DISABLED_NEEDS_REJOIN_THRESHOLD:
         return "stuck", f"{len(disabled_now)} needs disabled ({', '.join(sorted(disabled_now))})"
+    long_disabled = sorted(n for n in disabled_now if time.time() - state.disabled_at.get(n, time.time()) >= cfg.STUCK_NEED_REJOIN_AFTER)
+    if long_disabled:
+        return "stuck", f"{', '.join(long_disabled)} disabled for {cfg.STUCK_NEED_REJOIN_AFTER / 60:g} minutes (it worked before in this run)"
     if state.last_progress is not None and time.time() - state.last_progress >= cfg.NO_PROGRESS_REJOIN_INTERVAL:
         return "stalled", f"no need resolved for {cfg.NO_PROGRESS_REJOIN_INTERVAL / 60:g} minutes"
     if state.last_rejoin is not None and time.time() - state.last_rejoin >= cfg.REJOIN_INTERVAL:
@@ -3764,6 +3802,7 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
     if again:
         log_run_event(f"given another chance after {cfg.NEED_HOPELESS_RETRY / 3600:.0f} h: {', '.join(again)}")
     state.disabled_needs &= state.hopeless                                                   # (the others get a fresh chance after a rejoin; a need that never worked in the run does not)
+    state.disabled_at = {n: t for n, t in state.disabled_at.items() if n in state.disabled_needs}
     reset_need_tracking()
     log_run_event("recovery complete: rejoined, setup run, disabled needs cleared" + (f" (still disabled: {', '.join(sorted(state.disabled_needs))})" if state.disabled_needs else ""))
     logger.info("Recovery complete - carrying on")
@@ -3997,7 +4036,7 @@ def leave_hub_if_in() -> bool:
 
 def unscrew(in_task: bool = False, interruptible: bool = True) -> Optional[str]:
     """The per-cycle checks (at the top of every cycle; with `in_task` also during a task): rejoin, backpack, stray windows, then the paycheck popup - in that order, since the green
-    buttons of the earlier ones look like CASH OUT. Returns "rejoined" or "aborted" (the callers abandon the task) or None. See docs/ARCHITECTURE.md#need-handlers.
+    buttons of the earlier ones look like CASH OUT - and, at the top of a cycle only, any other notice with one green button (dismiss_notice()). Returns "rejoined" or "aborted" (the callers abandon the task) or None. See docs/ARCHITECTURE.md#need-handlers.
     """
     if in_task:
         if rejoin_game(kinds=("disconnect", "white_screen")):
@@ -4069,8 +4108,14 @@ def side_quest() -> None:
             update_game_config(lambda c: c.update(lure_timer=time.time() + cfg.LURE_RECOLLECT_INTERVAL))
 
 def find_task_board_button(img: Image) -> Optional[Point]:
-    """The middle of the Task Board's sign at the left edge of the screen (DIALOG_BUTTONS["task_board"]: found by the colour of its wood and its size), or None."""
-    return find_dialog_button(img, cfg.DIALOG_BUTTONS["task_board"])
+    """The middle of the Task Board's sign at the left edge of the screen: by the colour of its wood (DIALOG_BUTTONS["task_board"]: a blob of its size), and when its surroundings are wood-coloured too (the
+    school's brown floor, the campfire's orange: the blob is the whole strip) by the crop of its title cloud, "Lightning Dimension" (`task_board_title`), which does not depend on what is behind it.
+    The sign is TASK_BOARD_TITLE_TO_SIGN below the title's middle. None if neither finds it."""
+    found = find_dialog_button(img, cfg.DIALOG_BUTTONS["task_board"])
+    if found is not None:
+        return found
+    title = popup_found(img, "task_board_title")
+    return (title[0], title[1] + cfg.TASK_BOARD_TITLE_TO_SIGN) if title is not None else None
 
 def task_board_badge(img: Image) -> bool:
     """Whether the Task Board's button shows its red alert badge (looked for beside the sign, where it is found)."""
@@ -4124,6 +4169,7 @@ def collect_pet_pen() -> bool:
             wait_interruptible(cfg.UI_SETTLE)
             if find_dialog_button(grab_screen(), cfg.DIALOG_BUTTONS["nice"]) is None:
                 log_run_event("pet pen: pets aged up")
+                update_game_config(lambda c: c.update(pet_pen_swap=True))                       # (always looked at after a collect: the pets that grew up are taken out, all of them - the Friend pill is only seen for one)
                 return True
         log_run_event("pet pen: the NICE! button did not go")
         return False
@@ -4169,7 +4215,7 @@ def pet_cell_state(img: Image, row: int, column: int) -> str:
     hsv = cv2.cvtColor(cell, cv2.COLOR_BGR2HSV)
     ring = np.concatenate([cell[0:3, :].reshape(-1, 3), cell[-3:, :].reshape(-1, 3), cell[:, 0:3].reshape(-1, 3), cell[:, -3:].reshape(-1, 3)]).astype(int)
     ring_hsv = np.concatenate([hsv[0:3, :].reshape(-1, 3), hsv[-3:, :].reshape(-1, 3), hsv[:, 0:3].reshape(-1, 3), hsv[:, -3:].reshape(-1, 3)]).astype(int)
-    green = float(((ring[:, 1] > 150) & (ring[:, 2] < 120) & (ring[:, 0] < 120)).mean())
+    green = float(((ring[:, 1] > cfg.PET_CELL_GREEN_MIN_G) & (ring[:, 2] < cfg.PET_CELL_GREEN_MAX_RB) & (ring[:, 0] < cfg.PET_CELL_GREEN_MAX_RB)).mean())
     if green >= cfg.PET_CELL_PLUS_GREEN:
         return "plus"
     if float(cv2.cvtColor(cell, cv2.COLOR_BGR2GRAY).std()) < cfg.PET_CELL_CONTENT_MIN_STD:
@@ -4177,7 +4223,7 @@ def pet_cell_state(img: Image, row: int, column: int) -> str:
     corners = np.concatenate([hsv[2:10, 2:10].reshape(-1, 3), hsv[2:10, -10:-2].reshape(-1, 3)])
     if corners[:, 2].mean() < cfg.PET_CELL_LOCKED_MAX_V:
         return "locked"
-    orange = float(((ring_hsv[:, 0] >= 5) & (ring_hsv[:, 0] <= 22) & (ring_hsv[:, 1] >= 140) & (ring_hsv[:, 2] >= 180)).mean())
+    orange = float(((ring_hsv[:, 0] >= cfg.PET_CELL_ORANGE_HUE[0]) & (ring_hsv[:, 0] <= cfg.PET_CELL_ORANGE_HUE[1]) & (ring_hsv[:, 1] >= cfg.PET_CELL_ORANGE_MIN_S) & (ring_hsv[:, 2] >= cfg.PET_CELL_ORANGE_MIN_V)).mean())
     if green >= cfg.PET_CELL_GREEN_BORDER_MIN and green >= orange:                                  # (a gold pet's background is orange too: the green frame wins when it is the stronger)
         return "equipped"
     return "pen" if orange >= cfg.PET_CELL_ORANGE_MIN else "pet"
@@ -4317,7 +4363,7 @@ def switch_pen_pets() -> bool:
         x, y = cfg.PET_PEN_SLOTS[grown[0]]
         hover_click(x + cfg.PET_PEN_X_OFFSET[0], y + cfg.PET_PEN_X_OFFSET[1])
         wait_interruptible(cfg.PET_PEN_UI_SETTLE)
-        if len(full_grown_slots(grab_screen())) >= len(grown):
+        if look_until(lambda img: len(full_grown_slots(img)) < len(grown), cfg.PET_PEN_OPEN_WAIT, cfg.PET_PEN_POLL) is None:       # (the others move up: waited for, not looked at once - with two full grown the second was taken for "did not go out")
             log_failure("pet pen: a full-grown pet did not go out of the pen")
             return False
         out += 1
@@ -4429,7 +4475,7 @@ class RunRecorder:
         """Stop recording and close the file."""
         self.stop_event.set()
         if self.thread is not None:
-            self.thread.join(timeout=5.0)
+            self.thread.join(timeout=cfg.THREAD_JOIN_TIMEOUT)
         if self.writer is not None:
             self.writer.release()
         size_mb = os.path.getsize(self.path) / (1024 * 1024) if os.path.exists(self.path) else 0
@@ -4564,7 +4610,7 @@ class InputCapture:
         self.stop_event.set()
         self.shot_now.set()                             # (the frame thread is waiting out CAPTURE_FRAME_INTERVAL: let it see the stop)
         for thread in self._threads:
-            thread.join(timeout=5.0)
+            thread.join(timeout=cfg.THREAD_JOIN_TIMEOUT)
         self._keep_within_budget()                      # (the events grew since the last frame was saved)
         with self._lock:
             if self._file is not None:
@@ -4670,7 +4716,7 @@ class InputCapture:
                     return
                 seconds = time.time() - self.started
                 screen = grab_screen()
-                small = cv2.resize(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY), (320, 180), interpolation=cv2.INTER_AREA)
+                small = cv2.resize(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY), cfg.CAPTURE_COMPARE_SIZE, interpolation=cv2.INTER_AREA)
                 bursting = time.time() < self._burst_until and len(self.protected) < self.protected_max     # (around a mark(): every look)
                 if bursting or seconds - last_saved >= self._gap and (
                         clicked or last_small is None or seconds - last_saved >= max(cfg.CAPTURE_MAX_SKIP, self._gap)
@@ -4900,7 +4946,7 @@ def write_moments_files(capture: InputCapture, seconds: float) -> None:
         for name in shots:
             picture = cv2.imread(os.path.join(cfg.FAILURE_DIR, name, "screen.png"))
             if picture is not None:
-                cv2.imwrite(os.path.join(folder, f"failure_{name}.jpg"), picture, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                cv2.imwrite(os.path.join(folder, f"failure_{name}.jpg"), picture, [cv2.IMWRITE_JPEG_QUALITY, cfg.FAILURE_JPEG_QUALITY])
         version = macro_version()
         info_path = os.path.join(folder, "info.json")
         with open(info_path, encoding="utf-8") as f:
@@ -5162,9 +5208,9 @@ def run_workflow_loop() -> None:
     log_run_event("LOOP started")
     recorder = start_recording_if_requested()
     start_moments()
-    logger.info("=" * 50)
+    logger.info("=" * cfg.LOG_BANNER_WIDTH)
     logger.info(f"[LOOP] Starting continuous workflow (run {state.run_number})")
-    logger.info("=" * 50)
+    logger.info("=" * cfg.LOG_BANNER_WIDTH)
 
     # Respawn once up front so the loop always starts from a known state,
     # regardless of wherever the character happened to be standing.
@@ -6067,7 +6113,7 @@ class AdoptMeGUI:
             self.refresh_debug_from_outside()
 
     def act_from_outside(self, command: str, stem: str = "", resume: bool = False) -> None:
-        """Queue what the button of the same name does (OUTSIDE_ACTIONS: `rejoin` is Leave & rejoin, `setup` is Setup, and the Trading Hub trips). Actions are
+        """Queue what the button of the same name does (OUTSIDE_ACTIONS: `rejoin` is Leave & rejoin, `setup` is Setup (run at once: the GUI's box does it at the next loop), and the Trading Hub trips, which have no button of their own any more). Actions are
         done one after the other, in the order asked for (drain_pending()); a `stop` command stops what is running now and leaves the queue alone."""
         self.pending.append(command)
         self.pending_stems.append(stem)

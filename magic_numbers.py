@@ -104,6 +104,7 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "sick_dialog":     {"box": (700, 400, 1220, 700), "threshold": 0.8},
     "doctor_prompt":   {"box": (880, 420, 1050, 580), "threshold": 0.8},
     "teleport_yes":    {"box": (900, 600, 1200, 720), "threshold": 0.8},       # the green Yes of the "Teleport to the Nursery / the Vehicle Dealership" dialog (a capture of the teleport tests)
+    "task_board_title": {"box": (0, 480, 200, 680), "threshold": 0.8},       # the title cloud of the Task Board's sign: the fallback where its wood is lost in the colours behind it (find_task_board_button())
     "doctor_prompt_e": {"box": (800, 330, 1120, 600), "threshold": 0.8},      # the same button since the Lightning Dimension update: an E, over the player's head behind the desk (a capture of the teleport tests)
     # The normal backpack's "BACKPACK" title, and the expanded one's BACK button.
     "backpack_normal": {"box": (700, 600, 1000, 690), "threshold": 0.8},
@@ -189,6 +190,7 @@ NOTICE_BUTTON_SIZE = ((110, 420), (30, 75))   # its width and height range, px (
 NOTICE_BUTTON_ASPECT = 3.5                # its width over its height at least (Awesome! 7.2, Thanks! 4.1; the backpack's green plus tile and tab icons, which joined are 3.0, and the tiles of its lists are no buttons)
 NOTICE_BUTTON_FILL = 0.4                  # the share of its box that is the button's green (a rounded button with its text)
 NOTICE_RED_MIN = (90, 30)                 # a red blob this size in the box is a No / Cancel: the card is a question, not a notice (confetti pieces are small)
+NOTICE_RED_HSV = (((0, 150, 150), (8, 255, 255)), ((170, 150, 150), (180, 255, 255)))   # the two ranges of red (hue wraps round) of a No / Cancel button
 NOTICE_JOIN = 5                           # px the green is grown by first, so that confetti over the button does not split it
 NOTICE_MAX_CLICKS = 3                     # clicks within NOTICE_CLICK_WINDOW seconds that did not make it go: it is left alone for NOTICE_PAUSE seconds (a green button that is not a notice)
 NOTICE_CLICK_WINDOW = 60.0
@@ -418,6 +420,7 @@ CHOOSE_SLOW_MOVE_DURATION = 1.0  # deliberate, slow mouse travel to the found bu
 PET_BAR_HSV = ((122, 110, 200), (136, 215, 255))
 PET_BAR_AREA = (500, 20000)
 PET_BAR_ASPECT = (1.8, 4.0)
+PET_BAR_WHITE_REACH = 0.9                 # how far right of the bar the white part is looked for, as a share of the bar's width
 PET_BAR_WHITE_LEVEL = 225
 PET_BAR_WHITE_FRACTION = 0.15
 PET_PILL_HSV = (((122, 110, 200), (138, 215, 255)), ((126, 140, 60), (138, 215, 125)))     # the name pill as a whole: its filled part is bright purple and the rest dark purple (the pet's age progress), the text white over both
@@ -526,7 +529,7 @@ BOT_TRADES_POLL = 1.0
 INVENTORY_DIR = os.path.join(DEBUG_DIR, "inventory")            # the pictures (001.png, 002.png ...), emptied at the start of each tour
 INVENTORY_DONE_PATH = os.path.join(INVENTORY_DIR, "done.json")  # written when the tour ends, however it ends: {"pictures": N, "ended": why}
 INVENTORY_PETS_TAB_POS = (817, 713)
-EQUIP_BUTTON_BOX = (900, 780, 1215, 930)                        # where the Equip button of the backpack's card is (find_equip_button())...
+EQUIP_BUTTON_BOX = (900, 780, 1400, 1010)                        # where the Equip button of the backpack's card is (find_equip_button())...
 EQUIP_BUTTON_SIZE = ((100, 200), (25, 45))                      # ...its (width, height) range in px: 148 x 35 on a real frame
 INVENTORY_EXPAND_POS = (938, 642)                               # the orange button left of the settings one, in the normal backpack's header (measured on tests/popups/backpack_open.png)
 INVENTORY_LOAD_WAIT = 3.0                                       # seconds after the backpack has expanded, for its items to load before the first picture (blank cells in it, otherwise)
@@ -562,6 +565,7 @@ RIDE_FORWARD_DURATION = 2.0    # walk forward briefly after mounting, before the
 RIDE_VEHICLES_POS = (816, 804)
 RIDE_FIRST_VEHICLE_POS = (976, 708)
 RIDE_EQUIP_POS = (1062, 814)
+RIDE_TAKEOFF_RETRIES = 2           # times the helicopter key is held again when the view did not change after it (the helicopter did not lift off)
 RIDE_R_HOLD_DURATION = 1.5     # hold KEYS["helicopter"] this long after equipping, before walking back and forth
 
 # Backpack-teleport sequence, shared by every teleport destination: open
@@ -570,6 +574,7 @@ RIDE_R_HOLD_DURATION = 1.5     # hold KEYS["helicopter"] this long after equippi
 # landing spot. Only the category tab differs per destination (passed into
 # teleport_to() as `category_pos`); everything else is always the same,
 # hence "general".
+TELEPORT_DIALOG_POLL = 0.3         # seconds between looks for the teleport dialog's Yes
 TELEPORT_DIALOG_WAIT = 3.0        # seconds the teleport dialog's Yes is looked for after the Get More tile was clicked (the tile is clicked once more if it did not come up)
 TELEPORT_YES_TRIES = 2            # the teleport dialog's Yes is clicked this often at most, until the view changes or the screen goes white 
 TELEPORT_WAIT = 5.0               # wait after the teleport click, for it to take effect
@@ -579,8 +584,9 @@ GENERAL_TELEPORT_POS_2 = (895, 705)
 GENERAL_TELEPORT_POS_3 = (1048, 658)
 TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing spot
 TELEPORT_WALK_STEP_GAP = 4.0      # pause between consecutive steps of a teleport-walk need's sequence. Do not shorten it: shorter gaps made the routes break often (the routes were tuned with it)
-SICK_PRE_CLICK_WAIT = 2.0         # after the sick need's walk, before the doctor's prompt is looked for (let the character come to rest)
-SICK_PROMPT_LOOK = 3.0            # how long the doctor's prompt (POPUP_TEMPLATES["doctor_prompt"]) is looked for before the need is given up
+SICK_PRE_CLICK_WAIT = 2.0         # after the sick need's walk, before the doctor's prompt is looked for (let the character come to rest): the fixed time when no white screen of the hospital's door shows, else that one's
+                                  # fade is waited for (wait_for_white_to_pass())
+SICK_PROMPT_LOOK = 6.0            # how long the doctor's prompt (POPUP_TEMPLATES["doctor_prompt"]) is looked for before the need is given up
 SICK_CONFIRM_WAIT = 7.0           # how long the doctor's dialog (POPUP_TEMPLATES["sick_dialog"]) is looked for after the prompt was clicked (it took about 2.5 s) before the need is given up
 SICK_LOOK_INTERVAL = 0.4          # between two looks for either
 
@@ -589,7 +595,7 @@ TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
 SICK_FINAL_CLICK_POS = (1045, 660)       # click after the sick need's walk
 
 # Whether a teleport-walk need flies by helicopter by default; an entry can
-# override it with `helicopter=True/False`. No entry turns it on now (the event's did: scripts/Halloween2026.py).
+# override it with `helicopter=True/False`: `camping` turns it on, the others walk (the Halloween routes of the event flew too: scripts/Halloween2026.py).
 HELICOPTER_REQUIRED = False
 HELICOPTER_FORWARD_DURATION = 1.0  # step forward this long after teleporting, before equipping
 HELICOPTER_HOLD_DURATION = 4.5     # then hold KEYS["helicopter"] this long (it was 0.5 s less, and the helicopter could be caught on a tree)
@@ -641,6 +647,7 @@ TELEPORT_WALK_NEEDS: dict[str, dict[str, Any]] = {
 WATCH_POLL_INTERVAL = 0.2           # how often the screen is looked at while waiting for the game's "Only Pets..." answer to a need button click
 DISABLED_NEEDS_REJOIN_THRESHOLD = 4  # this many needs disabled for the run (see NEED_STUCK_CHECKS) means something is
                                      # badly wrong: rejoin the game, run setup, and give every need a fresh chance
+STUCK_NEED_REJOIN_AFTER = 20 * 60  # a need that worked in the run (so not a hopeless one) and has been disabled as stuck this long is a reason to rejoin, one need or not (run 4: the ride was disabled after 26 minutes of failed tries and worked again after the next scheduled rejoin, 20 minutes later)
 NEED_HOPELESS_RETRY = 3600.0       # seconds a need that never worked stays disabled through rejoins; then one more chance (one failure puts it back)
 NEED_NEVER_WORKED_FAILS = 3        # a need that was not cleared this many times in a run, and never was, is disabled for it (camping: a wait of 75 s four times and no success in a 2 hour run)
 NEED_STUCK_CHECKS = 5            # an enabled need still on screen after this many attempts in a row is
@@ -679,6 +686,7 @@ MONEY_COLLECTED_TARGET = 200
 MONEY_RESET_HOUR = 17                  # the tree's money total starts again from 0 at this hour (0-23, local time) every day
 # The Pet Pen: its "ready to age up" notice is a card on the Task Board (the button at the left edge of the screen, with a red badge while there is an alert); the card opens the age-up
 # screen, which ends with a green NICE! - see pet_pen().
+TASK_BOARD_TITLE_TO_SIGN = 50            # px from the middle of the sign's title cloud to the middle of the sign (find_task_board_button())
 TASK_BOARD_BADGE_BOX = (-62, -28, 78, 92) # where its red alert badge is (a speech bubble with a "!"), from the middle of the sign (found by find_task_board_button())
 TASK_BOARD_BADGE_HSV = (((0, 170, 170), (8, 255, 255)), ((172, 170, 170), (180, 255, 255)))
 TASK_BOARD_BADGE_MIN_PIXELS = 500         # red pixels there for a badge (about 1000 with it, under 100 without)
@@ -700,6 +708,11 @@ PET_GRID_X = (895, 975, 1055, 1135)   # the middles of the cells of the small ba
 PET_GRID_Y = (706, 787, 867)          # ...and by row (three rows show)
 PET_CELL_HALF = 36                    # half the size of a cell
 PET_CELL_LOCKED_MAX_V = 200                # a cell whose corners are darker than this (brightness 0-255) is grey: a pet that is in a trade listing (white cells are 250 and more, grey ones 160)
+PET_CELL_GREEN_MIN_G = 150                 # a green pixel of a cell's edge: its green channel above this and its red and blue below PET_CELL_GREEN_MAX_RB
+PET_CELL_GREEN_MAX_RB = 120
+PET_CELL_ORANGE_HUE = (5, 22)              # an orange pixel of a cell's edge: this hue (0-179), at least this saturation and value
+PET_CELL_ORANGE_MIN_S = 140
+PET_CELL_ORANGE_MIN_V = 180
 PET_CELL_PLUS_GREEN = 0.6                  # a cell whose edge is this green is the solid green Add tile that starts the pets tab, not a pet
 PET_CELL_ORANGE_MIN = 0.05                 # a cell whose edge is this orange (a frame with a little house in its corner) is a pet that is in the pen
 PET_CELL_GREEN_BORDER_MIN = 0.05           # a cell whose edge is this green (share of its pixels) is the equipped pet (0.25 on the capture)
@@ -714,7 +727,7 @@ PET_REPICK_INTERVAL = 30 * 60            # seconds between the loop's picks of t
 TREE_CHECK_INTERVAL = 10 * 60          # seconds (10 minutes) between tree harvests
 LURE_RECOLLECT_INTERVAL = 4 * 60 * 60  # seconds (4 hours)
 
-# setup_game(): run on demand (the GUI's Setup button) and by the automatic recovery
+# setup_game(): run when asked for (the GUI's "Run Setup at the next loop" box, the bot's /setup) and by the automatic recovery
 # in rejoin_game(), never by the normal cycle.
 SETUP_LOCK_HOUSE_POS = (1112, 65)
 SETUP_BACKPACK_SETTINGS_POS = (977, 646)
@@ -787,11 +800,16 @@ DISCONNECT_PANEL_MIN_FRACTION = 0.5
 # in a row, the game is rejoined (see detect_white_screen()). A normal scene, even a bright one, has far less.
 WHITE_SCREEN_LEVEL = 250
 WHITE_SCREEN_MIN_FRACTION = 0.6
+WHITE_BARE_BOX = (200, 140, 1500, 1000)   # loading_white_screen() looks here (not the HUD at the top, nor the macro's window at the right) for what is not white...
+WHITE_BARE_MIN_SATURATION = 90           # a pixel counts as colourful for that above this saturation (0-255) and this value:
+WHITE_BARE_MIN_VALUE = 120
+WHITE_BARE_MAX_SATURATED = 6000          # ...saturated pixels at most this many: the plaza of the pizza need, white too, has about 8000 (the pet's pill, the E button, the character); a loading screen 1450 to 2600
 WHITE_SCREEN_REJOIN_AFTER = 30.0
 # "The server is closing for an update" - blue letters at the bottom of an otherwise white screen (the game updating; 3 times in a 2-hour run, each followed by a rejoin after the 30 s above). The servers take a
 # while to come back, so the rejoin waits SERVER_UPDATE_REJOIN_AFTER seconds from the first sight of it instead. Found by the blue of the letters (nothing else white has blue letters there), not by a crop.
 SERVER_CLOSING_BOX = (640, 840, 1280, 920)
 SERVER_CLOSING_MIN_PIXELS = 200           # blue pixels (blue at least SERVER_CLOSING_BLUE_LEAD over red, and at least 140) in that box
+SERVER_CLOSING_BLUE_MIN = 140            # the blue channel of a letter pixel at least this
 SERVER_CLOSING_BLUE_LEAD = 60
 SERVER_UPDATE_REJOIN_AFTER = 180.0
 # A door, a respawn and a teleport each show the white screen and fade out of it: wait_for_white_to_pass() waits for that, not for a fixed time.
@@ -916,3 +934,8 @@ TAB_SELECTED_COLOR = (250, 149, 30)
 TAB_SELECTED_TOLERANCE = 12
 TAB_HALF_SIZE = (26, 18)
 TAB_SELECTED_MIN_PIXELS = 300
+
+THREAD_JOIN_TIMEOUT = 5.0                # seconds a recorder's or a capture's thread is waited for when it is stopped
+CAPTURE_COMPARE_SIZE = (320, 180)        # a capture compares each screen with the last one saved at this size (grey)
+FAILURE_JPEG_QUALITY = 85                # quality of the screenshots of a moments capture's failures (JPEG)
+LOG_BANNER_WIDTH = 50                    # width of the '=' lines round the start of a loop in the log

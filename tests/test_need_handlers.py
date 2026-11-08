@@ -23,6 +23,8 @@ def events(macro, monkeypatch):
     monkeypatch.setattr(macro, "to_screen", lambda x, y: (x, y))
     monkeypatch.setattr(macro, "focus_pet", lambda *a: log.append(("focus_pet", *a)) or True)
     monkeypatch.setattr(macro, "equip_favorite_vehicle", lambda: log.append(("equip_vehicle",)))
+    monkeypatch.setattr(macro, "grab_screen", lambda: None)
+    monkeypatch.setattr(macro, "screen_changed", lambda before, after: True)                      # (the view moves after the helicopter key: it took off)
     monkeypatch.setattr(macro, "walk_alternating", lambda pair, total, step=0, need_name=None: log.append(("walk", pair, total, need_name)))
     monkeypatch.setattr(macro.pydirectinput, "press", lambda key, **k: log.append(("press", key)), raising=False)
     monkeypatch.setattr(macro.pydirectinput, "moveTo", lambda x, y, **k: log.append(("move", x, y)), raising=False)
@@ -85,8 +87,21 @@ def test_ride_steps_back_mounts_walks_on_equips_a_vehicle_and_rides_to_and_fro(m
     assert macro.RideNeedHandler().handle() is True
     assert events == [
         ("focus_roblox",), ("hold", cfg.KEYS["back"], cfg.RIDE_BACKWARD_DURATION), ("press", cfg.KEYS["mount"]), ("wait", cfg.RIDE_WAIT_AFTER_E),
-        ("hold", cfg.KEYS["forward"], cfg.RIDE_FORWARD_DURATION), ("equip_vehicle",), ("hold", cfg.KEYS["helicopter"], cfg.RIDE_R_HOLD_DURATION),
+        ("hold", cfg.KEYS["forward"], cfg.RIDE_FORWARD_DURATION), ("equip_vehicle",), ("hold", cfg.KEYS["helicopter"], cfg.RIDE_R_HOLD_DURATION), ("wait", cfg.UI_SETTLE),
         ("walk", (cfg.KEYS["forward"], cfg.KEYS["back"]), cfg.NEED_GONE_MAX_WAIT, "ride")]
+
+
+def test_a_helicopter_that_does_not_lift_off_is_held_for_again_a_limited_number_of_times(macro, events, monkeypatch):
+    cfg = macro.cfg
+    lines = []
+    monkeypatch.setattr(macro, "log_run_event", lines.append)
+    monkeypatch.setattr(macro, "screen_changed", lambda before, after: False)
+    assert macro.take_off() is True                                                              # (never fails the ride: its own wait goes on)
+    assert events.count(("hold", cfg.KEYS["helicopter"], cfg.RIDE_R_HOLD_DURATION)) == cfg.RIDE_TAKEOFF_RETRIES + 1 and len(lines) == cfg.RIDE_TAKEOFF_RETRIES + 1
+    events.clear()
+    changes = iter([False, True])
+    monkeypatch.setattr(macro, "screen_changed", lambda before, after: next(changes))
+    assert macro.take_off() is True and events.count(("hold", cfg.KEYS["helicopter"], cfg.RIDE_R_HOLD_DURATION)) == 2         # (lifted off on the second)
 
 
 def pet_bar_frame():

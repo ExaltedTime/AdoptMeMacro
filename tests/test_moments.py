@@ -228,3 +228,33 @@ def test_the_zips_of_a_capture_hold_its_text_files_in_the_first_part_deflated(ma
         assert z.getinfo("output.log").compress_type == zipfile.ZIP_DEFLATED and z.getinfo("output.log").compress_size < 1000
         assert next(z.getinfo(n) for n in z.namelist() if n.startswith("frame_")).compress_type == zipfile.ZIP_STORED
     assert sorted(n for p in paths for n in zipfile.ZipFile(p).namelist()) == sorted(f for f in os.listdir(folder) if f != "zips")
+
+
+def test_the_screens_of_a_need_that_failed_are_kept_in_the_moments_and_those_of_one_that_went_well_are_dropped_but_one_in_a_while(macro, monkeypatch):
+    import numpy as np
+    kept, notes = [], []
+    capture = type("Capture", (), {"started": 1000.0, "note": lambda self, text: notes.append(text), "keep_frame": lambda self, png, seconds, label: kept.append(label)})()
+    macro.state.moments = capture
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((1080, 1920, 3), np.uint8))
+    monkeypatch.setattr(macro.time, "time", lambda: 1005.0)
+    macro.phase_reset()
+    macro.phase_shot("the landing")
+    macro.phase_shot("after the last step")
+    assert len(macro.state.phase_shots) == 2
+    macro.phase_commit("bored was not cleared")
+    assert kept == ["bored was not cleared: the landing", "bored was not cleared: after the last step"] and macro.state.phase_shots == [] and notes == ["phase screens kept: bored was not cleared (2)"]
+    kept.clear()
+    for _ in range(macro.cfg.PHASE_KEEP_GOOD_EVERY - 1):
+        macro.phase_shot("the landing")
+        macro.phase_done_well("bored")
+    assert kept == []                                                                          # (the good ones are dropped)
+    macro.phase_shot("the landing")
+    macro.phase_done_well("bored")
+    assert kept == ["bored went well: the landing"]                                            # (the tenth is kept to compare with)
+    macro.state.moments = None
+    macro.phase_shot("nothing without a capture")
+    assert macro.state.phase_shots == []
+    macro.state.moments = capture
+    for _ in range(macro.cfg.PHASE_SHOTS_MAX + 5):
+        macro.phase_shot("x")
+    assert len(macro.state.phase_shots) == macro.cfg.PHASE_SHOTS_MAX

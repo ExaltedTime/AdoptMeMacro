@@ -440,3 +440,17 @@ def test_the_debug_button_switches_the_pen_at_once_and_respawns(macro, monkeypat
     macro.update_game_config(lambda c: c.update(pet_pen_enabled=False, pet_pen_swap=True))        # (whatever the switches say)
     assert macro.switch_pen_now() is True and seen == ["switch", "respawn"]
     assert macro.load_game_config()["pet_pen_swap"] is False and macro.load_game_config()["pet_pen_swap_tried"] > 0
+
+
+def test_a_real_pen_with_four_full_grown_pets_is_read_and_the_red_x_of_each_is_where_it_is_clicked(macro):
+    """A screenshot of the pen (taken with the screenshot key) with all four places full grown: the signs are found in all of them and each place's red X is under the position that takes the pet out."""
+    import cv2
+    frame = shot("pen_four_full_grown")
+    assert macro.popup_visible(frame, "pet_pen_title") and not macro.popup_visible(frame, "pet_pen_add")
+    assert macro.full_grown_slots(frame) == [0, 1, 2, 3]
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    for x, y in macro.cfg.PET_PEN_SLOTS:
+        cx, cy = x + macro.cfg.PET_PEN_X_OFFSET[0], y + macro.cfg.PET_PEN_X_OFFSET[1]
+        patch = hsv[cy - 10:cy + 10, cx - 10:cx + 10]
+        red = ((patch[:, :, 0] < 8) | (patch[:, :, 0] > 170)) & (patch[:, :, 1] > 150)
+        assert red.mean() > 0.3, (cx, cy)                                                      # (the X is a red disc with a white cross: 40% red)

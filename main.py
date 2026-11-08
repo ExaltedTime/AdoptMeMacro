@@ -2873,7 +2873,7 @@ def find_pet_bar(img: Image) -> list[Point]:
         x, y, w, h, area = (int(v) for v in stats[i])
         if not cfg.PET_BAR_AREA[0] <= area <= cfg.PET_BAR_AREA[1] or not cfg.PET_BAR_ASPECT[0] <= w / h <= cfg.PET_BAR_ASPECT[1]:
             continue
-        beside = img[y:y + h, x + w:x + w + int(w * 0.9)]
+        beside = img[y:y + h, x + w:x + w + int(w * cfg.PET_BAR_WHITE_REACH)]
         if beside.size == 0 or float((beside.min(axis=2) >= cfg.PET_BAR_WHITE_LEVEL).mean()) < cfg.PET_BAR_WHITE_FRACTION:
             continue
         if best is None or area > best[0]:
@@ -3265,7 +3265,7 @@ def teleport_to(category_pos: Point) -> bool:
         for _ in range(2):                                      # the "Get More" tile, clicked once more if the dialog did not come up (the click can be lost)
             hover_click(*cfg.GENERAL_TELEPORT_POS_2)
             wait_interruptible(cfg.UI_SETTLE)
-            yes = look_until(find_teleport_yes, cfg.TELEPORT_DIALOG_WAIT, 0.3)
+            yes = look_until(find_teleport_yes, cfg.TELEPORT_DIALOG_WAIT, cfg.TELEPORT_DIALOG_POLL)
             if yes is not None:
                 break
         if yes is None:
@@ -3534,7 +3534,7 @@ def find_notice_button(img: Image) -> Optional[Point]:
     left, top, right, bottom = cfg.NOTICE_BOX
     band = img[top:bottom, left:right]
     hsv = cv2.cvtColor(band, cv2.COLOR_BGR2HSV)
-    red = cv2.bitwise_or(cv2.inRange(hsv, (0, 150, 150), (8, 255, 255)), cv2.inRange(hsv, (170, 150, 150), (180, 255, 255)))
+    red = cv2.bitwise_or(cv2.inRange(hsv, *cfg.NOTICE_RED_HSV[0]), cv2.inRange(hsv, *cfg.NOTICE_RED_HSV[1]))
     count, _, stats, _centres = cv2.connectedComponentsWithStats(red, connectivity=8)
     if any(stats[i, cv2.CC_STAT_WIDTH] >= cfg.NOTICE_RED_MIN[0] and stats[i, cv2.CC_STAT_HEIGHT] >= cfg.NOTICE_RED_MIN[1] for i in range(1, count)):
         return None
@@ -3709,7 +3709,7 @@ def loading_white_screen(img: Image) -> bool:
         return False
     left, top, right, bottom = cfg.WHITE_BARE_BOX
     hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
-    colourful = (hsv[:, :, 1] > 90) & (hsv[:, :, 2] > 120)
+    colourful = (hsv[:, :, 1] > cfg.WHITE_BARE_MIN_SATURATION) & (hsv[:, :, 2] > cfg.WHITE_BARE_MIN_VALUE)
     cl, ct, cr, cb = cfg.SERVER_CLOSING_BOX                                              # (the update's blue letters are what a white screen of that kind has: not counted)
     colourful[max(0, ct - top):max(0, cb - top), max(0, cl - left):max(0, cr - left)] = False
     return int(np.count_nonzero(colourful)) <= cfg.WHITE_BARE_MAX_SATURATED
@@ -3720,7 +3720,7 @@ def server_closing_visible(img: Image) -> bool:
     """Whether the white screen of the game's update shows its blue "The server is closing for an update" (SERVER_CLOSING_BOX: enough blue pixels)."""
     left, top, right, bottom = cfg.SERVER_CLOSING_BOX
     band = img[top:bottom, left:right].astype(np.int16)
-    blue = (band[:, :, 0] >= 140) & (band[:, :, 0] - band[:, :, 2] >= cfg.SERVER_CLOSING_BLUE_LEAD)
+    blue = (band[:, :, 0] >= cfg.SERVER_CLOSING_BLUE_MIN) & (band[:, :, 0] - band[:, :, 2] >= cfg.SERVER_CLOSING_BLUE_LEAD)
     return int(np.count_nonzero(blue)) >= cfg.SERVER_CLOSING_MIN_PIXELS
 
 def rejoin_reason() -> Optional[tuple[str, str]]:
@@ -4215,7 +4215,7 @@ def pet_cell_state(img: Image, row: int, column: int) -> str:
     hsv = cv2.cvtColor(cell, cv2.COLOR_BGR2HSV)
     ring = np.concatenate([cell[0:3, :].reshape(-1, 3), cell[-3:, :].reshape(-1, 3), cell[:, 0:3].reshape(-1, 3), cell[:, -3:].reshape(-1, 3)]).astype(int)
     ring_hsv = np.concatenate([hsv[0:3, :].reshape(-1, 3), hsv[-3:, :].reshape(-1, 3), hsv[:, 0:3].reshape(-1, 3), hsv[:, -3:].reshape(-1, 3)]).astype(int)
-    green = float(((ring[:, 1] > 150) & (ring[:, 2] < 120) & (ring[:, 0] < 120)).mean())
+    green = float(((ring[:, 1] > cfg.PET_CELL_GREEN_MIN_G) & (ring[:, 2] < cfg.PET_CELL_GREEN_MAX_RB) & (ring[:, 0] < cfg.PET_CELL_GREEN_MAX_RB)).mean())
     if green >= cfg.PET_CELL_PLUS_GREEN:
         return "plus"
     if float(cv2.cvtColor(cell, cv2.COLOR_BGR2GRAY).std()) < cfg.PET_CELL_CONTENT_MIN_STD:
@@ -4223,7 +4223,7 @@ def pet_cell_state(img: Image, row: int, column: int) -> str:
     corners = np.concatenate([hsv[2:10, 2:10].reshape(-1, 3), hsv[2:10, -10:-2].reshape(-1, 3)])
     if corners[:, 2].mean() < cfg.PET_CELL_LOCKED_MAX_V:
         return "locked"
-    orange = float(((ring_hsv[:, 0] >= 5) & (ring_hsv[:, 0] <= 22) & (ring_hsv[:, 1] >= 140) & (ring_hsv[:, 2] >= 180)).mean())
+    orange = float(((ring_hsv[:, 0] >= cfg.PET_CELL_ORANGE_HUE[0]) & (ring_hsv[:, 0] <= cfg.PET_CELL_ORANGE_HUE[1]) & (ring_hsv[:, 1] >= cfg.PET_CELL_ORANGE_MIN_S) & (ring_hsv[:, 2] >= cfg.PET_CELL_ORANGE_MIN_V)).mean())
     if green >= cfg.PET_CELL_GREEN_BORDER_MIN and green >= orange:                                  # (a gold pet's background is orange too: the green frame wins when it is the stronger)
         return "equipped"
     return "pen" if orange >= cfg.PET_CELL_ORANGE_MIN else "pet"
@@ -4475,7 +4475,7 @@ class RunRecorder:
         """Stop recording and close the file."""
         self.stop_event.set()
         if self.thread is not None:
-            self.thread.join(timeout=5.0)
+            self.thread.join(timeout=cfg.THREAD_JOIN_TIMEOUT)
         if self.writer is not None:
             self.writer.release()
         size_mb = os.path.getsize(self.path) / (1024 * 1024) if os.path.exists(self.path) else 0
@@ -4610,7 +4610,7 @@ class InputCapture:
         self.stop_event.set()
         self.shot_now.set()                             # (the frame thread is waiting out CAPTURE_FRAME_INTERVAL: let it see the stop)
         for thread in self._threads:
-            thread.join(timeout=5.0)
+            thread.join(timeout=cfg.THREAD_JOIN_TIMEOUT)
         self._keep_within_budget()                      # (the events grew since the last frame was saved)
         with self._lock:
             if self._file is not None:
@@ -4716,7 +4716,7 @@ class InputCapture:
                     return
                 seconds = time.time() - self.started
                 screen = grab_screen()
-                small = cv2.resize(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY), (320, 180), interpolation=cv2.INTER_AREA)
+                small = cv2.resize(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY), cfg.CAPTURE_COMPARE_SIZE, interpolation=cv2.INTER_AREA)
                 bursting = time.time() < self._burst_until and len(self.protected) < self.protected_max     # (around a mark(): every look)
                 if bursting or seconds - last_saved >= self._gap and (
                         clicked or last_small is None or seconds - last_saved >= max(cfg.CAPTURE_MAX_SKIP, self._gap)
@@ -4946,7 +4946,7 @@ def write_moments_files(capture: InputCapture, seconds: float) -> None:
         for name in shots:
             picture = cv2.imread(os.path.join(cfg.FAILURE_DIR, name, "screen.png"))
             if picture is not None:
-                cv2.imwrite(os.path.join(folder, f"failure_{name}.jpg"), picture, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                cv2.imwrite(os.path.join(folder, f"failure_{name}.jpg"), picture, [cv2.IMWRITE_JPEG_QUALITY, cfg.FAILURE_JPEG_QUALITY])
         version = macro_version()
         info_path = os.path.join(folder, "info.json")
         with open(info_path, encoding="utf-8") as f:
@@ -5208,9 +5208,9 @@ def run_workflow_loop() -> None:
     log_run_event("LOOP started")
     recorder = start_recording_if_requested()
     start_moments()
-    logger.info("=" * 50)
+    logger.info("=" * cfg.LOG_BANNER_WIDTH)
     logger.info(f"[LOOP] Starting continuous workflow (run {state.run_number})")
-    logger.info("=" * 50)
+    logger.info("=" * cfg.LOG_BANNER_WIDTH)
 
     # Respawn once up front so the loop always starts from a known state,
     # regardless of wherever the character happened to be standing.
@@ -6113,7 +6113,7 @@ class AdoptMeGUI:
             self.refresh_debug_from_outside()
 
     def act_from_outside(self, command: str, stem: str = "", resume: bool = False) -> None:
-        """Queue what the button of the same name does (OUTSIDE_ACTIONS: `rejoin` is Leave & rejoin, `setup` is Setup, and the Trading Hub trips). Actions are
+        """Queue what the button of the same name does (OUTSIDE_ACTIONS: `rejoin` is Leave & rejoin, `setup` is Setup (run at once: the GUI's box does it at the next loop), and the Trading Hub trips, which have no button of their own any more). Actions are
         done one after the other, in the order asked for (drain_pending()); a `stop` command stops what is running now and leaves the queue alone."""
         self.pending.append(command)
         self.pending_stems.append(stem)

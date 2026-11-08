@@ -190,6 +190,7 @@ NOTICE_BUTTON_SIZE = ((110, 420), (30, 75))   # its width and height range, px (
 NOTICE_BUTTON_ASPECT = 3.5                # its width over its height at least (Awesome! 7.2, Thanks! 4.1; the backpack's green plus tile and tab icons, which joined are 3.0, and the tiles of its lists are no buttons)
 NOTICE_BUTTON_FILL = 0.4                  # the share of its box that is the button's green (a rounded button with its text)
 NOTICE_RED_MIN = (90, 30)                 # a red blob this size in the box is a No / Cancel: the card is a question, not a notice (confetti pieces are small)
+NOTICE_RED_HSV = (((0, 150, 150), (8, 255, 255)), ((170, 150, 150), (180, 255, 255)))   # the two ranges of red (hue wraps round) of a No / Cancel button
 NOTICE_JOIN = 5                           # px the green is grown by first, so that confetti over the button does not split it
 NOTICE_MAX_CLICKS = 3                     # clicks within NOTICE_CLICK_WINDOW seconds that did not make it go: it is left alone for NOTICE_PAUSE seconds (a green button that is not a notice)
 NOTICE_CLICK_WINDOW = 60.0
@@ -419,6 +420,7 @@ CHOOSE_SLOW_MOVE_DURATION = 1.0  # deliberate, slow mouse travel to the found bu
 PET_BAR_HSV = ((122, 110, 200), (136, 215, 255))
 PET_BAR_AREA = (500, 20000)
 PET_BAR_ASPECT = (1.8, 4.0)
+PET_BAR_WHITE_REACH = 0.9                 # how far right of the bar the white part is looked for, as a share of the bar's width
 PET_BAR_WHITE_LEVEL = 225
 PET_BAR_WHITE_FRACTION = 0.15
 PET_PILL_HSV = (((122, 110, 200), (138, 215, 255)), ((126, 140, 60), (138, 215, 125)))     # the name pill as a whole: its filled part is bright purple and the rest dark purple (the pet's age progress), the text white over both
@@ -572,6 +574,7 @@ RIDE_R_HOLD_DURATION = 1.5     # hold KEYS["helicopter"] this long after equippi
 # landing spot. Only the category tab differs per destination (passed into
 # teleport_to() as `category_pos`); everything else is always the same,
 # hence "general".
+TELEPORT_DIALOG_POLL = 0.3         # seconds between looks for the teleport dialog's Yes
 TELEPORT_DIALOG_WAIT = 3.0        # seconds the teleport dialog's Yes is looked for after the Get More tile was clicked (the tile is clicked once more if it did not come up)
 TELEPORT_YES_TRIES = 2            # the teleport dialog's Yes is clicked this often at most, until the view changes or the screen goes white 
 TELEPORT_WAIT = 5.0               # wait after the teleport click, for it to take effect
@@ -581,7 +584,8 @@ GENERAL_TELEPORT_POS_2 = (895, 705)
 GENERAL_TELEPORT_POS_3 = (1048, 658)
 TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing spot
 TELEPORT_WALK_STEP_GAP = 4.0      # pause between consecutive steps of a teleport-walk need's sequence. Do not shorten it: shorter gaps made the routes break often (the routes were tuned with it)
-SICK_PRE_CLICK_WAIT = 2.0         # after the sick need's walk, before the doctor's prompt is looked for (let the character come to rest)
+SICK_PRE_CLICK_WAIT = 2.0         # after the sick need's walk, before the doctor's prompt is looked for (let the character come to rest): the fixed time when no white screen of the hospital's door shows, else that one's
+                                  # fade is waited for (wait_for_white_to_pass())
 SICK_PROMPT_LOOK = 6.0            # how long the doctor's prompt (POPUP_TEMPLATES["doctor_prompt"]) is looked for before the need is given up
 SICK_CONFIRM_WAIT = 7.0           # how long the doctor's dialog (POPUP_TEMPLATES["sick_dialog"]) is looked for after the prompt was clicked (it took about 2.5 s) before the need is given up
 SICK_LOOK_INTERVAL = 0.4          # between two looks for either
@@ -704,6 +708,11 @@ PET_GRID_X = (895, 975, 1055, 1135)   # the middles of the cells of the small ba
 PET_GRID_Y = (706, 787, 867)          # ...and by row (three rows show)
 PET_CELL_HALF = 36                    # half the size of a cell
 PET_CELL_LOCKED_MAX_V = 200                # a cell whose corners are darker than this (brightness 0-255) is grey: a pet that is in a trade listing (white cells are 250 and more, grey ones 160)
+PET_CELL_GREEN_MIN_G = 150                 # a green pixel of a cell's edge: its green channel above this and its red and blue below PET_CELL_GREEN_MAX_RB
+PET_CELL_GREEN_MAX_RB = 120
+PET_CELL_ORANGE_HUE = (5, 22)              # an orange pixel of a cell's edge: this hue (0-179), at least this saturation and value
+PET_CELL_ORANGE_MIN_S = 140
+PET_CELL_ORANGE_MIN_V = 180
 PET_CELL_PLUS_GREEN = 0.6                  # a cell whose edge is this green is the solid green Add tile that starts the pets tab, not a pet
 PET_CELL_ORANGE_MIN = 0.05                 # a cell whose edge is this orange (a frame with a little house in its corner) is a pet that is in the pen
 PET_CELL_GREEN_BORDER_MIN = 0.05           # a cell whose edge is this green (share of its pixels) is the equipped pet (0.25 on the capture)
@@ -718,7 +727,7 @@ PET_REPICK_INTERVAL = 30 * 60            # seconds between the loop's picks of t
 TREE_CHECK_INTERVAL = 10 * 60          # seconds (10 minutes) between tree harvests
 LURE_RECOLLECT_INTERVAL = 4 * 60 * 60  # seconds (4 hours)
 
-# setup_game(): run on demand (the GUI's Setup button) and by the automatic recovery
+# setup_game(): run when asked for (the GUI's "Run Setup at the next loop" box, the bot's /setup) and by the automatic recovery
 # in rejoin_game(), never by the normal cycle.
 SETUP_LOCK_HOUSE_POS = (1112, 65)
 SETUP_BACKPACK_SETTINGS_POS = (977, 646)
@@ -792,12 +801,15 @@ DISCONNECT_PANEL_MIN_FRACTION = 0.5
 WHITE_SCREEN_LEVEL = 250
 WHITE_SCREEN_MIN_FRACTION = 0.6
 WHITE_BARE_BOX = (200, 140, 1500, 1000)   # loading_white_screen() looks here (not the HUD at the top, nor the macro's window at the right) for what is not white...
+WHITE_BARE_MIN_SATURATION = 90           # a pixel counts as colourful for that above this saturation (0-255) and this value:
+WHITE_BARE_MIN_VALUE = 120
 WHITE_BARE_MAX_SATURATED = 6000          # ...saturated pixels at most this many: the plaza of the pizza need, white too, has about 8000 (the pet's pill, the E button, the character); a loading screen 1450 to 2600
 WHITE_SCREEN_REJOIN_AFTER = 30.0
 # "The server is closing for an update" - blue letters at the bottom of an otherwise white screen (the game updating; 3 times in a 2-hour run, each followed by a rejoin after the 30 s above). The servers take a
 # while to come back, so the rejoin waits SERVER_UPDATE_REJOIN_AFTER seconds from the first sight of it instead. Found by the blue of the letters (nothing else white has blue letters there), not by a crop.
 SERVER_CLOSING_BOX = (640, 840, 1280, 920)
 SERVER_CLOSING_MIN_PIXELS = 200           # blue pixels (blue at least SERVER_CLOSING_BLUE_LEAD over red, and at least 140) in that box
+SERVER_CLOSING_BLUE_MIN = 140            # the blue channel of a letter pixel at least this
 SERVER_CLOSING_BLUE_LEAD = 60
 SERVER_UPDATE_REJOIN_AFTER = 180.0
 # A door, a respawn and a teleport each show the white screen and fade out of it: wait_for_white_to_pass() waits for that, not for a fixed time.
@@ -922,3 +934,8 @@ TAB_SELECTED_COLOR = (250, 149, 30)
 TAB_SELECTED_TOLERANCE = 12
 TAB_HALF_SIZE = (26, 18)
 TAB_SELECTED_MIN_PIXELS = 300
+
+THREAD_JOIN_TIMEOUT = 5.0                # seconds a recorder's or a capture's thread is waited for when it is stopped
+CAPTURE_COMPARE_SIZE = (320, 180)        # a capture compares each screen with the last one saved at this size (grey)
+FAILURE_JPEG_QUALITY = 85                # quality of the screenshots of a moments capture's failures (JPEG)
+LOG_BANNER_WIDTH = 50                    # width of the '=' lines round the start of a loop in the log

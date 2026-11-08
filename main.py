@@ -380,6 +380,7 @@ class State:
     # the game config): relaunching the script gives every enabled need a fresh
     # chance.
     disabled_needs: set = field(default_factory=set)
+    disabled_at: dict = field(default_factory=dict)  # {need: when it was disabled}: one that worked in the run and has stayed disabled STUCK_NEED_REJOIN_AFTER seconds is a reason to rejoin (run 4: the ride, 26 minutes of tries, then fine after the scheduled rejoin)
     hopeless_at: dict = field(default_factory=dict)  # {need: when it was disabled as hopeless}: after NEED_HOPELESS_RETRY seconds the next rejoin gives it one more chance
     hopeless: set = field(default_factory=set)       # needs disabled that had never worked in the run: a rejoin does not give them another chance (pizza and sick, 3 more failures each after every rejoin of a 10-hour run)
     # The in-task checks (see task_unscrew()): whether a need handler or setup
@@ -3328,7 +3329,7 @@ class TeleportWalkNeedHandler(NeedHandler):
         'e' (that focuses the pet) - and wait for the dialog. Returns whether it came up (the Yes is next); False means
         the need is given up at once. See docs/ARCHITECTURE.md#need-handlers.
         """
-        wait_interruptible(cfg.SICK_PRE_CLICK_WAIT)
+        wait_for_white_to_pass(cfg.SICK_PRE_CLICK_WAIT)                                          # (the hospital's door can still be showing its white screen: 8 of 24 sick needs of a 10 hour run found no prompt behind it)
         if detect_pet_focus(grab_screen()):                      # (it hides the prompt)
             log_run_event(f"{self.name}: the pet view is open - backing out of it")
             dismiss_stray_windows()
@@ -3393,6 +3394,7 @@ def record_detection(detected: list[str]) -> None:
     stuck = {n for n, count in state.attempt_streaks.items() if count >= cfg.NEED_STUCK_CHECKS} & (enabled_needs() - state.disabled_needs)
     for need_name in sorted(stuck):
         state.disabled_needs.add(need_name)
+        state.disabled_at.setdefault(need_name, time.time())
         if not run_stats.resolved.get(need_name):
             mark_hopeless(need_name)
         logger.info(f"{need_name} still there after {cfg.NEED_STUCK_CHECKS} attempts in a row - disabling it for this run")
@@ -3484,6 +3486,7 @@ def process_needs() -> bool:
                 log_run_event(f"not cleared: {need_name} ({seconds:.0f}s)")
                 if run_stats.failed[need_name] >= cfg.NEED_NEVER_WORKED_FAILS and not run_stats.resolved.get(need_name) and need_name not in state.disabled_needs:
                     state.disabled_needs.add(need_name)
+                    state.disabled_at.setdefault(need_name, time.time())
                     mark_hopeless(need_name)                                                   # (a need that has failed this often and never once worked costs its wait every time it comes)
                     log_run_event(f"disabled: {need_name}")
                     log_failure(f"{need_name} failed {run_stats.failed[need_name]} times and never worked in this run - disabled for this run")
@@ -3712,6 +3715,9 @@ def rejoin_reason() -> Optional[tuple[str, str]]:
     disabled_now = state.disabled_needs - state.hopeless                                          # (needs that never worked are not what a rejoin is for)
     if len(disabled_now) >= cfg.DISABLED_NEEDS_REJOIN_THRESHOLD:
         return "stuck", f"{len(disabled_now)} needs disabled ({', '.join(sorted(disabled_now))})"
+    long_disabled = sorted(n for n in disabled_now if time.time() - state.disabled_at.get(n, time.time()) >= cfg.STUCK_NEED_REJOIN_AFTER)
+    if long_disabled:
+        return "stuck", f"{', '.join(long_disabled)} disabled for {cfg.STUCK_NEED_REJOIN_AFTER / 60:g} minutes (it worked before in this run)"
     if state.last_progress is not None and time.time() - state.last_progress >= cfg.NO_PROGRESS_REJOIN_INTERVAL:
         return "stalled", f"no need resolved for {cfg.NO_PROGRESS_REJOIN_INTERVAL / 60:g} minutes"
     if state.last_rejoin is not None and time.time() - state.last_rejoin >= cfg.REJOIN_INTERVAL:
@@ -3764,6 +3770,7 @@ def rejoin_game(kinds: Optional[Sequence[str]] = None) -> bool:
     if again:
         log_run_event(f"given another chance after {cfg.NEED_HOPELESS_RETRY / 3600:.0f} h: {', '.join(again)}")
     state.disabled_needs &= state.hopeless                                                   # (the others get a fresh chance after a rejoin; a need that never worked in the run does not)
+    state.disabled_at = {n: t for n, t in state.disabled_at.items() if n in state.disabled_needs}
     reset_need_tracking()
     log_run_event("recovery complete: rejoined, setup run, disabled needs cleared" + (f" (still disabled: {', '.join(sorted(state.disabled_needs))})" if state.disabled_needs else ""))
     logger.info("Recovery complete - carrying on")

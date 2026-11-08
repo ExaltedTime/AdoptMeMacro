@@ -49,6 +49,7 @@ def test_the_handler_carries_out_the_real_entry(macro, monkeypatch, name):
     monkeypatch.setattr(macro, "equip_favorite_vehicle", lambda: None)
     monkeypatch.setattr(macro, "hold_key", lambda key, duration: held.append((key, duration)))
     monkeypatch.setattr(macro, "wait_interruptible", lambda duration: None)
+    monkeypatch.setattr(macro, "wait_for_white_to_pass", lambda *a, **k: True)
     monkeypatch.setattr(macro, "detect_sick_dialog", lambda img: True)
     monkeypatch.setattr(macro, "detect_pet_focus", lambda img: False)
     monkeypatch.setattr(macro, "find_doctor_prompt", lambda img: (10, 20))

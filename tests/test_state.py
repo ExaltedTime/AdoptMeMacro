@@ -2356,3 +2356,23 @@ def test_a_hopeless_need_gets_one_more_chance_after_the_retry_time_not_before(ma
     assert macro.release_hopeless_needs() == []
     now[0] += macro.cfg.NEED_HOPELESS_RETRY / 2
     assert macro.release_hopeless_needs() == ["sick"] and macro.state.hopeless == {"pizza"}      # (the older one only)
+
+
+def test_a_need_that_worked_and_has_stayed_disabled_for_the_stuck_time_is_a_reason_to_rejoin(macro, monkeypatch):
+    now = [50000.0]
+    monkeypatch.setattr(macro.time, "time", lambda: now[0])
+    monkeypatch.setattr(macro, "grab_screen", lambda: None)
+    monkeypatch.setattr(macro, "detect_disconnect", lambda img: False)
+    monkeypatch.setattr(macro, "detect_white_screen", lambda img: False)
+    monkeypatch.setattr(macro.gw, "getAllWindows", lambda: [types.SimpleNamespace(title="Roblox")], raising=False)
+    macro.state.last_progress = now[0]
+    macro.state.last_rejoin = now[0]
+    macro.state.disabled_needs = {"ride"}
+    macro.state.disabled_at = {"ride": now[0]}
+    assert macro.rejoin_reason() is None
+    now[0] += macro.cfg.STUCK_NEED_REJOIN_AFTER
+    macro.state.last_progress = now[0]
+    kind, reason = macro.rejoin_reason()
+    assert kind == "stuck" and "ride" in reason
+    macro.state.hopeless = {"ride"}                                                            # (one that never worked is not what a rejoin is for)
+    assert macro.rejoin_reason() is None

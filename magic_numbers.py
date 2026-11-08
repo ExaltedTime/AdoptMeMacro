@@ -580,7 +580,7 @@ GENERAL_TELEPORT_POS_3 = (1048, 658)
 TELEPORT_BACK_DURATION = 1.0      # how long to hold 's' to clear the landing spot
 TELEPORT_WALK_STEP_GAP = 4.0      # pause between consecutive steps of a teleport-walk need's sequence. Do not shorten it: shorter gaps made the routes break often (the routes were tuned with it)
 SICK_PRE_CLICK_WAIT = 2.0         # after the sick need's walk, before the doctor's prompt is looked for (let the character come to rest)
-SICK_PROMPT_LOOK = 3.0            # how long the doctor's prompt (POPUP_TEMPLATES["doctor_prompt"]) is looked for before the need is given up
+SICK_PROMPT_LOOK = 6.0            # how long the doctor's prompt (POPUP_TEMPLATES["doctor_prompt"]) is looked for before the need is given up
 SICK_CONFIRM_WAIT = 7.0           # how long the doctor's dialog (POPUP_TEMPLATES["sick_dialog"]) is looked for after the prompt was clicked (it took about 2.5 s) before the need is given up
 SICK_LOOK_INTERVAL = 0.4          # between two looks for either
 
@@ -641,6 +641,7 @@ TELEPORT_WALK_NEEDS: dict[str, dict[str, Any]] = {
 WATCH_POLL_INTERVAL = 0.2           # how often the screen is looked at while waiting for the game's "Only Pets..." answer to a need button click
 DISABLED_NEEDS_REJOIN_THRESHOLD = 4  # this many needs disabled for the run (see NEED_STUCK_CHECKS) means something is
                                      # badly wrong: rejoin the game, run setup, and give every need a fresh chance
+STUCK_NEED_REJOIN_AFTER = 20 * 60  # a need that worked in the run (so not a hopeless one) and has been disabled as stuck this long is a reason to rejoin, one need or not (run 4: the ride was disabled after 26 minutes of failed tries and worked again after the next scheduled rejoin, 20 minutes later)
 NEED_HOPELESS_RETRY = 3600.0       # seconds a need that never worked stays disabled through rejoins; then one more chance (one failure puts it back)
 NEED_NEVER_WORKED_FAILS = 3        # a need that was not cleared this many times in a run, and never was, is disabled for it (camping: a wait of 75 s four times and no success in a 2 hour run)
 NEED_STUCK_CHECKS = 5            # an enabled need still on screen after this many attempts in a row is

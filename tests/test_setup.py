@@ -390,3 +390,10 @@ def test_a_backpack_whose_pets_tab_cannot_be_selected_is_not_filtered_by_age(mac
     assert "setup: the backpack's pets tab could not be selected" in texts(game)
     assert backpack.applied["egg"] is True and backpack.applied["fg"] is True                  # (the Age boxes were left alone)
     assert not game.equip_tab                                                                  # (and no pet was picked from the list)
+
+
+def test_the_equip_button_is_found_when_the_card_opens_to_the_right_of_a_pet_in_the_last_column(macro):
+    """A run's repick said the card had no Equip button five times: the pet was in the fourth column, its card opens further right, and the button was outside the box it was looked for in (a real frame of it)."""
+    x, y = macro.find_equip_button(frame("pets_card_equip_far"))
+    assert abs(x - 1220) <= 12 and abs(y - 805) <= 12
+    assert macro.find_equip_button(frame("pets_grid")) is None                                  # (the green plus tile of the list is no Equip button)

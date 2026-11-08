@@ -4411,6 +4411,12 @@ def switch_pen_now() -> bool:
     logger.info("Pet Pen: " + ("; ".join(state.pen_notes) if state.pen_notes else "nothing was said") + (" - done" if done else " - NOT as it should be"))
     return done
 
+def switch_pen_and_respawn() -> bool:
+    """switch_pen_pets() and a respawn after it: the pen is opened outside the house, and a character left in the yard would start the next need from there (the walks are timed from the house)."""
+    done = switch_pen_pets()
+    respawn_character()
+    return done
+
 def pet_pen_swap_due() -> None:
     """Once per cycle after pet_pen(): switch_pen_pets() when pets grew up - the age-up screen showed a pet that reached Friend or any pets aged up (the game config's pet_pen_swap) and PET_PEN_SWAP_RETRY seconds have passed
     since the last try - and in any case every PET_PEN_SWAP_INTERVAL seconds, whether or not a growing up was seen (a notice can be missed: a pet that grew was left in the pen). The flag is cleared once it came through."""
@@ -4418,7 +4424,7 @@ def pet_pen_swap_due() -> None:
     since = time.time() - config["pet_pen_swap_tried"]
     if not config["pet_pen_enabled"] or not ((config["pet_pen_swap"] and since >= cfg.PET_PEN_SWAP_RETRY) or since >= cfg.PET_PEN_SWAP_INTERVAL):
         return
-    done = run_side_action(switch_pen_pets)
+    done = run_side_action(switch_pen_and_respawn)
     update_game_config(lambda c: c.update(pet_pen_swap_tried=time.time(), **({"pet_pen_swap": False} if done else {})))
 
 def pet_pen() -> None:

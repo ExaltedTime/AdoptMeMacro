@@ -219,3 +219,14 @@ def test_30_seconds_of_the_pizza_plaza_are_no_reason_to_rejoin_and_30_seconds_of
         macro.state.last_progress = macro.state.last_rejoin = now[0]
         reason = macro.rejoin_reason()
         assert (reason is not None and reason[0] == "white_screen") is rejoins, name
+
+
+# --- where each teleport need ends, a frame of each from a 10 hour run (tests/needs_end/): the detectors that must say nothing there -------------------------
+
+@pytest.mark.parametrize("need", ["beach", "bored", "cafe", "salon", "camping", "school", "pizza"])
+def test_where_a_teleport_need_ends_is_not_the_house_not_a_loading_screen_not_a_popup_and_has_the_sign(macro, need):
+    frame = cv2.imread(os.path.join(os.path.dirname(__file__), "needs_end", f"{need}.png"))
+    assert macro.in_house(frame) is False and macro.loading_white_screen(frame) is False
+    assert macro.find_notice_button(frame) is None
+    assert not any(macro.popup_visible(frame, name) for name in macro.cfg.STRAY_WINDOWS if name != "task_board"), need
+    assert macro.find_task_board_button(frame) is not None

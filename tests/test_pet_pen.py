@@ -333,3 +333,13 @@ def test_the_sign_is_waited_for_after_a_respawn_when_the_screen_is_black_or_whit
     monkeypatch.setattr(macro, "log_run_event", lambda text: None)
     monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: macro.clicks.append((x, y)))
     assert macro.collect_pet_pen() is True and 40 <= macro.clicks[0][0] <= 90                                       # (the sign was found on the third look)
+
+
+def test_the_sign_is_found_by_its_title_where_the_colours_behind_it_are_wood_too(macro):
+    """At the school (a brown floor) and the campfire (orange) the wood of the sign is lost in what is behind it: the blob is the whole strip. The title cloud does not depend on that."""
+    for need in ("school", "camping"):
+        frame = cv2.imread(os.path.join(os.path.dirname(__file__), "needs_end", f"{need}.png"))
+        assert macro.find_dialog_button(frame, macro.cfg.DIALOG_BUTTONS["task_board"]) is None, need
+        x, y = macro.find_task_board_button(frame)
+        assert 40 <= x <= 90 and 530 <= y <= 600, need
+    assert macro.find_task_board_button(shot("age_up_nice")) is None

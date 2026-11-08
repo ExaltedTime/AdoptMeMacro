@@ -104,6 +104,7 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "sick_dialog":     {"box": (700, 400, 1220, 700), "threshold": 0.8},
     "doctor_prompt":   {"box": (880, 420, 1050, 580), "threshold": 0.8},
     "teleport_yes":    {"box": (900, 600, 1200, 720), "threshold": 0.8},       # the green Yes of the "Teleport to the Nursery / the Vehicle Dealership" dialog (a capture of the teleport tests)
+    "task_board_title": {"box": (0, 480, 200, 680), "threshold": 0.8},       # the title cloud of the Task Board's sign: the fallback where its wood is lost in the colours behind it (find_task_board_button())
     "doctor_prompt_e": {"box": (800, 330, 1120, 600), "threshold": 0.8},      # the same button since the Lightning Dimension update: an E, over the player's head behind the desk (a capture of the teleport tests)
     # The normal backpack's "BACKPACK" title, and the expanded one's BACK button.
     "backpack_normal": {"box": (700, 600, 1000, 690), "threshold": 0.8},
@@ -681,6 +682,7 @@ MONEY_COLLECTED_TARGET = 200
 MONEY_RESET_HOUR = 17                  # the tree's money total starts again from 0 at this hour (0-23, local time) every day
 # The Pet Pen: its "ready to age up" notice is a card on the Task Board (the button at the left edge of the screen, with a red badge while there is an alert); the card opens the age-up
 # screen, which ends with a green NICE! - see pet_pen().
+TASK_BOARD_TITLE_TO_SIGN = 50            # px from the middle of the sign's title cloud to the middle of the sign (find_task_board_button())
 TASK_BOARD_BADGE_BOX = (-62, -28, 78, 92) # where its red alert badge is (a speech bubble with a "!"), from the middle of the sign (found by find_task_board_button())
 TASK_BOARD_BADGE_HSV = (((0, 170, 170), (8, 255, 255)), ((172, 170, 170), (180, 255, 255)))
 TASK_BOARD_BADGE_MIN_PIXELS = 500         # red pixels there for a badge (about 1000 with it, under 100 without)

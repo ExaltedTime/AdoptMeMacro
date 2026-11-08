@@ -4103,8 +4103,14 @@ def side_quest() -> None:
             update_game_config(lambda c: c.update(lure_timer=time.time() + cfg.LURE_RECOLLECT_INTERVAL))
 
 def find_task_board_button(img: Image) -> Optional[Point]:
-    """The middle of the Task Board's sign at the left edge of the screen (DIALOG_BUTTONS["task_board"]: found by the colour of its wood and its size), or None."""
-    return find_dialog_button(img, cfg.DIALOG_BUTTONS["task_board"])
+    """The middle of the Task Board's sign at the left edge of the screen: by the colour of its wood (DIALOG_BUTTONS["task_board"]: a blob of its size), and when its surroundings are wood-coloured too (the
+    school's brown floor, the campfire's orange: the blob is the whole strip) by the crop of its title cloud, "Lightning Dimension" (`task_board_title`), which does not depend on what is behind it.
+    The sign is TASK_BOARD_TITLE_TO_SIGN below the title's middle. None if neither finds it."""
+    found = find_dialog_button(img, cfg.DIALOG_BUTTONS["task_board"])
+    if found is not None:
+        return found
+    title = popup_found(img, "task_board_title")
+    return (title[0], title[1] + cfg.TASK_BOARD_TITLE_TO_SIGN) if title is not None else None
 
 def task_board_badge(img: Image) -> bool:
     """Whether the Task Board's button shows its red alert badge (looked for beside the sign, where it is found)."""

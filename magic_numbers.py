@@ -155,6 +155,18 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "trading_no_one":              {"box": (990, 525, 1090, 570), "threshold": 0.85},
     "trading_option_no_one":       {"box": (960, 570, 1100, 640), "threshold": 0.85},
     "pet_alicorn":                 {"box": (900, 640, 1230, 900), "threshold": 0.8},
+    # The Effect and Rarity rows of the FILTERS panel (the text of each row; its box is found left of it, as for the Age rows): what the daily tasks' pets are picked by.
+    "filter_effect_regular": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_effect_neon": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_effect_mega_neon": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_effect_no_potion": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_effect_rideable": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_effect_flyable": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_rarity_common": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_rarity_uncommon": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_rarity_rare": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_rarity_ultra_rare": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_rarity_legendary": {"box": (800, 640, 1130, 880), "threshold": 0.85},
     "age_egg":                     {"box": (800, 640, 1130, 880), "threshold": 0.85},       # the Age rows of the backpack's FILTERS panel: the text of Egg and of Full Grown (their boxes are found left of it)
     "age_full_grown":              {"box": (800, 640, 1130, 880), "threshold": 0.85},
     "age_full_grown_pen":          {"box": (800, 640, 1130, 880), "threshold": 0.85},       # the same row in the pen's small backpack, whose panel has no blue line under the text (the first crop was cut in the big backpack's)
@@ -751,6 +763,14 @@ SETUP_BACKPACK_SETTINGS_POS = (977, 646)
 SETUP_SORT_MENU_POS = (1031, 680)
 SETUP_CONFIRM_POS = (1047, 908)
 AGE_ALTERNATES = {"age_full_grown": ("age_full_grown_pen",)}   # other crops of the same row, tried when the first is not found
+FILTER_NEON_ROWS = ("filter_effect_neon", "filter_effect_mega_neon")        # the Effect rows a neon pet is under...
+FILTER_EFFECT_ROWS = ("filter_effect_regular", *FILTER_NEON_ROWS, "filter_effect_no_potion", "filter_effect_rideable", "filter_effect_flyable")      # ...of all of them
+FILTER_COLUMN_X = (866, 949, 1033)                                         # where the text of the first, second and third column of the Effect and Rarity rows starts: a crop is only that row's when found in its column
+FILTER_ROW_COLUMN = {"filter_effect_regular": 0, "filter_effect_neon": 1, "filter_effect_mega_neon": 2, "filter_effect_no_potion": 0, "filter_effect_rideable": 1, "filter_effect_flyable": 2,
+                     "filter_rarity_common": 0, "filter_rarity_uncommon": 1, "filter_rarity_rare": 2, "filter_rarity_ultra_rare": 0, "filter_rarity_legendary": 1}
+FILTER_COLUMN_TOLERANCE = 14
+FILTER_COMMON_ROW = "filter_rarity_common"
+FILTER_RARITY_ROWS = (FILTER_COMMON_ROW, "filter_rarity_uncommon", "filter_rarity_rare", "filter_rarity_ultra_rare", "filter_rarity_legendary")
 AGE_LABELS = ("age_egg", "age_full_grown")        # the Age rows Setup unticks (POPUP_TEMPLATES): what is neither an egg nor full grown still grows
 AGE_CHECKBOX_DX = -17                             # px from where the text of a row starts to the middle of its box
 AGE_CHECKBOX_HALF = 12                            # half the side of the square looked at for a tick

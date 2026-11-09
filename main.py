@@ -1867,6 +1867,15 @@ def age_checkbox(img: Image, label: str) -> Optional[tuple[Point, bool]]:
     ticked = cv2.countNonZero(cv2.inRange(patch, *cfg.AGE_TICK_HSV)) >= cfg.AGE_TICK_MIN_PIXELS
     return (x, centre[1]), ticked
 
+def filter_checkbox(img: Image, label: str) -> Optional[tuple[Point, bool]]:
+    """age_checkbox() for a row of the Effect or Rarity part of the FILTERS panel (`label`: FILTER_EFFECT_ROWS, FILTER_RARITY_ROWS): where its box is and whether it is ticked - None if the row is not in view,
+    or what was found is not in the row's column (the crop of "Rare" is also in "Ultra Rare", one column further left)."""
+    found = age_checkbox(img, label)
+    if found is None:
+        return None
+    text_left = found[0][0] - cfg.AGE_CHECKBOX_DX
+    return found if abs(text_left - cfg.FILTER_COLUMN_X[cfg.FILTER_ROW_COLUMN[label]]) <= cfg.FILTER_COLUMN_TOLERANCE else None
+
 def scroll_filters_to_age() -> bool:
     """In the open FILTERS panel: scroll its list (the wheel over its scroll bar, so that no item's description opens) until the Age rows are in view, FILTERS_SCROLL_TRIES notches at most. False if they never were."""
     for _ in range(cfg.FILTERS_SCROLL_TRIES + 1):
@@ -1972,6 +1981,84 @@ def set_backpack_filter() -> bool:
         pick_pet_in_open_backpack(growing, on_pets, pet_out)
         close_backpack("setup")
     return ok
+
+def set_filter_rows(wanted: dict[str, bool]) -> bool:
+    """In the open FILTERS panel: the Effect and Rarity rows in `wanted` ({row: ticked}) ticked or unticked as asked - each found in view (the wheel brings the lower rows up, a notch at a time), looked at, clicked only
+    when it is not as wanted, and looked at again after. The panel is scrolled back up at the end. False (logged) when a row was not found or did not take."""
+    ok = True
+    for label, tick in wanted.items():
+        for _ in range(cfg.FILTERS_SCROLL_TRIES + 1):
+            found = filter_checkbox(grab_screen(), label)
+            if found is not None:
+                break
+            hover_move(*cfg.FILTERS_SCROLL_POS)
+            scroll_down(1)
+            wait_interruptible(cfg.UI_SETTLE)
+        else:
+            log_setup_problem(f"filters: the row {label} was not found")
+            ok = False
+            continue
+        point, ticked = found
+        if ticked != tick:
+            hover_click(*point)
+            wait_interruptible(cfg.UI_SETTLE)
+            again = filter_checkbox(grab_screen(), label)
+            if again is None or again[1] != tick:
+                log_setup_problem(f"filters: the row {label} did not take")
+                ok = False
+    if not scroll_filters_to_top():
+        log_setup_problem("filters: the panel could not be scrolled back up")
+        ok = False
+    return ok
+
+def task_pet_rows(kind: str) -> dict[str, bool]:
+    """The rows of the FILTERS panel for a daily task's pet: `neon` has only the Neon and Mega Neon effects ticked, `common` only the Common rarity (the others of that part unticked, which is how the list is narrowed).
+    `all` ticks every row again."""
+    if kind == "neon":
+        return {row: row in cfg.FILTER_NEON_ROWS for row in cfg.FILTER_EFFECT_ROWS}
+    if kind == "common":
+        return {row: row == cfg.FILTER_COMMON_ROW for row in cfg.FILTER_RARITY_ROWS}
+    return {row: True for row in (*cfg.FILTER_EFFECT_ROWS, *cfg.FILTER_RARITY_ROWS)}
+
+def equip_task_pet(kind: str) -> bool:
+    """For the daily tasks "needs on a neon / common pet": the backpack's pets tab, the FILTERS panel narrowed to that kind of pet (task_pet_rows()), Confirm, and the first pet of the list equipped (the equipped one
+    kept when it is in it). `kind` "all" only puts the Effect and Rarity rows back (restore_pet_filters()). True when the filters took and a pet is out. Logged in the run log (`task pet: ...`), a step that did not go right
+    with its screen."""
+    if not focus_roblox():
+        return False
+    ok = False
+    with backpack_on_purpose():
+        pydirectinput.press(cfg.KEYS["backpack"])
+        wait_interruptible(cfg.UI_SETTLE)
+        if not ensure_pets_tab():
+            log_setup_problem("task pet: the pets tab could not be selected")
+        elif open_filter_panel() and scroll_filters_to_top():
+            if set_filter_rows(task_pet_rows(kind)):
+                hover_click(*cfg.SETUP_CONFIRM_POS)
+                wait_interruptible(cfg.UI_SETTLE)
+                ok = True
+            else:
+                hover_click(*cfg.SETUP_FILTER_CANCEL_POS)
+                wait_interruptible(cfg.UI_SETTLE)
+            if ok and kind != "all":
+                select_backpack_tab(cfg.INVENTORY_PETS_TAB_POS)
+                wait_interruptible(cfg.UI_SETTLE)
+                pick = choose_list_pet(stop_at_equipped=True)
+                if pick is None:
+                    log_run_event(f"task pet: no {kind} pet in the list (the Age filter leaves out eggs and full-grown pets too)")
+                    ok = False
+                elif pick[0] == "equipped":
+                    log_run_event(f"task pet: the pet that is out is a {kind} one")
+                else:
+                    ok = equip_pet(f"the first {kind} pet", lambda: pick[1])
+                    log_run_event(f"task pet: a {kind} pet {'equipped' if ok else 'could not be equipped'}")
+        close_backpack("task pet")
+    return ok
+
+def restore_pet_filters() -> bool:
+    """After a task: every Effect and Rarity row ticked again, and the pet of Setup (the first that still grows) equipped (repick_pet())."""
+    done = equip_task_pet("all")
+    return repick_pet() and done
 
 def pick_pet_in_open_backpack(growing: bool, on_pets: bool, pet_out: bool) -> None:
     """The pet part of Setup, in the open backpack: with `growing` (level_growing_pets()) on the pets tab, the equipped pet is kept when its green frame shows in the filtered list (it still grows), else the first pet
@@ -6871,6 +6958,15 @@ class AdoptMeGUI:
         buttons.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
         buttons.grid_columnconfigure(0, weight=1, uniform="settings")
         buttons.grid_columnconfigure(1, weight=1, uniform="settings")
+        for label, kind in (("Equip a neon pet (for the daily tasks)", "neon"), ("Equip a common pet (for the daily tasks)", "common")):
+            task_button = tk.Button(parent, text=label, command=lambda k=kind: self.run_async(lambda: equip_task_pet(k)), font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),  # type: ignore[misc]
+                                    bg=cfg.GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
+            task_button.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+            self.action_buttons.append(task_button)
+        restore_button = tk.Button(parent, text="Filters and pet back to normal (after a task)", command=lambda: self.run_async(restore_pet_filters), font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
+                                   bg=cfg.GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
+        restore_button.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+        self.action_buttons.append(restore_button)
         pen_button = tk.Button(parent, text="Switch the Pet Pen's full-grown pets now", command=lambda: self.run_async(switch_pen_now), font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
                                bg=cfg.GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
         pen_button.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)

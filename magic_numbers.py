@@ -155,6 +155,20 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "trading_no_one":              {"box": (990, 525, 1090, 570), "threshold": 0.85},
     "trading_option_no_one":       {"box": (960, 570, 1100, 640), "threshold": 0.85},
     "pet_alicorn":                 {"box": (900, 640, 1230, 900), "threshold": 0.8},
+    # The Effect and Rarity rows of the FILTERS panel (the text of each row; its box is found left of it, as for the Age rows): what the daily tasks' pets are picked by.
+    "daily_neon": {"box": (842, 440, 1200, 700), "threshold": 0.85},          # the bold word Neon / Common in the text of a daily task (what the task wants of the pet), found above its progress bar
+    "daily_common": {"box": (842, 440, 1200, 700), "threshold": 0.85},
+    "filter_effect_regular": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_effect_neon": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_effect_mega_neon": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_effect_no_potion": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_effect_rideable": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_effect_flyable": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_rarity_common": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_rarity_uncommon": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_rarity_rare": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_rarity_ultra_rare": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_rarity_legendary": {"box": (800, 640, 1130, 880), "threshold": 0.85},
     "age_egg":                     {"box": (800, 640, 1130, 880), "threshold": 0.85},       # the Age rows of the backpack's FILTERS panel: the text of Egg and of Full Grown (their boxes are found left of it)
     "age_full_grown":              {"box": (800, 640, 1130, 880), "threshold": 0.85},
     "age_full_grown_pen":          {"box": (800, 640, 1130, 880), "threshold": 0.85},       # the same row in the pen's small backpack, whose panel has no blue line under the text (the first crop was cut in the big backpack's)
@@ -221,7 +235,7 @@ COMMANDS_DIR = os.path.join(DEBUG_DIR, "commands")          # the commands for t
 COMMANDS = ("start", "stop", "exit", "set", "rejoin", "setup", "refresh_debug", "trade_hub", "leave_trade_hub", "inventory", "sloop", "focus", "blackout", "test", "reset_config", "server_link", "trades", "decline", "capture", "recenter", "report")     # what it may hold: start the loop, stop it, stop and close the window, change a switch (see NEED_NAMES, OPTION_SWITCHES), leave and rejoin the game, run Setup, empty the debug folder, travel to / leave the Trading Hub, take pictures of the backpack's pets tab, or run Setup and then the loop (`sloop`), bring the Roblox window to the front (`focus`), blank / show the screen (`blackout`), run one need handler on its own or every teleport one (`test`, what the Debug tab's Test buttons do), reset the config (`reset_config`), save the private server link (`server_link`), take pictures of the offers on the two trade listings (`trades`), decline one of them (`decline`), or start the input capture (the capture hotkey's) and stop it again (`capture`), or close what is open and respawn (`recenter`), or draw the chart of a run (`report`, the newest in the log or the one named)
 NEED_NAMES = ("catch", "pet", "choose", "ride", "walk", "hungry", "thirsty", "dirty", "potty", "sleepy", "bored", "beach", "school", "cafe", "salon", "pizza", "camping", "sick")   # the Debug tab's need switches (the keys of main.py's NEED_HANDLER_CLASSES)
 OPTION_SWITCHES = {"setup_next_loop": "setup_next_loop", "money_tree": "money_tree_enabled", "lure": "lure_enabled", "resume_on_focus_loss": "resume_on_focus_loss", "record_next_run": "record_next_run",
-                   "use_private_server": "use_private_server", "pet_pen": "pet_pen_enabled", "blackout_hotkey": "blackout_hotkey_enabled", "new_need_hotkey": "new_need_hotkey_enabled", "level_growing_pet": "level_growing_pet", "keep_moments": "keep_moments"}   # the other switches a command may change: name -> the game config's key ("show_debug_lines" too, which is only in the window)
+                   "use_private_server": "use_private_server", "pet_pen": "pet_pen_enabled", "daily_tasks": "daily_tasks_enabled", "blackout_hotkey": "blackout_hotkey_enabled", "new_need_hotkey": "new_need_hotkey_enabled", "level_growing_pet": "level_growing_pet", "keep_moments": "keep_moments"}   # the other switches a command may change: name -> the game config's key ("show_debug_lines" too, which is only in the window)
 SHOW_DEBUG_LINES_OPTION = "show_debug_lines"
 TEST_ALL_TELEPORTS = "teleports"                       # the `test` command's handler for the Debug tab's "Test every teleport handler" (the others are NEED_NAMES)
 COMMAND_POLL_MS = 1000                                      # how often the macro looks for one
@@ -692,6 +706,22 @@ TASK_BOARD_TITLE_TO_SIGN = 50            # px from the middle of the sign's titl
 TASK_BOARD_BADGE_BOX = (-62, -28, 78, 92) # where its red alert badge is (a speech bubble with a "!"), from the middle of the sign (found by find_task_board_button())
 TASK_BOARD_BADGE_HSV = (((0, 170, 170), (8, 255, 255)), ((172, 170, 170), (180, 255, 255)))
 TASK_BOARD_BADGE_MIN_PIXELS = 500         # red pixels there for a badge (about 1000 with it, under 100 without)
+DAILY_TASKS_INTERVAL = 60 * 60            # seconds between looks at the daily tasks (when the option is on and the Task Board is open anyway)
+DAILY_TASKS_RESET_HOUR = 4                # the daily tasks reset at this hour (local time): the first look after it is due at once
+DAILY_TASKS_DIR = os.path.join(DEBUG_DIR, "daily_tasks")   # a crop of each daily task seen (task_<n>.png), so that a new one is told (new_daily_tasks())
+DAILY_TASK_TEXT_X = (842, 1200)           # the columns of a task's name and what to do (not the reward at the right)
+DAILY_TASK_TEXT_HEIGHT = 80               # the rows above its progress bar that hold them
+DAILY_KIND_MATCH = 0.85                  # the bold word of a task's text (daily_neon, daily_common) found at least this well in the rows above its bar
+DAILY_TASK_MATCH = 0.9                    # a crop that matches a saved one at least this well is the same task
+DAILY_TASKS_ACTIVE_INTERVAL = 15 * 60     # seconds between looks at the tasks while a task's pet is out (its bar full means the pet goes back)
+DAILY_TASK_DONE_SHARE = 0.99              # a bar this full is a task done
+DAILY_TASKS_TAB_POS = (1018, 360)         # the Tasks tab of the Task Board (the first tab; the second is Alerts)
+DAILY_TASKS_BOX = (850, 430, 1090, 700)   # where the progress bars of the daily tasks are (read_daily_tasks())
+DAILY_BAR_GREY = (120, 175)               # the grey of an undone part of a bar (its stripes are 135 and 157)...
+DAILY_BAR_GREY_SPREAD = 6                 # ...the same in all three channels, to within this
+DAILY_BAR_GREEN_LEAD = 60                 # a done part is green: its green channel this far over the other two
+DAILY_BAR_ROW_FRACTION = 0.9              # a row of the box is a bar's when this share of it is grey or green
+DAILY_BAR_BAND_HEIGHT = (8, 24)           # a bar is this many rows high (14 on the capture)
 PET_PEN_CHECK_INTERVAL = 15 * 60          # seconds between looks at the board when no badge shows
 PET_PEN_BADGE_INTERVAL = 2 * 60           # seconds between looks at the board while a badge shows (it is there for the other alerts too)
 PET_PEN_UI_WAIT = 4.0                     # seconds for the board to open
@@ -738,6 +768,14 @@ SETUP_BACKPACK_SETTINGS_POS = (977, 646)
 SETUP_SORT_MENU_POS = (1031, 680)
 SETUP_CONFIRM_POS = (1047, 908)
 AGE_ALTERNATES = {"age_full_grown": ("age_full_grown_pen",)}   # other crops of the same row, tried when the first is not found
+FILTER_NEON_ROWS = ("filter_effect_neon", "filter_effect_mega_neon")        # the Effect rows a neon pet is under...
+FILTER_EFFECT_ROWS = ("filter_effect_regular", *FILTER_NEON_ROWS, "filter_effect_no_potion", "filter_effect_rideable", "filter_effect_flyable")      # ...of all of them
+FILTER_COLUMN_X = (866, 949, 1033)                                         # where the text of the first, second and third column of the Effect and Rarity rows starts: a crop is only that row's when found in its column
+FILTER_ROW_COLUMN = {"filter_effect_regular": 0, "filter_effect_neon": 1, "filter_effect_mega_neon": 2, "filter_effect_no_potion": 0, "filter_effect_rideable": 1, "filter_effect_flyable": 2,
+                     "filter_rarity_common": 0, "filter_rarity_uncommon": 1, "filter_rarity_rare": 2, "filter_rarity_ultra_rare": 0, "filter_rarity_legendary": 1}
+FILTER_COLUMN_TOLERANCE = 14
+FILTER_COMMON_ROW = "filter_rarity_common"
+FILTER_RARITY_ROWS = (FILTER_COMMON_ROW, "filter_rarity_uncommon", "filter_rarity_rare", "filter_rarity_ultra_rare", "filter_rarity_legendary")
 AGE_LABELS = ("age_egg", "age_full_grown")        # the Age rows Setup unticks (POPUP_TEMPLATES): what is neither an egg nor full grown still grows
 AGE_CHECKBOX_DX = -17                             # px from where the text of a row starts to the middle of its box
 AGE_CHECKBOX_HALF = 12                            # half the side of the square looked at for a tick

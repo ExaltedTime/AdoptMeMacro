@@ -846,6 +846,10 @@ def _read_game_config() -> dict[str, Any]:
         "keep_moments": True,              # whether the loop captures the run's moments (start_moments()), kept when the run lasted MOMENTS_MIN_RUN seconds or more
         "pet_pen_enabled": True,           # whether pet_pen() collects the Pet Pen when the Task Board says it is ready
         "pet_outgrown": False,             # the game said the pet that is out is full grown ("Yay! Your pet is full grown!"): the next pick does not keep it, even if it still shows in the list
+        "daily_tasks_enabled": False,       # whether the Task Board's daily tasks are looked at (read_daily_tasks()) when collect_pet_pen() has the board open: logged, with a screenshot kept
+        "daily_tasks_looked": 0.0,          # when they were last looked at
+        "task_pet": "",                     # "neon" or "common" while the pet out and the backpack's filters are for a daily task that is open (apply_task_pet()); "" otherwise
+        "task_pet_failed": {},              # {kind: when} a pet of that kind could not be had for a task: not tried again before the next reset
         "pet_repicked": 0.0,               # when pet_repick() last picked the pet to level
         "pet_pen_looked": 0.0,
         "pet_pen_swap": False,             # a pet of the pen reached Friend: pet_pen_swap_due() switches the full-grown ones out
@@ -1865,6 +1869,15 @@ def age_checkbox(img: Image, label: str) -> Optional[tuple[Point, bool]]:
     ticked = cv2.countNonZero(cv2.inRange(patch, *cfg.AGE_TICK_HSV)) >= cfg.AGE_TICK_MIN_PIXELS
     return (x, centre[1]), ticked
 
+def filter_checkbox(img: Image, label: str) -> Optional[tuple[Point, bool]]:
+    """age_checkbox() for a row of the Effect or Rarity part of the FILTERS panel (`label`: FILTER_EFFECT_ROWS, FILTER_RARITY_ROWS): where its box is and whether it is ticked - None if the row is not in view,
+    or what was found is not in the row's column (the crop of "Rare" is also in "Ultra Rare", one column further left)."""
+    found = age_checkbox(img, label)
+    if found is None:
+        return None
+    text_left = found[0][0] - cfg.AGE_CHECKBOX_DX
+    return found if abs(text_left - cfg.FILTER_COLUMN_X[cfg.FILTER_ROW_COLUMN[label]]) <= cfg.FILTER_COLUMN_TOLERANCE else None
+
 def scroll_filters_to_age() -> bool:
     """In the open FILTERS panel: scroll its list (the wheel over its scroll bar, so that no item's description opens) until the Age rows are in view, FILTERS_SCROLL_TRIES notches at most. False if they never were."""
     for _ in range(cfg.FILTERS_SCROLL_TRIES + 1):
@@ -1970,6 +1983,84 @@ def set_backpack_filter() -> bool:
         pick_pet_in_open_backpack(growing, on_pets, pet_out)
         close_backpack("setup")
     return ok
+
+def set_filter_rows(wanted: dict[str, bool]) -> bool:
+    """In the open FILTERS panel: the Effect and Rarity rows in `wanted` ({row: ticked}) ticked or unticked as asked - each found in view (the wheel brings the lower rows up, a notch at a time), looked at, clicked only
+    when it is not as wanted, and looked at again after. The panel is scrolled back up at the end. False (logged) when a row was not found or did not take."""
+    ok = True
+    for label, tick in wanted.items():
+        for _ in range(cfg.FILTERS_SCROLL_TRIES + 1):
+            found = filter_checkbox(grab_screen(), label)
+            if found is not None:
+                break
+            hover_move(*cfg.FILTERS_SCROLL_POS)
+            scroll_down(1)
+            wait_interruptible(cfg.UI_SETTLE)
+        else:
+            log_setup_problem(f"filters: the row {label} was not found")
+            ok = False
+            continue
+        point, ticked = found
+        if ticked != tick:
+            hover_click(*point)
+            wait_interruptible(cfg.UI_SETTLE)
+            again = filter_checkbox(grab_screen(), label)
+            if again is None or again[1] != tick:
+                log_setup_problem(f"filters: the row {label} did not take")
+                ok = False
+    if not scroll_filters_to_top():
+        log_setup_problem("filters: the panel could not be scrolled back up")
+        ok = False
+    return ok
+
+def task_pet_rows(kind: str) -> dict[str, bool]:
+    """The rows of the FILTERS panel for a daily task's pet: `neon` has only the Neon and Mega Neon effects ticked, `common` only the Common rarity (the others of that part unticked, which is how the list is narrowed).
+    `all` ticks every row again."""
+    if kind == "neon":
+        return {row: row in cfg.FILTER_NEON_ROWS for row in cfg.FILTER_EFFECT_ROWS}
+    if kind == "common":
+        return {row: row == cfg.FILTER_COMMON_ROW for row in cfg.FILTER_RARITY_ROWS}
+    return {row: True for row in (*cfg.FILTER_EFFECT_ROWS, *cfg.FILTER_RARITY_ROWS)}
+
+def equip_task_pet(kind: str) -> bool:
+    """For the daily tasks "needs on a neon / common pet": the backpack's pets tab, the FILTERS panel narrowed to that kind of pet (task_pet_rows()), Confirm, and the first pet of the list equipped (the equipped one
+    kept when it is in it). `kind` "all" only puts the Effect and Rarity rows back (restore_pet_filters()). True when the filters took and a pet is out. Logged in the run log (`task pet: ...`), a step that did not go right
+    with its screen."""
+    if not focus_roblox():
+        return False
+    ok = False
+    with backpack_on_purpose():
+        pydirectinput.press(cfg.KEYS["backpack"])
+        wait_interruptible(cfg.UI_SETTLE)
+        if not ensure_pets_tab():
+            log_setup_problem("task pet: the pets tab could not be selected")
+        elif open_filter_panel() and scroll_filters_to_top():
+            if set_filter_rows(task_pet_rows(kind)):
+                hover_click(*cfg.SETUP_CONFIRM_POS)
+                wait_interruptible(cfg.UI_SETTLE)
+                ok = True
+            else:
+                hover_click(*cfg.SETUP_FILTER_CANCEL_POS)
+                wait_interruptible(cfg.UI_SETTLE)
+            if ok and kind != "all":
+                select_backpack_tab(cfg.INVENTORY_PETS_TAB_POS)
+                wait_interruptible(cfg.UI_SETTLE)
+                pick = choose_list_pet(stop_at_equipped=True)
+                if pick is None:
+                    log_run_event(f"task pet: no {kind} pet in the list (the Age filter leaves out eggs and full-grown pets too)")
+                    ok = False
+                elif pick[0] == "equipped":
+                    log_run_event(f"task pet: the pet that is out is a {kind} one")
+                else:
+                    ok = equip_pet(f"the first {kind} pet", lambda: pick[1])
+                    log_run_event(f"task pet: a {kind} pet {'equipped' if ok else 'could not be equipped'}")
+        close_backpack("task pet")
+    return ok
+
+def restore_pet_filters() -> bool:
+    """After a task: every Effect and Rarity row ticked again, and the pet of Setup (the first that still grows) equipped (repick_pet())."""
+    done = equip_task_pet("all")
+    return repick_pet() and done
 
 def pick_pet_in_open_backpack(growing: bool, on_pets: bool, pet_out: bool) -> None:
     """The pet part of Setup, in the open backpack: with `growing` (level_growing_pets()) on the pets tab, the equipped pet is kept when its green frame shows in the filtered list (it still grows), else the first pet
@@ -4086,14 +4177,18 @@ def run_side_action(action: Callable[[], bool]) -> bool:
         log_run_event(f"{action.__name__} interrupted by {interruption.reason}")
         return False
 
-def last_money_reset_time(now: float) -> float:
-    """The most recent daily reset moment (MONEY_RESET_HOUR o'clock, local
-    time) at or before `now`, as a timestamp."""
+def last_daily_boundary(now: float, hour: int) -> float:
+    """The most recent moment at or before `now` that it was `hour` o'clock, local time, as a timestamp."""
     moment = datetime.datetime.fromtimestamp(now)
-    boundary = moment.replace(hour=cfg.MONEY_RESET_HOUR, minute=0, second=0, microsecond=0)
+    boundary = moment.replace(hour=hour, minute=0, second=0, microsecond=0)
     if boundary > moment:
         boundary -= datetime.timedelta(days=1)
     return boundary.timestamp()
+
+def last_money_reset_time(now: float) -> float:
+    """The most recent daily reset moment (MONEY_RESET_HOUR o'clock, local
+    time) at or before `now`, as a timestamp."""
+    return last_daily_boundary(now, cfg.MONEY_RESET_HOUR)
 
 def reset_money_if_due(config: dict[str, Any]) -> dict[str, Any]:
     """Reset the tree's money total at each MONEY_RESET_HOUR (first sighting only recorded).
@@ -4159,6 +4254,157 @@ def note_pet_friend(img: Image) -> bool:
     update_game_config(lambda c: c.update(pet_pen_swap=True))
     return True
 
+def daily_bars(img: Image) -> list[tuple[int, float]]:
+    """The progress bars of the Task Board's Tasks tab: (the row of the top of each bar in `img`, the share 0-1 of it that is done). A bar is a band of DAILY_BAR_BAND_HEIGHT rows of DAILY_TASKS_BOX that are all
+    grey (DAILY_BAR_GREY: its undone stripes) or green (its done part); the share is the green of its middle row. [] when the tab is not showing."""
+    left, top, right, bottom = cfg.DAILY_TASKS_BOX
+    seg = img[top:bottom, left:right].astype(int)
+    blue, green_ch, red = seg[..., 0], seg[..., 1], seg[..., 2]
+    grey = (abs(blue - green_ch) < cfg.DAILY_BAR_GREY_SPREAD) & (abs(green_ch - red) < cfg.DAILY_BAR_GREY_SPREAD) & (blue >= cfg.DAILY_BAR_GREY[0]) & (blue <= cfg.DAILY_BAR_GREY[1])
+    green = (green_ch - blue > cfg.DAILY_BAR_GREEN_LEAD) & (green_ch - red > cfg.DAILY_BAR_GREEN_LEAD)
+    barish = list((grey | green).mean(axis=1) >= cfg.DAILY_BAR_ROW_FRACTION) + [False]
+    bars, start = [], None
+    for y, on in enumerate(barish):
+        if on and start is None:
+            start = y
+        elif not on and start is not None:
+            if cfg.DAILY_BAR_BAND_HEIGHT[0] <= y - start <= cfg.DAILY_BAR_BAND_HEIGHT[1]:
+                middle = (start + y) // 2
+                done, total = int(green[middle].sum()), int((grey | green)[middle].sum())
+                bars.append((top + start, done / total if total else 0.0))
+            start = None
+    return bars
+
+def read_daily_tasks(img: Image) -> list[float]:
+    """The share (0-1) done of each daily task of the Task Board's Tasks tab (daily_bars()); [] when the tab is not showing."""
+    return [share for _, share in daily_bars(img)]
+
+def daily_task_kinds(img: Image) -> list[Optional[str]]:
+    """What each daily task of the board asks of the pet, one per bar of daily_bars(): "neon" (the bold word Neon in its text: `daily_neon`, "on a Neon or Mega Neon pet"), "common" (`daily_common`), or None for any
+    other (needs of any pet, other rarities: left alone). Looked for in the DAILY_TASK_TEXT_HEIGHT rows above the bar."""
+    templates = load_templates(cfg.STRAY_WINDOW_DIR)
+    kinds: list[Optional[str]] = []
+    for bar_top, _ in daily_bars(img):
+        box = (cfg.DAILY_TASK_TEXT_X[0], max(0, bar_top - cfg.DAILY_TASK_TEXT_HEIGHT), cfg.DAILY_TASK_TEXT_X[1], bar_top)
+        kind = None
+        for name, label in (("daily_neon", "neon"), ("daily_common", "common")):
+            crop = templates.get(name)
+            if crop is not None and find_template(img, crop, box)[0] >= cfg.DAILY_KIND_MATCH:
+                kind = label
+                break
+        kinds.append(kind)
+    return kinds
+
+def daily_task_crops(img: Image) -> list[Image]:
+    """The part of each daily task's card that says which task it is - its name and what to do, above the progress bar (DAILY_TASK_TEXT_HEIGHT rows, DAILY_TASK_TEXT_X columns) - one per bar of daily_bars().
+    The progress digits and the reward are outside it, so the same task on another day or at another progress is the same crop."""
+    return [img[max(0, bar_top - cfg.DAILY_TASK_TEXT_HEIGHT):bar_top - 3, cfg.DAILY_TASK_TEXT_X[0]:cfg.DAILY_TASK_TEXT_X[1]].copy() for bar_top, _ in daily_bars(img)]
+
+def new_daily_tasks(img: Image) -> list[Image]:
+    """The tasks on the board that have not been seen before (DAILY_TASKS_DIR holds a crop of each one seen, task_<n>.png): their crops, which are added to it. A crop is the same task when it matches a saved one
+    (matchTemplate, DAILY_TASK_MATCH)."""
+    os.makedirs(cfg.DAILY_TASKS_DIR, exist_ok=True)
+    known: list[Image] = []
+    for name in sorted(os.listdir(cfg.DAILY_TASKS_DIR)):
+        saved = cv2.imread(os.path.join(cfg.DAILY_TASKS_DIR, name)) if name.startswith("task_") and name.endswith(".png") else None
+        if saved is not None:
+            known.append(saved)
+    fresh = []
+    for crop in daily_task_crops(img):
+        if crop.size == 0:
+            continue
+        if any(k.shape == crop.shape and float(cv2.matchTemplate(crop, k, cv2.TM_CCOEFF_NORMED).max()) >= cfg.DAILY_TASK_MATCH for k in known):
+            continue
+        cv2.imwrite(os.path.join(cfg.DAILY_TASKS_DIR, f"task_{len(known) + 1:03d}.png"), crop)
+        known.append(crop)
+        fresh.append(crop)
+    return fresh
+
+def keep_new_daily_tasks(img: Image) -> int:
+    """The tasks of the board not seen before are logged (`daily tasks: N new task(s) seen`), their crops kept in DAILY_TASKS_DIR, and the whole board put into the run's moments (a frame labelled
+    `new daily task`) when a moments capture runs. How many were new."""
+    fresh = new_daily_tasks(img)
+    if not fresh:
+        return 0
+    log_run_event(f"daily tasks: {len(fresh)} new task(s) seen (saved in debug/daily_tasks)")
+    capture = state.moments
+    if capture is not None:
+        try:
+            ok, png = cv2.imencode(".png", img, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+            if ok:
+                capture.keep_frame(png.tobytes(), round(time.time() - capture.started, 3), f"new daily task ({len(fresh)})")
+        except Exception as error:
+            logger.debug(f"The board with a new daily task was not kept in the moments: {error}")
+    return len(fresh)
+
+def daily_tasks_due(config: dict[str, Any]) -> bool:
+    """Whether the daily tasks are to be looked at now: when daily_tasks_enabled, and the last look was before the last DAILY_TASKS_RESET_HOUR o'clock (the tasks reset then: the first look after it) or is DAILY_TASKS_INTERVAL
+    seconds old."""
+    if not config["daily_tasks_enabled"]:
+        return False
+    now = time.time()
+    interval = cfg.DAILY_TASKS_ACTIVE_INTERVAL if config["task_pet"] else cfg.DAILY_TASKS_INTERVAL                  # (while a task pet is out its bar is looked at oftener: it is done when it is full)
+    return config["daily_tasks_looked"] < last_daily_boundary(now, cfg.DAILY_TASKS_RESET_HOUR) or now - config["daily_tasks_looked"] >= interval
+
+def task_pet_wanted(img: Image, failed: dict[str, float]) -> str:
+    """The kind of pet the daily tasks on the board call for now: the first task that is not done (its bar under DAILY_TASK_DONE_SHARE) and asks for a "neon" or a "common" pet (daily_task_kinds()) and whose kind
+    was not given up on since the last reset (`failed`); "" when there is none (every such task is done, or there are none)."""
+    reset = last_daily_boundary(time.time(), cfg.DAILY_TASKS_RESET_HOUR)
+    for (_, share), kind in zip(daily_bars(img), daily_task_kinds(img)):
+        if kind is not None and share < cfg.DAILY_TASK_DONE_SHARE and failed.get(kind, 0.0) < reset:
+            return kind
+    return ""
+
+def look_at_daily_tasks() -> Optional[str]:
+    """With the Task Board open: when daily_tasks_enabled and the tasks are due (daily_tasks_due(): the first look after the reset hour, then every DAILY_TASKS_INTERVAL - DAILY_TASKS_ACTIVE_INTERVAL while a task pet
+    is out), show its Tasks tab, read how far each task is (`daily tasks: 0%, 40%` in the run log), note the tasks not seen before (keep_new_daily_tasks()), keep a screenshot of the board (SCREENSHOTS_DIR) and
+    say which pet the open tasks call for (task_pet_wanted(): "neon", "common" or "" for none). None when nothing was looked at or the tab was not showing. Nothing is clicked but the tab."""
+    config = load_game_config()
+    if not daily_tasks_due(config):
+        return None
+    hover_click(*cfg.DAILY_TASKS_TAB_POS)
+    wait_interruptible(cfg.PET_PEN_UI_SETTLE)
+    img = grab_screen()
+    shares = read_daily_tasks(img)
+    update_game_config(lambda c: c.update(daily_tasks_looked=time.time()))
+    if not shares:
+        log_run_event("daily tasks: the Tasks tab was not showing")
+        return None
+    kinds = daily_task_kinds(img)
+    log_run_event("daily tasks: " + ", ".join(f"{share:.0%}" + (f" ({kind})" if kind else "") for share, kind in zip(shares, kinds)))
+    keep_new_daily_tasks(img)
+    try:
+        save_screenshot()
+    except OSError:
+        pass
+    return task_pet_wanted(img, dict(config["task_pet_failed"]))
+
+def apply_task_pet(wanted: Optional[str]) -> None:
+    """Put the pet out that the daily tasks call for (`wanted` from look_at_daily_tasks(): "neon", "common", "" for none, None for nothing was read): a kind that is not the one out is equipped through the filters
+    (equip_task_pet(); the filters of the kind that was out are put back first), "" puts the filters and Setup's pet back (restore_pet_filters()). The kind is kept in the game config (`task_pet`) while it is out, and
+    pet_repick() leaves the pet alone meanwhile. A kind that cannot be had (no such pet in the list, a step that did not take) is given up on until the next reset (`task_pet_failed`) and the filters put back."""
+    if wanted is None:
+        return
+    config = load_game_config()
+    current = config["task_pet"]
+    if wanted == current:
+        return
+    if wanted == "":
+        log_run_event(f"daily tasks: no open task needs a {current} pet any more - the filters and the pet are put back")
+        if restore_pet_filters():
+            update_game_config(lambda c: c.update(task_pet="", pet_repicked=time.time()))
+        return
+    if current:
+        equip_task_pet("all")                                                            # (the rows of the kind that was out first: a neon and a common filter together may list nothing)
+    log_run_event(f"daily tasks: an open task needs a {wanted} pet - switching to one")
+    if equip_task_pet(wanted):
+        respawn_character()
+        update_game_config(lambda c: c.update(task_pet=wanted))
+        return
+    log_run_event(f"daily tasks: no {wanted} pet could be had - given up on it until the next reset")
+    restore_pet_filters()
+    update_game_config(lambda c: c.update(task_pet="", task_pet_failed={**c["task_pet_failed"], wanted: time.time()}, pet_repicked=time.time()))
+
 def collect_pet_pen() -> bool:
     """Open the Task Board and, when it has the "Pet Pen Ready" card, click it, wait out the age-up screen and click its NICE!. True once the board has been looked at (and the pets collected if they were
     ready), False when the game was not in front or the NICE! never came."""
@@ -4176,7 +4422,11 @@ def collect_pet_pen() -> bool:
             return False
         card = popup_found(grab_screen(), "pet_pen_ready")
         if card is None:
+            wanted = look_at_daily_tasks()
             hover_click(*cfg.STRAY_WINDOWS["task_board"]["close_pos"])
+            wait_interruptible(cfg.PET_PEN_UI_SETTLE)
+            state.task_board_wanted = False
+            apply_task_pet(wanted)                                                        # (the backpack, with the board closed)
             return True
         hover_click(*card)
         wait_interruptible(cfg.PET_PEN_ANIMATION_WAIT)
@@ -4209,7 +4459,7 @@ def pet_repick() -> None:
     """Once per cycle after pet_pen(), when the game config's level_growing_pet is on: every PET_REPICK_INTERVAL seconds repick_pet() puts out the first pet that is neither an egg nor full grown. The
     macro has no way yet to tell that the pet out has grown up (no capture of it), so it asks the list instead."""
     config = load_game_config()
-    if not config["level_growing_pet"] or time.time() - config["pet_repicked"] < cfg.PET_REPICK_INTERVAL:
+    if not config["level_growing_pet"] or config["task_pet"] or time.time() - config["pet_repicked"] < cfg.PET_REPICK_INTERVAL:      # (not while a daily task's pet is out)
         return
     run_side_action(repick_pet)
     update_game_config(lambda c: c.update(pet_repicked=time.time()))
@@ -4857,7 +5107,7 @@ def zip_capture(folder: str) -> list[str]:
     building = out + ".partial"                                                                  # (the zips are only in zips/ once all are made: /pull and OneDrive must not take half of them)
     shutil.rmtree(building, ignore_errors=True)
     os.makedirs(building)
-    frames = sorted(f for f in os.listdir(folder) if f.startswith("frame_") and f.endswith(".png"))
+    frames = sorted((f for f in os.listdir(folder) if f.startswith("frame_") and f.endswith(".png")), key=lambda f: float(f[:-len(".png")].rsplit("_", 1)[1]))      # (in time order: the screens of a need's phases, frame_p<n>_<seconds>, are among the others, not after them all)
     first = ["README.txt", "info.json", "events.jsonl"]                                           # (what a reader opens first)
     heads = [f for f in first if os.path.exists(os.path.join(folder, f))] + sorted(
         f for f in os.listdir(folder) if f not in first and not f.startswith("frame_") and os.path.isfile(os.path.join(folder, f)))
@@ -6724,6 +6974,7 @@ class AdoptMeGUI:
                            ("Tend the lure", "lure_enabled"),
                            ("Resume after focus loss (take Roblox's focus back instead of stopping)", "resume_on_focus_loss"),
                            ("Collect the Pet Pen when the Task Board says it is ready", "pet_pen_enabled"),
+                           ("Do the daily tasks that need a neon or a common pet (needs the Pet Pen on; the pet is switched through the backpack's filters and back)", "daily_tasks_enabled"),
                            ("Setup levels a pet that still grows (no eggs, none full grown)", "level_growing_pet")):
             self.add_config_checkbox(parent, label, key, config)
 
@@ -6757,6 +7008,15 @@ class AdoptMeGUI:
         buttons.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
         buttons.grid_columnconfigure(0, weight=1, uniform="settings")
         buttons.grid_columnconfigure(1, weight=1, uniform="settings")
+        for label, kind in (("Equip a neon pet (for the daily tasks)", "neon"), ("Equip a common pet (for the daily tasks)", "common")):
+            task_button = tk.Button(parent, text=label, command=lambda k=kind: self.run_async(lambda: equip_task_pet(k)), font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),  # type: ignore[misc]
+                                    bg=cfg.GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
+            task_button.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+            self.action_buttons.append(task_button)
+        restore_button = tk.Button(parent, text="Filters and pet back to normal (after a task)", command=lambda: self.run_async(restore_pet_filters), font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
+                                   bg=cfg.GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
+        restore_button.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+        self.action_buttons.append(restore_button)
         pen_button = tk.Button(parent, text="Switch the Pet Pen's full-grown pets now", command=lambda: self.run_async(switch_pen_now), font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
                                bg=cfg.GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
         pen_button.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)

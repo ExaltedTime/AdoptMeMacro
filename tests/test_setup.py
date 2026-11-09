@@ -414,3 +414,38 @@ def test_a_pet_the_game_called_full_grown_is_not_kept_by_the_pick_even_if_it_sti
     macro.update_game_config(lambda c: c.update(pet_outgrown=True))
     macro.pick_pet_in_open_backpack(True, True, True)
     assert seen[0] is False and ("equip", (975, 787)) in seen and macro.load_game_config()["pet_outgrown"] is False      # (not kept this time, and asked once)
+
+
+def test_the_effect_and_rarity_rows_of_the_filters_are_found_with_their_ticks_in_their_own_columns(macro):
+    cfg = macro.cfg
+    top = frame("filters_top")
+    for row in (*cfg.FILTER_EFFECT_ROWS, *cfg.FILTER_RARITY_ROWS):
+        found = macro.filter_checkbox(top, row)
+        assert found is not None and found[1] is True, row                                      # (every row is in view and ticked on the real frame)
+    lower = frame("filters_age_both_ticked")
+    assert macro.filter_checkbox(lower, "filter_rarity_rare") is None                           # ("Rare" is also the end of "Ultra Rare", a column to the left: not that row)
+    assert macro.filter_checkbox(lower, "filter_rarity_ultra_rare")[1] is True
+
+
+def test_a_neon_task_leaves_only_the_neon_effects_ticked_and_a_common_one_only_common_and_only_the_rows_that_differ_are_clicked(macro, monkeypatch):
+    cfg = macro.cfg
+    assert {k for k, v in macro.task_pet_rows("neon").items() if v} == set(cfg.FILTER_NEON_ROWS) and set(macro.task_pet_rows("neon")) == set(cfg.FILTER_EFFECT_ROWS)
+    assert {k for k, v in macro.task_pet_rows("common").items() if v} == {cfg.FILTER_COMMON_ROW} and set(macro.task_pet_rows("common")) == set(cfg.FILTER_RARITY_ROWS)
+    assert all(macro.task_pet_rows("all").values())
+    state = {row: True for row in (*cfg.FILTER_EFFECT_ROWS, *cfg.FILTER_RARITY_ROWS)}
+    position = {row: (100 + i, 200) for i, row in enumerate(state)}
+    monkeypatch.setattr(macro, "grab_screen", lambda: None)
+    monkeypatch.setattr(macro, "filter_checkbox", lambda img, label: (position[label], state[label]))
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "scroll_filters_to_top", lambda: True)
+    clicked = []
+    def click(x, y, duration=0):
+        row = next(r for r, p in position.items() if p == (x, y))
+        clicked.append(row)
+        state[row] = not state[row]
+    monkeypatch.setattr(macro, "hover_click", click)
+    assert macro.set_filter_rows(macro.task_pet_rows("neon")) is True
+    assert sorted(clicked) == sorted(set(cfg.FILTER_EFFECT_ROWS) - set(cfg.FILTER_NEON_ROWS))    # (the four others unticked, the two neon rows left)
+    clicked.clear()
+    assert macro.set_filter_rows(macro.task_pet_rows("neon")) is True and clicked == []          # (already so: nothing clicked)
+    assert macro.set_filter_rows(macro.task_pet_rows("all")) is True and len(clicked) == 4        # (and back)

@@ -474,3 +474,149 @@ def test_a_pen_whose_places_show_up_after_its_title_is_waited_for_not_taken_for_
     assert macro.switch_pen_pets() is True
     assert taken[0][0] == macro.cfg.PET_PEN_SLOTS[0][0] + macro.cfg.PET_PEN_X_OFFSET[0]          # (the X of the first place was clicked)
     assert "pet pen: no pet in it is full grown" not in notes
+
+
+def test_the_daily_tasks_progress_bars_are_read_from_a_real_board_and_a_drawn_partial_fill(macro):
+    frame = shot("board_daily_tasks")
+    assert macro.read_daily_tasks(frame) == [0.0, 0.0]                                          # (two tasks, neither started: 0/10 and 0/5)
+    drawn = frame.copy()
+    drawn[529:543, 846:846 + 100] = (73, 197, 84)                                              # the first bar green for its first 100 columns...
+    drawn[640:654, 846:846 + 254] = (73, 197, 84)                                              # ...the second almost whole
+    first, second = macro.read_daily_tasks(drawn)
+    assert 0.25 < first < 0.55 and second > 0.9
+    assert macro.read_daily_tasks(shot("board_other_alerts")) == []                            # (the Alerts tab has no bars)
+    assert macro.read_daily_tasks(shot("world_after")) == []
+
+
+def test_the_daily_tasks_are_looked_at_only_when_asked_for_and_once_an_hour_and_nothing_but_the_tab_is_clicked(macro, monkeypatch):
+    log, saved = [], []
+    monkeypatch.setattr(macro, "log_run_event", log.append)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "save_screenshot", lambda: saved.append(1) or "x.png")
+    monkeypatch.setattr(macro, "grab_screen", lambda: shot("board_daily_tasks"))
+    macro.update_game_config(lambda c: c.update(daily_tasks_enabled=False, daily_tasks_looked=0.0))
+    macro.look_at_daily_tasks()
+    assert log == [] and macro.clicks == []                                                      # (off by default)
+    macro.update_game_config(lambda c: c.update(daily_tasks_enabled=True))
+    macro.look_at_daily_tasks()
+    assert log == ["daily tasks: 0% (neon), 0% (common)", "daily tasks: 2 new task(s) seen (saved in debug/daily_tasks)"][:1] or log[0] == "daily tasks: 0% (neon), 0% (common)"
+    assert macro.clicks == [macro.cfg.DAILY_TASKS_TAB_POS] and saved == [1]
+    n = len(log)
+    assert macro.look_at_daily_tasks() is None and len(log) == n                                 # (just looked)
+    macro.update_game_config(lambda c: c.update(daily_tasks_looked=0.0))
+    monkeypatch.setattr(macro, "grab_screen", lambda: shot("board_other_alerts"))
+    macro.look_at_daily_tasks()
+    assert log[-1] == "daily tasks: the Tasks tab was not showing"
+
+
+def test_a_task_is_new_once_and_the_same_task_at_another_progress_is_not_new_and_a_different_one_is(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "DAILY_TASKS_DIR", str(tmp_path / "daily"))
+    frame = shot("board_daily_tasks")
+    assert len(macro.daily_task_crops(frame)) == 2
+    assert len(macro.new_daily_tasks(frame)) == 2 and len(os.listdir(tmp_path / "daily")) == 2             # (the first look: both are new, a crop of each saved)
+    assert macro.new_daily_tasks(frame) == []
+    progressed = frame.copy()
+    progressed[529:543, 846:946] = (73, 197, 84)                                                           # (the bar moved: the same task)
+    assert macro.new_daily_tasks(progressed) == []
+    other = frame.copy()
+    other[460:520, 850:1190] = 255                                                                          # (the first task's words are gone: another task)
+    other[470:480, 860:1000] = (40, 40, 40)
+    assert len(macro.new_daily_tasks(other)) == 1 and len(os.listdir(tmp_path / "daily")) == 3
+
+
+def test_a_new_task_is_logged_and_the_board_is_kept_in_the_moments(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "DAILY_TASKS_DIR", str(tmp_path / "daily"))
+    log, kept = [], []
+    monkeypatch.setattr(macro, "log_run_event", log.append)
+    macro.state.moments = type("Capture", (), {"started": 1000.0, "keep_frame": lambda self, png, seconds, label: kept.append(label)})()
+    assert macro.keep_new_daily_tasks(shot("board_daily_tasks")) == 2
+    assert log == ["daily tasks: 2 new task(s) seen (saved in debug/daily_tasks)"] and kept == ["new daily task (2)"]
+    assert macro.keep_new_daily_tasks(shot("board_daily_tasks")) == 0 and len(kept) == 1
+    macro.state.moments = None
+
+
+def test_the_daily_tasks_are_due_at_the_first_look_after_the_reset_hour_and_otherwise_once_an_hour(macro, monkeypatch):
+    import datetime
+    hour = macro.cfg.DAILY_TASKS_RESET_HOUR
+    now = datetime.datetime(2026, 11, 10, hour + 3, 0, 0).timestamp()
+    reset = datetime.datetime(2026, 11, 10, hour, 0, 0).timestamp()
+    monkeypatch.setattr(macro.time, "time", lambda: now)
+    on = {"daily_tasks_enabled": True, "task_pet": ""}
+    assert macro.daily_tasks_due({**on, "daily_tasks_looked": reset - 60}) is True                       # (looked before the reset: the tasks are new)
+    assert macro.daily_tasks_due({**on, "daily_tasks_looked": now - 60}) is False                          # (looked since the reset and not an hour ago)
+    assert macro.daily_tasks_due({**on, "daily_tasks_looked": now - macro.cfg.DAILY_TASKS_INTERVAL - 1}) is True
+    assert macro.daily_tasks_due({"daily_tasks_enabled": False, "daily_tasks_looked": 0.0, "task_pet": ""}) is False
+    assert macro.daily_tasks_due({**on, "task_pet": "neon", "daily_tasks_looked": now - macro.cfg.DAILY_TASKS_ACTIVE_INTERVAL - 1}) is True      # (a task pet is out: looked at oftener)
+
+
+def test_the_pet_a_task_calls_for_is_the_first_open_task_of_a_kind_not_given_up_on(macro):
+    frame = shot("board_daily_tasks")
+    assert macro.daily_bars(frame) and macro.daily_task_kinds(frame) == ["neon", "common"]
+    assert macro.task_pet_wanted(frame, {}) == "neon"
+    assert macro.task_pet_wanted(frame, {"neon": time.time()}) == "common"                      # (neon given up on today: the next)
+    assert macro.task_pet_wanted(frame, {"neon": time.time(), "common": time.time()}) == ""
+    done = frame.copy()
+    done[529:543, 846:1105] = (73, 197, 84)                                                      # (the first bar full)
+    assert macro.task_pet_wanted(done, {}) == "common"
+    done[640:654, 846:1105] = (73, 197, 84)
+    assert macro.task_pet_wanted(done, {}) == ""                                                 # (both done: no task pet)
+    assert macro.task_pet_wanted(shot("world_after"), {}) == ""
+
+
+def test_the_task_pet_is_switched_to_when_a_task_is_open_kept_while_it_is_and_put_back_when_none_is(macro, monkeypatch):
+    seen = []
+    monkeypatch.setattr(macro, "equip_task_pet", lambda kind: seen.append(("equip", kind)) or True)
+    monkeypatch.setattr(macro, "restore_pet_filters", lambda: seen.append(("restore",)) or True)
+    monkeypatch.setattr(macro, "respawn_character", lambda: seen.append(("respawn",)))
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    macro.apply_task_pet(None)
+    assert seen == []                                                                            # (nothing read: nothing done)
+    macro.apply_task_pet("neon")
+    assert seen == [("equip", "neon"), ("respawn",)] and macro.load_game_config()["task_pet"] == "neon"
+    seen.clear()
+    macro.apply_task_pet("neon")
+    assert seen == []                                                                            # (already out)
+    macro.apply_task_pet("common")
+    assert seen == [("equip", "all"), ("equip", "common"), ("respawn",)] and macro.load_game_config()["task_pet"] == "common"      # (the neon rows put back first)
+    seen.clear()
+    macro.apply_task_pet("")
+    assert seen == [("restore",)] and macro.load_game_config()["task_pet"] == ""
+
+
+def test_a_kind_that_cannot_be_had_is_given_up_on_until_the_reset_and_the_filters_are_put_back(macro, monkeypatch):
+    seen = []
+    monkeypatch.setattr(macro, "equip_task_pet", lambda kind: seen.append(("equip", kind)) and False)
+    monkeypatch.setattr(macro, "restore_pet_filters", lambda: seen.append(("restore",)) or True)
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    macro.apply_task_pet("neon")
+    config = macro.load_game_config()
+    assert seen == [("equip", "neon"), ("restore",)] and config["task_pet"] == "" and config["task_pet_failed"]["neon"] > 0
+
+
+def test_the_level_up_repick_leaves_the_pet_alone_while_a_task_pet_is_out(macro, monkeypatch):
+    tried = []
+    monkeypatch.setattr(macro, "run_side_action", lambda action: tried.append(action.__name__) or True)
+    macro.update_game_config(lambda c: c.update(level_growing_pet=True, pet_repicked=0.0, task_pet="neon"))
+    macro.pet_repick()
+    assert tried == []
+    macro.update_game_config(lambda c: c.update(task_pet=""))
+    macro.pet_repick()
+    assert tried == ["repick_pet"]
+
+
+def test_the_whole_way_a_board_with_an_open_neon_task_ends_in_a_neon_pet_through_the_pens_look(macro, screens, monkeypatch, tmp_path):
+    """collect_pet_pen() -> the board opened, no Pet Pen card, the Tasks tab read, the board closed, then the pet switched: played on the real board frame."""
+    frames, log = screens
+    frames[:] = [shot("world_after"), shot("board_daily_tasks")]
+    monkeypatch.setattr(macro.time, "time", lambda: 1.8e9)                                       # (a real date: the 4 o'clock reset is looked up from it)
+    monkeypatch.setattr(macro.cfg, "DAILY_TASKS_DIR", str(tmp_path / "daily"))
+    monkeypatch.setattr(macro, "save_screenshot", lambda: "x.png")
+    applied = []
+    monkeypatch.setattr(macro, "equip_task_pet", lambda kind: applied.append(kind) or True)
+    monkeypatch.setattr(macro, "respawn_character", lambda: applied.append("respawn"))
+    macro.update_game_config(lambda c: c.update(daily_tasks_enabled=True, daily_tasks_looked=-1e9, task_pet="", task_pet_failed={}))
+    assert macro.collect_pet_pen() is True
+    assert applied == ["neon", "respawn"], log
+    assert macro.load_game_config()["task_pet"] == "neon"
+    assert macro.clicks[-1] == macro.cfg.STRAY_WINDOWS["task_board"]["close_pos"] and macro.state.task_board_wanted is False
+    assert any(line.startswith("daily tasks: 0% (neon), 0% (common)") for line in log)

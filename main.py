@@ -846,6 +846,8 @@ def _read_game_config() -> dict[str, Any]:
         "keep_moments": True,              # whether the loop captures the run's moments (start_moments()), kept when the run lasted MOMENTS_MIN_RUN seconds or more
         "pet_pen_enabled": True,           # whether pet_pen() collects the Pet Pen when the Task Board says it is ready
         "pet_outgrown": False,             # the game said the pet that is out is full grown ("Yay! Your pet is full grown!"): the next pick does not keep it, even if it still shows in the list
+        "daily_tasks_enabled": False,       # whether the Task Board's daily tasks are looked at (read_daily_tasks()) when collect_pet_pen() has the board open: logged, with a screenshot kept
+        "daily_tasks_looked": 0.0,          # when they were last looked at
         "pet_repicked": 0.0,               # when pet_repick() last picked the pet to level
         "pet_pen_looked": 0.0,
         "pet_pen_swap": False,             # a pet of the pen reached Friend: pet_pen_swap_due() switches the full-grown ones out
@@ -4159,6 +4161,47 @@ def note_pet_friend(img: Image) -> bool:
     update_game_config(lambda c: c.update(pet_pen_swap=True))
     return True
 
+def read_daily_tasks(img: Image) -> list[float]:
+    """The share (0-1) done of each daily task of the Task Board's Tasks tab, from its progress bars (grey stripes, green as far as it is done; DAILY_BAR_*): [] when the tab is not showing. The bars are the rows
+    of DAILY_TASKS_BOX that are all grey or green; each band of DAILY_BAR_BAND_HEIGHT rows is one."""
+    left, top, right, bottom = cfg.DAILY_TASKS_BOX
+    seg = img[top:bottom, left:right].astype(int)
+    blue, green_ch, red = seg[..., 0], seg[..., 1], seg[..., 2]
+    grey = (abs(blue - green_ch) < cfg.DAILY_BAR_GREY_SPREAD) & (abs(green_ch - red) < cfg.DAILY_BAR_GREY_SPREAD) & (blue >= cfg.DAILY_BAR_GREY[0]) & (blue <= cfg.DAILY_BAR_GREY[1])
+    green = (green_ch - blue > cfg.DAILY_BAR_GREEN_LEAD) & (green_ch - red > cfg.DAILY_BAR_GREEN_LEAD)
+    barish = (grey | green).mean(axis=1) >= cfg.DAILY_BAR_ROW_FRACTION
+    shares, start = [], None
+    for y, on in enumerate(list(barish) + [False]):
+        if on and start is None:
+            start = y
+        elif not on and start is not None:
+            if cfg.DAILY_BAR_BAND_HEIGHT[0] <= y - start <= cfg.DAILY_BAR_BAND_HEIGHT[1]:
+                middle = (start + y) // 2
+                done, total = int(green[middle].sum()), int((grey | green)[middle].sum())
+                shares.append(done / total if total else 0.0)
+            start = None
+    return shares
+
+def look_at_daily_tasks() -> None:
+    """With the Task Board open: when daily_tasks_enabled and DAILY_TASKS_INTERVAL has passed since the last time, show its Tasks tab, read how far each daily task is (read_daily_tasks()), say so in the run log
+    (`daily tasks: 0%, 40%`) and keep a screenshot of the board (SCREENSHOTS_DIR), so that the tasks of each day are on file. Nothing is clicked but the tab."""
+    config = load_game_config()
+    if not config["daily_tasks_enabled"] or time.time() - config["daily_tasks_looked"] < cfg.DAILY_TASKS_INTERVAL:
+        return
+    hover_click(*cfg.DAILY_TASKS_TAB_POS)
+    wait_interruptible(cfg.PET_PEN_UI_SETTLE)
+    img = grab_screen()
+    shares = read_daily_tasks(img)
+    update_game_config(lambda c: c.update(daily_tasks_looked=time.time()))
+    if not shares:
+        log_run_event("daily tasks: the Tasks tab was not showing")
+        return
+    log_run_event("daily tasks: " + ", ".join(f"{share:.0%}" for share in shares))
+    try:
+        save_screenshot()
+    except OSError:
+        pass
+
 def collect_pet_pen() -> bool:
     """Open the Task Board and, when it has the "Pet Pen Ready" card, click it, wait out the age-up screen and click its NICE!. True once the board has been looked at (and the pets collected if they were
     ready), False when the game was not in front or the NICE! never came."""
@@ -4176,6 +4219,7 @@ def collect_pet_pen() -> bool:
             return False
         card = popup_found(grab_screen(), "pet_pen_ready")
         if card is None:
+            look_at_daily_tasks()
             hover_click(*cfg.STRAY_WINDOWS["task_board"]["close_pos"])
             return True
         hover_click(*card)
@@ -6724,6 +6768,7 @@ class AdoptMeGUI:
                            ("Tend the lure", "lure_enabled"),
                            ("Resume after focus loss (take Roblox's focus back instead of stopping)", "resume_on_focus_loss"),
                            ("Collect the Pet Pen when the Task Board says it is ready", "pet_pen_enabled"),
+                           ("Look at the Task Board's daily tasks (needs the Pet Pen on; logged, with a screenshot)", "daily_tasks_enabled"),
                            ("Setup levels a pet that still grows (no eggs, none full grown)", "level_growing_pet")):
             self.add_config_checkbox(parent, label, key, config)
 

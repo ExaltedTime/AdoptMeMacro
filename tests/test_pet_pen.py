@@ -474,3 +474,35 @@ def test_a_pen_whose_places_show_up_after_its_title_is_waited_for_not_taken_for_
     assert macro.switch_pen_pets() is True
     assert taken[0][0] == macro.cfg.PET_PEN_SLOTS[0][0] + macro.cfg.PET_PEN_X_OFFSET[0]          # (the X of the first place was clicked)
     assert "pet pen: no pet in it is full grown" not in notes
+
+
+def test_the_daily_tasks_progress_bars_are_read_from_a_real_board_and_a_drawn_partial_fill(macro):
+    frame = shot("board_daily_tasks")
+    assert macro.read_daily_tasks(frame) == [0.0, 0.0]                                          # (two tasks, neither started: 0/10 and 0/5)
+    drawn = frame.copy()
+    drawn[529:543, 846:846 + 100] = (73, 197, 84)                                              # the first bar green for its first 100 columns...
+    drawn[640:654, 846:846 + 254] = (73, 197, 84)                                              # ...the second almost whole
+    first, second = macro.read_daily_tasks(drawn)
+    assert 0.25 < first < 0.55 and second > 0.9
+    assert macro.read_daily_tasks(shot("board_other_alerts")) == []                            # (the Alerts tab has no bars)
+    assert macro.read_daily_tasks(shot("world_after")) == []
+
+
+def test_the_daily_tasks_are_looked_at_only_when_asked_for_and_once_an_hour_and_nothing_but_the_tab_is_clicked(macro, monkeypatch):
+    log, saved = [], []
+    monkeypatch.setattr(macro, "log_run_event", log.append)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "save_screenshot", lambda: saved.append(1) or "x.png")
+    monkeypatch.setattr(macro, "grab_screen", lambda: shot("board_daily_tasks"))
+    macro.update_game_config(lambda c: c.update(daily_tasks_enabled=False, daily_tasks_looked=0.0))
+    macro.look_at_daily_tasks()
+    assert log == [] and macro.clicks == []                                                      # (off by default)
+    macro.update_game_config(lambda c: c.update(daily_tasks_enabled=True))
+    macro.look_at_daily_tasks()
+    assert log == ["daily tasks: 0%, 0%"] and macro.clicks == [macro.cfg.DAILY_TASKS_TAB_POS] and saved == [1]
+    macro.look_at_daily_tasks()
+    assert len(log) == 1                                                                         # (just looked)
+    macro.update_game_config(lambda c: c.update(daily_tasks_looked=0.0))
+    monkeypatch.setattr(macro, "grab_screen", lambda: shot("board_other_alerts"))
+    macro.look_at_daily_tasks()
+    assert log[-1] == "daily tasks: the Tasks tab was not showing"

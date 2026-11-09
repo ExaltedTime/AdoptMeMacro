@@ -4210,8 +4210,11 @@ def new_daily_tasks(img: Image) -> list[Image]:
     """The tasks on the board that have not been seen before (DAILY_TASKS_DIR holds a crop of each one seen, task_<n>.png): their crops, which are added to it. A crop is the same task when it matches a saved one
     (matchTemplate, DAILY_TASK_MATCH)."""
     os.makedirs(cfg.DAILY_TASKS_DIR, exist_ok=True)
-    known = [cv2.imread(os.path.join(cfg.DAILY_TASKS_DIR, name)) for name in sorted(os.listdir(cfg.DAILY_TASKS_DIR)) if name.startswith("task_") and name.endswith(".png")]
-    known = [k for k in known if k is not None]
+    known: list[Image] = []
+    for name in sorted(os.listdir(cfg.DAILY_TASKS_DIR)):
+        saved = cv2.imread(os.path.join(cfg.DAILY_TASKS_DIR, name)) if name.startswith("task_") and name.endswith(".png") else None
+        if saved is not None:
+            known.append(saved)
     fresh = []
     for crop in daily_task_crops(img):
         if crop.size == 0:

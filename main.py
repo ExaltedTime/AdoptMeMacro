@@ -4088,14 +4088,18 @@ def run_side_action(action: Callable[[], bool]) -> bool:
         log_run_event(f"{action.__name__} interrupted by {interruption.reason}")
         return False
 
-def last_money_reset_time(now: float) -> float:
-    """The most recent daily reset moment (MONEY_RESET_HOUR o'clock, local
-    time) at or before `now`, as a timestamp."""
+def last_daily_boundary(now: float, hour: int) -> float:
+    """The most recent moment at or before `now` that it was `hour` o'clock, local time, as a timestamp."""
     moment = datetime.datetime.fromtimestamp(now)
-    boundary = moment.replace(hour=cfg.MONEY_RESET_HOUR, minute=0, second=0, microsecond=0)
+    boundary = moment.replace(hour=hour, minute=0, second=0, microsecond=0)
     if boundary > moment:
         boundary -= datetime.timedelta(days=1)
     return boundary.timestamp()
+
+def last_money_reset_time(now: float) -> float:
+    """The most recent daily reset moment (MONEY_RESET_HOUR o'clock, local
+    time) at or before `now`, as a timestamp."""
+    return last_daily_boundary(now, cfg.MONEY_RESET_HOUR)
 
 def reset_money_if_due(config: dict[str, Any]) -> dict[str, Any]:
     """Reset the tree's money total at each MONEY_RESET_HOUR (first sighting only recorded).
@@ -4182,11 +4186,72 @@ def read_daily_tasks(img: Image) -> list[float]:
             start = None
     return shares
 
+def daily_task_crops(img: Image) -> list[Image]:
+    """The part of each daily task's card that says which task it is - its name and what to do, above the progress bar (DAILY_TASK_TEXT_HEIGHT rows, DAILY_TASK_TEXT_X columns) - one per bar of read_daily_tasks().
+    The progress digits and the reward are outside it, so the same task on another day or at another progress is the same crop."""
+    left, top, right, bottom = cfg.DAILY_TASKS_BOX
+    seg = img[top:bottom, left:right].astype(int)
+    blue, green_ch, red = seg[..., 0], seg[..., 1], seg[..., 2]
+    grey = (abs(blue - green_ch) < cfg.DAILY_BAR_GREY_SPREAD) & (abs(green_ch - red) < cfg.DAILY_BAR_GREY_SPREAD) & (blue >= cfg.DAILY_BAR_GREY[0]) & (blue <= cfg.DAILY_BAR_GREY[1])
+    green = (green_ch - blue > cfg.DAILY_BAR_GREEN_LEAD) & (green_ch - red > cfg.DAILY_BAR_GREEN_LEAD)
+    barish = list((grey | green).mean(axis=1) >= cfg.DAILY_BAR_ROW_FRACTION) + [False]
+    crops, start = [], None
+    for y, on in enumerate(barish):
+        if on and start is None:
+            start = y
+        elif not on and start is not None:
+            if cfg.DAILY_BAR_BAND_HEIGHT[0] <= y - start <= cfg.DAILY_BAR_BAND_HEIGHT[1]:
+                bar_top = top + start
+                crops.append(img[max(0, bar_top - cfg.DAILY_TASK_TEXT_HEIGHT):bar_top - 3, cfg.DAILY_TASK_TEXT_X[0]:cfg.DAILY_TASK_TEXT_X[1]].copy())
+            start = None
+    return crops
+
+def new_daily_tasks(img: Image) -> list[Image]:
+    """The tasks on the board that have not been seen before (DAILY_TASKS_DIR holds a crop of each one seen, task_<n>.png): their crops, which are added to it. A crop is the same task when it matches a saved one
+    (matchTemplate, DAILY_TASK_MATCH)."""
+    os.makedirs(cfg.DAILY_TASKS_DIR, exist_ok=True)
+    known = [cv2.imread(os.path.join(cfg.DAILY_TASKS_DIR, name)) for name in sorted(os.listdir(cfg.DAILY_TASKS_DIR)) if name.startswith("task_") and name.endswith(".png")]
+    known = [k for k in known if k is not None]
+    fresh = []
+    for crop in daily_task_crops(img):
+        if crop.size == 0:
+            continue
+        if any(k.shape == crop.shape and float(cv2.matchTemplate(crop, k, cv2.TM_CCOEFF_NORMED).max()) >= cfg.DAILY_TASK_MATCH for k in known):
+            continue
+        cv2.imwrite(os.path.join(cfg.DAILY_TASKS_DIR, f"task_{len(known) + 1:03d}.png"), crop)
+        known.append(crop)
+        fresh.append(crop)
+    return fresh
+
+def keep_new_daily_tasks(img: Image) -> int:
+    """The tasks of the board not seen before are logged (`daily tasks: N new task(s) seen`), their crops kept in DAILY_TASKS_DIR, and the whole board put into the run's moments (a frame labelled
+    `new daily task`) when a moments capture runs. How many were new."""
+    fresh = new_daily_tasks(img)
+    if not fresh:
+        return 0
+    log_run_event(f"daily tasks: {len(fresh)} new task(s) seen (saved in debug/daily_tasks)")
+    capture = state.moments
+    if capture is not None:
+        try:
+            ok, png = cv2.imencode(".png", img, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+            if ok:
+                capture.keep_frame(png.tobytes(), round(time.time() - capture.started, 3), f"new daily task ({len(fresh)})")
+        except Exception as error:
+            logger.debug(f"The board with a new daily task was not kept in the moments: {error}")
+    return len(fresh)
+
+def daily_tasks_due(config: dict[str, Any]) -> bool:
+    """Whether the daily tasks are to be looked at now: when daily_tasks_enabled, and the last look was before the last DAILY_TASKS_RESET_HOUR o'clock (the tasks reset then: the first look after it) or is DAILY_TASKS_INTERVAL
+    seconds old."""
+    if not config["daily_tasks_enabled"]:
+        return False
+    now = time.time()
+    return config["daily_tasks_looked"] < last_daily_boundary(now, cfg.DAILY_TASKS_RESET_HOUR) or now - config["daily_tasks_looked"] >= cfg.DAILY_TASKS_INTERVAL
+
 def look_at_daily_tasks() -> None:
     """With the Task Board open: when daily_tasks_enabled and DAILY_TASKS_INTERVAL has passed since the last time, show its Tasks tab, read how far each daily task is (read_daily_tasks()), say so in the run log
-    (`daily tasks: 0%, 40%`) and keep a screenshot of the board (SCREENSHOTS_DIR), so that the tasks of each day are on file. Nothing is clicked but the tab."""
-    config = load_game_config()
-    if not config["daily_tasks_enabled"] or time.time() - config["daily_tasks_looked"] < cfg.DAILY_TASKS_INTERVAL:
+    (`daily tasks: 0%, 40%`), note the tasks not seen before (keep_new_daily_tasks()) and keep a screenshot of the board (SCREENSHOTS_DIR), so that the tasks of each day are on file. Nothing is clicked but the tab."""
+    if not daily_tasks_due(load_game_config()):
         return
     hover_click(*cfg.DAILY_TASKS_TAB_POS)
     wait_interruptible(cfg.PET_PEN_UI_SETTLE)
@@ -4197,6 +4262,7 @@ def look_at_daily_tasks() -> None:
         log_run_event("daily tasks: the Tasks tab was not showing")
         return
     log_run_event("daily tasks: " + ", ".join(f"{share:.0%}" for share in shares))
+    keep_new_daily_tasks(img)
     try:
         save_screenshot()
     except OSError:

@@ -506,3 +506,42 @@ def test_the_daily_tasks_are_looked_at_only_when_asked_for_and_once_an_hour_and_
     monkeypatch.setattr(macro, "grab_screen", lambda: shot("board_other_alerts"))
     macro.look_at_daily_tasks()
     assert log[-1] == "daily tasks: the Tasks tab was not showing"
+
+
+def test_a_task_is_new_once_and_the_same_task_at_another_progress_is_not_new_and_a_different_one_is(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "DAILY_TASKS_DIR", str(tmp_path / "daily"))
+    frame = shot("board_daily_tasks")
+    assert len(macro.daily_task_crops(frame)) == 2
+    assert len(macro.new_daily_tasks(frame)) == 2 and len(os.listdir(tmp_path / "daily")) == 2             # (the first look: both are new, a crop of each saved)
+    assert macro.new_daily_tasks(frame) == []
+    progressed = frame.copy()
+    progressed[529:543, 846:946] = (73, 197, 84)                                                           # (the bar moved: the same task)
+    assert macro.new_daily_tasks(progressed) == []
+    other = frame.copy()
+    other[460:520, 850:1190] = 255                                                                          # (the first task's words are gone: another task)
+    other[470:480, 860:1000] = (40, 40, 40)
+    assert len(macro.new_daily_tasks(other)) == 1 and len(os.listdir(tmp_path / "daily")) == 3
+
+
+def test_a_new_task_is_logged_and_the_board_is_kept_in_the_moments(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "DAILY_TASKS_DIR", str(tmp_path / "daily"))
+    log, kept = [], []
+    monkeypatch.setattr(macro, "log_run_event", log.append)
+    macro.state.moments = type("Capture", (), {"started": 1000.0, "keep_frame": lambda self, png, seconds, label: kept.append(label)})()
+    assert macro.keep_new_daily_tasks(shot("board_daily_tasks")) == 2
+    assert log == ["daily tasks: 2 new task(s) seen (saved in debug/daily_tasks)"] and kept == ["new daily task (2)"]
+    assert macro.keep_new_daily_tasks(shot("board_daily_tasks")) == 0 and len(kept) == 1
+    macro.state.moments = None
+
+
+def test_the_daily_tasks_are_due_at_the_first_look_after_the_reset_hour_and_otherwise_once_an_hour(macro, monkeypatch):
+    import datetime
+    hour = macro.cfg.DAILY_TASKS_RESET_HOUR
+    now = datetime.datetime(2026, 11, 10, hour + 3, 0, 0).timestamp()
+    reset = datetime.datetime(2026, 11, 10, hour, 0, 0).timestamp()
+    monkeypatch.setattr(macro.time, "time", lambda: now)
+    on = {"daily_tasks_enabled": True}
+    assert macro.daily_tasks_due({**on, "daily_tasks_looked": reset - 60}) is True                       # (looked before the reset: the tasks are new)
+    assert macro.daily_tasks_due({**on, "daily_tasks_looked": now - 60}) is False                          # (looked since the reset and not an hour ago)
+    assert macro.daily_tasks_due({**on, "daily_tasks_looked": now - macro.cfg.DAILY_TASKS_INTERVAL - 1}) is True
+    assert macro.daily_tasks_due({"daily_tasks_enabled": False, "daily_tasks_looked": 0.0}) is False

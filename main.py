@@ -848,6 +848,8 @@ def _read_game_config() -> dict[str, Any]:
         "pet_outgrown": False,             # the game said the pet that is out is full grown ("Yay! Your pet is full grown!"): the next pick does not keep it, even if it still shows in the list
         "daily_tasks_enabled": False,       # whether the Task Board's daily tasks are looked at (read_daily_tasks()) when collect_pet_pen() has the board open: logged, with a screenshot kept
         "daily_tasks_looked": 0.0,          # when they were last looked at
+        "task_pet": "",                     # "neon" or "common" while the pet out and the backpack's filters are for a daily task that is open (apply_task_pet()); "" otherwise
+        "task_pet_failed": {},              # {kind: when} a pet of that kind could not be had for a task: not tried again before the next reset
         "pet_repicked": 0.0,               # when pet_repick() last picked the pet to level
         "pet_pen_looked": 0.0,
         "pet_pen_swap": False,             # a pet of the pen reached Friend: pet_pen_swap_due() switches the full-grown ones out
@@ -4252,46 +4254,51 @@ def note_pet_friend(img: Image) -> bool:
     update_game_config(lambda c: c.update(pet_pen_swap=True))
     return True
 
-def read_daily_tasks(img: Image) -> list[float]:
-    """The share (0-1) done of each daily task of the Task Board's Tasks tab, from its progress bars (grey stripes, green as far as it is done; DAILY_BAR_*): [] when the tab is not showing. The bars are the rows
-    of DAILY_TASKS_BOX that are all grey or green; each band of DAILY_BAR_BAND_HEIGHT rows is one."""
-    left, top, right, bottom = cfg.DAILY_TASKS_BOX
-    seg = img[top:bottom, left:right].astype(int)
-    blue, green_ch, red = seg[..., 0], seg[..., 1], seg[..., 2]
-    grey = (abs(blue - green_ch) < cfg.DAILY_BAR_GREY_SPREAD) & (abs(green_ch - red) < cfg.DAILY_BAR_GREY_SPREAD) & (blue >= cfg.DAILY_BAR_GREY[0]) & (blue <= cfg.DAILY_BAR_GREY[1])
-    green = (green_ch - blue > cfg.DAILY_BAR_GREEN_LEAD) & (green_ch - red > cfg.DAILY_BAR_GREEN_LEAD)
-    barish = (grey | green).mean(axis=1) >= cfg.DAILY_BAR_ROW_FRACTION
-    shares, start = [], None
-    for y, on in enumerate(list(barish) + [False]):
-        if on and start is None:
-            start = y
-        elif not on and start is not None:
-            if cfg.DAILY_BAR_BAND_HEIGHT[0] <= y - start <= cfg.DAILY_BAR_BAND_HEIGHT[1]:
-                middle = (start + y) // 2
-                done, total = int(green[middle].sum()), int((grey | green)[middle].sum())
-                shares.append(done / total if total else 0.0)
-            start = None
-    return shares
-
-def daily_task_crops(img: Image) -> list[Image]:
-    """The part of each daily task's card that says which task it is - its name and what to do, above the progress bar (DAILY_TASK_TEXT_HEIGHT rows, DAILY_TASK_TEXT_X columns) - one per bar of read_daily_tasks().
-    The progress digits and the reward are outside it, so the same task on another day or at another progress is the same crop."""
+def daily_bars(img: Image) -> list[tuple[int, float]]:
+    """The progress bars of the Task Board's Tasks tab: (the row of the top of each bar in `img`, the share 0-1 of it that is done). A bar is a band of DAILY_BAR_BAND_HEIGHT rows of DAILY_TASKS_BOX that are all
+    grey (DAILY_BAR_GREY: its undone stripes) or green (its done part); the share is the green of its middle row. [] when the tab is not showing."""
     left, top, right, bottom = cfg.DAILY_TASKS_BOX
     seg = img[top:bottom, left:right].astype(int)
     blue, green_ch, red = seg[..., 0], seg[..., 1], seg[..., 2]
     grey = (abs(blue - green_ch) < cfg.DAILY_BAR_GREY_SPREAD) & (abs(green_ch - red) < cfg.DAILY_BAR_GREY_SPREAD) & (blue >= cfg.DAILY_BAR_GREY[0]) & (blue <= cfg.DAILY_BAR_GREY[1])
     green = (green_ch - blue > cfg.DAILY_BAR_GREEN_LEAD) & (green_ch - red > cfg.DAILY_BAR_GREEN_LEAD)
     barish = list((grey | green).mean(axis=1) >= cfg.DAILY_BAR_ROW_FRACTION) + [False]
-    crops, start = [], None
+    bars, start = [], None
     for y, on in enumerate(barish):
         if on and start is None:
             start = y
         elif not on and start is not None:
             if cfg.DAILY_BAR_BAND_HEIGHT[0] <= y - start <= cfg.DAILY_BAR_BAND_HEIGHT[1]:
-                bar_top = top + start
-                crops.append(img[max(0, bar_top - cfg.DAILY_TASK_TEXT_HEIGHT):bar_top - 3, cfg.DAILY_TASK_TEXT_X[0]:cfg.DAILY_TASK_TEXT_X[1]].copy())
+                middle = (start + y) // 2
+                done, total = int(green[middle].sum()), int((grey | green)[middle].sum())
+                bars.append((top + start, done / total if total else 0.0))
             start = None
-    return crops
+    return bars
+
+def read_daily_tasks(img: Image) -> list[float]:
+    """The share (0-1) done of each daily task of the Task Board's Tasks tab (daily_bars()); [] when the tab is not showing."""
+    return [share for _, share in daily_bars(img)]
+
+def daily_task_kinds(img: Image) -> list[Optional[str]]:
+    """What each daily task of the board asks of the pet, one per bar of daily_bars(): "neon" (the bold word Neon in its text: `daily_neon`, "on a Neon or Mega Neon pet"), "common" (`daily_common`), or None for any
+    other (needs of any pet, other rarities: left alone). Looked for in the DAILY_TASK_TEXT_HEIGHT rows above the bar."""
+    templates = load_templates(cfg.STRAY_WINDOW_DIR)
+    kinds: list[Optional[str]] = []
+    for bar_top, _ in daily_bars(img):
+        box = (cfg.DAILY_TASK_TEXT_X[0], max(0, bar_top - cfg.DAILY_TASK_TEXT_HEIGHT), cfg.DAILY_TASK_TEXT_X[1], bar_top)
+        kind = None
+        for name, label in (("daily_neon", "neon"), ("daily_common", "common")):
+            crop = templates.get(name)
+            if crop is not None and find_template(img, crop, box)[0] >= cfg.DAILY_KIND_MATCH:
+                kind = label
+                break
+        kinds.append(kind)
+    return kinds
+
+def daily_task_crops(img: Image) -> list[Image]:
+    """The part of each daily task's card that says which task it is - its name and what to do, above the progress bar (DAILY_TASK_TEXT_HEIGHT rows, DAILY_TASK_TEXT_X columns) - one per bar of daily_bars().
+    The progress digits and the reward are outside it, so the same task on another day or at another progress is the same crop."""
+    return [img[max(0, bar_top - cfg.DAILY_TASK_TEXT_HEIGHT):bar_top - 3, cfg.DAILY_TASK_TEXT_X[0]:cfg.DAILY_TASK_TEXT_X[1]].copy() for bar_top, _ in daily_bars(img)]
 
 def new_daily_tasks(img: Image) -> list[Image]:
     """The tasks on the board that have not been seen before (DAILY_TASKS_DIR holds a crop of each one seen, task_<n>.png): their crops, which are added to it. A crop is the same task when it matches a saved one
@@ -4336,13 +4343,25 @@ def daily_tasks_due(config: dict[str, Any]) -> bool:
     if not config["daily_tasks_enabled"]:
         return False
     now = time.time()
-    return config["daily_tasks_looked"] < last_daily_boundary(now, cfg.DAILY_TASKS_RESET_HOUR) or now - config["daily_tasks_looked"] >= cfg.DAILY_TASKS_INTERVAL
+    interval = cfg.DAILY_TASKS_ACTIVE_INTERVAL if config["task_pet"] else cfg.DAILY_TASKS_INTERVAL                  # (while a task pet is out its bar is looked at oftener: it is done when it is full)
+    return config["daily_tasks_looked"] < last_daily_boundary(now, cfg.DAILY_TASKS_RESET_HOUR) or now - config["daily_tasks_looked"] >= interval
 
-def look_at_daily_tasks() -> None:
-    """With the Task Board open: when daily_tasks_enabled and DAILY_TASKS_INTERVAL has passed since the last time, show its Tasks tab, read how far each daily task is (read_daily_tasks()), say so in the run log
-    (`daily tasks: 0%, 40%`), note the tasks not seen before (keep_new_daily_tasks()) and keep a screenshot of the board (SCREENSHOTS_DIR), so that the tasks of each day are on file. Nothing is clicked but the tab."""
-    if not daily_tasks_due(load_game_config()):
-        return
+def task_pet_wanted(img: Image, failed: dict[str, float]) -> str:
+    """The kind of pet the daily tasks on the board call for now: the first task that is not done (its bar under DAILY_TASK_DONE_SHARE) and asks for a "neon" or a "common" pet (daily_task_kinds()) and whose kind
+    was not given up on since the last reset (`failed`); "" when there is none (every such task is done, or there are none)."""
+    reset = last_daily_boundary(time.time(), cfg.DAILY_TASKS_RESET_HOUR)
+    for (_, share), kind in zip(daily_bars(img), daily_task_kinds(img)):
+        if kind is not None and share < cfg.DAILY_TASK_DONE_SHARE and failed.get(kind, 0.0) < reset:
+            return kind
+    return ""
+
+def look_at_daily_tasks() -> Optional[str]:
+    """With the Task Board open: when daily_tasks_enabled and the tasks are due (daily_tasks_due(): the first look after the reset hour, then every DAILY_TASKS_INTERVAL - DAILY_TASKS_ACTIVE_INTERVAL while a task pet
+    is out), show its Tasks tab, read how far each task is (`daily tasks: 0%, 40%` in the run log), note the tasks not seen before (keep_new_daily_tasks()), keep a screenshot of the board (SCREENSHOTS_DIR) and
+    say which pet the open tasks call for (task_pet_wanted(): "neon", "common" or "" for none). None when nothing was looked at or the tab was not showing. Nothing is clicked but the tab."""
+    config = load_game_config()
+    if not daily_tasks_due(config):
+        return None
     hover_click(*cfg.DAILY_TASKS_TAB_POS)
     wait_interruptible(cfg.PET_PEN_UI_SETTLE)
     img = grab_screen()
@@ -4350,13 +4369,41 @@ def look_at_daily_tasks() -> None:
     update_game_config(lambda c: c.update(daily_tasks_looked=time.time()))
     if not shares:
         log_run_event("daily tasks: the Tasks tab was not showing")
-        return
-    log_run_event("daily tasks: " + ", ".join(f"{share:.0%}" for share in shares))
+        return None
+    kinds = daily_task_kinds(img)
+    log_run_event("daily tasks: " + ", ".join(f"{share:.0%}" + (f" ({kind})" if kind else "") for share, kind in zip(shares, kinds)))
     keep_new_daily_tasks(img)
     try:
         save_screenshot()
     except OSError:
         pass
+    return task_pet_wanted(img, dict(config["task_pet_failed"]))
+
+def apply_task_pet(wanted: Optional[str]) -> None:
+    """Put the pet out that the daily tasks call for (`wanted` from look_at_daily_tasks(): "neon", "common", "" for none, None for nothing was read): a kind that is not the one out is equipped through the filters
+    (equip_task_pet(); the filters of the kind that was out are put back first), "" puts the filters and Setup's pet back (restore_pet_filters()). The kind is kept in the game config (`task_pet`) while it is out, and
+    pet_repick() leaves the pet alone meanwhile. A kind that cannot be had (no such pet in the list, a step that did not take) is given up on until the next reset (`task_pet_failed`) and the filters put back."""
+    if wanted is None:
+        return
+    config = load_game_config()
+    current = config["task_pet"]
+    if wanted == current:
+        return
+    if wanted == "":
+        log_run_event(f"daily tasks: no open task needs a {current} pet any more - the filters and the pet are put back")
+        if restore_pet_filters():
+            update_game_config(lambda c: c.update(task_pet="", pet_repicked=time.time()))
+        return
+    if current:
+        equip_task_pet("all")                                                            # (the rows of the kind that was out first: a neon and a common filter together may list nothing)
+    log_run_event(f"daily tasks: an open task needs a {wanted} pet - switching to one")
+    if equip_task_pet(wanted):
+        respawn_character()
+        update_game_config(lambda c: c.update(task_pet=wanted))
+        return
+    log_run_event(f"daily tasks: no {wanted} pet could be had - given up on it until the next reset")
+    restore_pet_filters()
+    update_game_config(lambda c: c.update(task_pet="", task_pet_failed={**c["task_pet_failed"], wanted: time.time()}, pet_repicked=time.time()))
 
 def collect_pet_pen() -> bool:
     """Open the Task Board and, when it has the "Pet Pen Ready" card, click it, wait out the age-up screen and click its NICE!. True once the board has been looked at (and the pets collected if they were
@@ -4375,8 +4422,11 @@ def collect_pet_pen() -> bool:
             return False
         card = popup_found(grab_screen(), "pet_pen_ready")
         if card is None:
-            look_at_daily_tasks()
+            wanted = look_at_daily_tasks()
             hover_click(*cfg.STRAY_WINDOWS["task_board"]["close_pos"])
+            wait_interruptible(cfg.PET_PEN_UI_SETTLE)
+            state.task_board_wanted = False
+            apply_task_pet(wanted)                                                        # (the backpack, with the board closed)
             return True
         hover_click(*card)
         wait_interruptible(cfg.PET_PEN_ANIMATION_WAIT)
@@ -4409,7 +4459,7 @@ def pet_repick() -> None:
     """Once per cycle after pet_pen(), when the game config's level_growing_pet is on: every PET_REPICK_INTERVAL seconds repick_pet() puts out the first pet that is neither an egg nor full grown. The
     macro has no way yet to tell that the pet out has grown up (no capture of it), so it asks the list instead."""
     config = load_game_config()
-    if not config["level_growing_pet"] or time.time() - config["pet_repicked"] < cfg.PET_REPICK_INTERVAL:
+    if not config["level_growing_pet"] or config["task_pet"] or time.time() - config["pet_repicked"] < cfg.PET_REPICK_INTERVAL:      # (not while a daily task's pet is out)
         return
     run_side_action(repick_pet)
     update_game_config(lambda c: c.update(pet_repicked=time.time()))
@@ -6924,7 +6974,7 @@ class AdoptMeGUI:
                            ("Tend the lure", "lure_enabled"),
                            ("Resume after focus loss (take Roblox's focus back instead of stopping)", "resume_on_focus_loss"),
                            ("Collect the Pet Pen when the Task Board says it is ready", "pet_pen_enabled"),
-                           ("Look at the Task Board's daily tasks (needs the Pet Pen on; logged, with a screenshot)", "daily_tasks_enabled"),
+                           ("Do the daily tasks that need a neon or a common pet (needs the Pet Pen on; the pet is switched through the backpack's filters and back)", "daily_tasks_enabled"),
                            ("Setup levels a pet that still grows (no eggs, none full grown)", "level_growing_pet")):
             self.add_config_checkbox(parent, label, key, config)
 

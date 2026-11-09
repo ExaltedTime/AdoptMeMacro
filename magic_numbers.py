@@ -156,6 +156,8 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "trading_option_no_one":       {"box": (960, 570, 1100, 640), "threshold": 0.85},
     "pet_alicorn":                 {"box": (900, 640, 1230, 900), "threshold": 0.8},
     # The Effect and Rarity rows of the FILTERS panel (the text of each row; its box is found left of it, as for the Age rows): what the daily tasks' pets are picked by.
+    "daily_neon": {"box": (842, 440, 1200, 700), "threshold": 0.85},          # the bold word Neon / Common in the text of a daily task (what the task wants of the pet), found above its progress bar
+    "daily_common": {"box": (842, 440, 1200, 700), "threshold": 0.85},
     "filter_effect_regular": {"box": (800, 640, 1130, 880), "threshold": 0.85},
     "filter_effect_neon": {"box": (800, 640, 1130, 880), "threshold": 0.85},
     "filter_effect_mega_neon": {"box": (800, 640, 1130, 880), "threshold": 0.85},
@@ -709,7 +711,10 @@ DAILY_TASKS_RESET_HOUR = 4                # the daily tasks reset at this hour (
 DAILY_TASKS_DIR = os.path.join(DEBUG_DIR, "daily_tasks")   # a crop of each daily task seen (task_<n>.png), so that a new one is told (new_daily_tasks())
 DAILY_TASK_TEXT_X = (842, 1200)           # the columns of a task's name and what to do (not the reward at the right)
 DAILY_TASK_TEXT_HEIGHT = 80               # the rows above its progress bar that hold them
+DAILY_KIND_MATCH = 0.85                  # the bold word of a task's text (daily_neon, daily_common) found at least this well in the rows above its bar
 DAILY_TASK_MATCH = 0.9                    # a crop that matches a saved one at least this well is the same task
+DAILY_TASKS_ACTIVE_INTERVAL = 15 * 60     # seconds between looks at the tasks while a task's pet is out (its bar full means the pet goes back)
+DAILY_TASK_DONE_SHARE = 0.99              # a bar this full is a task done
 DAILY_TASKS_TAB_POS = (1018, 360)         # the Tasks tab of the Task Board (the first tab; the second is Alerts)
 DAILY_TASKS_BOX = (850, 430, 1090, 700)   # where the progress bars of the daily tasks are (read_daily_tasks())
 DAILY_BAR_GREY = (120, 175)               # the grey of an undone part of a bar (its stripes are 135 and 157)...

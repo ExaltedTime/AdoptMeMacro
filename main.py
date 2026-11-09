@@ -4857,7 +4857,7 @@ def zip_capture(folder: str) -> list[str]:
     building = out + ".partial"                                                                  # (the zips are only in zips/ once all are made: /pull and OneDrive must not take half of them)
     shutil.rmtree(building, ignore_errors=True)
     os.makedirs(building)
-    frames = sorted(f for f in os.listdir(folder) if f.startswith("frame_") and f.endswith(".png"))
+    frames = sorted((f for f in os.listdir(folder) if f.startswith("frame_") and f.endswith(".png")), key=lambda f: float(f[:-len(".png")].rsplit("_", 1)[1]))      # (in time order: the screens of a need's phases, frame_p<n>_<seconds>, are among the others, not after them all)
     first = ["README.txt", "info.json", "events.jsonl"]                                           # (what a reader opens first)
     heads = [f for f in first if os.path.exists(os.path.join(folder, f))] + sorted(
         f for f in os.listdir(folder) if f not in first and not f.startswith("frame_") and os.path.isfile(os.path.join(folder, f)))

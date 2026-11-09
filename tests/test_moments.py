@@ -258,3 +258,15 @@ def test_the_screens_of_a_need_that_failed_are_kept_in_the_moments_and_those_of_
     for _ in range(macro.cfg.PHASE_SHOTS_MAX + 5):
         macro.phase_shot("x")
     assert len(macro.state.phase_shots) == macro.cfg.PHASE_SHOTS_MAX
+
+
+def test_the_zips_hold_the_frames_in_time_order_with_the_screens_of_the_phases_among_them(macro, tmp_path):
+    import zipfile
+    for name in ("frame_000001_0.500.png", "frame_000002_900.250.png", "frame_p00001_16.127.png", "frame_000003_1800.000.png", "frame_p00002_742.447.png"):
+        (tmp_path / name).write_bytes(b"x")
+    (tmp_path / "events.jsonl").write_text("{}")
+    names = []
+    for path in macro.zip_capture(str(tmp_path)):
+        with zipfile.ZipFile(path) as z:
+            names += [n for n in z.namelist() if n.startswith("frame_")]
+    assert names == ["frame_000001_0.500.png", "frame_p00001_16.127.png", "frame_p00002_742.447.png", "frame_000002_900.250.png", "frame_000003_1800.000.png"]

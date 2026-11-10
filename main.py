@@ -409,7 +409,6 @@ class State:
     display_switching: bool = False        # Blackout is switching the display (Win+P's way): Windows moves the windows and Roblox loses the focus for a moment - the running macro waits at its next check instead of stopping
     phase_shots: list = field(default_factory=list)      # (seconds into the capture, label, PNG bytes) of the screens taken during the need that runs: kept in the moments when it fails (phase_shot())
     phase_ok: dict = field(default_factory=dict)          # {need: executions that went well since one of them was kept}
-    pen_notes: list = field(default_factory=list)        # what switch_pen_pets() and put_a_pet_in_the_pen() said (pen_note()), for the Debug button to show in the console
     notice_clicks: list = field(default_factory=list)     # when dismiss_notice() clicked (a notice that does not go is left alone for a while)
     notice_pause_until: float = 0.0
     notice_reported: float = 0.0
@@ -1695,7 +1694,7 @@ def walk_alternating(direction_pair: tuple[str, str], total_duration: float, ste
 # Plain callable actions, not tied to any detected need/icon - not in
 # ENABLED_NEEDS or NEED_HANDLER_CLASSES. side_quest() runs lure_collect() and
 # tree_collect() on a timer; setup_game() and leave_and_rejoin() run from the
-# GUI's Functions section and from rejoin_game()'s recovery.
+# bot's commands and from rejoin_game()'s recovery.
 
 def lure_collect() -> bool:
     """Walk to the lure, collect its rewards, then set a new one
@@ -4631,11 +4630,11 @@ def put_a_pet_in_the_pen() -> bool:
     not come up or no pet fits."""
     add = popup_found(grab_screen(), "pet_pen_add")
     if add is None:
-        pen_note("pet pen: no free place to put a pet in")
+        log_run_event("pet pen: no free place to put a pet in")
         return False
     hover_click(*add)
     if look_until(lambda img: popup_visible(img, "pet_backpack_title"), cfg.PET_PEN_OPEN_WAIT, cfg.PET_PEN_POLL) is None:
-        pen_note("pet pen: the backpack did not come up after Add Pet")
+        log_run_event("pet pen: the backpack did not come up after Add Pet")
         return False
     if not ensure_pen_age_filter():
         hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
@@ -4643,22 +4642,17 @@ def put_a_pet_in_the_pen() -> bool:
         return False
     pet = choose_pen_pet()
     if pet is None:
-        pen_note("pet pen: no pet fits (all in a trade listing, equipped or none left)")
+        log_run_event("pet pen: no pet fits (all in a trade listing, equipped or none left)")
         hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
         wait_interruptible(cfg.PET_PEN_UI_SETTLE)
         return False
     hover_click(*pet)
     wait_interruptible(cfg.PET_PEN_UI_SETTLE)
     if popup_visible(grab_screen(), "pet_backpack_title"):
-        pen_note("pet pen: the pet clicked did not go in")
+        log_run_event("pet pen: the pet clicked did not go in")
         hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
         return False
     return True
-
-def pen_note(text: str) -> None:
-    """A line of the pen's switch, in the run log and kept in state.pen_notes (switch_pen_now() shows them in the console)."""
-    state.pen_notes.append(text)
-    log_run_event(text)
 
 def switch_pen_pets() -> bool:
     """The pen's full-grown pets out and others in: the pen opened (open_pet_pen()), the red X of each place with the "Full grown!" sign clicked (the rest move up, so each time it is looked at again), then a pet that fits put in
@@ -4668,7 +4662,7 @@ def switch_pen_pets() -> bool:
         return False
     phase_reset()
     if not open_pet_pen():
-        pen_note("pet pen: it did not open")
+        log_run_event("pet pen: it did not open")
         phase_shot("the pen did not open")
         phase_commit("the pet pen switch")
         return False
@@ -4691,13 +4685,13 @@ def switch_pen_pets() -> bool:
         phase_shot(f"after the X of place {grown[0]}")
         out += 1
     if out == 0:
-        pen_note("pet pen: no pet in it is full grown")
+        log_run_event("pet pen: no pet in it is full grown")
     for _ in range(out):
         if not put_a_pet_in_the_pen():
             break
     else:
         if out:
-            pen_note(f"pet pen: {out} full-grown pet(s) switched")
+            log_run_event(f"pet pen: {out} full-grown pet(s) switched")
     phase_shot("before the pen is closed")
     phase_commit("the pet pen switch")
     hover_click(*cfg.PET_PEN_CLOSE_POS)
@@ -4712,17 +4706,6 @@ def check_pet_pen() -> bool:
     done = switch_pen_pets()
     update_game_config(lambda c: c.update(pet_pen_swap_tried=time.time(), **({"pet_pen_swap": False} if done else {})))
     respawn_character()
-    return done
-
-def switch_pen_now() -> bool:
-    """The Debug tab's "Switch the Pet Pen's full-grown pets now": switch_pen_pets() at once, whether or not a growing up was seen or the pen is switched on, then a respawn back in the house (as Setup's check does); what it
-    did is in the run log (`pet pen: ...`) and, for a pet that did not go out, a failure with its screenshot. True when the pen is as it should be."""
-    state.pen_notes.clear()
-    with task_unscrew(interruptible=False, what="debug: switch the pen"):
-        done = switch_pen_pets()
-        update_game_config(lambda c: c.update(pet_pen_swap_tried=time.time(), **({"pet_pen_swap": False} if done else {})))
-        respawn_character()
-    logger.info("Pet Pen: " + ("; ".join(state.pen_notes) if state.pen_notes else "nothing was said") + (" - done" if done else " - NOT as it should be"))
     return done
 
 def switch_pen_and_respawn() -> bool:
@@ -6416,6 +6399,33 @@ class Blackout:
             return None
         return window
 
+# The Guide tab: (heading, lines); {stop}, {capture}, {blackout}, {new_need} and {screenshot} are the keys of HOTKEYS.
+GUIDE: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Keys", (
+        "{stop} stops the macro, in any window.",
+        "{capture} starts and stops an input capture (in Roblox).",
+        "{screenshot} saves a screenshot to debug/screenshots (in Roblox).",
+        "{blackout} blanks the screen while the macro works, and shows it again (in Roblox).",
+        "{new_need} teaches a need icon the macro does not know (in Roblox).",
+        "The last three can be switched off in Settings, so that the key is typed in the game.")),
+    ("Main", (
+        "The blue button starts the loop, the red one stops it.",
+        "Run Setup at the next loop: once, the next time the loop starts or comes round (equip the pet, set the filters).")),
+    ("Settings", (
+        "Tend the money tree / the lure: collect them now and then.",
+        "Resume after focus loss: take Roblox's focus back instead of stopping.",
+        "Pet Pen: collect it when the Task Board's sign says it is ready.",
+        "Daily tasks: do the ones that need a neon or a common pet (needs the Pet Pen on; the pet is switched through the backpack's filters and back).",
+        "Setup levels a pet that still grows: no eggs, none full grown.",
+        "Rejoin: the private server (off: a public one) and its link.")),
+    ("Debug", (
+        "Record the next run: a low quality video.",
+        "Capture the moments: frames around failures, kept when a run lasts over an hour.",
+        "Show debug lines: the dimmer lines in the output (output.log has them either way).",
+        "Needs: switch a need off to leave it alone, or test its handler on its own.")),
+)
+
+
 class AdoptMeGUI:
     def __init__(self, root: tk.Tk) -> None:
         state.macro_window = self
@@ -6431,6 +6441,7 @@ class AdoptMeGUI:
         self.fg = cfg.GUI_FG
         self.root.configure(bg=self.bg)
 
+        self.set_style()
         self.create_ui()
 
         self.capture = DebugCapture(self.root, self.debug_text)
@@ -6722,6 +6733,20 @@ class AdoptMeGUI:
             except OSError:
                 pass
 
+    def set_style(self) -> None:
+        """One palette for the whole window (GUI_BG, GUI_TAB_BG, GUI_ACCENT, GUI_FG): the tab strips (ttk, drawn with the "clam" theme, whose colours can all be set: the
+        default theme's white frame around a tab's page cannot) and no focus ring or bevel on the Tk widgets (the white edge round a checkbox or the console)."""
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+        for name in ("TNotebook", "TNotebook.Tab"):
+            style.configure(name, background=self.bg, bordercolor=self.bg, lightcolor=self.bg, darkcolor=self.bg, focuscolor=self.bg)
+        style.configure("TNotebook", borderwidth=0, tabmargins=(0, 0, 0, 0))
+        style.configure("TNotebook.Tab", background=cfg.GUI_TAB_BG, foreground=self.fg, borderwidth=0, padding=cfg.GUI_TAB_PADDING, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE))
+        style.map("TNotebook.Tab", background=[("selected", self.accent), ("active", self.accent)], foreground=[("selected", self.fg)])
+        for widget in ("Checkbutton", "Button", "Entry", "Text", "Frame", "Label"):
+            self.root.option_add(f"*{widget}.highlightThickness", 0)
+        self.root.option_add("*Checkbutton.borderWidth", 0)
+
     def create_ui(self) -> None:
         """Build every widget; buttons that start a background action are added to
         self.action_buttons ([STOP] deliberately isn't). See docs/ARCHITECTURE.md#gui-internals.
@@ -6735,6 +6760,8 @@ class AdoptMeGUI:
         notebook.add(btn_frame, text="Main")
         notebook.add(options_tab, text="Settings")
         notebook.add(debug_tab, text="Debug")
+        guide_tab = tk.Frame(notebook, bg=self.bg)
+        notebook.add(guide_tab, text="Guide")
 
         self.action_buttons = []  # every button that starts a background task
 
@@ -6765,20 +6792,7 @@ class AdoptMeGUI:
         btn_loop.pack(fill=tk.BOTH, expand=True)
         self.action_buttons.append(btn_loop)
 
-        tk.Label(btn_frame, text=f"Press {cfg.HOTKEYS['stop'].upper()} anywhere to stop", font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE),
-                 bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X)
-
         tk.Frame(btn_frame, bg=self.accent, height=cfg.GUI_DIVIDER_HEIGHT).pack(fill=tk.X, pady=cfg.GUI_ROW_SPACING)
-
-        tk.Label(btn_frame, text="Functions", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"),
-                 bg=self.bg, fg=self.accent).pack(anchor=tk.W)
-
-        for label, action in (("Respawn", respawn_character), ("Leave & rejoin", leave_and_rejoin)):
-            btn = tk.Button(btn_frame, text=label, command=lambda a=action: self.run_async(a),  # type: ignore[misc]
-                            font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_RESPAWN_COLOR, fg=self.fg,
-                            height=cfg.GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
-            btn.pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
-            self.action_buttons.append(btn)
 
         # Setup is not a button: it is ticked here and runs once, at the next pass of the loop (a loop that is running takes it at its next cycle)
         self.config_flag_vars: dict[str, tk.BooleanVar] = {}
@@ -6793,6 +6807,7 @@ class AdoptMeGUI:
         # Debug tab: the need handlers (a switch and a Test button each, regardless of whether it's in
         # ENABLED_NEEDS, so any can be run on its own, plus one that runs them all in turn).
         self.build_debug_tab(debug_tab)
+        self.build_guide_tab(guide_tab)
 
         # Debug console
         debug_frame = tk.Frame(self.root, bg=self.bg)
@@ -7005,7 +7020,7 @@ class AdoptMeGUI:
                            font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.fg, selectcolor=self.bg,
                            activebackground=self.bg, activeforeground=self.fg, anchor=tk.W, cursor="hand2").pack(side=tk.LEFT)
             btn = tk.Button(cell, text="Test", command=lambda n=name, c=handler_cls: self.test_handler(n, c),  # type: ignore[misc]
-                            font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=cfg.GUI_TEST_COLOR, fg=self.fg, cursor="hand2", padx=cfg.GUI_ROW_SPACING, pady=0)
+                            font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.accent, fg=self.fg, cursor="hand2", padx=cfg.GUI_ROW_SPACING, pady=0)
             btn.pack(side=tk.RIGHT, pady=cfg.GUI_LABEL_PADDING)
             self.action_buttons.append(btn)
 
@@ -7013,6 +7028,20 @@ class AdoptMeGUI:
         """Persist a need's switch (usable while a run goes on, like the other switches: update_game_config() is locked)."""
         update_game_config(lambda c: c.setdefault("needs_enabled", {}).update({name: value}))
         logger.info(f"{name} need {'on' if value else 'off'}")
+
+    def build_guide_tab(self, parent: Any) -> None:
+        """Fill the Guide tab: what the keys and the switches do (read only; GUIDE has the text, the key letters come from HOTKEYS)."""
+        keys = {name: key.upper() for name, key in cfg.HOTKEYS.items()}
+        text = scrolledtext.ScrolledText(parent, height=cfg.GUI_GUIDE_HEIGHT, width=cfg.GUI_CONSOLE_WIDTH, wrap=tk.WORD, bg=self.bg, fg=self.fg, bd=0, highlightthickness=0,
+                                         font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE))
+        text.tag_configure("heading", foreground=self.accent, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"))
+        for heading, lines in GUIDE:
+            text.insert(tk.END, heading + "\n", "heading")
+            for line in lines:
+                text.insert(tk.END, "  " + line.format(**keys) + "\n")
+            text.insert(tk.END, "\n")
+        text.configure(state=tk.DISABLED)
+        text.pack(fill=tk.BOTH, expand=True)
 
     def add_section(self, parent: Any, title: str) -> None:
         """A heading of the Settings tab, with a line under it."""
@@ -7031,15 +7060,15 @@ class AdoptMeGUI:
         self.add_section(parent, "The loop")
         for label, key in (("Tend the money tree", "money_tree_enabled"),
                            ("Tend the lure", "lure_enabled"),
-                           ("Resume after focus loss (take Roblox's focus back instead of stopping)", "resume_on_focus_loss"),
-                           ("Collect the Pet Pen when the Task Board says it is ready", "pet_pen_enabled"),
-                           ("Do the daily tasks that need a neon or a common pet (needs the Pet Pen on; the pet is switched through the backpack's filters and back)", "daily_tasks_enabled"),
-                           ("Setup levels a pet that still grows (no eggs, none full grown)", "level_growing_pet")):
+                           ("Resume after focus loss", "resume_on_focus_loss"),
+                           ("Collect the Pet Pen when it is ready", "pet_pen_enabled"),
+                           ("Do the daily tasks that need a neon or a common pet", "daily_tasks_enabled"),
+                           ("Setup levels a pet that still grows", "level_growing_pet")):
             self.add_config_checkbox(parent, label, key, config)
 
         self.add_section(parent, "Rejoin")
-        self.add_config_checkbox(parent, "Rejoin the private server (off: a public one)", "use_private_server", config)
-        self.add_hint(parent, "Private server link")
+        self.add_config_checkbox(parent, "Rejoin the private server", "use_private_server", config)
+        self.add_hint(parent, "Private server link")      # (the label of the field below it)
         self.server_link_var = tk.StringVar(value=config["private_server_link"])
         server_link_entry = tk.Entry(parent, textvariable=self.server_link_var, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
                                      bg=cfg.GUI_CONSOLE_BG, fg=cfg.GUI_CONSOLE_FG, insertbackground=cfg.GUI_CONSOLE_FG)
@@ -7048,16 +7077,14 @@ class AdoptMeGUI:
         server_link_entry.bind("<Return>", lambda e: self.save_server_link())
 
         self.add_section(parent, "Keys")
-        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['blackout'].upper()} blanks the screen in Roblox (off: type it)", "blackout_hotkey_enabled", config)
-        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['new_need'].upper()} teaches a new need icon in Roblox (off: type it)", "new_need_hotkey_enabled", config)
-        self.add_hint(parent, f"{cfg.HOTKEYS['stop'].upper()} stops, anywhere. {cfg.HOTKEYS['capture'].upper()} starts / stops an input capture (in Roblox). "
-                              f"{cfg.HOTKEYS['screenshot'].upper()} saves a screenshot to debug/screenshots (in Roblox)")
+        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['blackout'].upper()} blanks the screen in Roblox", "blackout_hotkey_enabled", config)
+        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['new_need'].upper()} teaches a new need icon in Roblox", "new_need_hotkey_enabled", config)
 
     def build_debug_options(self, parent: Any) -> None:
         """Fill the Debug tab's Options subtab: record the next run, capture the moments, show the debug lines in the output, refresh the debug folder, reset the config."""
         config = load_game_config()
-        self.add_config_checkbox(parent, "Record the next run (low quality video)", "record_next_run", config)
-        self.add_config_checkbox(parent, "Capture the moments of a run (kept when it lasts over an hour)", "keep_moments", config)
+        self.add_config_checkbox(parent, "Record the next run", "record_next_run", config)
+        self.add_config_checkbox(parent, "Capture the moments of a run", "keep_moments", config)
         self.show_debug_var = tk.BooleanVar(value=True)
         tk.Checkbutton(parent, text="Show debug lines in the output", variable=self.show_debug_var, command=self.set_debug_lines_shown,
                        font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.bg, fg=self.fg,
@@ -7067,19 +7094,6 @@ class AdoptMeGUI:
         buttons.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
         buttons.grid_columnconfigure(0, weight=1, uniform="settings")
         buttons.grid_columnconfigure(1, weight=1, uniform="settings")
-        for label, kind in (("Equip a neon pet (for the daily tasks)", "neon"), ("Equip a common pet (for the daily tasks)", "common")):
-            task_button = tk.Button(parent, text=label, command=lambda k=kind: self.run_async(lambda: equip_task_pet(k)), font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),  # type: ignore[misc]
-                                    bg=cfg.GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
-            task_button.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
-            self.action_buttons.append(task_button)
-        restore_button = tk.Button(parent, text="Filters and pet back to normal (after a task)", command=lambda: self.run_async(restore_pet_filters), font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
-                                   bg=cfg.GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
-        restore_button.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
-        self.action_buttons.append(restore_button)
-        pen_button = tk.Button(parent, text="Switch the Pet Pen's full-grown pets now", command=lambda: self.run_async(switch_pen_now), font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
-                               bg=cfg.GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
-        pen_button.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
-        self.action_buttons.append(pen_button)
         tk.Button(buttons, text="Refresh debug", command=self.refresh_debug_folder, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
                   bg=self.accent, fg=self.fg, cursor="hand2").grid(row=0, column=0, sticky=tk.EW, padx=(0, cfg.GUI_WIDGET_SPACING))
         tk.Button(buttons, text="Reset Config", command=self.reset_config, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),

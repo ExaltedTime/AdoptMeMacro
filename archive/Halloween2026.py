@@ -1,8 +1,8 @@
-"""Halloween 2026: the event's minigames and routes, kept here now that it is over (docs/HALLOWEEN_2026.md).
+"""Halloween 2026: the event's minigames and routes, kept here now that it is over (HALLOWEEN_2026.md).
 
 Everything in this file was part of the macro while the event ran: reading the Hauntlet 2 screen and playing its rooms, hunting the Ghost Gallery's ghosts, following the Stitches'
 Spotlight's ring, reading the candy corn total, accepting or dismissing the minigame popups, recording a run of one, and the constants all of that used. The macro does not import it.
-To bring the event (or a later one like it) back, the hooks the macro had are listed in docs/HALLOWEEN_2026.md: `unscrew()` calling `minigame_popup()` and `close_minigame_finish_screen()`,
+To bring the event (or a later one like it) back, the hooks the macro had are listed in HALLOWEEN_2026.md: `unscrew()` calling `minigame_popup()` and `close_minigame_finish_screen()`,
 the GUI's "Play ..." switches, the run report's minigame lines. The code reaches the macro's own functions as `m.<name>` (main.py), and the state it keeps for itself is `event`."""
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ MINIGAME_FINISH_BUTTON_BOX = (860, 725, 1060, 800)
 MINIGAME_FINISH_BUTTON_MIN_PIXELS = 2000
 MINIGAME_FINISH_BUTTON_POS = (966, 762)
 # While one runs it has its own overlay along the top of the screen (Hauntlet 2: the ROOM counter beside the
-# timer and monitor; Ghost Gallery: the TIME LEFT / GHOST GALLERY / Score banner; Stitches' Spotlight: TIME LEFT / STITCHES' SPOTLIGHT / Candy Corn). Crops of each overlay (scripts/Halloween2026_ref/overlays/<minigame>.png, found within its box here, at least
+# timer and monitor; Ghost Gallery: the TIME LEFT / GHOST GALLERY / Score banner; Stitches' Spotlight: TIME LEFT / STITCHES' SPOTLIGHT / Candy Corn). Crops of each overlay (archive/Halloween2026_ref/overlays/<minigame>.png, found within its box here, at least
 # MINIGAME_OVERLAY_THRESHOLD) say whether the game is on: one that was seen and then isn't, for
 # MINIGAME_OVERLAY_LOST_TIMEOUT seconds, was left (game over, kicked out) - and one never seen within
 # MINIGAME_OVERLAY_START_GRACE seconds after its start wait never started.

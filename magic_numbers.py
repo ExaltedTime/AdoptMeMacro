@@ -613,7 +613,7 @@ TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
 SICK_FINAL_CLICK_POS = (1045, 660)       # click after the sick need's walk
 
 # Whether a teleport-walk need flies by helicopter by default; an entry can
-# override it with `helicopter=True/False`: `camping` turns it on, the others walk (the Halloween routes of the event flew too: scripts/Halloween2026.py).
+# override it with `helicopter=True/False`: `camping` turns it on, the others walk (the Halloween routes of the event flew too: archive/Halloween2026.py).
 HELICOPTER_REQUIRED = False
 HELICOPTER_FORWARD_DURATION = 1.0  # step forward this long after teleporting, before equipping
 HELICOPTER_HOLD_DURATION = 4.5     # then hold KEYS["helicopter"] this long (it was 0.5 s less, and the helicopter could be caught on a tree)
@@ -649,7 +649,7 @@ HELD_KEYS = tuple(dict.fromkeys([*KEYS.values(), *(key for keys in KEY_SEQUENCES
 # (key, seconds) holds to perform in order, optionally a `final_click` (a need with one has a doctor's dialog to answer after the last hold:
 # its prompt is clicked, the dialog waited for and this is its Yes - sick; see TeleportWalkNeedHandler._open_dialog()), optionally `helicopter` (above) and optionally
 # `max_wait` (how long to wait for the need to clear afterwards; default NEED_GONE_MAX_WAIT). One table: the nursery's routes (bored, beach, school, camping, sick); the
-# event's own routes are in scripts/Halloween2026.py.
+# event's own routes are in archive/Halloween2026.py.
 TELEPORT_WALK_NEEDS: dict[str, dict[str, Any]] = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["forward"], 16.0), (KEYS["left"], 10.0))),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["left"], 27.0),)),
@@ -941,14 +941,15 @@ WHITE_RANGE = (np.array([0, 0, 200]), np.array([180, 40, 255]))
 # ============================================================================
 GUI_GEOMETRY = "380x650+1533+110"   # size + position (docked top-right)
 GUI_ALPHA = 0.95
+GUI_GUIDE_HEIGHT = 14               # lines, the Guide tab
 GUI_FONT = "Courier"
 GUI_BG = "#1a1a1a"
 GUI_ACCENT = "#0d7377"
 GUI_FG = "#fff"
 GUI_STOP_COLOR = "#d62828"
 GUI_LOOP_COLOR = "#2980b9"
-GUI_RESPAWN_COLOR = "#8e44ad"
-GUI_TEST_COLOR = "#e74c3c"
+GUI_TAB_BG = "#2a2a2a"             # the tabs that are not selected (the selected one and the buttons are GUI_ACCENT; GUI_LOOP_COLOR starts, GUI_STOP_COLOR stops or resets)
+GUI_TAB_PADDING = (10, 3)           # px, inside a tab
 GUI_CONSOLE_BG = "#0a0a0a"
 GUI_CONSOLE_FG = "#00ff00"
 GUI_CONSOLE_LEVEL_COLORS = {"DEBUG": "#4f9f4f", "INFO": GUI_CONSOLE_FG, "WARNING": "#ffb000", "ERROR": "#ff5050"}     # the console's text by log level (the debug lines dimmer)
@@ -971,7 +972,6 @@ GUI_CONSOLE_FONT_SIZE = 7
 
 GUI_CONSOLE_HEIGHT = 14          # lines
 GUI_CONSOLE_WIDTH = 45           # chars
-GUI_RESPAWN_BUTTON_HEIGHT = 1    # lines
 
 # A backpack category tab that is already selected has an orange background; clicking it again expands the
 # backpack, so handlers only click a tab that isn't orange yet. The tile is TAB_HALF_SIZE (x, y) around its

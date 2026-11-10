@@ -641,3 +641,22 @@ def test_a_done_task_is_claimed_by_the_claim_all_button_of_the_real_board_and_no
     monkeypatch.setattr(macro, "grab_screen", lambda: shot("board_daily_tasks"))
     macro.look_at_daily_tasks()
     assert "daily tasks: Claim All clicked" not in log and macro.clicks == [macro.cfg.DAILY_TASKS_TAB_POS]
+
+
+def test_a_temporary_pet_is_found_by_its_pill_and_replaced_by_the_pick_that_skips_the_pet_that_is_out(macro, monkeypatch):
+    assert macro.popup_visible(shot("temporary_pet_out"), "pet_temporary") and not macro.popup_visible(shot("world_after"), "pet_temporary")
+    seen = []
+    monkeypatch.setattr(macro, "log_run_event", lambda text: seen.append(text))
+    monkeypatch.setattr(macro, "grab_screen", lambda: shot("temporary_pet_out"))
+    monkeypatch.setattr(macro, "run_side_action", lambda action: seen.append((action.__name__, macro.load_game_config()["pet_outgrown"])) or True)
+    macro.update_game_config(lambda c: c.update(level_growing_pet=True, task_pet="", pet_outgrown=False))
+    macro.state.temporary_pet_tried = 0.0
+    macro.replace_temporary_pet()
+    assert ("repick_pet", True) in seen and macro.load_game_config()["pet_outgrown"] is False          # (the pick was told to skip the pet that is out, then the flag went)
+    n = len(seen)
+    macro.replace_temporary_pet()
+    assert len(seen) == n                                                                              # (just tried: not again before TEMPORARY_PET_RETRY)
+    macro.state.temporary_pet_tried = 0.0
+    monkeypatch.setattr(macro, "grab_screen", lambda: shot("world_after"))
+    macro.replace_temporary_pet()
+    assert len(seen) == n                                                                              # (no temporary pet: nothing)

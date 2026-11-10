@@ -405,6 +405,7 @@ class State:
     # True while a handler that wants the pet focused runs (see wanting_pet_focus()).
     pet_focus_wanted: bool = False
     task_board_wanted: bool = False
+    temporary_pet_tried: float = 0.0       # when replace_temporary_pet() last tried to put the temporary pet away
     display_switching: bool = False        # Blackout is switching the display (Win+P's way): Windows moves the windows and Roblox loses the focus for a moment - the running macro waits at its next check instead of stopping
     phase_shots: list = field(default_factory=list)      # (seconds into the capture, label, PNG bytes) of the screens taken during the need that runs: kept in the moments when it fails (phase_shot())
     phase_ok: dict = field(default_factory=dict)          # {need: executions that went well since one of them was kept}
@@ -3127,19 +3128,12 @@ STEP_ACTIONS: dict[str, Callable[..., Optional[bool]]] = {
 }
 
 def take_off() -> bool:
-    """Hold the helicopter key (RIDE_R_HOLD_DURATION) and look whether the view changed (screen_changed(): a helicopter that rises takes the camera with it); when it did not, hold it again, RIDE_TAKEOFF_RETRIES times at
-    most. In a run, 10 rides in a row ran as always and the need did not clear: the frames show the helicopter on the ground beside a house the whole time, where those that cleared had it high over the
-    neighbourhood. Always True: a ride that cannot lift off is left to the need's wait, as before."""
-    for attempt in range(cfg.RIDE_TAKEOFF_RETRIES + 1):
-        before = grab_screen()
-        logger.debug(f"Holding the helicopter key for {cfg.RIDE_R_HOLD_DURATION}s...")
-        hold_key(cfg.KEYS["helicopter"], cfg.RIDE_R_HOLD_DURATION)
-        wait_interruptible(cfg.UI_SETTLE)
-        phase_shot(f"after the helicopter key (try {attempt + 1})")
-        if screen_changed(before, grab_screen()):
-            return True
-        logger.debug(f"The view did not change after the helicopter key (try {attempt + 1} of {cfg.RIDE_TAKEOFF_RETRIES + 1})")
-    log_run_event(f"ride: the view did not change after the helicopter key, {cfg.RIDE_TAKEOFF_RETRIES + 1} tries")                 # (one line, and only when none of them moved it: the check is coarse, a ride that went on to clear is no failure)
+    """Hold the helicopter key (RIDE_R_HOLD_DURATION) once, and keep the screen after it (the phase screen `after the helicopter key`, for a ride that fails). It used to hold the key again when the view did not
+    change, but the helicopter is often in the air before the key (the equip and the walk lift it), so the view hardly changes and every such ride was flagged: the check is gone. Always True."""
+    logger.debug(f"Holding the helicopter key for {cfg.RIDE_R_HOLD_DURATION}s...")
+    hold_key(cfg.KEYS["helicopter"], cfg.RIDE_R_HOLD_DURATION)
+    wait_interruptible(cfg.UI_SETTLE)
+    phase_shot("after the helicopter key")
     return True
 
 def run_steps(steps: Sequence[tuple[Any, ...]]) -> bool:
@@ -4467,6 +4461,21 @@ def repick_pet() -> bool:
     respawn_character()
     return ok
 
+def replace_temporary_pet() -> None:
+    """Once per cycle after pet_repick(): the temporary pet that the game gives every Tuesday and puts out (its name pill reads "Temporary", `pet_temporary`; the pet is under it, where the click under the name pill misses,
+    which failed the pet need five times in a row) is replaced by the pet of the list: pet_outgrown makes the pick skip the pet that is out, and repick_pet() equips the first of the filtered list. Only with
+    level_growing_pet on and no daily task's pet out; at most every TEMPORARY_PET_RETRY seconds."""
+    config = load_game_config()
+    if not config["level_growing_pet"] or config["task_pet"] or time.time() - state.temporary_pet_tried < cfg.TEMPORARY_PET_RETRY:
+        return
+    if not popup_visible(grab_screen(), "pet_temporary"):
+        return
+    state.temporary_pet_tried = time.time()
+    log_run_event("pet: a temporary pet is out - the first pet of the list is put out instead")
+    update_game_config(lambda c: c.update(pet_outgrown=True))
+    run_side_action(repick_pet)
+    update_game_config(lambda c: c.update(pet_repicked=time.time(), pet_outgrown=False))
+
 def pet_repick() -> None:
     """Once per cycle after pet_pen(), when the game config's level_growing_pet is on: every PET_REPICK_INTERVAL seconds repick_pet() puts out the first pet that is neither an egg nor full grown. The
     macro has no way yet to tell that the pet out has grown up (no capture of it), so it asks the list instead."""
@@ -5544,6 +5553,7 @@ def run_full_cycle() -> None:
         pet_pen()
         pet_pen_swap_due()
         pet_repick()
+        replace_temporary_pet()
         if process_needs():
             return
         respawn_if_no_detection()

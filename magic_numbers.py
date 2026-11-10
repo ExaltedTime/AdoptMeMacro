@@ -156,6 +156,7 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "trading_option_no_one":       {"box": (960, 570, 1100, 640), "threshold": 0.85},
     "pet_alicorn":                 {"box": (900, 640, 1230, 900), "threshold": 0.8},
     # The Effect and Rarity rows of the FILTERS panel (the text of each row; its box is found left of it, as for the Age rows): what the daily tasks' pets are picked by.
+    "pet_temporary": {"box": (600, 450, 1500, 950), "threshold": 0.85},       # the pill "Temporary" over a temporary pet (one is given every Tuesday and put out): the pet is under it, out of reach of the click under the name pill
     "daily_claim_all": {"box": (1100, 700, 1340, 800), "threshold": 0.85},   # the green Claim All button at the bottom right of the Task Board's Tasks tab, shown when a task is done
     "daily_neon": {"box": (842, 440, 1200, 700), "threshold": 0.85},          # the bold word Neon / Common in the text of a daily task (what the task wants of the pet), found above its progress bar
     "daily_common": {"box": (842, 440, 1200, 700), "threshold": 0.85},
@@ -583,7 +584,6 @@ RIDE_FORWARD_DURATION = 2.0    # walk forward briefly after mounting, before the
 RIDE_VEHICLES_POS = (816, 804)
 RIDE_FIRST_VEHICLE_POS = (976, 708)
 RIDE_EQUIP_POS = (1062, 814)
-RIDE_TAKEOFF_RETRIES = 2           # times the helicopter key is held again when the view did not change after it (the helicopter did not lift off)
 RIDE_R_HOLD_DURATION = 1.5     # hold KEYS["helicopter"] this long after equipping, before walking back and forth
 
 # Backpack-teleport sequence, shared by every teleport destination: open
@@ -760,6 +760,7 @@ PET_PEN_FILTER_BUTTON_POS = (956, 640)    # the orange filter button in the smal
 PET_PEN_UI_SETTLE = 1.5                   # seconds after a click in the pen's screens
 PET_PEN_SWAP_INTERVAL = 30 * 60           # seconds between looks at the pen for full-grown pets whether or not one was seen to grow up
 PET_PEN_SWAP_RETRY = 10 * 60              # seconds before a swap that did not come through is tried again
+TEMPORARY_PET_RETRY = 15 * 60            # seconds before a temporary pet that is still out is replaced again (when the first try did not get it off)
 PET_REPICK_INTERVAL = 30 * 60            # seconds between the loop's picks of the pet to level (see pet_repick(): a pet that has grown up is no longer in the filtered list)
 TREE_CHECK_INTERVAL = 10 * 60          # seconds (10 minutes) between tree harvests
 LURE_RECOLLECT_INTERVAL = 4 * 60 * 60  # seconds (4 hours)

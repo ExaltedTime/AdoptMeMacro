@@ -91,17 +91,12 @@ def test_ride_steps_back_mounts_walks_on_equips_a_vehicle_and_rides_to_and_fro(m
         ("walk", (cfg.KEYS["forward"], cfg.KEYS["back"]), cfg.NEED_GONE_MAX_WAIT, "ride")]
 
 
-def test_a_helicopter_that_does_not_lift_off_is_held_for_again_a_limited_number_of_times(macro, events, monkeypatch):
+def test_the_helicopter_key_is_held_once_and_a_screen_kept_whatever_the_view_does(macro, events, monkeypatch):
     cfg = macro.cfg
-    lines = []
-    monkeypatch.setattr(macro, "log_run_event", lines.append)
-    monkeypatch.setattr(macro, "screen_changed", lambda before, after: False)
-    assert macro.take_off() is True                                                              # (never fails the ride: its own wait goes on)
-    assert events.count(("hold", cfg.KEYS["helicopter"], cfg.RIDE_R_HOLD_DURATION)) == cfg.RIDE_TAKEOFF_RETRIES + 1 and len(lines) == 1
-    events.clear()
-    changes = iter([False, True])
-    monkeypatch.setattr(macro, "screen_changed", lambda before, after: next(changes))
-    assert macro.take_off() is True and events.count(("hold", cfg.KEYS["helicopter"], cfg.RIDE_R_HOLD_DURATION)) == 2         # (lifted off on the second)
+    shots = []
+    monkeypatch.setattr(macro, "phase_shot", shots.append)
+    assert macro.take_off() is True
+    assert events.count(("hold", cfg.KEYS["helicopter"], cfg.RIDE_R_HOLD_DURATION)) == 1 and shots == ["after the helicopter key"]
 
 
 def pet_bar_frame():

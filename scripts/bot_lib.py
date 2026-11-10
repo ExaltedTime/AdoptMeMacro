@@ -40,13 +40,14 @@ class Config:
     auto_restart_max_per_hour: int
     update_remote: str           # what /update pulls from: this remote's branch (the default: origin's main)
     update_branch: str
+    launch_macro: bool = True    # start the macro's window (not its loop) when the bot starts, if it is not running
 
 
 GIT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")      # a remote or branch name: nothing git could take for an option, no spaces
 REQUIRED = ("token", "owner_id", "channel_id")
 DEFAULTS: dict[str, Any] = {"guild_id": None, "stale_status_minutes": 5, "log_lines_max": 40, "onedrive_dir": "", "heartbeat_hours": 0,
             "repo_dir": "", "python": "", "stop_timeout_seconds": 30, "auto_restart": False, "auto_restart_max_per_hour": 3,
-            "update_remote": "origin", "update_branch": "main"}
+            "update_remote": "origin", "update_branch": "main", "launch_macro": True}
 
 
 def load_config(path: str) -> Config:
@@ -89,6 +90,8 @@ def load_config(path: str) -> Config:
         raise ConfigError("auto_restart must be true or false")
     if not isinstance(values["auto_restart_max_per_hour"], int) or isinstance(values["auto_restart_max_per_hour"], bool) or values["auto_restart_max_per_hour"] < 1:
         raise ConfigError("auto_restart_max_per_hour must be a whole number of at least 1")
+    if not isinstance(values["launch_macro"], bool):
+        raise ConfigError("launch_macro must be true or false")
     for key in ("update_remote", "update_branch"):
         if not isinstance(values[key], str) or not GIT_NAME.match(values[key]) or ".." in values[key]:
             raise ConfigError(f"{key} must be a name of letters, digits and . _ / - (not starting with a dash), not {values[key]!r}")
@@ -96,7 +99,7 @@ def load_config(path: str) -> Config:
                   float(values["stale_status_minutes"]), values["log_lines_max"], values["onedrive_dir"].strip(),
                   float(values["heartbeat_hours"]),
                   values["repo_dir"].strip(), values["python"].strip(), float(values["stop_timeout_seconds"]),
-                  values["auto_restart"], values["auto_restart_max_per_hour"], values["update_remote"], values["update_branch"])
+                  values["auto_restart"], values["auto_restart_max_per_hour"], values["update_remote"], values["update_branch"], values["launch_macro"])
 
 
 def is_allowed(config: Config, user_id: int, channel_id: int) -> bool:

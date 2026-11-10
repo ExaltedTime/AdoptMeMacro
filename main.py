@@ -1997,7 +1997,7 @@ def set_filter_rows(wanted: dict[str, bool]) -> bool:
     ok = True
     for label, tick in wanted.items():
         for _ in range(cfg.FILTERS_SCROLL_TRIES + 1):
-            found = filter_checkbox(grab_screen(), label)
+            found = look_until(lambda img: filter_checkbox(img, label), cfg.FILTERS_ROW_LOOK, cfg.SETUP_POLL)            # (waited for: just after the scroll up the list is still moving, and the rows were "not found" and the list scrolled away from them)
             if found is not None:
                 break
             hover_move(*cfg.FILTERS_SCROLL_POS)

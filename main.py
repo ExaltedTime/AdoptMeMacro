@@ -6399,6 +6399,33 @@ class Blackout:
             return None
         return window
 
+# The Guide tab: (heading, lines); {stop}, {capture}, {blackout}, {new_need} and {screenshot} are the keys of HOTKEYS.
+GUIDE: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Keys", (
+        "{stop} stops the macro, in any window.",
+        "{capture} starts and stops an input capture (in Roblox).",
+        "{screenshot} saves a screenshot to debug/screenshots (in Roblox).",
+        "{blackout} blanks the screen while the macro works, and shows it again (in Roblox).",
+        "{new_need} teaches a need icon the macro does not know (in Roblox).",
+        "The last three can be switched off in Settings, so that the key is typed in the game.")),
+    ("Main", (
+        "The blue button starts the loop, the red one stops it.",
+        "Run Setup at the next loop: once, the next time the loop starts or comes round (equip the pet, set the filters).")),
+    ("Settings", (
+        "Tend the money tree / the lure: collect them now and then.",
+        "Resume after focus loss: take Roblox's focus back instead of stopping.",
+        "Pet Pen: collect it when the Task Board's sign says it is ready.",
+        "Daily tasks: do the ones that need a neon or a common pet (needs the Pet Pen on; the pet is switched through the backpack's filters and back).",
+        "Setup levels a pet that still grows: no eggs, none full grown.",
+        "Rejoin: the private server (off: a public one) and its link.")),
+    ("Debug", (
+        "Record the next run: a low quality video.",
+        "Capture the moments: frames around failures, kept when a run lasts over an hour.",
+        "Show debug lines: the dimmer lines in the output (output.log has them either way).",
+        "Needs: switch a need off to leave it alone, or test its handler on its own.")),
+)
+
+
 class AdoptMeGUI:
     def __init__(self, root: tk.Tk) -> None:
         state.macro_window = self
@@ -6406,6 +6433,8 @@ class AdoptMeGUI:
         self.root.title("Adopt Me Macro")
         self.root.geometry(cfg.GUI_GEOMETRY)
         self.root.resizable(False, False)
+        if cfg.GUI_BORDERLESS:
+            self.root.overrideredirect(True)           # no frame: the title bar is drawn in create_ui() (add_title_bar())
         self.root.attributes('-topmost', True)
         self.root.attributes('-alpha', cfg.GUI_ALPHA)
 
@@ -6709,6 +6738,8 @@ class AdoptMeGUI:
         """Build every widget; buttons that start a background action are added to
         self.action_buttons ([STOP] deliberately isn't). See docs/ARCHITECTURE.md#gui-internals.
         """
+        if cfg.GUI_BORDERLESS:
+            self.add_title_bar()
         # Main buttons
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill=tk.X, padx=cfg.GUI_OUTER_PADDING, pady=(cfg.GUI_OUTER_PADDING, 0))
@@ -6718,6 +6749,8 @@ class AdoptMeGUI:
         notebook.add(btn_frame, text="Main")
         notebook.add(options_tab, text="Settings")
         notebook.add(debug_tab, text="Debug")
+        guide_tab = tk.Frame(notebook, bg=self.bg)
+        notebook.add(guide_tab, text="Guide")
 
         self.action_buttons = []  # every button that starts a background task
 
@@ -6748,9 +6781,6 @@ class AdoptMeGUI:
         btn_loop.pack(fill=tk.BOTH, expand=True)
         self.action_buttons.append(btn_loop)
 
-        tk.Label(btn_frame, text=f"Press {cfg.HOTKEYS['stop'].upper()} anywhere to stop", font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE),
-                 bg=self.bg, fg=self.accent, anchor=tk.W).pack(fill=tk.X)
-
         tk.Frame(btn_frame, bg=self.accent, height=cfg.GUI_DIVIDER_HEIGHT).pack(fill=tk.X, pady=cfg.GUI_ROW_SPACING)
 
         # Setup is not a button: it is ticked here and runs once, at the next pass of the loop (a loop that is running takes it at its next cycle)
@@ -6766,6 +6796,7 @@ class AdoptMeGUI:
         # Debug tab: the need handlers (a switch and a Test button each, regardless of whether it's in
         # ENABLED_NEEDS, so any can be run on its own, plus one that runs them all in turn).
         self.build_debug_tab(debug_tab)
+        self.build_guide_tab(guide_tab)
 
         # Debug console
         debug_frame = tk.Frame(self.root, bg=self.bg)
@@ -6987,6 +7018,44 @@ class AdoptMeGUI:
         update_game_config(lambda c: c.setdefault("needs_enabled", {}).update({name: value}))
         logger.info(f"{name} need {'on' if value else 'off'}")
 
+    def add_title_bar(self) -> None:
+        """The title bar of the frameless window (GUI_BORDERLESS): its name, dragged to move the window, and a x that closes it like the frame's would."""
+        bar = tk.Frame(self.root, bg=self.accent, height=cfg.GUI_TITLE_BAR_HEIGHT)
+        bar.pack(fill=tk.X, side=tk.TOP)
+        bar.pack_propagate(False)
+        title = tk.Label(bar, text="Adopt Me Macro", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"), bg=self.accent, fg=self.fg)
+        title.pack(side=tk.LEFT, padx=cfg.GUI_OUTER_PADDING)
+        close = tk.Label(bar, text="\u2715", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"), bg=self.accent, fg=self.fg, cursor="hand2")
+        close.pack(side=tk.RIGHT, padx=cfg.GUI_OUTER_PADDING)
+        close.bind("<Button-1>", lambda e: self.close())
+        close.bind("<Enter>", lambda e: close.configure(bg=cfg.GUI_STOP_COLOR))
+        close.bind("<Leave>", lambda e: close.configure(bg=self.accent))
+        grab: list[int] = [0, 0]
+
+        def press(event: Any) -> None:
+            grab[:] = [event.x_root - self.root.winfo_x(), event.y_root - self.root.winfo_y()]
+
+        def drag(event: Any) -> None:
+            self.root.geometry(f"+{event.x_root - grab[0]}+{event.y_root - grab[1]}")
+
+        for widget in (bar, title):
+            widget.bind("<Button-1>", press)
+            widget.bind("<B1-Motion>", drag)
+
+    def build_guide_tab(self, parent: Any) -> None:
+        """Fill the Guide tab: what the keys and the switches do (read only; GUIDE has the text, the key letters come from HOTKEYS)."""
+        keys = {name: key.upper() for name, key in cfg.HOTKEYS.items()}
+        text = scrolledtext.ScrolledText(parent, height=cfg.GUI_GUIDE_HEIGHT, width=cfg.GUI_CONSOLE_WIDTH, wrap=tk.WORD, bg=self.bg, fg=self.fg, bd=0, highlightthickness=0,
+                                         font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE))
+        text.tag_configure("heading", foreground=self.accent, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"))
+        for heading, lines in GUIDE:
+            text.insert(tk.END, heading + "\n", "heading")
+            for line in lines:
+                text.insert(tk.END, "  " + line.format(**keys) + "\n")
+            text.insert(tk.END, "\n")
+        text.configure(state=tk.DISABLED)
+        text.pack(fill=tk.BOTH, expand=True)
+
     def add_section(self, parent: Any, title: str) -> None:
         """A heading of the Settings tab, with a line under it."""
         tk.Label(parent, text=title, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"), bg=self.bg, fg=self.accent, anchor=tk.W
@@ -7004,33 +7073,32 @@ class AdoptMeGUI:
         self.add_section(parent, "The loop")
         for label, key in (("Tend the money tree", "money_tree_enabled"),
                            ("Tend the lure", "lure_enabled"),
-                           ("Resume after focus loss (take Roblox's focus back instead of stopping)", "resume_on_focus_loss"),
-                           ("Collect the Pet Pen when the Task Board says it is ready", "pet_pen_enabled"),
-                           ("Do the daily tasks that need a neon or a common pet (needs the Pet Pen on; the pet is switched through the backpack's filters and back)", "daily_tasks_enabled"),
-                           ("Setup levels a pet that still grows (no eggs, none full grown)", "level_growing_pet")):
+                           ("Resume after focus loss", "resume_on_focus_loss"),
+                           ("Collect the Pet Pen when it is ready", "pet_pen_enabled"),
+                           ("Do the daily tasks that need a neon or a common pet", "daily_tasks_enabled"),
+                           ("Setup levels a pet that still grows", "level_growing_pet")):
             self.add_config_checkbox(parent, label, key, config)
 
         self.add_section(parent, "Rejoin")
-        self.add_config_checkbox(parent, "Rejoin the private server (off: a public one)", "use_private_server", config)
-        self.add_hint(parent, "Private server link")
+        self.add_config_checkbox(parent, "Rejoin the private server", "use_private_server", config)
+        self.add_hint(parent, "Private server link")      # (the label of the field below it)
         self.server_link_var = tk.StringVar(value=config["private_server_link"])
         server_link_entry = tk.Entry(parent, textvariable=self.server_link_var, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
                                      bg=cfg.GUI_CONSOLE_BG, fg=cfg.GUI_CONSOLE_FG, insertbackground=cfg.GUI_CONSOLE_FG)
         server_link_entry.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
         server_link_entry.bind("<FocusOut>", lambda e: self.save_server_link())
+        server_link_entry.bind("<Button-1>", lambda e: server_link_entry.focus_force())      # (a frameless window is not given the keyboard by a click on its own)
         server_link_entry.bind("<Return>", lambda e: self.save_server_link())
 
         self.add_section(parent, "Keys")
-        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['blackout'].upper()} blanks the screen in Roblox (off: type it)", "blackout_hotkey_enabled", config)
-        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['new_need'].upper()} teaches a new need icon in Roblox (off: type it)", "new_need_hotkey_enabled", config)
-        self.add_hint(parent, f"{cfg.HOTKEYS['stop'].upper()} stops, anywhere. {cfg.HOTKEYS['capture'].upper()} starts / stops an input capture (in Roblox). "
-                              f"{cfg.HOTKEYS['screenshot'].upper()} saves a screenshot to debug/screenshots (in Roblox)")
+        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['blackout'].upper()} blanks the screen in Roblox", "blackout_hotkey_enabled", config)
+        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['new_need'].upper()} teaches a new need icon in Roblox", "new_need_hotkey_enabled", config)
 
     def build_debug_options(self, parent: Any) -> None:
         """Fill the Debug tab's Options subtab: record the next run, capture the moments, show the debug lines in the output, refresh the debug folder, reset the config."""
         config = load_game_config()
-        self.add_config_checkbox(parent, "Record the next run (low quality video)", "record_next_run", config)
-        self.add_config_checkbox(parent, "Capture the moments of a run (kept when it lasts over an hour)", "keep_moments", config)
+        self.add_config_checkbox(parent, "Record the next run", "record_next_run", config)
+        self.add_config_checkbox(parent, "Capture the moments of a run", "keep_moments", config)
         self.show_debug_var = tk.BooleanVar(value=True)
         tk.Checkbutton(parent, text="Show debug lines in the output", variable=self.show_debug_var, command=self.set_debug_lines_shown,
                        font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.bg, fg=self.fg,

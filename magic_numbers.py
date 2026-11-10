@@ -613,7 +613,7 @@ TELEPORT_VEHICLES_TAB_POS = (813, 810)   # dealership: vehicles tab
 SICK_FINAL_CLICK_POS = (1045, 660)       # click after the sick need's walk
 
 # Whether a teleport-walk need flies by helicopter by default; an entry can
-# override it with `helicopter=True/False`: `camping` turns it on, the others walk (the Halloween routes of the event flew too: scripts/Halloween2026.py).
+# override it with `helicopter=True/False`: `camping` turns it on, the others walk (the Halloween routes of the event flew too: archive/Halloween2026.py).
 HELICOPTER_REQUIRED = False
 HELICOPTER_FORWARD_DURATION = 1.0  # step forward this long after teleporting, before equipping
 HELICOPTER_HOLD_DURATION = 4.5     # then hold KEYS["helicopter"] this long (it was 0.5 s less, and the helicopter could be caught on a tree)
@@ -649,7 +649,7 @@ HELD_KEYS = tuple(dict.fromkeys([*KEYS.values(), *(key for keys in KEY_SEQUENCES
 # (key, seconds) holds to perform in order, optionally a `final_click` (a need with one has a doctor's dialog to answer after the last hold:
 # its prompt is clicked, the dialog waited for and this is its Yes - sick; see TeleportWalkNeedHandler._open_dialog()), optionally `helicopter` (above) and optionally
 # `max_wait` (how long to wait for the need to clear afterwards; default NEED_GONE_MAX_WAIT). One table: the nursery's routes (bored, beach, school, camping, sick); the
-# event's own routes are in scripts/Halloween2026.py.
+# event's own routes are in archive/Halloween2026.py.
 TELEPORT_WALK_NEEDS: dict[str, dict[str, Any]] = {
     "bored":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["forward"], 16.0), (KEYS["left"], 10.0))),
     "beach":   dict(teleport_pos=TELEPORT_PETS_TAB_POS,     steps=((KEYS["left"], 27.0),)),
@@ -941,6 +941,9 @@ WHITE_RANGE = (np.array([0, 0, 200]), np.array([180, 40, 255]))
 # ============================================================================
 GUI_GEOMETRY = "380x650+1533+110"   # size + position (docked top-right)
 GUI_ALPHA = 0.95
+GUI_BORDERLESS = True               # no window frame (the macro draws a title bar to drag and close it by); False: the frame of Windows
+GUI_TITLE_BAR_HEIGHT = 24           # px, that title bar
+GUI_GUIDE_HEIGHT = 14               # lines, the Guide tab
 GUI_FONT = "Courier"
 GUI_BG = "#1a1a1a"
 GUI_ACCENT = "#0d7377"

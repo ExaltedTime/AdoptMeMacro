@@ -6441,6 +6441,7 @@ class AdoptMeGUI:
         self.fg = cfg.GUI_FG
         self.root.configure(bg=self.bg)
 
+        self.set_style()
         self.create_ui()
 
         self.capture = DebugCapture(self.root, self.debug_text)
@@ -6732,6 +6733,20 @@ class AdoptMeGUI:
             except OSError:
                 pass
 
+    def set_style(self) -> None:
+        """One palette for the whole window (GUI_BG, GUI_TAB_BG, GUI_ACCENT, GUI_FG): the tab strips (ttk, drawn with the "clam" theme, whose colours can all be set: the
+        default theme's white frame around a tab's page cannot) and no focus ring or bevel on the Tk widgets (the white edge round a checkbox or the console)."""
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+        for name in ("TNotebook", "TNotebook.Tab"):
+            style.configure(name, background=self.bg, bordercolor=self.bg, lightcolor=self.bg, darkcolor=self.bg, focuscolor=self.bg)
+        style.configure("TNotebook", borderwidth=0, tabmargins=(0, 0, 0, 0))
+        style.configure("TNotebook.Tab", background=cfg.GUI_TAB_BG, foreground=self.fg, borderwidth=0, padding=cfg.GUI_TAB_PADDING, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE))
+        style.map("TNotebook.Tab", background=[("selected", self.accent), ("active", self.accent)], foreground=[("selected", self.fg)])
+        for widget in ("Checkbutton", "Button", "Entry", "Text", "Frame", "Label"):
+            self.root.option_add(f"*{widget}.highlightThickness", 0)
+        self.root.option_add("*Checkbutton.borderWidth", 0)
+
     def create_ui(self) -> None:
         """Build every widget; buttons that start a background action are added to
         self.action_buttons ([STOP] deliberately isn't). See docs/ARCHITECTURE.md#gui-internals.
@@ -7005,7 +7020,7 @@ class AdoptMeGUI:
                            font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.fg, selectcolor=self.bg,
                            activebackground=self.bg, activeforeground=self.fg, anchor=tk.W, cursor="hand2").pack(side=tk.LEFT)
             btn = tk.Button(cell, text="Test", command=lambda n=name, c=handler_cls: self.test_handler(n, c),  # type: ignore[misc]
-                            font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=cfg.GUI_TEST_COLOR, fg=self.fg, cursor="hand2", padx=cfg.GUI_ROW_SPACING, pady=0)
+                            font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.accent, fg=self.fg, cursor="hand2", padx=cfg.GUI_ROW_SPACING, pady=0)
             btn.pack(side=tk.RIGHT, pady=cfg.GUI_LABEL_PADDING)
             self.action_buttons.append(btn)
 

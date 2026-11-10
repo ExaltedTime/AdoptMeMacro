@@ -112,7 +112,13 @@ def check_stop() -> None:
 
 def check_focus() -> None:
     """Raise FocusLost if Roblox is running but is no longer the focused
-    window. Prefer check_running() at most checkpoints."""
+    window. Prefer check_running() at most checkpoints. While the display is being switched (state.display_switching) it waits, up to DISPLAY_SWITCH_MAX_WAIT seconds, for that to end
+    first: the switch takes the focus from Roblox for a moment, and that is not the person leaving."""
+    waited = 0.0
+    while state.display_switching and waited < cfg.DISPLAY_SWITCH_MAX_WAIT:
+        check_stop()
+        time.sleep(cfg.STOP_CHECK_INTERVAL)
+        waited += cfg.STOP_CHECK_INTERVAL
     if not is_roblox_focused():
         logger.warning("Roblox is no longer focused")
         raise FocusLost()
@@ -399,6 +405,7 @@ class State:
     # True while a handler that wants the pet focused runs (see wanting_pet_focus()).
     pet_focus_wanted: bool = False
     task_board_wanted: bool = False
+    display_switching: bool = False        # Blackout is switching the display (Win+P's way): Windows moves the windows and Roblox loses the focus for a moment - the running macro waits at its next check instead of stopping
     phase_shots: list = field(default_factory=list)      # (seconds into the capture, label, PNG bytes) of the screens taken during the need that runs: kept in the moments when it fails (phase_shot())
     phase_ok: dict = field(default_factory=dict)          # {need: executions that went well since one of them was kept}
     pen_notes: list = field(default_factory=list)        # what switch_pen_pets() and put_a_pet_in_the_pen() said (pen_note()), for the Debug button to show in the console
@@ -6204,6 +6211,13 @@ def display_switch_worked() -> bool:
     img = grab_screen()
     return bool(int(img.max()) - int(img.min()) >= cfg.BLACKOUT_FLAT_LEVEL)
 
+def refocus_roblox_after_switch() -> None:
+    """After a switch of display Windows has moved the windows and Roblox is not the focused one: bring it back (without a click) so that the running macro goes on and the keys (the blackout key among them) reach it. Never raises."""
+    try:
+        focus_roblox()
+    except Exception as error:
+        logger.debug(f"Roblox was not brought back to the front after the display switch: {error}")
+
 def keep_awake(on: bool) -> None:
     """While the screen is blank, ask Windows not to sleep or turn the display off by itself (SetThreadExecutionState; the same thread - Tk's - must undo it, and it goes with the process)."""
     if os.name != "nt":
@@ -6241,16 +6255,22 @@ class Blackout:
         if not cfg.BLACKOUT_VIRTUAL_DISPLAY or not virtual_display_present():
             return False
         remember_display_switched(True)                                       # (before: a crash in the middle must not leave the panel off with nothing that knows)
-        if display_switch("/external"):
+        state.display_switching = True
+        try:
+            if display_switch("/external"):
+                time.sleep(cfg.BLACKOUT_DISPLAY_SETTLE)
+                refocus_roblox_after_switch()
+                if display_switch_worked():
+                    self.display_switched = True
+                    return True
+                logger.warning("The virtual display showed no picture of Roblox - back to the PC screen")
+            display_switch("/internal")
             time.sleep(cfg.BLACKOUT_DISPLAY_SETTLE)
-            if display_switch_worked():
-                self.display_switched = True
-                return True
-            logger.warning("The virtual display showed no picture of Roblox - back to the PC screen")
-        display_switch("/internal")
-        time.sleep(cfg.BLACKOUT_DISPLAY_SETTLE)
-        remember_display_switched(False)
-        return False
+            refocus_roblox_after_switch()
+            remember_display_switched(False)
+            return False
+        finally:
+            state.display_switching = False
 
     def recover_display(self) -> None:
         """At the macro's start: a panel that was left off by a macro that died (display_switched in the game config) is put back on."""
@@ -6320,8 +6340,13 @@ class Blackout:
     def hide(self) -> None:
         was_blank = self.shown
         if self.display_switched:
-            display_switch("/internal")                                        # (the PC's own screen back; a macro that dies before this does it at its next start)
-            time.sleep(cfg.BLACKOUT_DISPLAY_SETTLE)
+            state.display_switching = True
+            try:
+                display_switch("/internal")                                    # (the PC's own screen back; a macro that dies before this does it at its next start)
+                time.sleep(cfg.BLACKOUT_DISPLAY_SETTLE)
+                refocus_roblox_after_switch()
+            finally:
+                state.display_switching = False
             self.display_switched = False
             remember_display_switched(False)
         if was_blank:
@@ -6575,7 +6600,8 @@ class AdoptMeGUI:
                 for i, (key, action, only_while_running, only_in_roblox) in enumerate(hotkeys):
                     try:
                         down = hotkey_down(key)
-                        if not state.typing and hotkey_fires(down, was_down[i], only_while_running, self.is_running, only_in_roblox):         # (not while the macro types a word: its own letters)
+                        in_roblox_only = only_in_roblox and not (key == cfg.HOTKEYS["blackout"] and self.blackout.shown)      # (a blank screen is shown again from any window: with the panel off the focus may be anywhere)
+                        if not state.typing and hotkey_fires(down, was_down[i], only_while_running, self.is_running, in_roblox_only):         # (not while the macro types a word: its own letters)
                             self.root.after(0, action)
                         was_down[i] = down
                     except (RuntimeError, tk.TclError):

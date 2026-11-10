@@ -2376,3 +2376,22 @@ def test_a_need_that_worked_and_has_stayed_disabled_for_the_stuck_time_is_a_reas
     assert kind == "stuck" and "ride" in reason
     macro.state.hopeless = {"ride"}                                                            # (one that never worked is not what a rejoin is for)
     assert macro.rejoin_reason() is None
+
+
+def test_a_running_macro_waits_for_a_display_switch_to_end_instead_of_stopping_for_the_focus_it_lost(macro, monkeypatch):
+    focused = [False]
+    clock = [0.0]
+    monkeypatch.setattr(macro, "is_roblox_focused", lambda: focused[0])
+    monkeypatch.setattr(macro.time, "sleep", lambda s: (clock.__setitem__(0, clock[0] + s), (setattr(macro.state, "display_switching", False), focused.__setitem__(0, True)) if clock[0] >= 2 else None))
+    macro.state.display_switching = True
+    macro.check_focus()                                                                          # (waits until the switch is over and Roblox is back: no FocusLost)
+    assert clock[0] >= 2 and macro.state.display_switching is False
+    focused[0] = False
+    with pytest.raises(macro.FocusLost):
+        macro.check_focus()                                                                      # (outside a switch a lost focus is still one)
+
+
+def test_the_blackout_key_works_from_any_window_while_the_screen_is_blank_and_only_in_roblox_otherwise(macro, monkeypatch):
+    monkeypatch.setattr(macro, "is_roblox_focused", lambda: False)
+    assert macro.hotkey_fires(True, False, False, True, True) is False                           # (in Roblox only: another window is focused)
+    assert macro.hotkey_fires(True, False, False, True, False) is True                           # (what the loop passes for a blank screen)

@@ -380,6 +380,7 @@ VIRTUAL_DISPLAY_NAMES = ("virtual display", "mttvdd", "iddsample")   # what the 
 DISPLAY_ADAPTERS_MAX = 32     # the display adapters looked through for one of those names
 DISPLAY_SWITCH_TIMEOUT = 15.0 # seconds DisplaySwitch.exe is given
 BLACKOUT_DISPLAY_SETTLE = 4.0 # seconds after a switch of display before the screen is looked at (Windows moves its windows over)
+DISPLAY_SWITCH_MAX_WAIT = 30.0        # seconds the running macro waits at its next check for a switch of display to end (it normally takes about two BLACKOUT_DISPLAY_SETTLE)
 BLACKOUT_FLAT_LEVEL = 8       # a screenshot whose brightest and darkest pixels are closer than this is one flat colour: black, or no picture
 BLACKOUT_RAISE_INTERVAL_MS = 200  # milliseconds between the black window being put back above everything while the screen is blank (the control window, coming back up, lands above it)
 BLACKOUT_SETTLE = 0.4         # seconds the test flash is shown before the screen is looked at, to see whether the macro's screenshots see the window

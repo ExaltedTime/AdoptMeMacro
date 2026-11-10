@@ -792,3 +792,13 @@ def test_the_macros_answer_to_blank_is_said_in_words(tmp_path, monkeypatch):
         return result
     assert asyncio.run(both()) == "blanked" and not (tmp_path / "b1.done").exists()
     assert asyncio.run(discord_bot.wait_for_end("never", 0.1)) is None
+
+
+@pytest.mark.parametrize("pids, setting, launches", [([], True, True), ([4], True, False), (None, True, False), ([], False, False)])
+def test_the_bot_starts_the_macros_window_without_its_loop_only_when_none_runs(tmp_path, monkeypatch, pids, setting, launches):
+    launched = []
+    monkeypatch.setattr(discord_bot, "current_macro_pids", lambda: pids)
+    monkeypatch.setattr(discord_bot, "launch_macro", lambda config, loop=True: launched.append(loop) or 9)
+    config = bot_lib.load_config(_config(tmp_path, launch_macro=setting))
+    assert (discord_bot.launch_macro_at_start(config) == 9) is launches
+    assert launched == ([False] if launches else [])                                                    # (never with its loop)

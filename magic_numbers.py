@@ -156,6 +156,8 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "trading_option_no_one":       {"box": (960, 570, 1100, 640), "threshold": 0.85},
     "pet_alicorn":                 {"box": (900, 640, 1230, 900), "threshold": 0.8},
     # The Effect and Rarity rows of the FILTERS panel (the text of each row; its box is found left of it, as for the Age rows): what the daily tasks' pets are picked by.
+    "pet_temporary": {"box": (600, 450, 1500, 950), "threshold": 0.85},       # the pill "Temporary" over a temporary pet (one is given every Tuesday and put out): the pet is under it, out of reach of the click under the name pill
+    "daily_claim_all": {"box": (1100, 700, 1340, 800), "threshold": 0.85},   # the green Claim All button at the bottom right of the Task Board's Tasks tab, shown when a task is done
     "daily_neon": {"box": (842, 440, 1200, 700), "threshold": 0.85},          # the bold word Neon / Common in the text of a daily task (what the task wants of the pet), found above its progress bar
     "daily_common": {"box": (842, 440, 1200, 700), "threshold": 0.85},
     "filter_effect_regular": {"box": (800, 640, 1130, 880), "threshold": 0.85},
@@ -380,6 +382,7 @@ VIRTUAL_DISPLAY_NAMES = ("virtual display", "mttvdd", "iddsample")   # what the 
 DISPLAY_ADAPTERS_MAX = 32     # the display adapters looked through for one of those names
 DISPLAY_SWITCH_TIMEOUT = 15.0 # seconds DisplaySwitch.exe is given
 BLACKOUT_DISPLAY_SETTLE = 4.0 # seconds after a switch of display before the screen is looked at (Windows moves its windows over)
+DISPLAY_SWITCH_MAX_WAIT = 30.0        # seconds the running macro waits at its next check for a switch of display to end (it normally takes about two BLACKOUT_DISPLAY_SETTLE)
 BLACKOUT_FLAT_LEVEL = 8       # a screenshot whose brightest and darkest pixels are closer than this is one flat colour: black, or no picture
 BLACKOUT_RAISE_INTERVAL_MS = 200  # milliseconds between the black window being put back above everything while the screen is blank (the control window, coming back up, lands above it)
 BLACKOUT_SETTLE = 0.4         # seconds the test flash is shown before the screen is looked at, to see whether the macro's screenshots see the window
@@ -581,7 +584,6 @@ RIDE_FORWARD_DURATION = 2.0    # walk forward briefly after mounting, before the
 RIDE_VEHICLES_POS = (816, 804)
 RIDE_FIRST_VEHICLE_POS = (976, 708)
 RIDE_EQUIP_POS = (1062, 814)
-RIDE_TAKEOFF_RETRIES = 2           # times the helicopter key is held again when the view did not change after it (the helicopter did not lift off)
 RIDE_R_HOLD_DURATION = 1.5     # hold KEYS["helicopter"] this long after equipping, before walking back and forth
 
 # Backpack-teleport sequence, shared by every teleport destination: open
@@ -707,12 +709,13 @@ TASK_BOARD_BADGE_BOX = (-62, -28, 78, 92) # where its red alert badge is (a spee
 TASK_BOARD_BADGE_HSV = (((0, 170, 170), (8, 255, 255)), ((172, 170, 170), (180, 255, 255)))
 TASK_BOARD_BADGE_MIN_PIXELS = 500         # red pixels there for a badge (about 1000 with it, under 100 without)
 DAILY_TASKS_INTERVAL = 60 * 60            # seconds between looks at the daily tasks (when the option is on and the Task Board is open anyway)
-DAILY_TASKS_RESET_HOUR = 4                # the daily tasks reset at this hour (local time): the first look after it is due at once
+DAILY_TASKS_RESET_HOUR = 16               # the daily tasks reset at this hour (local time; 4 p.m.: a board read at 15:29 said "expires in 00:30"): the first look after it is due at once
 DAILY_TASKS_DIR = os.path.join(DEBUG_DIR, "daily_tasks")   # a crop of each daily task seen (task_<n>.png), so that a new one is told (new_daily_tasks())
 DAILY_TASK_TEXT_X = (842, 1200)           # the columns of a task's name and what to do (not the reward at the right)
 DAILY_TASK_TEXT_HEIGHT = 80               # the rows above its progress bar that hold them
 DAILY_KIND_MATCH = 0.85                  # the bold word of a task's text (daily_neon, daily_common) found at least this well in the rows above its bar
 DAILY_TASK_MATCH = 0.9                    # a crop that matches a saved one at least this well is the same task
+FILTERS_ROW_LOOK = 2.0                    # seconds a row of the FILTERS panel is waited for before the list is scrolled to look further (the list is still moving just after a scroll)
 DAILY_TASKS_ACTIVE_INTERVAL = 15 * 60     # seconds between looks at the tasks while a task's pet is out (its bar full means the pet goes back)
 DAILY_TASK_DONE_SHARE = 0.99              # a bar this full is a task done
 DAILY_TASKS_TAB_POS = (1018, 360)         # the Tasks tab of the Task Board (the first tab; the second is Alerts)
@@ -757,6 +760,7 @@ PET_PEN_FILTER_BUTTON_POS = (956, 640)    # the orange filter button in the smal
 PET_PEN_UI_SETTLE = 1.5                   # seconds after a click in the pen's screens
 PET_PEN_SWAP_INTERVAL = 30 * 60           # seconds between looks at the pen for full-grown pets whether or not one was seen to grow up
 PET_PEN_SWAP_RETRY = 10 * 60              # seconds before a swap that did not come through is tried again
+TEMPORARY_PET_RETRY = 15 * 60            # seconds before a temporary pet that is still out is replaced again (when the first try did not get it off)
 PET_REPICK_INTERVAL = 30 * 60            # seconds between the loop's picks of the pet to level (see pet_repick(): a pet that has grown up is no longer in the filtered list)
 TREE_CHECK_INTERVAL = 10 * 60          # seconds (10 minutes) between tree harvests
 LURE_RECOLLECT_INTERVAL = 4 * 60 * 60  # seconds (4 hours)

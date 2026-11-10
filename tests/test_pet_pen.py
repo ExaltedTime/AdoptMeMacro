@@ -620,3 +620,43 @@ def test_the_whole_way_a_board_with_an_open_neon_task_ends_in_a_neon_pet_through
     assert macro.load_game_config()["task_pet"] == "neon"
     assert macro.clicks[-1] == macro.cfg.STRAY_WINDOWS["task_board"]["close_pos"] and macro.state.task_board_wanted is False
     assert any(line.startswith("daily tasks: 0% (neon), 0% (common)") for line in log)
+
+
+def test_a_done_task_is_claimed_by_the_claim_all_button_of_the_real_board_and_not_when_there_is_none(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "DAILY_TASKS_DIR", str(tmp_path / "daily"))
+    log = []
+    monkeypatch.setattr(macro, "log_run_event", log.append)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "save_screenshot", lambda: "x.png")
+    macro.update_game_config(lambda c: c.update(daily_tasks_enabled=True, daily_tasks_looked=-1e9, task_pet="", task_pet_failed={}))
+    monkeypatch.setattr(macro.time, "time", lambda: 1.8e9)
+    monkeypatch.setattr(macro, "grab_screen", lambda: shot("board_daily_claim"))
+    macro.look_at_daily_tasks()
+    assert "daily tasks: Claim All clicked" in log
+    x, y = macro.clicks[-1]
+    assert 1190 <= x <= 1310 and 730 <= y <= 770
+    macro.clicks.clear()
+    log.clear()
+    macro.update_game_config(lambda c: c.update(daily_tasks_looked=-1e9))
+    monkeypatch.setattr(macro, "grab_screen", lambda: shot("board_daily_tasks"))
+    macro.look_at_daily_tasks()
+    assert "daily tasks: Claim All clicked" not in log and macro.clicks == [macro.cfg.DAILY_TASKS_TAB_POS]
+
+
+def test_a_temporary_pet_is_found_by_its_pill_and_replaced_by_the_pick_that_skips_the_pet_that_is_out(macro, monkeypatch):
+    assert macro.popup_visible(shot("temporary_pet_out"), "pet_temporary") and not macro.popup_visible(shot("world_after"), "pet_temporary")
+    seen = []
+    monkeypatch.setattr(macro, "log_run_event", lambda text: seen.append(text))
+    monkeypatch.setattr(macro, "grab_screen", lambda: shot("temporary_pet_out"))
+    monkeypatch.setattr(macro, "run_side_action", lambda action: seen.append((action.__name__, macro.load_game_config()["pet_outgrown"])) or True)
+    macro.update_game_config(lambda c: c.update(level_growing_pet=True, task_pet="", pet_outgrown=False))
+    macro.state.temporary_pet_tried = 0.0
+    macro.replace_temporary_pet()
+    assert ("repick_pet", True) in seen and macro.load_game_config()["pet_outgrown"] is False          # (the pick was told to skip the pet that is out, then the flag went)
+    n = len(seen)
+    macro.replace_temporary_pet()
+    assert len(seen) == n                                                                              # (just tried: not again before TEMPORARY_PET_RETRY)
+    macro.state.temporary_pet_tried = 0.0
+    monkeypatch.setattr(macro, "grab_screen", lambda: shot("world_after"))
+    macro.replace_temporary_pet()
+    assert len(seen) == n                                                                              # (no temporary pet: nothing)

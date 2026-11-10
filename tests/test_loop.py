@@ -19,6 +19,7 @@ def test_the_loop_respawns_when_idle_logs_resources_stops_and_draws_no_chart(mac
     monkeypatch.setattr(macro, "check_focus", lambda: None)
     monkeypatch.setattr(macro, "unscrew", lambda *a, **k: None)
     monkeypatch.setattr(macro, "side_quest", lambda: None)
+    monkeypatch.setattr(macro, "replace_temporary_pet", lambda: None)
     monkeypatch.setattr(macro, "process_needs", lambda: False)        # nothing on screen, ever
 
     outcome = []
@@ -67,6 +68,7 @@ def test_a_stop_that_comes_before_the_loop_has_begun_is_not_lost(macro, tmp_path
     monkeypatch.setattr(macro, "check_focus", lambda: None)
     monkeypatch.setattr(macro, "unscrew", lambda *a, **k: None)
     monkeypatch.setattr(macro, "side_quest", lambda: None)
+    monkeypatch.setattr(macro, "replace_temporary_pet", lambda: None)
     monkeypatch.setattr(macro, "process_needs", lambda: False)
     macro.STOP_EVENT.set()
     try:

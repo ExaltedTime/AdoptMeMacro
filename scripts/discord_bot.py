@@ -1333,6 +1333,23 @@ async def watch_once(channel: discord.abc.Messageable, config: bot_lib.Config, s
             state.last_heartbeat = now
 
 
+def launch_macro_at_start(config: bot_lib.Config) -> Optional[int]:
+    """When the bot starts (`launch_macro` in bot_config.json, on unless it says false): start the macro's window - without its loop: /start or /loop does that - if no macro is running. Nothing when the processes of
+    the PC cannot be listed (a macro that is running must not be started twice) or one is already there (a bot restarted by /update). The new process id, or None."""
+    if not config.launch_macro:
+        return None
+    pids = current_macro_pids()
+    if pids != []:
+        return None
+    try:
+        pid = launch_macro(config, loop=False)
+    except OSError as error:
+        log.warning(f"The macro could not be started: {error}")
+        return None
+    log.info(f"The macro was started (process {pid}); /start or /loop starts its loop")
+    return pid
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
     logging.getLogger("discord.client").addFilter(lambda record: "PyNaCl" not in record.getMessage())       # (the bot has no voice: that warning says nothing to act on)
@@ -1341,6 +1358,7 @@ def main() -> None:
         config = bot_lib.load_config(path)
     except bot_lib.ConfigError as error:
         sys.exit(str(error))
+    launch_macro_at_start(config)
     build(config).run(config.token, log_handler=None)
     if RESTART_BOT:                       # (the client has closed: the new bot is the only one logged in)
         log.info("restarting the bot with the updated code")

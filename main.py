@@ -4384,6 +4384,11 @@ def look_at_daily_tasks() -> Optional[str]:
         save_screenshot()
     except OSError:
         pass
+    claim = popup_found(img, "daily_claim_all")
+    if claim is not None:
+        hover_click(*claim)                                                           # (a done task's reward is claimed: the Claim All button shows when there is one)
+        wait_interruptible(cfg.PET_PEN_UI_SETTLE)
+        log_run_event("daily tasks: Claim All clicked")
     return task_pet_wanted(img, dict(config["task_pet_failed"]))
 
 def apply_task_pet(wanted: Optional[str]) -> None:

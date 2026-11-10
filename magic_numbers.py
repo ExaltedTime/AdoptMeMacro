@@ -156,6 +156,7 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "trading_option_no_one":       {"box": (960, 570, 1100, 640), "threshold": 0.85},
     "pet_alicorn":                 {"box": (900, 640, 1230, 900), "threshold": 0.8},
     # The Effect and Rarity rows of the FILTERS panel (the text of each row; its box is found left of it, as for the Age rows): what the daily tasks' pets are picked by.
+    "daily_claim_all": {"box": (1100, 700, 1340, 800), "threshold": 0.85},   # the green Claim All button at the bottom right of the Task Board's Tasks tab, shown when a task is done
     "daily_neon": {"box": (842, 440, 1200, 700), "threshold": 0.85},          # the bold word Neon / Common in the text of a daily task (what the task wants of the pet), found above its progress bar
     "daily_common": {"box": (842, 440, 1200, 700), "threshold": 0.85},
     "filter_effect_regular": {"box": (800, 640, 1130, 880), "threshold": 0.85},

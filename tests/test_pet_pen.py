@@ -620,3 +620,24 @@ def test_the_whole_way_a_board_with_an_open_neon_task_ends_in_a_neon_pet_through
     assert macro.load_game_config()["task_pet"] == "neon"
     assert macro.clicks[-1] == macro.cfg.STRAY_WINDOWS["task_board"]["close_pos"] and macro.state.task_board_wanted is False
     assert any(line.startswith("daily tasks: 0% (neon), 0% (common)") for line in log)
+
+
+def test_a_done_task_is_claimed_by_the_claim_all_button_of_the_real_board_and_not_when_there_is_none(macro, monkeypatch, tmp_path):
+    monkeypatch.setattr(macro.cfg, "DAILY_TASKS_DIR", str(tmp_path / "daily"))
+    log = []
+    monkeypatch.setattr(macro, "log_run_event", log.append)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "save_screenshot", lambda: "x.png")
+    macro.update_game_config(lambda c: c.update(daily_tasks_enabled=True, daily_tasks_looked=-1e9, task_pet="", task_pet_failed={}))
+    monkeypatch.setattr(macro.time, "time", lambda: 1.8e9)
+    monkeypatch.setattr(macro, "grab_screen", lambda: shot("board_daily_claim"))
+    macro.look_at_daily_tasks()
+    assert "daily tasks: Claim All clicked" in log
+    x, y = macro.clicks[-1]
+    assert 1190 <= x <= 1310 and 730 <= y <= 770
+    macro.clicks.clear()
+    log.clear()
+    macro.update_game_config(lambda c: c.update(daily_tasks_looked=-1e9))
+    monkeypatch.setattr(macro, "grab_screen", lambda: shot("board_daily_tasks"))
+    macro.look_at_daily_tasks()
+    assert "daily tasks: Claim All clicked" not in log and macro.clicks == [macro.cfg.DAILY_TASKS_TAB_POS]

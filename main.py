@@ -409,7 +409,6 @@ class State:
     display_switching: bool = False        # Blackout is switching the display (Win+P's way): Windows moves the windows and Roblox loses the focus for a moment - the running macro waits at its next check instead of stopping
     phase_shots: list = field(default_factory=list)      # (seconds into the capture, label, PNG bytes) of the screens taken during the need that runs: kept in the moments when it fails (phase_shot())
     phase_ok: dict = field(default_factory=dict)          # {need: executions that went well since one of them was kept}
-    pen_notes: list = field(default_factory=list)        # what switch_pen_pets() and put_a_pet_in_the_pen() said (pen_note()), for the Debug button to show in the console
     notice_clicks: list = field(default_factory=list)     # when dismiss_notice() clicked (a notice that does not go is left alone for a while)
     notice_pause_until: float = 0.0
     notice_reported: float = 0.0
@@ -1695,7 +1694,7 @@ def walk_alternating(direction_pair: tuple[str, str], total_duration: float, ste
 # Plain callable actions, not tied to any detected need/icon - not in
 # ENABLED_NEEDS or NEED_HANDLER_CLASSES. side_quest() runs lure_collect() and
 # tree_collect() on a timer; setup_game() and leave_and_rejoin() run from the
-# GUI's Functions section and from rejoin_game()'s recovery.
+# bot's commands and from rejoin_game()'s recovery.
 
 def lure_collect() -> bool:
     """Walk to the lure, collect its rewards, then set a new one
@@ -4631,11 +4630,11 @@ def put_a_pet_in_the_pen() -> bool:
     not come up or no pet fits."""
     add = popup_found(grab_screen(), "pet_pen_add")
     if add is None:
-        pen_note("pet pen: no free place to put a pet in")
+        log_run_event("pet pen: no free place to put a pet in")
         return False
     hover_click(*add)
     if look_until(lambda img: popup_visible(img, "pet_backpack_title"), cfg.PET_PEN_OPEN_WAIT, cfg.PET_PEN_POLL) is None:
-        pen_note("pet pen: the backpack did not come up after Add Pet")
+        log_run_event("pet pen: the backpack did not come up after Add Pet")
         return False
     if not ensure_pen_age_filter():
         hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
@@ -4643,22 +4642,17 @@ def put_a_pet_in_the_pen() -> bool:
         return False
     pet = choose_pen_pet()
     if pet is None:
-        pen_note("pet pen: no pet fits (all in a trade listing, equipped or none left)")
+        log_run_event("pet pen: no pet fits (all in a trade listing, equipped or none left)")
         hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
         wait_interruptible(cfg.PET_PEN_UI_SETTLE)
         return False
     hover_click(*pet)
     wait_interruptible(cfg.PET_PEN_UI_SETTLE)
     if popup_visible(grab_screen(), "pet_backpack_title"):
-        pen_note("pet pen: the pet clicked did not go in")
+        log_run_event("pet pen: the pet clicked did not go in")
         hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
         return False
     return True
-
-def pen_note(text: str) -> None:
-    """A line of the pen's switch, in the run log and kept in state.pen_notes (switch_pen_now() shows them in the console)."""
-    state.pen_notes.append(text)
-    log_run_event(text)
 
 def switch_pen_pets() -> bool:
     """The pen's full-grown pets out and others in: the pen opened (open_pet_pen()), the red X of each place with the "Full grown!" sign clicked (the rest move up, so each time it is looked at again), then a pet that fits put in
@@ -4668,7 +4662,7 @@ def switch_pen_pets() -> bool:
         return False
     phase_reset()
     if not open_pet_pen():
-        pen_note("pet pen: it did not open")
+        log_run_event("pet pen: it did not open")
         phase_shot("the pen did not open")
         phase_commit("the pet pen switch")
         return False
@@ -4691,13 +4685,13 @@ def switch_pen_pets() -> bool:
         phase_shot(f"after the X of place {grown[0]}")
         out += 1
     if out == 0:
-        pen_note("pet pen: no pet in it is full grown")
+        log_run_event("pet pen: no pet in it is full grown")
     for _ in range(out):
         if not put_a_pet_in_the_pen():
             break
     else:
         if out:
-            pen_note(f"pet pen: {out} full-grown pet(s) switched")
+            log_run_event(f"pet pen: {out} full-grown pet(s) switched")
     phase_shot("before the pen is closed")
     phase_commit("the pet pen switch")
     hover_click(*cfg.PET_PEN_CLOSE_POS)
@@ -4712,17 +4706,6 @@ def check_pet_pen() -> bool:
     done = switch_pen_pets()
     update_game_config(lambda c: c.update(pet_pen_swap_tried=time.time(), **({"pet_pen_swap": False} if done else {})))
     respawn_character()
-    return done
-
-def switch_pen_now() -> bool:
-    """The Debug tab's "Switch the Pet Pen's full-grown pets now": switch_pen_pets() at once, whether or not a growing up was seen or the pen is switched on, then a respawn back in the house (as Setup's check does); what it
-    did is in the run log (`pet pen: ...`) and, for a pet that did not go out, a failure with its screenshot. True when the pen is as it should be."""
-    state.pen_notes.clear()
-    with task_unscrew(interruptible=False, what="debug: switch the pen"):
-        done = switch_pen_pets()
-        update_game_config(lambda c: c.update(pet_pen_swap_tried=time.time(), **({"pet_pen_swap": False} if done else {})))
-        respawn_character()
-    logger.info("Pet Pen: " + ("; ".join(state.pen_notes) if state.pen_notes else "nothing was said") + (" - done" if done else " - NOT as it should be"))
     return done
 
 def switch_pen_and_respawn() -> bool:
@@ -6770,16 +6753,6 @@ class AdoptMeGUI:
 
         tk.Frame(btn_frame, bg=self.accent, height=cfg.GUI_DIVIDER_HEIGHT).pack(fill=tk.X, pady=cfg.GUI_ROW_SPACING)
 
-        tk.Label(btn_frame, text="Functions", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"),
-                 bg=self.bg, fg=self.accent).pack(anchor=tk.W)
-
-        for label, action in (("Respawn", respawn_character), ("Leave & rejoin", leave_and_rejoin)):
-            btn = tk.Button(btn_frame, text=label, command=lambda a=action: self.run_async(a),  # type: ignore[misc]
-                            font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=cfg.GUI_RESPAWN_COLOR, fg=self.fg,
-                            height=cfg.GUI_RESPAWN_BUTTON_HEIGHT, cursor="hand2")
-            btn.pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
-            self.action_buttons.append(btn)
-
         # Setup is not a button: it is ticked here and runs once, at the next pass of the loop (a loop that is running takes it at its next cycle)
         self.config_flag_vars: dict[str, tk.BooleanVar] = {}
         self.add_config_checkbox(btn_frame, "Run Setup at the next loop (once)", "setup_next_loop", load_game_config())
@@ -7067,19 +7040,6 @@ class AdoptMeGUI:
         buttons.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
         buttons.grid_columnconfigure(0, weight=1, uniform="settings")
         buttons.grid_columnconfigure(1, weight=1, uniform="settings")
-        for label, kind in (("Equip a neon pet (for the daily tasks)", "neon"), ("Equip a common pet (for the daily tasks)", "common")):
-            task_button = tk.Button(parent, text=label, command=lambda k=kind: self.run_async(lambda: equip_task_pet(k)), font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),  # type: ignore[misc]
-                                    bg=cfg.GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
-            task_button.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
-            self.action_buttons.append(task_button)
-        restore_button = tk.Button(parent, text="Filters and pet back to normal (after a task)", command=lambda: self.run_async(restore_pet_filters), font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
-                                   bg=cfg.GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
-        restore_button.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
-        self.action_buttons.append(restore_button)
-        pen_button = tk.Button(parent, text="Switch the Pet Pen's full-grown pets now", command=lambda: self.run_async(switch_pen_now), font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
-                               bg=cfg.GUI_TEST_COLOR, fg=self.fg, cursor="hand2")
-        pen_button.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
-        self.action_buttons.append(pen_button)
         tk.Button(buttons, text="Refresh debug", command=self.refresh_debug_folder, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
                   bg=self.accent, fg=self.fg, cursor="hand2").grid(row=0, column=0, sticky=tk.EW, padx=(0, cfg.GUI_WIDGET_SPACING))
         tk.Button(buttons, text="Reset Config", command=self.reset_config, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),

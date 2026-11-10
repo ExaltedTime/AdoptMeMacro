@@ -433,15 +433,6 @@ def test_the_pen_is_looked_at_every_half_hour_whether_or_not_a_pet_was_seen_to_g
     assert len(tried) == 2                                                                       # (switched off: never)
 
 
-def test_the_debug_button_switches_the_pen_at_once_and_respawns(macro, monkeypatch):
-    seen = []
-    monkeypatch.setattr(macro, "switch_pen_pets", lambda: seen.append("switch") or True)
-    monkeypatch.setattr(macro, "respawn_character", lambda: seen.append("respawn"))
-    macro.update_game_config(lambda c: c.update(pet_pen_enabled=False, pet_pen_swap=True))        # (whatever the switches say)
-    assert macro.switch_pen_now() is True and seen == ["switch", "respawn"]
-    assert macro.load_game_config()["pet_pen_swap"] is False and macro.load_game_config()["pet_pen_swap_tried"] > 0
-
-
 def test_a_real_pen_with_four_full_grown_pets_is_read_and_the_red_x_of_each_is_where_it_is_clicked(macro):
     """A screenshot of the pen (taken with the screenshot key) with all four places full grown: the signs are found in all of them and each place's red X is under the position that takes the pet out."""
     import cv2

@@ -947,7 +947,6 @@ GUI_ACCENT = "#0d7377"
 GUI_FG = "#fff"
 GUI_STOP_COLOR = "#d62828"
 GUI_LOOP_COLOR = "#2980b9"
-GUI_RESPAWN_COLOR = "#8e44ad"
 GUI_TEST_COLOR = "#e74c3c"
 GUI_CONSOLE_BG = "#0a0a0a"
 GUI_CONSOLE_FG = "#00ff00"
@@ -971,7 +970,6 @@ GUI_CONSOLE_FONT_SIZE = 7
 
 GUI_CONSOLE_HEIGHT = 14          # lines
 GUI_CONSOLE_WIDTH = 45           # chars
-GUI_RESPAWN_BUTTON_HEIGHT = 1    # lines
 
 # A backpack category tab that is already selected has an orange background; clicking it again expands the
 # backpack, so handlers only click a tab that isn't orange yet. The tile is TAB_HALF_SIZE (x, y) around its

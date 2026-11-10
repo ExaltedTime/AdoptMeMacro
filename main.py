@@ -1878,13 +1878,31 @@ def age_checkbox(img: Image, label: str) -> Optional[tuple[Point, bool]]:
     return (x, centre[1]), ticked
 
 def filter_checkbox(img: Image, label: str) -> Optional[tuple[Point, bool]]:
-    """age_checkbox() for a row of the Effect or Rarity part of the FILTERS panel (`label`: FILTER_EFFECT_ROWS, FILTER_RARITY_ROWS): where its box is and whether it is ticked - None if the row is not in view,
-    or what was found is not in the row's column (the crop of "Rare" is also in "Ultra Rare", one column further left)."""
-    found = age_checkbox(img, label)
-    if found is None:
+    """age_checkbox() for a row of the Effect or Rarity part of the FILTERS panel (`label`: FILTER_EFFECT_ROWS, FILTER_RARITY_ROWS): where its box is and whether it is ticked - None if the row is not in view.
+    The crop is only looked for in the row's own column (FILTER_COLUMN_X, FILTER_COLUMN_TOLERANCE): "Neon" is also the end of "Mega Neon" and "Rare" the end of "Ultra Rare", and the match there is as good (1.0
+    on the same frame), so the best match anywhere took one or the other by the CPU's rounding - a row that was found on one machine and not on another."""
+    crop = load_templates(cfg.STRAY_WINDOW_DIR).get(label)
+    if crop is None:
         return None
-    text_left = found[0][0] - cfg.AGE_CHECKBOX_DX
-    return found if abs(text_left - cfg.FILTER_COLUMN_X[cfg.FILTER_ROW_COLUMN[label]]) <= cfg.FILTER_COLUMN_TOLERANCE else None
+    left, top, right, bottom = cfg.POPUP_TEMPLATES[label]["box"]
+    band = img[top:bottom, left:right]
+    if crop.shape[0] > band.shape[0] or crop.shape[1] > band.shape[1]:
+        return None
+    scores = cv2.matchTemplate(band, crop, cv2.TM_CCOEFF_NORMED)
+    wanted = cfg.FILTER_COLUMN_X[cfg.FILTER_ROW_COLUMN[label]] - 1 - left                      # (the crop's left edge: one px before where the text starts)
+    first, last = max(0, wanted - cfg.FILTER_COLUMN_TOLERANCE), min(scores.shape[1] - 1, wanted + cfg.FILTER_COLUMN_TOLERANCE)
+    if first > last:
+        return None
+    window = scores[:, first:last + 1]
+    _, score, _, (x, y) = cv2.minMaxLoc(window)
+    if score < cfg.POPUP_TEMPLATES[label]["threshold"]:
+        return None
+    crop_left, middle_y = left + first + x, top + y + crop.shape[0] // 2
+    box_x = crop_left + cfg.AGE_CHECKBOX_DX
+    half = cfg.AGE_CHECKBOX_HALF
+    patch = cv2.cvtColor(img[middle_y - half:middle_y + half, box_x - half:box_x + half], cv2.COLOR_BGR2HSV)
+    ticked = cv2.countNonZero(cv2.inRange(patch, *cfg.AGE_TICK_HSV)) >= cfg.AGE_TICK_MIN_PIXELS
+    return (box_x, middle_y), ticked
 
 def scroll_filters_to_age() -> bool:
     """In the open FILTERS panel: scroll its list (the wheel over its scroll bar, so that no item's description opens) until the Age rows are in view, FILTERS_SCROLL_TRIES notches at most. False if they never were."""

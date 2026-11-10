@@ -449,3 +449,16 @@ def test_a_neon_task_leaves_only_the_neon_effects_ticked_and_a_common_one_only_c
     clicked.clear()
     assert macro.set_filter_rows(macro.task_pet_rows("neon")) is True and clicked == []          # (already so: nothing clicked)
     assert macro.set_filter_rows(macro.task_pet_rows("all")) is True and len(clicked) == 4        # (and back)
+
+
+def test_neon_is_found_in_its_own_column_though_the_end_of_mega_neon_matches_as_well_as_it_does(macro):
+    """The CI failed on this at random: the crop of "Neon" matches the end of "Mega Neon" exactly as well (1.0 on the same frame), and which of the two the best match was came down to the CPU's rounding."""
+    top = frame("filters_top")
+    band = top[640:880, 800:1130]
+    crop = macro.load_templates(macro.cfg.STRAY_WINDOW_DIR)["filter_effect_neon"]
+    scores = cv2.matchTemplate(band, crop, cv2.TM_CCOEFF_NORMED)
+    assert int((scores >= 0.99).sum()) >= 2                                                      # (two places match: the row's own and the end of Mega Neon)
+    (x, y), ticked = macro.filter_checkbox(top, "filter_effect_neon")
+    assert abs(x - 931) <= 3 and abs(y - 749) <= 3 and ticked is True
+    (x, y), _ = macro.filter_checkbox(top, "filter_effect_mega_neon")
+    assert abs(x - 1015) <= 3

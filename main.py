@@ -25,7 +25,7 @@ from typing import Any, Callable, ContextManager, Iterable, Iterator, Optional, 
 from abc import ABC, abstractmethod
 from functools import lru_cache, partial
 import tkinter as tk
-from tkinter import messagebox, scrolledtext, simpledialog, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 import numpy as np
 import cv2
@@ -849,6 +849,9 @@ def _read_game_config() -> dict[str, Any]:
         "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
         "setup_next_loop": False,   # run Setup at the next pass of the loop (once; cleared when it runs)
         "record_next_run": False,   # record the next run as a low quality video; cleared when that run starts
+        "stop_hotkey_enabled": True,       # whether HOTKEYS["stop"] stops the macro (off: that key can be typed anywhere; the [STOP] button and the bot's stop work either way)
+        "capture_hotkey_enabled": True,    # whether HOTKEYS["capture"] starts and stops an input capture (off: that key can be typed in Roblox)
+        "screenshot_hotkey_enabled": True, # whether HOTKEYS["screenshot"] saves a screenshot (off: that key can be typed in Roblox)
         "blackout_hotkey_enabled": True,   # whether HOTKEYS["blackout"] blanks the screen (off: that key can be typed in Roblox)
         "keep_moments": True,              # whether the loop captures the run's moments (start_moments()), kept when the run lasted MOMENTS_MIN_RUN seconds or more
         "pet_pen_enabled": True,           # whether pet_pen() collects the Pet Pen when the Task Board says it is ready
@@ -6407,7 +6410,7 @@ GUIDE: tuple[tuple[str, tuple[str, ...]], ...] = (
         "{screenshot} saves a screenshot to debug/screenshots (in Roblox).",
         "{blackout} blanks the screen while the macro works, and shows it again (in Roblox).",
         "{new_need} teaches a need icon the macro does not know (in Roblox).",
-        "The last three can be switched off in Settings, so that the key is typed in the game.")),
+        "Each key can be switched off in Settings (Keys), so that it is typed in the game; the red button and the bot still stop the macro.")),
     ("Main", (
         "The blue button starts the loop, the red one stops it.",
         "Run Setup at the next loop: once, the next time the loop starts or comes round (equip the pet, set the filters).")),
@@ -6682,14 +6685,18 @@ class AdoptMeGUI:
             logger.exception("Looking for a new need failed")
 
     def screenshot_by_hotkey(self) -> None:
-        """HOTKEYS["screenshot"] was pressed in Roblox: a picture of the whole screen into SCREENSHOTS_DIR (Tk's thread)."""
+        """HOTKEYS["screenshot"] was pressed in Roblox: a picture of the whole screen into SCREENSHOTS_DIR (Tk's thread), unless its checkbox has the key off."""
+        if not self.hotkey_enabled("screenshot"):
+            return
         try:
             logger.info(f"Screenshot saved: {save_screenshot()}")
         except Exception:
             logger.exception("Saving a screenshot failed")
 
     def capture_by_hotkey(self) -> None:
-        """HOTKEYS["capture"] was pressed: start or stop the input capture (Tk's thread; the capture's own threads do the work)."""
+        """HOTKEYS["capture"] was pressed: start or stop the input capture (Tk's thread; the capture's own threads do the work), unless its checkbox has the key off."""
+        if not self.hotkey_enabled("capture"):
+            return
         try:
             toggle_input_capture()
         except OSError as error:
@@ -6723,9 +6730,14 @@ class AdoptMeGUI:
             logger.exception("Blanking the screen failed")
             self.blackout.hide()
 
+    def hotkey_enabled(self, name: str) -> bool:
+        """Whether the Settings tab's checkbox of the hotkey HOTKEYS[`name`] is on (on when there is none: the window is not up yet)."""
+        var = getattr(self, "config_flag_vars", {}).get(f"{name}_hotkey_enabled")
+        return True if var is None else bool(var.get())
+
     def stop_by_hotkey(self) -> None:
-        """HOTKEYS["stop"] was pressed: stop, same as the [STOP] button, and say so."""
-        if self.is_running:
+        """HOTKEYS["stop"] was pressed: stop, same as the [STOP] button, and say so (unless its checkbox has the key off)."""
+        if self.is_running and self.hotkey_enabled("stop"):
             logger.info(f"'{cfg.HOTKEYS['stop'].upper()}' pressed")
             self.stop()   # first: a failing log write must not keep the macro running
             try:
@@ -6734,7 +6746,7 @@ class AdoptMeGUI:
                 pass
 
     def set_style(self) -> None:
-        """One palette for the whole window (GUI_BG, GUI_TAB_BG, GUI_ACCENT, GUI_FG): the tab strips (ttk, drawn with the "clam" theme, whose colours can all be set: the
+        """One palette for the whole window (GUI_BG, GUI_TAB_BG, GUI_ACCENT, GUI_FG): the tab strips and scroll bars (ttk, drawn with the "clam" theme, whose colours can all be set: the
         default theme's white frame around a tab's page cannot) and no focus ring or bevel on the Tk widgets (the white edge round a checkbox or the console)."""
         style = ttk.Style(self.root)
         style.theme_use("clam")
@@ -6742,10 +6754,22 @@ class AdoptMeGUI:
             style.configure(name, background=self.bg, bordercolor=self.bg, lightcolor=self.bg, darkcolor=self.bg, focuscolor=self.bg)
         style.configure("TNotebook", borderwidth=0, tabmargins=(0, 0, 0, 0))
         style.configure("TNotebook.Tab", background=cfg.GUI_TAB_BG, foreground=self.fg, borderwidth=0, padding=cfg.GUI_TAB_PADDING, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE))
-        style.map("TNotebook.Tab", background=[("selected", self.accent), ("active", self.accent)], foreground=[("selected", self.fg)])
+        style.map("TNotebook.Tab", background=[("selected", self.accent), ("active", self.accent)], foreground=[("selected", cfg.GUI_ON_ACCENT), ("active", cfg.GUI_ON_ACCENT)])
+        style.configure("Vertical.TScrollbar", background=cfg.GUI_TAB_BG, troughcolor=cfg.GUI_CONSOLE_BG, bordercolor=self.bg, lightcolor=cfg.GUI_TAB_BG, darkcolor=cfg.GUI_TAB_BG,
+                        arrowcolor=self.accent, relief="flat", borderwidth=0)
+        style.map("Vertical.TScrollbar", background=[("active", self.accent), ("pressed", self.accent)])
         for widget in ("Checkbutton", "Button", "Entry", "Text", "Frame", "Label"):
             self.root.option_add(f"*{widget}.highlightThickness", 0)
         self.root.option_add("*Checkbutton.borderWidth", 0)
+        self.root.option_add("*selectBackground", self.accent)                  # (the highlighted text of an entry or the console)
+        self.root.option_add("*selectForeground", cfg.GUI_ON_ACCENT)
+
+    def match_pressed_colors(self, widget: Any) -> None:
+        """Every Tk button under `widget` keeps its own colours while it is pressed or pointed at (the default is the system's grey)."""
+        for child in widget.winfo_children():
+            if isinstance(child, tk.Button):
+                child.configure(activebackground=child.cget("bg"), activeforeground=child.cget("fg"))
+            self.match_pressed_colors(child)
 
     def create_ui(self) -> None:
         """Build every widget; buttons that start a background action are added to
@@ -6755,7 +6779,7 @@ class AdoptMeGUI:
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill=tk.X, padx=cfg.GUI_OUTER_PADDING, pady=(cfg.GUI_OUTER_PADDING, 0))
         btn_frame = tk.Frame(notebook, bg=self.bg)
-        options_tab = tk.Frame(notebook, bg=self.bg)
+        options_tab, options_inner = self.add_scrolled_frame(notebook)
         debug_tab = tk.Frame(notebook, bg=self.bg)
         notebook.add(btn_frame, text="Main")
         notebook.add(options_tab, text="Settings")
@@ -6802,7 +6826,7 @@ class AdoptMeGUI:
         # Persisted switches (see load_game_config()). Deliberately not in
         # action_buttons: they must stay usable while a workflow is running,
         # which is safe since update_game_config() is locked.
-        self.build_settings_tab(options_tab)
+        self.build_settings_tab(options_inner)
 
         # Debug tab: the need handlers (a switch and a Test button each, regardless of whether it's in
         # ENABLED_NEEDS, so any can be run on its own, plus one that runs them all in turn).
@@ -6816,17 +6840,49 @@ class AdoptMeGUI:
         tk.Label(debug_frame, text="Output", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"),
                  bg=self.bg, fg=self.accent).pack(anchor=tk.W, pady=(0, cfg.GUI_LABEL_PADDING))
 
-        self.debug_text = scrolledtext.ScrolledText(debug_frame, height=cfg.GUI_CONSOLE_HEIGHT, width=cfg.GUI_CONSOLE_WIDTH,
-                                                     bg=cfg.GUI_CONSOLE_BG, fg=cfg.GUI_CONSOLE_FG,
-                                                     font=(cfg.GUI_FONT, cfg.GUI_CONSOLE_FONT_SIZE), state=tk.DISABLED)
-        self.debug_text.pack(fill=tk.BOTH, expand=True)
+        self.debug_text = self.add_scrolled_text(debug_frame, height=cfg.GUI_CONSOLE_HEIGHT, width=cfg.GUI_CONSOLE_WIDTH, bg=cfg.GUI_CONSOLE_BG, fg=cfg.GUI_CONSOLE_FG,
+                                                 font=(cfg.GUI_FONT, cfg.GUI_CONSOLE_FONT_SIZE), state=tk.DISABLED)
 
         # Status bar
         status = tk.Frame(self.root, bg=self.accent, height=cfg.GUI_STATUS_HEIGHT)
         status.pack(fill=tk.X, side=tk.BOTTOM)
         status.pack_propagate(False)
-        self.status = tk.Label(status, text="Ready", font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.accent, fg=self.fg)
+        self.status = tk.Label(status, text="Ready", font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.accent, fg=cfg.GUI_ON_ACCENT)
         self.status.pack(anchor=tk.W, padx=cfg.GUI_OUTER_PADDING, pady=cfg.GUI_LABEL_PADDING)
+        self.match_pressed_colors(self.root)
+
+    def add_scrolled_text(self, parent: Any, **options: Any) -> tk.Text:
+        """A Text with a scroll bar of the palette (tkinter's ScrolledText has the system's white and grey one, which cannot be recoloured), packed in `parent`."""
+        frame = tk.Frame(parent, bg=self.bg)
+        frame.pack(fill=tk.BOTH, expand=True)
+        bar = ttk.Scrollbar(frame, orient=tk.VERTICAL)
+        bar.pack(side=tk.RIGHT, fill=tk.Y)
+        text = tk.Text(frame, yscrollcommand=bar.set, bd=0, highlightthickness=0, **options)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        bar.configure(command=text.yview)
+        return text
+
+    def add_scrolled_frame(self, parent: Any) -> tuple[tk.Frame, tk.Frame]:
+        """A page that scrolls (the Settings tab is taller than its room): (the frame to add to the notebook, the frame to fill). A scroll bar of the palette on the right, and the mouse wheel
+        while the pointer is over it."""
+        outer = tk.Frame(parent, bg=self.bg)
+        bar = ttk.Scrollbar(outer, orient=tk.VERTICAL)
+        bar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas = tk.Canvas(outer, bg=self.bg, bd=0, highlightthickness=0, height=cfg.GUI_SCROLL_PAGE_HEIGHT, yscrollcommand=bar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        bar.configure(command=canvas.yview)
+        inner = tk.Frame(canvas, bg=self.bg)
+        window = canvas.create_window((0, 0), window=inner, anchor=tk.NW)
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(window, width=e.width))        # (the page is as wide as the canvas)
+
+        def wheel(event: Any) -> None:
+            if inner.winfo_height() > canvas.winfo_height():
+                canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", wheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        return outer, inner
 
     def set_debug_lines_shown(self) -> None:
         """The console's checkbox: show the debug lines or leave them out (output.log has them either way)."""
@@ -7020,7 +7076,7 @@ class AdoptMeGUI:
                            font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.fg, selectcolor=self.bg,
                            activebackground=self.bg, activeforeground=self.fg, anchor=tk.W, cursor="hand2").pack(side=tk.LEFT)
             btn = tk.Button(cell, text="Test", command=lambda n=name, c=handler_cls: self.test_handler(n, c),  # type: ignore[misc]
-                            font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.accent, fg=self.fg, cursor="hand2", padx=cfg.GUI_ROW_SPACING, pady=0)
+                            font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.accent, fg=cfg.GUI_ON_ACCENT, cursor="hand2", padx=cfg.GUI_ROW_SPACING, pady=0)
             btn.pack(side=tk.RIGHT, pady=cfg.GUI_LABEL_PADDING)
             self.action_buttons.append(btn)
 
@@ -7032,8 +7088,7 @@ class AdoptMeGUI:
     def build_guide_tab(self, parent: Any) -> None:
         """Fill the Guide tab: what the keys and the switches do (read only; GUIDE has the text, the key letters come from HOTKEYS)."""
         keys = {name: key.upper() for name, key in cfg.HOTKEYS.items()}
-        text = scrolledtext.ScrolledText(parent, height=cfg.GUI_GUIDE_HEIGHT, width=cfg.GUI_CONSOLE_WIDTH, wrap=tk.WORD, bg=self.bg, fg=self.fg, bd=0, highlightthickness=0,
-                                         font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE))
+        text = self.add_scrolled_text(parent, height=cfg.GUI_GUIDE_HEIGHT, width=cfg.GUI_CONSOLE_WIDTH, wrap=tk.WORD, bg=self.bg, fg=self.fg, font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE))
         text.tag_configure("heading", foreground=self.accent, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"))
         for heading, lines in GUIDE:
             text.insert(tk.END, heading + "\n", "heading")
@@ -7041,7 +7096,6 @@ class AdoptMeGUI:
                 text.insert(tk.END, "  " + line.format(**keys) + "\n")
             text.insert(tk.END, "\n")
         text.configure(state=tk.DISABLED)
-        text.pack(fill=tk.BOTH, expand=True)
 
     def add_section(self, parent: Any, title: str) -> None:
         """A heading of the Settings tab, with a line under it."""
@@ -7077,6 +7131,9 @@ class AdoptMeGUI:
         server_link_entry.bind("<Return>", lambda e: self.save_server_link())
 
         self.add_section(parent, "Keys")
+        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['stop'].upper()} stops the macro, in any window", "stop_hotkey_enabled", config)
+        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['capture'].upper()} starts and stops a capture in Roblox", "capture_hotkey_enabled", config)
+        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['screenshot'].upper()} saves a screenshot in Roblox", "screenshot_hotkey_enabled", config)
         self.add_config_checkbox(parent, f"{cfg.HOTKEYS['blackout'].upper()} blanks the screen in Roblox", "blackout_hotkey_enabled", config)
         self.add_config_checkbox(parent, f"{cfg.HOTKEYS['new_need'].upper()} teaches a new need icon in Roblox", "new_need_hotkey_enabled", config)
 
@@ -7095,7 +7152,7 @@ class AdoptMeGUI:
         buttons.grid_columnconfigure(0, weight=1, uniform="settings")
         buttons.grid_columnconfigure(1, weight=1, uniform="settings")
         tk.Button(buttons, text="Refresh debug", command=self.refresh_debug_folder, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
-                  bg=self.accent, fg=self.fg, cursor="hand2").grid(row=0, column=0, sticky=tk.EW, padx=(0, cfg.GUI_WIDGET_SPACING))
+                  bg=self.accent, fg=cfg.GUI_ON_ACCENT, cursor="hand2").grid(row=0, column=0, sticky=tk.EW, padx=(0, cfg.GUI_WIDGET_SPACING))
         tk.Button(buttons, text="Reset Config", command=self.reset_config, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
                   bg=cfg.GUI_STOP_COLOR, fg=self.fg, cursor="hand2").grid(row=0, column=1, sticky=tk.EW, padx=(cfg.GUI_WIDGET_SPACING, 0))
 

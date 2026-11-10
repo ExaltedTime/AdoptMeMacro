@@ -693,8 +693,8 @@ def switch_command(kind: str, name: str, value: bool) -> dict[str, Any]:
     return {"kind": kind, "name": name, "value": bool(value)}
 
 
-# The game config's defaults for the switches (main.py's _read_game_config(): the money tree, the lure, the private server and the blackout key on, the rest off), for a config that doesn't have them yet.
-OPTION_DEFAULTS = {"money_tree_enabled": True, "lure_enabled": True, "use_private_server": True, "blackout_hotkey_enabled": True, "new_need_hotkey_enabled": True, "level_growing_pet": True, "pet_pen_enabled": True, "keep_moments": True}
+# The game config's defaults for the switches (main.py's _read_game_config(): the money tree, the lure, the private server and the five hotkeys on, the rest off), for a config that doesn't have them yet.
+OPTION_DEFAULTS = {"stop_hotkey_enabled": True, "capture_hotkey_enabled": True, "screenshot_hotkey_enabled": True, "money_tree_enabled": True, "lure_enabled": True, "use_private_server": True, "blackout_hotkey_enabled": True, "new_need_hotkey_enabled": True, "level_growing_pet": True, "pet_pen_enabled": True, "keep_moments": True}
 
 
 def switch_states(config: Optional[dict[str, Any]]) -> dict[str, bool]:

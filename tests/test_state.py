@@ -2395,3 +2395,25 @@ def test_the_blackout_key_works_from_any_window_while_the_screen_is_blank_and_on
     monkeypatch.setattr(macro, "is_roblox_focused", lambda: False)
     assert macro.hotkey_fires(True, False, False, True, True) is False                           # (in Roblox only: another window is focused)
     assert macro.hotkey_fires(True, False, False, True, False) is True                           # (what the loop passes for a blank screen)
+
+
+def test_a_hotkey_with_its_checkbox_off_does_nothing(macro, monkeypatch):
+    shots, stops = [], []
+    monkeypatch.setattr(macro, "save_screenshot", lambda: shots.append(1) or "x.png")
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.is_running = True
+    gui.stop = lambda: stops.append(1)
+    gui.config_flag_vars = {f"{name}_hotkey_enabled": types.SimpleNamespace(get=lambda: False) for name in ("stop", "capture", "screenshot")}
+    gui.stop_by_hotkey()
+    gui.screenshot_by_hotkey()
+    gui.capture_by_hotkey()
+    assert shots == [] and stops == [] and macro.state.capture is None
+    gui.config_flag_vars = {}                                                    # (no checkboxes yet: the keys work)
+    gui.screenshot_by_hotkey()
+    assert shots == [1] and gui.hotkey_enabled("stop")
+
+
+def test_the_new_hotkey_switches_are_in_the_config_and_the_bots_options(macro):
+    for name in ("stop", "capture", "screenshot"):
+        assert macro.load_game_config()[f"{name}_hotkey_enabled"] is True
+        assert macro.cfg.OPTION_SWITCHES[f"{name}_hotkey"] == f"{name}_hotkey_enabled"

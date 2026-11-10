@@ -25,7 +25,7 @@ from typing import Any, Callable, ContextManager, Iterable, Iterator, Optional, 
 from abc import ABC, abstractmethod
 from functools import lru_cache, partial
 import tkinter as tk
-from tkinter import messagebox, scrolledtext, simpledialog, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 import numpy as np
 import cv2
@@ -6407,7 +6407,7 @@ GUIDE: tuple[tuple[str, tuple[str, ...]], ...] = (
         "{screenshot} saves a screenshot to debug/screenshots (in Roblox).",
         "{blackout} blanks the screen while the macro works, and shows it again (in Roblox).",
         "{new_need} teaches a need icon the macro does not know (in Roblox).",
-        "The last three can be switched off in Settings, so that the key is typed in the game.")),
+        "{blackout} and {new_need} can be switched off in Settings, so that the key is typed in the game; {stop}, {capture} and {screenshot} cannot.")),
     ("Main", (
         "The blue button starts the loop, the red one stops it.",
         "Run Setup at the next loop: once, the next time the loop starts or comes round (equip the pet, set the filters).")),
@@ -6734,7 +6734,7 @@ class AdoptMeGUI:
                 pass
 
     def set_style(self) -> None:
-        """One palette for the whole window (GUI_BG, GUI_TAB_BG, GUI_ACCENT, GUI_FG): the tab strips (ttk, drawn with the "clam" theme, whose colours can all be set: the
+        """One palette for the whole window (GUI_BG, GUI_TAB_BG, GUI_ACCENT, GUI_FG): the tab strips and scroll bars (ttk, drawn with the "clam" theme, whose colours can all be set: the
         default theme's white frame around a tab's page cannot) and no focus ring or bevel on the Tk widgets (the white edge round a checkbox or the console)."""
         style = ttk.Style(self.root)
         style.theme_use("clam")
@@ -6742,7 +6742,10 @@ class AdoptMeGUI:
             style.configure(name, background=self.bg, bordercolor=self.bg, lightcolor=self.bg, darkcolor=self.bg, focuscolor=self.bg)
         style.configure("TNotebook", borderwidth=0, tabmargins=(0, 0, 0, 0))
         style.configure("TNotebook.Tab", background=cfg.GUI_TAB_BG, foreground=self.fg, borderwidth=0, padding=cfg.GUI_TAB_PADDING, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE))
-        style.map("TNotebook.Tab", background=[("selected", self.accent), ("active", self.accent)], foreground=[("selected", self.fg)])
+        style.map("TNotebook.Tab", background=[("selected", self.accent), ("active", self.accent)], foreground=[("selected", cfg.GUI_ON_ACCENT), ("active", cfg.GUI_ON_ACCENT)])
+        style.configure("Vertical.TScrollbar", background=cfg.GUI_TAB_BG, troughcolor=cfg.GUI_CONSOLE_BG, bordercolor=self.bg, lightcolor=cfg.GUI_TAB_BG, darkcolor=cfg.GUI_TAB_BG,
+                        arrowcolor=self.accent, relief="flat", borderwidth=0)
+        style.map("Vertical.TScrollbar", background=[("active", self.accent), ("pressed", self.accent)])
         for widget in ("Checkbutton", "Button", "Entry", "Text", "Frame", "Label"):
             self.root.option_add(f"*{widget}.highlightThickness", 0)
         self.root.option_add("*Checkbutton.borderWidth", 0)
@@ -6816,17 +6819,26 @@ class AdoptMeGUI:
         tk.Label(debug_frame, text="Output", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"),
                  bg=self.bg, fg=self.accent).pack(anchor=tk.W, pady=(0, cfg.GUI_LABEL_PADDING))
 
-        self.debug_text = scrolledtext.ScrolledText(debug_frame, height=cfg.GUI_CONSOLE_HEIGHT, width=cfg.GUI_CONSOLE_WIDTH,
-                                                     bg=cfg.GUI_CONSOLE_BG, fg=cfg.GUI_CONSOLE_FG,
-                                                     font=(cfg.GUI_FONT, cfg.GUI_CONSOLE_FONT_SIZE), state=tk.DISABLED)
-        self.debug_text.pack(fill=tk.BOTH, expand=True)
+        self.debug_text = self.add_scrolled_text(debug_frame, height=cfg.GUI_CONSOLE_HEIGHT, width=cfg.GUI_CONSOLE_WIDTH, bg=cfg.GUI_CONSOLE_BG, fg=cfg.GUI_CONSOLE_FG,
+                                                 font=(cfg.GUI_FONT, cfg.GUI_CONSOLE_FONT_SIZE), state=tk.DISABLED)
 
         # Status bar
         status = tk.Frame(self.root, bg=self.accent, height=cfg.GUI_STATUS_HEIGHT)
         status.pack(fill=tk.X, side=tk.BOTTOM)
         status.pack_propagate(False)
-        self.status = tk.Label(status, text="Ready", font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.accent, fg=self.fg)
+        self.status = tk.Label(status, text="Ready", font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.accent, fg=cfg.GUI_ON_ACCENT)
         self.status.pack(anchor=tk.W, padx=cfg.GUI_OUTER_PADDING, pady=cfg.GUI_LABEL_PADDING)
+
+    def add_scrolled_text(self, parent: Any, **options: Any) -> tk.Text:
+        """A Text with a scroll bar of the palette (tkinter's ScrolledText has the system's white and grey one, which cannot be recoloured), packed in `parent`."""
+        frame = tk.Frame(parent, bg=self.bg)
+        frame.pack(fill=tk.BOTH, expand=True)
+        bar = ttk.Scrollbar(frame, orient=tk.VERTICAL)
+        bar.pack(side=tk.RIGHT, fill=tk.Y)
+        text = tk.Text(frame, yscrollcommand=bar.set, bd=0, highlightthickness=0, **options)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        bar.configure(command=text.yview)
+        return text
 
     def set_debug_lines_shown(self) -> None:
         """The console's checkbox: show the debug lines or leave them out (output.log has them either way)."""
@@ -7020,7 +7032,7 @@ class AdoptMeGUI:
                            font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.fg, selectcolor=self.bg,
                            activebackground=self.bg, activeforeground=self.fg, anchor=tk.W, cursor="hand2").pack(side=tk.LEFT)
             btn = tk.Button(cell, text="Test", command=lambda n=name, c=handler_cls: self.test_handler(n, c),  # type: ignore[misc]
-                            font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.accent, fg=self.fg, cursor="hand2", padx=cfg.GUI_ROW_SPACING, pady=0)
+                            font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.accent, fg=cfg.GUI_ON_ACCENT, cursor="hand2", padx=cfg.GUI_ROW_SPACING, pady=0)
             btn.pack(side=tk.RIGHT, pady=cfg.GUI_LABEL_PADDING)
             self.action_buttons.append(btn)
 
@@ -7032,8 +7044,7 @@ class AdoptMeGUI:
     def build_guide_tab(self, parent: Any) -> None:
         """Fill the Guide tab: what the keys and the switches do (read only; GUIDE has the text, the key letters come from HOTKEYS)."""
         keys = {name: key.upper() for name, key in cfg.HOTKEYS.items()}
-        text = scrolledtext.ScrolledText(parent, height=cfg.GUI_GUIDE_HEIGHT, width=cfg.GUI_CONSOLE_WIDTH, wrap=tk.WORD, bg=self.bg, fg=self.fg, bd=0, highlightthickness=0,
-                                         font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE))
+        text = self.add_scrolled_text(parent, height=cfg.GUI_GUIDE_HEIGHT, width=cfg.GUI_CONSOLE_WIDTH, wrap=tk.WORD, bg=self.bg, fg=self.fg, font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE))
         text.tag_configure("heading", foreground=self.accent, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"))
         for heading, lines in GUIDE:
             text.insert(tk.END, heading + "\n", "heading")
@@ -7041,7 +7052,6 @@ class AdoptMeGUI:
                 text.insert(tk.END, "  " + line.format(**keys) + "\n")
             text.insert(tk.END, "\n")
         text.configure(state=tk.DISABLED)
-        text.pack(fill=tk.BOTH, expand=True)
 
     def add_section(self, parent: Any, title: str) -> None:
         """A heading of the Settings tab, with a line under it."""
@@ -7095,7 +7105,7 @@ class AdoptMeGUI:
         buttons.grid_columnconfigure(0, weight=1, uniform="settings")
         buttons.grid_columnconfigure(1, weight=1, uniform="settings")
         tk.Button(buttons, text="Refresh debug", command=self.refresh_debug_folder, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
-                  bg=self.accent, fg=self.fg, cursor="hand2").grid(row=0, column=0, sticky=tk.EW, padx=(0, cfg.GUI_WIDGET_SPACING))
+                  bg=self.accent, fg=cfg.GUI_ON_ACCENT, cursor="hand2").grid(row=0, column=0, sticky=tk.EW, padx=(0, cfg.GUI_WIDGET_SPACING))
         tk.Button(buttons, text="Reset Config", command=self.reset_config, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
                   bg=cfg.GUI_STOP_COLOR, fg=self.fg, cursor="hand2").grid(row=0, column=1, sticky=tk.EW, padx=(cfg.GUI_WIDGET_SPACING, 0))
 

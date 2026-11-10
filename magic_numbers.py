@@ -941,8 +941,6 @@ WHITE_RANGE = (np.array([0, 0, 200]), np.array([180, 40, 255]))
 # ============================================================================
 GUI_GEOMETRY = "380x650+1533+110"   # size + position (docked top-right)
 GUI_ALPHA = 0.95
-GUI_BORDERLESS = True               # no window frame (the macro draws a title bar to drag and close it by); False: the frame of Windows
-GUI_TITLE_BAR_HEIGHT = 24           # px, that title bar
 GUI_GUIDE_HEIGHT = 14               # lines, the Guide tab
 GUI_FONT = "Courier"
 GUI_BG = "#1a1a1a"

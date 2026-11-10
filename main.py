@@ -6433,8 +6433,6 @@ class AdoptMeGUI:
         self.root.title("Adopt Me Macro")
         self.root.geometry(cfg.GUI_GEOMETRY)
         self.root.resizable(False, False)
-        if cfg.GUI_BORDERLESS:
-            self.root.overrideredirect(True)           # no frame: the title bar is drawn in create_ui() (add_title_bar())
         self.root.attributes('-topmost', True)
         self.root.attributes('-alpha', cfg.GUI_ALPHA)
 
@@ -6738,8 +6736,6 @@ class AdoptMeGUI:
         """Build every widget; buttons that start a background action are added to
         self.action_buttons ([STOP] deliberately isn't). See docs/ARCHITECTURE.md#gui-internals.
         """
-        if cfg.GUI_BORDERLESS:
-            self.add_title_bar()
         # Main buttons
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill=tk.X, padx=cfg.GUI_OUTER_PADDING, pady=(cfg.GUI_OUTER_PADDING, 0))
@@ -7018,30 +7014,6 @@ class AdoptMeGUI:
         update_game_config(lambda c: c.setdefault("needs_enabled", {}).update({name: value}))
         logger.info(f"{name} need {'on' if value else 'off'}")
 
-    def add_title_bar(self) -> None:
-        """The title bar of the frameless window (GUI_BORDERLESS): its name, dragged to move the window, and a x that closes it like the frame's would."""
-        bar = tk.Frame(self.root, bg=self.accent, height=cfg.GUI_TITLE_BAR_HEIGHT)
-        bar.pack(fill=tk.X, side=tk.TOP)
-        bar.pack_propagate(False)
-        title = tk.Label(bar, text="Adopt Me Macro", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"), bg=self.accent, fg=self.fg)
-        title.pack(side=tk.LEFT, padx=cfg.GUI_OUTER_PADDING)
-        close = tk.Label(bar, text="\u2715", font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"), bg=self.accent, fg=self.fg, cursor="hand2")
-        close.pack(side=tk.RIGHT, padx=cfg.GUI_OUTER_PADDING)
-        close.bind("<Button-1>", lambda e: self.close())
-        close.bind("<Enter>", lambda e: close.configure(bg=cfg.GUI_STOP_COLOR))
-        close.bind("<Leave>", lambda e: close.configure(bg=self.accent))
-        grab: list[int] = [0, 0]
-
-        def press(event: Any) -> None:
-            grab[:] = [event.x_root - self.root.winfo_x(), event.y_root - self.root.winfo_y()]
-
-        def drag(event: Any) -> None:
-            self.root.geometry(f"+{event.x_root - grab[0]}+{event.y_root - grab[1]}")
-
-        for widget in (bar, title):
-            widget.bind("<Button-1>", press)
-            widget.bind("<B1-Motion>", drag)
-
     def build_guide_tab(self, parent: Any) -> None:
         """Fill the Guide tab: what the keys and the switches do (read only; GUIDE has the text, the key letters come from HOTKEYS)."""
         keys = {name: key.upper() for name, key in cfg.HOTKEYS.items()}
@@ -7087,7 +7059,6 @@ class AdoptMeGUI:
                                      bg=cfg.GUI_CONSOLE_BG, fg=cfg.GUI_CONSOLE_FG, insertbackground=cfg.GUI_CONSOLE_FG)
         server_link_entry.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
         server_link_entry.bind("<FocusOut>", lambda e: self.save_server_link())
-        server_link_entry.bind("<Button-1>", lambda e: server_link_entry.focus_force())      # (a frameless window is not given the keyboard by a click on its own)
         server_link_entry.bind("<Return>", lambda e: self.save_server_link())
 
         self.add_section(parent, "Keys")

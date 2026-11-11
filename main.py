@@ -1450,6 +1450,23 @@ def name_buttons_by_position(positions: list[Point]) -> dict[str, Point]:
         named[near[0]] = (x, y)
     return named
 
+def fill_missing_button(named: dict[str, Point], img: Image) -> dict[str, Point]:
+    """`named` (name_buttons_by_position()) with the one button that was not seen put where the others say it is: its slot's x (BUTTON_SLOTS_X) and its height above the thirsty one (BUTTON_SLOTS_DY)
+    from the mean of the buttons seen. In run 5 a blue shaft of light over the dirty button (its ring failed the circularity filter) cost 8 dirty needs and the need itself, with the button in plain view.
+    `named` as it was when more than one, or none, is missing, or when there is no purple ring at the place in `img` (the character stands before the button, say: BUTTON_FILL_MIN_PURPLE)."""
+    missing = [name for name in cfg.BUTTON_NAMES if name not in named]
+    if len(missing) != 1 or len(named) < 2:
+        return named
+    index = {name: i for i, name in enumerate(cfg.BUTTON_NAMES)}
+    base = sum(y - cfg.BUTTON_SLOTS_DY[index[name]] for name, (_, y) in named.items()) / len(named)
+    i = index[missing[0]]
+    x, y = cfg.BUTTON_SLOTS_X[i], int(round(base + cfg.BUTTON_SLOTS_DY[i]))
+    half = cfg.BUTTON_FILL_LOOK_HALF
+    patch = img[max(0, y - half):y + half, max(0, x - half):x + half]
+    if cv2.countNonZero(cv2.inRange(cv2.cvtColor(patch, cv2.COLOR_BGR2HSV), *cfg.PURPLE_RANGE)) < cfg.BUTTON_FILL_MIN_PURPLE:
+        return named
+    return {**named, missing[0]: (x, y)}
+
 def refresh_button_mapping() -> bool:
     """Detect the action buttons and cache them in state.button_positions, clearing any
     previous mapping first so a failed detection never leaves a stale one. Anything but all five buttons is a failed
@@ -1476,9 +1493,12 @@ def refresh_button_mapping() -> bool:
         # The buttons are named by their order left to right, so a missed one (hidden by the character or a beam of light) would shift
         # every name after it: they are named by where they are instead, if each is where one of the buttons is, else none is made.
         named = name_buttons_by_position(positions)
+        filled = fill_missing_button(named, grab_screen()) if named else named
         log_run_event(f"button scan found {len(positions)} of {len(cfg.BUTTON_NAMES)} again: "
                       + ", ".join(f"({x}, {y})" for x, y in positions)
-                      + (f" - named by position, no {', '.join(n for n in cfg.BUTTON_NAMES if n not in named)}" if named else " - not where the buttons are, none mapped"))
+                      + (f" - named by position, no {', '.join(n for n in cfg.BUTTON_NAMES if n not in named)}" if named else " - not where the buttons are, none mapped")
+                      + (f", the missing one taken from where the others are: {', '.join(f'{n} {filled[n]}' for n in filled if n not in named)}" if filled != named else ""))
+        named = filled
         if not named:
             return False
     for name, (cx, cy) in named.items():
@@ -1882,24 +1902,28 @@ def age_checkbox(img: Image, label: str) -> Optional[tuple[Point, bool]]:
 def filter_checkbox(img: Image, label: str) -> Optional[tuple[Point, bool]]:
     """age_checkbox() for a row of the Effect or Rarity part of the FILTERS panel (`label`: FILTER_EFFECT_ROWS, FILTER_RARITY_ROWS): where its box is and whether it is ticked - None if the row is not in view.
     The crop is only looked for in the row's own column (FILTER_COLUMN_X, FILTER_COLUMN_TOLERANCE): "Neon" is also the end of "Mega Neon" and "Rare" the end of "Ultra Rare", and the match there is as good (1.0
-    on the same frame), so the best match anywhere took one or the other by the CPU's rounding - a row that was found on one machine and not on another."""
-    crop = load_templates(cfg.STRAY_WINDOW_DIR).get(label)
-    if crop is None:
+    on the same frame), so the best match anywhere took one or the other by the CPU's rounding - a row that was found on one machine and not on another. Each row has a crop of the sharp screenshot and one of
+    the real window (FILTER_ROW_VARIANTS: the window's text is softer and the ruled line runs at another height, which put the first crops at 0.58-0.84, under the threshold, in run 5); the better is used."""
+    best: Optional[tuple[float, int, int]] = None
+    for suffix in cfg.FILTER_ROW_VARIANTS:
+        crop = load_templates(cfg.STRAY_WINDOW_DIR).get(label + suffix)
+        if crop is None:
+            continue
+        left, top, right, bottom = cfg.POPUP_TEMPLATES[label + suffix]["box"]
+        band = img[top:bottom, left:right]
+        if crop.shape[0] > band.shape[0] or crop.shape[1] > band.shape[1]:
+            continue
+        scores = cv2.matchTemplate(band, crop, cv2.TM_CCOEFF_NORMED)
+        wanted = cfg.FILTER_COLUMN_X[cfg.FILTER_ROW_COLUMN[label]] - 1 - left                  # (the crop's left edge: one px before where the text starts)
+        first, last = max(0, wanted - cfg.FILTER_COLUMN_TOLERANCE), min(scores.shape[1] - 1, wanted + cfg.FILTER_COLUMN_TOLERANCE)
+        if first > last:
+            continue
+        _, score, _, (x, y) = cv2.minMaxLoc(scores[:, first:last + 1])
+        if score >= cfg.POPUP_TEMPLATES[label + suffix]["threshold"] and (best is None or score > best[0]):
+            best = (score, left + first + x, top + y + crop.shape[0] // 2)
+    if best is None:
         return None
-    left, top, right, bottom = cfg.POPUP_TEMPLATES[label]["box"]
-    band = img[top:bottom, left:right]
-    if crop.shape[0] > band.shape[0] or crop.shape[1] > band.shape[1]:
-        return None
-    scores = cv2.matchTemplate(band, crop, cv2.TM_CCOEFF_NORMED)
-    wanted = cfg.FILTER_COLUMN_X[cfg.FILTER_ROW_COLUMN[label]] - 1 - left                      # (the crop's left edge: one px before where the text starts)
-    first, last = max(0, wanted - cfg.FILTER_COLUMN_TOLERANCE), min(scores.shape[1] - 1, wanted + cfg.FILTER_COLUMN_TOLERANCE)
-    if first > last:
-        return None
-    window = scores[:, first:last + 1]
-    _, score, _, (x, y) = cv2.minMaxLoc(window)
-    if score < cfg.POPUP_TEMPLATES[label]["threshold"]:
-        return None
-    crop_left, middle_y = left + first + x, top + y + crop.shape[0] // 2
+    _, crop_left, middle_y = best
     box_x = crop_left + cfg.AGE_CHECKBOX_DX
     half = cfg.AGE_CHECKBOX_HALF
     patch = cv2.cvtColor(img[middle_y - half:middle_y + half, box_x - half:box_x + half], cv2.COLOR_BGR2HSV)
@@ -3744,8 +3768,9 @@ def detect_backpack_normal(img: Image) -> bool:
     """
     if popup_visible(img, "backpack_normal"):
         return True
-    if color_pixels(img, cfg.BACKPACK_NORMAL_PANEL_BOX, cfg.BACKPACK_NORMAL_COLOR, cfg.BACKPACK_NORMAL_TOLERANCE) < cfg.BACKPACK_NORMAL_MIN_PIXELS:
-        return False
+    frame_pixels = color_pixels(img, cfg.BACKPACK_NORMAL_PANEL_BOX, cfg.BACKPACK_NORMAL_COLOR, cfg.BACKPACK_NORMAL_TOLERANCE)
+    if not cfg.BACKPACK_NORMAL_MIN_PIXELS <= frame_pixels <= cfg.BACKPACK_NORMAL_MAX_PIXELS:
+        return False                                                # (too little purple, or a banner's worth of it)
     panel_left, panel_top, panel_right, panel_bottom = cfg.BACKPACK_NORMAL_PANEL_BOX
     for side in ((panel_left, panel_top, panel_left + cfg.BACKPACK_NORMAL_SIDE_WIDTH, panel_bottom), (panel_right - cfg.BACKPACK_NORMAL_SIDE_WIDTH, panel_top, panel_right, panel_bottom)):
         if color_pixels(img, side, cfg.BACKPACK_NORMAL_COLOR, cfg.BACKPACK_NORMAL_TOLERANCE) < cfg.BACKPACK_NORMAL_MIN_SIDE_PIXELS:

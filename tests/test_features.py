@@ -266,19 +266,37 @@ def test_a_button_scan_that_finds_all_five_the_second_time_maps_them(macro, monk
 
 def test_buttons_hidden_by_a_beam_or_the_character_leave_the_others_named_by_where_they_are(macro, monkeypatch):
     """Real frames of a run (12:37 and 12:40): a beam of light crosses the thirsty button, and in the second the character stands before the potty
-    one. The scan found 4 and 3 buttons, and naming them by order sent the dirty need to the potty button."""
+    one. The scan found 4 and 3 buttons, and naming them by order sent the dirty need to the potty button. The one missing button of the first, whose ring shows, is put where the
+    others say it is (fill_missing_button()); of the second, two are missing, and so none is."""
     import cv2
     here = os.path.join(os.path.dirname(__file__), "buttons")
     monkeypatch.setattr(macro, "focus_roblox_click", lambda: True)
     monkeypatch.setattr(macro, "wait_interruptible", lambda *a, **k: None)
     names = macro.cfg.BUTTON_NAMES                                                         # (the order of the buttons across the screen)
-    for name, missing in (("beam_hides_thirsty", {names[1]}), ("beam_hides_thirsty_character_hides_potty", {names[1], names[3]})):
+    for name, missing in (("beam_hides_thirsty", set()), ("beam_hides_thirsty_character_hides_potty", {names[1], names[3]})):
         screen = cv2.imread(os.path.join(here, f"{name}.png"))
         monkeypatch.setattr(macro, "grab_screen", lambda screen=screen: screen)
         assert macro.refresh_button_mapping() is True, name
         assert set(names) - set(macro.state.button_positions) == missing, name
         assert macro.state.button_positions[names[2]][0] == pytest.approx(858, abs=5), name
-        assert macro.click_need_button(names[1]) is False                                    # (no button seen: nothing is clicked)
+    assert macro.state.button_positions.get(names[1]) is None and macro.state.button_positions.get(names[3]) is None
+    assert macro.click_need_button(names[1]) is False                                        # (no button for it: nothing is clicked)
+
+
+def test_the_one_button_a_beam_of_light_hides_is_put_where_the_others_say_it_is(macro):
+    """Run 5 (21:29): a blue shaft of light over the dirty button, whose ring then failed the circularity filter: 4 of 5 found, and 8 dirty needs failed with the button in plain view
+    (at 857, 632 in this frame)."""
+    import cv2
+    screen = cv2.imread(os.path.join(os.path.dirname(__file__), "buttons", "beam_hides_dirty.png"))
+    four = [(674, 661), (752, 661), (997, 630), (1218, 612)]
+    named = macro.name_buttons_by_position(four)
+    filled = macro.fill_missing_button(named, screen)
+    names = macro.cfg.BUTTON_NAMES
+    assert abs(filled[names[2]][0] - 857) <= 5 and abs(filled[names[2]][1] - 632) <= 5 and len(filled) == 5
+    assert macro.fill_missing_button({k: v for k, v in named.items() if k != names[0]}, screen) == {k: v for k, v in named.items() if k != names[0]}      # (two missing: left alone)
+    blank = screen.copy()
+    blank[580:700, 800:920] = 0                                                              # nothing round the place (the character stands before it)
+    assert macro.fill_missing_button(named, blank) == named
 
 
 def test_buttons_that_are_not_where_the_buttons_are_are_not_named(macro):

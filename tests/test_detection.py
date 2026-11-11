@@ -446,13 +446,20 @@ def test_the_big_friend_pill_under_the_cafe_banner_is_no_backpack_but_a_purple_f
     assert not macro.detect_backpack_open(screenshot("cafe_banner_friend_pill"))            # (it was: "backpack still open after pressing the backpack key twice")
     drawn = blank()
     left, top, right, bottom = cfg.BACKPACK_NORMAL_PANEL_BOX
-    drawn[top:bottom, left:right] = tuple(reversed(cfg.BACKPACK_NORMAL_COLOR))     # the frame's colour all over the panel...
+    purple = tuple(reversed(cfg.BACKPACK_NORMAL_COLOR))
+    drawn[top:bottom, left:left + 2] = purple                                        # the frame's colour at the two sides of the panel (a few hundred px, as the real one has)...
+    drawn[top:bottom, right - 2:right] = purple
     wl, wt, wr, wb = cfg.BACKPACK_NORMAL_WHITE_BOX
     drawn[wt:wb, wl:wr] = 255                                                                # ...and the item grid's white in the middle of it
     assert macro.detect_backpack_normal(drawn)
     blob = drawn.copy()
     blob[top:bottom, left:left + cfg.BACKPACK_NORMAL_SIDE_WIDTH] = 255                      # no frame at the left: only a blob of purple
     assert not macro.detect_backpack_normal(blob)
+    banner = drawn.copy()
+    banner[top:bottom, left:right] = purple                                                  # a banner's worth of purple (run 5's Cat Cafe: 2000 px and more) is no frame
+    banner[wt:wb, wl:wr] = 255
+    assert not macro.detect_backpack_normal(banner)
+    assert not macro.detect_backpack_open(screenshot("cat_cafe_banner_no_backpack"))          # (run 5's frame: it passed for a backpack twice)
 
 
 

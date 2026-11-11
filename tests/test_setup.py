@@ -462,3 +462,15 @@ def test_neon_is_found_in_its_own_column_though_the_end_of_mega_neon_matches_as_
     assert abs(x - 931) <= 3 and abs(y - 749) <= 3 and ticked is True
     (x, y), _ = macro.filter_checkbox(top, "filter_effect_mega_neon")
     assert abs(x - 1015) <= 3
+
+
+def test_every_effect_and_rarity_row_is_found_in_the_real_windows_softer_picture(macro):
+    """Run 5's daily-task switch failed on every row ("the row filter_effect_regular was not found") with the panel at the top in view: the crops of a sharp screenshot scored 0.58-0.84 on the real window's
+    picture (softer text, the ruled line at another height). Each row has a crop of that picture too (`_soft`)."""
+    top = frame("filters_top_window")
+    for row in macro.cfg.FILTER_EFFECT_ROWS + macro.cfg.FILTER_RARITY_ROWS:
+        found = macro.filter_checkbox(top, row)
+        assert found is not None and found[1] is True, row                                      # (all ticked in the picture)
+    assert macro.filter_checkbox(top, "filter_effect_neon")[0][1] == macro.filter_checkbox(top, "filter_effect_mega_neon")[0][1]      # (one row of three: the columns are told apart)
+    scrolled = frame("filters_scrolled_ultra_rare_window")
+    assert macro.filter_checkbox(scrolled, "filter_rarity_ultra_rare") is not None and macro.filter_checkbox(scrolled, "filter_effect_regular") is None

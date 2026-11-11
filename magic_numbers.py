@@ -171,6 +171,18 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "filter_rarity_rare": {"box": (800, 640, 1130, 880), "threshold": 0.85},
     "filter_rarity_ultra_rare": {"box": (800, 640, 1130, 880), "threshold": 0.85},
     "filter_rarity_legendary": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    # The same rows as the real game window draws them (run 5: the window is scaled to the reference size, so the text is softer and sits on another pixel phase, and the pale ruled line runs through it at another height): a crop of the first set scored 0.58-0.84 there. filter_checkbox() tries both.
+    "filter_effect_regular_soft": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_effect_neon_soft": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_effect_mega_neon_soft": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_effect_no_potion_soft": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_effect_rideable_soft": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_effect_flyable_soft": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_rarity_common_soft": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_rarity_uncommon_soft": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_rarity_rare_soft": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_rarity_ultra_rare_soft": {"box": (800, 640, 1130, 880), "threshold": 0.85},
+    "filter_rarity_legendary_soft": {"box": (800, 640, 1130, 880), "threshold": 0.85},
     "age_egg":                     {"box": (800, 640, 1130, 880), "threshold": 0.85},       # the Age rows of the backpack's FILTERS panel: the text of Egg and of Full Grown (their boxes are found left of it)
     "age_full_grown":              {"box": (800, 640, 1130, 880), "threshold": 0.85},
     "age_full_grown_pen":          {"box": (800, 640, 1130, 880), "threshold": 0.85},       # the same row in the pen's small backpack, whose panel has no blue line under the text (the first crop was cut in the big backpack's)
@@ -484,6 +496,7 @@ BACKPACK_NORMAL_COLOR = (150, 92, 255)
 BACKPACK_NORMAL_TOLERANCE = 12
 BACKPACK_NORMAL_PANEL_BOX = (712, 640, 1210, 930)
 BACKPACK_NORMAL_MIN_PIXELS = 800
+BACKPACK_NORMAL_MAX_PIXELS = 1500                  # ...and no more than this: the real backpack has 200-400 of it, while a place's name banner and the Friend pill over it (the Cat Cafe's, run 5) have over 2000, and passed for a backpack 2 times in 3.4 hours
 # The frame is at the panel's two sides: at least BACKPACK_NORMAL_MIN_SIDE_PIXELS of that purple in each of the BACKPACK_NORMAL_SIDE_WIDTH columns at the left and at
 # the right of the panel box. The big "Friend" pill in the middle of the screen (shown with the cafe's name banner) is the same purple and white, and has
 # 1040 purple pixels in the box and a quarter of the white box white: it was taken for the backpack ("still open after pressing the key twice") and stopped a run. It has 5 at
@@ -778,6 +791,7 @@ FILTER_COLUMN_X = (866, 949, 1033)                                         # whe
 FILTER_ROW_COLUMN = {"filter_effect_regular": 0, "filter_effect_neon": 1, "filter_effect_mega_neon": 2, "filter_effect_no_potion": 0, "filter_effect_rideable": 1, "filter_effect_flyable": 2,
                      "filter_rarity_common": 0, "filter_rarity_uncommon": 1, "filter_rarity_rare": 2, "filter_rarity_ultra_rare": 0, "filter_rarity_legendary": 1}
 FILTER_COLUMN_TOLERANCE = 14
+FILTER_ROW_VARIANTS = ("", "_soft")                  # the suffixes of the crops of one row (POPUP_TEMPLATES): the ones made on a sharp screenshot, and the ones made in the real window
 FILTER_COMMON_ROW = "filter_rarity_common"
 FILTER_RARITY_ROWS = (FILTER_COMMON_ROW, "filter_rarity_uncommon", "filter_rarity_rare", "filter_rarity_ultra_rare", "filter_rarity_legendary")
 AGE_LABELS = ("age_egg", "age_full_grown")        # the Age rows Setup unticks (POPUP_TEMPLATES): what is neither an egg nor full grown still grows
@@ -923,6 +937,9 @@ BUTTON_MIN_CIRCULARITY = 0.65
 BUTTON_MAX_COUNT = 5
 BUTTON_NAMES = ["hungry", "thirsty", "dirty", "potty", "sleepy"]
 BUTTON_SLOTS_X = (673, 752, 858, 998, 1219)    # where each of them is across the screen (x of the buttons of 12 scans, within 10 px of these) - for when one is not seen (a beam of light, the character)
+BUTTON_SLOTS_DY = (0, 0, -28, -32, -50)          # px each button sits above (minus) the thirsty one, whatever the camera (67 scans of run 5: 0 / 0 / -30..-27 / -34..-30 / -52..-47): the one button that is not seen is where these say
+BUTTON_FILL_LOOK_HALF = 28                       # px: the square round where a button that was not seen should be is looked at for the purple of its ring...
+BUTTON_FILL_MIN_PURPLE = 300                     # ...at least this many px of it (580-990 where the ring shows, 0 where the character stands before it)
 BUTTON_SLOT_TOLERANCE = 35                     # px: a button this close to a slot is that one (the slots are 77 or more apart)
 BUTTON_LOOSE_AREA_FACTOR = 0.7         # how much looser than BUTTON_MIN_AREA a candidate may be
 BUTTON_MAX_AREA_FRACTION = 0.5         # reject a blob covering more than this fraction of the band

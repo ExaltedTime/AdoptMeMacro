@@ -125,7 +125,7 @@ Done when: with a faked newer tag the GUI says so; the updater keeps the user fi
 - **Split `main.py`.** Along the seams that already exist in its sections (window and coordinates, detection, input primitives, needs and handlers, setup, pet pen and daily tasks, GUI, moments and capture, loop). `tests/conftest.py` already loads `main` as one module; moving a section means keeping `main.<name>` working (re-exports) until the tests are moved, one section at a time, each a pull request that changes no behaviour.
 - **Calibration data out of the code path.** `magic_numbers.py` has 590 names; group them by area into several modules or tables, keep `cfg.NAME` working, and keep `tools/check_constants.py` as the guard.
 - **A type check on more of the code.** mypy runs on `main.py` and `scripts/bot_lib.py`; widen it as sections are split.
-- **Archive stays archive.** `archive/` holds what is not used and is not tested; a change that wants something from it moves it out first.
+- **Archive stays archive.** What is not used is kept under the tag `archive-halloween-2026` (see ARCHITECTURE, "Archive"), not in the working tree; a change that wants something from it checks it out of the tag first.
 
 ## Phase 6: risk, legal and trust (before any public announcement)
 

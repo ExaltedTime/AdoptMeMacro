@@ -77,6 +77,8 @@ def hotkey_vk(key: str) -> Optional[int]:
 def hotkey_down(key: str) -> bool:
     """True while `key` (a single letter or digit, or a character of its own key on the layout: hotkey_vk()) is held down, whichever window has the focus
     (Windows). A key the layout does not have is never down (said once)."""
+    if not key:
+        return False                                                                  # (blank: the hotkey is not set)
     vk = hotkey_vk(key)
     if vk is None:
         if key not in _WARNED_HOTKEYS:
@@ -101,12 +103,14 @@ def save_screenshot() -> str:
 HOTKEYS_NOW: dict[str, str] = dict(cfg.HOTKEYS)         # the hotkeys as they are now: HOTKEYS with the game config's `hotkeys` over it (load_hotkeys()); what hotkey_key() answers, so the watcher need not read a file
 
 def hotkey_key(name: str) -> str:
-    """The key of the hotkey `name` ("stop", "capture", "blackout", "screenshot", "new_need") now: the one the Settings tab's Hotkeys subtab set, else HOTKEYS'."""
+    """The key of the hotkey `name` ("stop", "capture", "blackout", "screenshot", "new_need") now: the one the Settings tab's Hotkeys subtab set, else HOTKEYS' - which is "", no key, until one is chosen."""
     return HOTKEYS_NOW[name]
 
 def check_hotkey(name: str, key: str) -> Optional[str]:
-    """Why `key` cannot be the hotkey `name`, or None when it can: it must be one character that is a key of its own (hotkey_vk()), not a key the macro presses in the game (HELD_KEYS) - it would
+    """Why `key` cannot be the hotkey `name`, or None when it can: blank (no key) always can; else it must be one character that is a key of its own (hotkey_vk()), not a key the macro presses in the game (HELD_KEYS) - it would
     be taken for a hotkey while it is being held - and not the key of another hotkey."""
+    if not key:
+        return None                                                                   # (blank: no key, the hotkey is off)
     if len(key) != 1 or not key.strip():
         return "a hotkey is one letter, digit or character"
     try:
@@ -116,7 +120,7 @@ def check_hotkey(name: str, key: str) -> Optional[str]:
         pass                                                                          # (no Windows: the tests)
     if key.lower() in {held.lower() for held in cfg.HELD_KEYS}:
         return f"'{key}' is a key the macro presses in the game"
-    taken = next((other for other, other_key in HOTKEYS_NOW.items() if other != name and other_key.lower() == key.lower()), None)
+    taken = next((other for other, other_key in HOTKEYS_NOW.items() if other != name and other_key and other_key.lower() == key.lower()), None)
     return f"'{key}' is the key of the {taken} hotkey already" if taken else None
 
 def load_hotkeys() -> None:
@@ -133,7 +137,7 @@ def load_hotkeys() -> None:
                 HOTKEYS_NOW[name] = key.lower()
 
 def save_hotkey(name: str, key: str) -> Optional[str]:
-    """Make `key` the hotkey `name` and keep it in the game config (the default's is not kept: the config holds only what was changed); the reason it cannot be, else None."""
+    """Make `key` the hotkey `name` ("": none) and keep it in the game config (the default's is not kept: the config holds only what was changed); the reason it cannot be, else None."""
     key = key.lower()
     problem = check_hotkey(name, key)
     if problem:
@@ -5345,7 +5349,7 @@ def toggle_input_capture() -> Optional[InputCapture]:
     capture = InputCapture(os.path.join(cfg.CAPTURES_DIR, "capture_" + time.strftime("%Y%m%d_%H%M%S")))
     capture.start()
     state.capture = capture
-    logger.info(f"Capture started (press {hotkey_key('capture').upper()} again to stop): {capture.folder}")
+    logger.info(f"Capture started ({'press ' + hotkey_key('capture').upper() + ' again to stop' if hotkey_key('capture') else 'the capture key is not set: /capture stops it'}): {capture.folder}")
     return capture
 
 # The moments of a run: a capture of the whole run kept to MOMENTS_ZIPS zips however long it goes (InputCapture with a budget: it thins itself out, so what is left is spread over the run), with the
@@ -6476,7 +6480,7 @@ class Blackout:
             return False
         if self.switch_display():
             keep_awake(True)
-            logger.info(f"Screen off: the game is on the virtual display ({hotkey_key('blackout').upper()} again to show it)")
+            logger.info(f"Screen off: the game is on the virtual display ({hotkey_key('blackout').upper() + ' again' if hotkey_key('blackout') else '/blank'} to show it)")
             return True
         before = grab_screen()
         window = self.make_window()
@@ -6491,7 +6495,7 @@ class Blackout:
             logger.warning("The screen was not blanked: " + ("the macro's screenshots would see the black window too" if seen else "the screen is too bright to test whether they would (try again from a darker view)"))
             return False
         window.configure(bg="black")
-        logger.info(f"Screen blanked ({hotkey_key('blackout').upper()} again to show it)")
+        logger.info(f"Screen blanked ({hotkey_key('blackout').upper() + ' again' if hotkey_key('blackout') else '/blank'} to show it)")
         keep_awake(True)
         self.keep_on_top()
         return True
@@ -6567,12 +6571,13 @@ class Blackout:
 # The Guide tab: (heading, lines); {stop}, {capture}, {blackout}, {new_need} and {screenshot} are the keys of HOTKEYS.
 GUIDE: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Keys", (
-        "{stop} stops the macro, in any window.",
-        "{capture} starts and stops an input capture (in Roblox).",
-        "{screenshot} saves a screenshot to debug/screenshots (in Roblox).",
-        "{blackout} blanks the screen while the macro works, and shows it again (in Roblox).",
-        "{new_need} teaches a need icon the macro does not know (in Roblox).",
-        "Settings > Hotkeys: each key can be changed (click its button, then press the new key) and switched off (the macro then ignores that key; the game still gets it); the red button and the bot still stop the macro.")),
+        "Stop the macro, in any window: {stop}.",
+        "Start and stop an input capture (in Roblox): {capture}.",
+        "Save a screenshot to debug/screenshots (in Roblox): {screenshot}.",
+        "Blank the screen while the macro works, and show it again (in Roblox): {blackout}.",
+        "Teach a need icon the macro does not know (in Roblox): {new_need}.",
+        "No key is set at first. Settings > Hotkeys: click a key's button, then press the key (Backspace clears it, Escape keeps it); the checkbox switches a key off, and the macro then ignores it while the game still gets it.",
+        "Without a stop key, the red button, the bot, or the mouse in a corner of the screen stops the macro.")),
     ("Main", (
         "The blue button starts the loop, the red one stops it.",
         "Run Setup at the next loop: once, the next time the loop starts or comes round (equip the pet, set the filters).")),
@@ -7276,7 +7281,7 @@ class AdoptMeGUI:
 
     def fill_guide(self) -> None:
         """The Guide tab's text, with the hotkeys as they are now (again when one is changed)."""
-        keys = {name: key.upper() for name, key in HOTKEYS_NOW.items()}
+        keys = {name: key.upper() or "not set" for name, key in HOTKEYS_NOW.items()}
         text = self.guide_text
         text.configure(state=tk.NORMAL)
         text.delete("1.0", tk.END)
@@ -7326,7 +7331,7 @@ class AdoptMeGUI:
         config = load_game_config()
         self.hotkey_buttons: dict[str, Any] = {}
         self.hotkey_note = tk.StringVar(value="")
-        self.add_hint(parent, "A checked key acts. An unchecked key is ignored by the macro.")
+        self.add_hint(parent, "A checked key acts; an unchecked one is ignored by the macro. A button with - has no key.")
         for name, label in HOTKEY_LABELS.items():
             row = tk.Frame(parent, bg=self.bg)
             row.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
@@ -7335,7 +7340,7 @@ class AdoptMeGUI:
             tk.Checkbutton(row, text=label, variable=var, command=lambda k=f"{name}_hotkey_enabled", v=var: self.set_config_flag(k, v.get()),     # type: ignore[misc]
                            font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.bg, fg=self.fg, selectcolor=self.bg,
                            activebackground=self.bg, activeforeground=self.fg, anchor=tk.W, cursor="hand2").pack(side=tk.LEFT, fill=tk.X, expand=True)
-            button = tk.Button(row, text=hotkey_key(name).upper(), width=cfg.GUI_HOTKEY_BUTTON_WIDTH, command=lambda n=name: self.change_hotkey(n),  # type: ignore[misc]
+            button = tk.Button(row, text=hotkey_key(name).upper() or "-", width=cfg.GUI_HOTKEY_BUTTON_WIDTH, command=lambda n=name: self.change_hotkey(n),  # type: ignore[misc]
                                font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"), bg=self.accent, fg=cfg.GUI_ON_ACCENT, cursor="hand2", bd=0, highlightthickness=0)
             button.pack(side=tk.RIGHT)
             self.hotkey_buttons[name] = button
@@ -7347,24 +7352,25 @@ class AdoptMeGUI:
     def show_hotkeys(self) -> None:
         """The hotkey buttons and the Guide tab show the keys as they are now."""
         for name, button in self.hotkey_buttons.items():
-            button.configure(text=hotkey_key(name).upper())
+            button.configure(text=hotkey_key(name).upper() or "-")
         self.fill_guide()
 
     def change_hotkey(self, name: str) -> None:
         """The hotkey `name`'s button was clicked: the next key pressed in this window is its new key (Escape: no change; a key that cannot be one - save_hotkey() says why - is refused and the old one kept)."""
         button = self.hotkey_buttons[name]
         button.configure(text="press a key...")
-        self.hotkey_note.set(f"Press the new key for: {HOTKEY_LABELS[name]} (Escape keeps {hotkey_key(name).upper()})")
+        self.hotkey_note.set(f"Press the new key for: {HOTKEY_LABELS[name]} (Backspace clears it, Escape keeps {hotkey_key(name).upper() or 'no key'})")
 
         def pressed(event: Any) -> str:
             if event.keysym in ("Shift_L", "Shift_R", "Control_L", "Control_R", "Alt_L", "Alt_R", "Caps_Lock", "Num_Lock"):
                 return "break"                                              # (a modifier alone is not a key to take)
             self.root.unbind("<Key>", binding)
             if event.keysym != "Escape":
-                problem = save_hotkey(name, event.char or "")
-                self.hotkey_note.set(problem or f"{HOTKEY_LABELS[name]}: {hotkey_key(name).upper()}")
+                clear = event.keysym in ("BackSpace", "Delete")
+                problem = save_hotkey(name, "" if clear else event.char or "")
+                self.hotkey_note.set(problem or f"{HOTKEY_LABELS[name]}: {hotkey_key(name).upper() or 'no key'}")
                 if not problem:
-                    logger.info(f"The {name} hotkey is now '{hotkey_key(name).upper()}'")
+                    logger.info(f"The {name} hotkey is now " + (f"'{hotkey_key(name).upper()}'" if hotkey_key(name) else "not set"))
             else:
                 self.hotkey_note.set("")
             self.show_hotkeys()

@@ -52,10 +52,9 @@ Today: `setup_game()` and `equip_pet()` fall back to the Alicorn; `equip_favorit
 Plan: settings for "the pet to keep out when none is" (a name looked up in the pets tab, or "the first of the filtered list", which is already what `level_growing_pet` does), "the vehicle for the ride need" (first of the favourites, or by name), and "lock the house in Setup" on or off. A step whose thing is missing logs why and is skipped instead of failing Setup.
 Done when: Setup runs on the author's account with the defaults exactly as before (test on the existing fixtures) and a test with no Alicorn in the list ends with a clear line, not a failure.
 
-**0.3 Hotkeys that exist on every keyboard (S).**
-Today: `HOTKEYS` has `ú` and `ô`; `hotkey_vk()` looks them up on the layout.
-Plan: defaults that are letters or digits present on a US layout (and say so in the Guide tab); the keys are settings from 0.1; a key that is not on the layout is reported at start (`_WARNED_HOTKEYS` already warns once; make it a visible line, not only a log).
-Done when: a test with a layout that lacks a key gets the warning and no crash.
+**0.3 Hotkeys that exist on every keyboard (done in part).**
+Done: the keys are settings (the Settings tab's Hotkeys subtab, the game config's `hotkeys`), and every default in `HOTKEYS` is blank, so no key is taken from the user until they choose one; a key that is not on the layout is refused with the reason (`check_hotkey()`) and `hotkey_down()` warns once about a saved one that is not.
+Left: with no stop key the first run has no keyboard stop. The first-run wizard (3.1) should ask for one, and the README should say the red button and the mouse in a corner of the screen stop the macro.
 
 **0.4 Requirements and Python (S).**
 Plan: `requirements.txt` in UTF-8, split into `requirements.txt` (the macro) and `requirements-bot.txt` (`discord.py` and what only the bot needs), a stated Python version (the one CI runs) and a note that Windows is required (the input and window code is Windows-only; the tests stub it so CI runs on Linux). Ranges instead of exact pins where a pin is not needed, so a user with another Python is not blocked.

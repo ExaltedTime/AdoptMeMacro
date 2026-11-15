@@ -658,12 +658,12 @@ KEY_SEQUENCES = {                  # keys pressed one after the other, each held
     "respawn": ("esc", "r", "enter"),
     "leave_game": ("esc", "l", "enter"),
 }
-HOTKEYS = {                        # the macro's own keys, each a letter or digit (or a character that is a key of its own on the keyboard layout), read in any window (the last three only while Roblox is focused)
-    "stop": "p",                   # stops a running macro
-    "capture": "m",                # starts or stops an input capture
-    "blackout": "h",               # blanks the screen with a black window (and again, to take it away)
-    "new_need": "ú",               # looks at the need bar and asks the name of an icon on it that no saved need matches (taught for the next look; same layout lookup as the screenshot key)
-    "screenshot": "ô",             # saves a picture of the whole screen in SCREENSHOTS_DIR (not a letter of the alphabet: its key is looked up on the keyboard layout, see hotkey_vk())
+HOTKEYS = {                        # the macro's own keys, each blank ("": no key, the hotkey is off until one is chosen in the Settings tab's Hotkeys subtab) or one letter or digit (or a character that is a key of its own on the keyboard layout), read in any window (all but stop only while Roblox is focused)
+    "stop": "",                    # stops a running macro (the [STOP] button, the bot's /stop and the mouse in a corner of the screen - pyautogui's fail-safe - stop it without a key)
+    "capture": "",                 # starts or stops an input capture
+    "blackout": "",                # blanks the screen with a black window (and again, to take it away)
+    "new_need": "",                # looks at the need bar and asks the name of an icon on it that no saved need matches (taught for the next look)
+    "screenshot": "",              # saves a picture of the whole screen in SCREENSHOTS_DIR
 }
 MOVE_KEYS = tuple(KEYS[name] for name in ("forward", "left", "back", "right"))
 HELD_KEYS = tuple(dict.fromkeys([*KEYS.values(), *(key for keys in KEY_SEQUENCES.values() for key in keys)]))   # every key the macro can hold down: let go of when it ends, at a stop, or when it is killed

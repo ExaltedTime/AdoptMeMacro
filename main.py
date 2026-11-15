@@ -5124,7 +5124,7 @@ class InputCapture:
             count = max(1, round(len(loose) * cfg.CAPTURE_THIN_FRACTION))
             at = {frame: i for i, frame in enumerate(self._kept)}
             moment = lambda frame: float(frame[0][:-len(".png")].rsplit("_", 1)[1])
-            going = set()
+            going: set[tuple[str, int]] = set()
             for frame in sorted(loose, key=lambda f: moment(self._kept[at[f] + 1]) - moment(self._kept[at[f] - 1]) if at[f] > 0 else 0.0):      # (the frames whose neighbours are the closest go first: no hole is made)
                 if len(going) < count and not any(self._kept[at[frame] + step] in going for step in (-1, 1) if 0 <= at[frame] + step < len(self._kept)):
                     going.add(frame)

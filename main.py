@@ -899,10 +899,10 @@ def _read_game_config() -> dict[str, Any]:
         "setup_next_loop": False,   # run Setup at the next pass of the loop (once; cleared when it runs)
         "record_next_run": False,   # record the next run as a low quality video; cleared when that run starts
         "hotkeys": {},                     # the keys of the hotkeys that were changed in the Settings tab ({"stop": "q"}): the others are HOTKEYS' (load_hotkeys())
-        "stop_hotkey_enabled": True,       # whether HOTKEYS["stop"] stops the macro (off: that key can be typed anywhere; the [STOP] button and the bot's stop work either way)
-        "capture_hotkey_enabled": True,    # whether HOTKEYS["capture"] starts and stops an input capture (off: that key can be typed in Roblox)
-        "screenshot_hotkey_enabled": True, # whether HOTKEYS["screenshot"] saves a screenshot (off: that key can be typed in Roblox)
-        "blackout_hotkey_enabled": True,   # whether HOTKEYS["blackout"] blanks the screen (off: that key can be typed in Roblox)
+        "stop_hotkey_enabled": True,       # whether HOTKEYS["stop"] stops the macro (off: the macro ignores that key; the [STOP] button and the bot's stop work either way)
+        "capture_hotkey_enabled": True,    # whether HOTKEYS["capture"] starts and stops an input capture (off: the macro ignores that key)
+        "screenshot_hotkey_enabled": True, # whether HOTKEYS["screenshot"] saves a screenshot (off: the macro ignores that key)
+        "blackout_hotkey_enabled": True,   # whether HOTKEYS["blackout"] blanks the screen (off: the macro ignores that key)
         "keep_moments": True,              # whether the loop captures the run's moments (start_moments()), kept when the run lasted MOMENTS_MIN_RUN seconds or more
         "pet_pen_enabled": True,           # whether pet_pen() collects the Pet Pen when the Task Board says it is ready
         "pet_outgrown": False,             # the game said the pet that is out is full grown ("Yay! Your pet is full grown!"): the next pick does not keep it, even if it still shows in the list
@@ -917,7 +917,7 @@ def _read_game_config() -> dict[str, Any]:
         "pet_pen_swap": False,             # a pet of the pen reached Friend: pet_pen_swap_due() switches the full-grown ones out
         "pet_pen_swap_tried": 0.0,         # when it last tried             # when pet_pen() last opened the board
         "level_growing_pet": True,         # whether Setup filters the eggs and full-grown pets out of the backpack and equips the first pet left (off: the pet is left, the Alicorn equipped if none is out)
-        "new_need_hotkey_enabled": True,   # whether HOTKEYS["new_need"] teaches the macro a need icon it does not know (off: that key can be typed in Roblox)
+        "new_need_hotkey_enabled": True,   # whether HOTKEYS["new_need"] teaches the macro a need icon it does not know (off: the macro ignores that key)
         "needs_enabled": {},        # {need: whether it is acted on}, the Debug tab's switches; a need not in it follows ENABLED_NEEDS (see need_is_enabled())
         "private_server_link": "",  # used by leave_and_rejoin(); kept here, not in the source, since it's a join key
         "use_private_server": True,   # whether a rejoin goes to that private server (off: a public one, with the link kept)
@@ -6572,7 +6572,7 @@ GUIDE: tuple[tuple[str, tuple[str, ...]], ...] = (
         "{screenshot} saves a screenshot to debug/screenshots (in Roblox).",
         "{blackout} blanks the screen while the macro works, and shows it again (in Roblox).",
         "{new_need} teaches a need icon the macro does not know (in Roblox).",
-        "Settings > Hotkeys: each key can be changed (click its button, then press the new key) and switched off, so that it is typed in the game; the red button and the bot still stop the macro.")),
+        "Settings > Hotkeys: each key can be changed (click its button, then press the new key) and switched off (the macro then ignores that key; the game still gets it); the red button and the bot still stop the macro.")),
     ("Main", (
         "The blue button starts the loop, the red one stops it.",
         "Run Setup at the next loop: once, the next time the loop starts or comes round (equip the pet, set the filters).")),
@@ -6852,7 +6852,7 @@ class AdoptMeGUI:
 
     def new_need_by_hotkey(self) -> None:
         """HOTKEYS["new_need"] was pressed in Roblox: look at the need bar and ask for the name of any icon on it the macro does not know (Tk's thread), unless the Options subtab's checkbox
-        has the key off (it is then typed in the game)."""
+        has the key off (the macro then ignores it)."""
         if not self.config_flag_vars["new_need_hotkey_enabled"].get():
             return
         try:
@@ -6895,7 +6895,7 @@ class AdoptMeGUI:
 
     def blackout_by_hotkey(self) -> None:
         """HOTKEYS["blackout"] was pressed: blank the screen or show it again (Tk's thread), unless the Options subtab's checkbox has the key off (it is
-        then typed in the game). The screen is only blanked while the macro is doing something (the loop or an action such as Setup); one that is blank can always be shown again."""
+        then ignored). The screen is only blanked while the macro is doing something (the loop or an action such as Setup); one that is blank can always be shown again."""
         if not self.config_flag_vars["blackout_hotkey_enabled"].get():
             return
         if not self.blackout.shown and not self.is_running:
@@ -7321,11 +7321,12 @@ class AdoptMeGUI:
         server_link_entry.bind("<Return>", lambda e: self.save_server_link())
 
     def build_hotkeys_tab(self, parent: Any) -> None:
-        """Fill the Settings tab's Hotkeys subtab: for each hotkey a checkbox (on: the key acts; off: it is typed as usual) and a button with its key - click it, then press the new key (Escape keeps the old one)
+        """Fill the Settings tab's Hotkeys subtab: for each hotkey a checkbox (on: the key acts; off: the macro ignores it, and the game still gets the key as it always does) and a button with its key - click it, then press the new key (Escape keeps the old one)
         - and a button for every key back to its default. The keys are kept in the game config (`hotkeys`) and act at once."""
         config = load_game_config()
         self.hotkey_buttons: dict[str, Any] = {}
         self.hotkey_note = tk.StringVar(value="")
+        self.add_hint(parent, "A checked key acts. An unchecked key is ignored by the macro.")
         for name, label in HOTKEY_LABELS.items():
             row = tk.Frame(parent, bg=self.bg)
             row.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)

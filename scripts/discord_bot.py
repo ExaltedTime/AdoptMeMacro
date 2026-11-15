@@ -79,7 +79,7 @@ def grab_roblox_jpeg() -> tuple[bytes, bool]:
         shot = sct.grab(roblox_region(sct.monitors[1]))
     picture = np.frombuffer(shot.bgra, np.uint8).reshape(shot.height, shot.width, 4)[:, :, :3]
     if shot.width > cfg.BOT_RVIEW_WIDTH:
-        picture = cv2.resize(picture, (cfg.BOT_RVIEW_WIDTH, round(shot.height * cfg.BOT_RVIEW_WIDTH / shot.width)), interpolation=cv2.INTER_AREA)
+        picture = np.asarray(cv2.resize(picture, (cfg.BOT_RVIEW_WIDTH, round(shot.height * cfg.BOT_RVIEW_WIDTH / shot.width)), interpolation=cv2.INTER_AREA), np.uint8)
     done, encoded = cv2.imencode(".jpg", picture, [cv2.IMWRITE_JPEG_QUALITY, cfg.BOT_RVIEW_JPEG_QUALITY])
     if not done:
         raise RuntimeError("the picture could not be encoded")

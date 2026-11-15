@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from typing import Any
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -49,7 +50,7 @@ def scaled(factor: str) -> str:
     return SCALE % (repr(OTHER_TIMES), factor)
 
 
-VARIANTS = {
+VARIANTS: dict[str, Any] = {
     "baseline": "",
     "timings_x1.7": scaled("1.7"),
     "timings_x0.5": scaled("0.5"),
@@ -151,7 +152,7 @@ def prepare(copy: str, setup: str) -> None:
     elif setup == "extra_refs":      # a learned icon, an unknown popup crop
         import cv2
         import numpy as np
-        noise = np.random.RandomState(0).randint(0, 255, (60, 60, 3), np.uint8)
+        noise = np.random.RandomState(0).randint(0, 255, (60, 60, 3)).astype(np.uint8)
         icon = np.full((66, 66, 3), 255, np.uint8)      # a white disc with a dark bar: the learned need (noise is mostly black once binarised, like a dark patch of scenery)
         cv2.line(icon, (10, 56), (56, 10), (0, 0, 0), 8)
         for folder, name, image in (("needs", "zz_new_need", icon), ("popups", "zz_unknown_popup", noise), ("overlays", "zz_overlay", noise)):
@@ -161,7 +162,7 @@ def prepare(copy: str, setup: str) -> None:
 def run_variant(name: str) -> bool:
     """One variant: a string (appended to magic_numbers.py) or a dict of what to change: env, cwd, setup, alone."""
     spec = VARIANTS[name]
-    options = spec if isinstance(spec, dict) else {}
+    options: dict[str, Any] = spec if isinstance(spec, dict) else {}
     patch = spec if isinstance(spec, str) else spec.get("patch", "")
     folder = tempfile.mkdtemp()
     try:

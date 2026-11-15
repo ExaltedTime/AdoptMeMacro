@@ -2,7 +2,7 @@
 
 The handler tests elsewhere use made-up entries (so they pass for any tuning). These check the real ones without
 pinning any value: a typo in a key, a missing position or a step that isn't a movement key fails here, while
-retuning a duration or a route doesn't. They run over whichever needs exist (HALLOWEEN decides whether `sick` does)."""
+retuning a duration or a route doesn't. They run over the needs that exist."""
 import pytest
 
 import magic_numbers as cfg

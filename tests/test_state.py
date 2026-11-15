@@ -358,7 +358,7 @@ def test_a_run_log_that_cannot_be_written_does_not_lose_the_combined_line(macro,
 @pytest.fixture
 def walker(macro, monkeypatch):
     """A made-up teleport-walk need with an entry of its own, so these tests don't depend on how the real ones are
-    tuned (or on HALLOWEEN, which decides which of them exist). Returns make(**extra_keys) -> handler, and the
+    tuned. Returns make(**extra_keys) -> handler, and the
     list of max_wait values wait_until_need_gone() was called with."""
     waited = []
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
@@ -923,8 +923,7 @@ def sick_screen(name):
 def sick_run(macro, world, monkeypatch):
     """The sick handler up to its Yes, on real screenshots (the detectors are the real ones): run["screen"] is what is on screen
     now; the prompt's click changes it to run["after_prompt"], backing out of the pet view to run["after_back_out"].
-    The need has an entry of its own here (positions made up), so none of this depends on how the real one is tuned
-    or on HALLOWEEN, which decides whether the real one exists."""
+    The need has an entry of its own here (positions made up), so none of this depends on how the real one is tuned."""
     from functools import partial
     final = (610, 620)
     monkeypatch.setitem(macro.cfg.TELEPORT_WALK_NEEDS, "sick", dict(teleport_pos=(1, 2), steps=(("w", 1.0),), helicopter=False,
@@ -1220,7 +1219,7 @@ def test_the_real_white_transition_is_white_and_no_other_real_screenshot_is(macr
     import glob
     import os
     import cv2
-    folder = os.path.join(os.path.dirname(__file__), "icon_detection", "halloween1")
+    folder = os.path.join(os.path.dirname(__file__), "icon_detection", "busy_scenes")
     white = [os.path.basename(f) for f in sorted(glob.glob(os.path.join(folder, "*.png")))
              if macro.detect_white_screen(cv2.imread(f))]
     assert [name.split("__")[0] for name in white] == ["white_screen"]

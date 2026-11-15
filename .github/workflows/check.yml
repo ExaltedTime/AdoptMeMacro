@@ -1,14 +1,28 @@
 name: check
 on: [push, pull_request]
 jobs:
-  lint:
+  linux:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python }}" }
+      - run: sudo apt-get update && sudo apt-get install -y libgl1          # (what opencv-python, the package of requirements.txt, loads)
+      - run: pip install -r requirements.txt pyflakes mypy pytest pytest-xdist    # the packages a user gets, at their pinned versions
+      - run: pyflakes main.py magic_numbers.py tools scripts tests
+      - run: python tools/check_constants.py
+      - run: mypy main.py magic_numbers.py scripts tools
+      - run: python -m pytest -q -n auto
+  windows:
+    # The macro is Windows-only (input, window and display code); the tests stub those libraries, so this job shows that the packages install and the suite passes on the system the macro runs on.
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install pyflakes mypy pytest pytest-xdist numpy opencv-python-headless discord.py
-      - run: pyflakes main.py magic_numbers.py tools scripts tests
-      - run: python tools/check_constants.py
-      - run: mypy main.py scripts/bot_lib.py
+      - run: pip install -r requirements.txt pytest pytest-xdist
       - run: python -m pytest -q -n auto

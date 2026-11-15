@@ -1396,16 +1396,16 @@ Nothing starts by itself with the PC: the bot is only ever started by hand, and 
 ## Automated checks
 
 `.github/workflows/check.yml` runs on every push and pull request (GitHub
-Actions, a temporary Linux machine): `pyflakes` on `main.py`,
+Actions) two jobs. The `linux` job (Python 3.12 and 3.13) installs `requirements.txt`, the packages a user gets at their pinned versions, and not a list of its own (a broken pin is found here, and a new version of a library cannot change a result unannounced), and runs `pyflakes` on `main.py`,
 `magic_numbers.py`, `tools`, `bot` and `tests` (syntax errors,
 undefined names, unused imports and local variables, duplicate definitions), then
 `python tools/check_constants.py`, which fails on a `cfg.NAME` in `main.py` or `scripts/`
 that `magic_numbers.py` doesn't define, a constant nothing uses, a function of
 `main.py` or `scripts/` that nothing but tests calls, an UPPER_CASE name the docs write in backticks that no code file has (`docs/review.md` is left out: it records what was found), and a test that asks for `tmp_path`,
-`monkeypatch`, `caplog` or `capsys` and never uses it; then `mypy main.py scripts/bot_lib.py` (configured in
+`monkeypatch`, `caplog` or `capsys` and never uses it; then `mypy main.py magic_numbers.py scripts tools` (configured in
 `mypy.ini`: it also checks the bodies of functions without type hints, and
 ignores the Windows-only libraries it has no stubs for), then
-`python -m pytest -q -n auto`. Every top-level function and method in
+`python -m pytest -q -n auto`. The `windows` job installs the same `requirements.txt` on a Windows machine, the system the macro runs on, and runs the tests there (they stub the input, window and display libraries, so it shows that the packages install and the suite passes there, not that the macro drives the game). Every top-level function and method in
 `main.py` has type hints (a few small nested helpers don't), using the aliases `Image` (a BGR screenshot or crop),
 `Point`, `Box` and `Color` defined under the imports. A few lines carry
 `# type: ignore[...]` for what the stubs get wrong (Windows-only calls, tkinter,

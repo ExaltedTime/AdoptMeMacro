@@ -1407,9 +1407,7 @@ that `magic_numbers.py` doesn't define, a constant nothing uses, a function of
 ignores the Windows-only libraries it has no stubs for), then
 `python -m pytest -q -n auto`. The `windows` job installs the same `requirements.txt` on a Windows machine, the system the macro runs on, and runs the tests there (they stub the input, window and display libraries, so it shows that the packages install and the suite passes there, not that the macro drives the game). Every top-level function and method in
 `main.py` has type hints (a few small nested helpers don't), using the aliases `Image` (a BGR screenshot or crop),
-`Point`, `Box` and `Color` defined under the imports. A few lines carry
-`# type: ignore[...]` for what the stubs get wrong (Windows-only calls, tkinter,
-OpenCV). It can't run the macro itself - that
+`Point`, `Box` and `Color` defined under the imports. The Windows-only calls go through `windll()` (typed `Any`; `ctypes.windll` itself does not exist for the type checker on Linux), the Tk callbacks are `functools.partial`s of methods, and `mypy.ini` has `warn_unused_ignores`, so a `# type: ignore[...]` that is no longer needed is an error; the few left (in `scripts/discord_bot.py`) are for what discord.py's stubs get wrong. It can't run the macro itself - that
 needs Windows, a screen and Roblox.
 
 ### Tests

@@ -21,7 +21,7 @@ import logging
 import logging.handlers
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field, fields
-from typing import Any, Callable, ContextManager, Iterable, Iterator, Optional, Sequence, TypeAlias, Union
+from typing import Any, Callable, ContextManager, Iterable, Iterator, Literal, Optional, Sequence, TypeAlias, Union
 from abc import ABC, abstractmethod
 from functools import lru_cache, partial
 import tkinter as tk
@@ -62,6 +62,10 @@ class FocusLost(Exception):
     """
     pass
 
+def windll() -> Any:
+    """`ctypes.windll` (Windows only: an AttributeError anywhere else), typed Any, so that the Windows-only calls need no `type: ignore`."""
+    return getattr(ctypes, "windll")
+
 _WARNED_HOTKEYS: set[str] = set()
 
 def hotkey_vk(key: str) -> Optional[int]:
@@ -69,7 +73,7 @@ def hotkey_vk(key: str) -> Optional[int]:
     keyboard layout in use (VkKeyScanW). None when the layout has no key for it by itself - it is typed with Shift, AltGr or a dead key, or not at all."""
     if key.isascii() and key.isalnum():
         return ord(key.upper())
-    scan = ctypes.windll.user32.VkKeyScanW(ord(key)) & 0xFFFF  # type: ignore[attr-defined]  # Windows only
+    scan = windll().user32.VkKeyScanW(ord(key)) & 0xFFFF
     if scan == 0xFFFF or scan >> 8:                         # (no key, or one that needs a modifier)
         return None
     return scan & 0xFF
@@ -85,7 +89,7 @@ def hotkey_down(key: str) -> bool:
             _WARNED_HOTKEYS.add(key)
             logger.warning(f"The '{key}' hotkey is not a key of its own on this keyboard layout - it does nothing")
         return False
-    return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)  # type: ignore[attr-defined]  # Windows only
+    return bool(windll().user32.GetAsyncKeyState(vk) & 0x8000)
 
 def save_screenshot() -> str:
     """The whole primary monitor now, at its own size (grab_full_screen(): nothing cut out or scaled, so what is read off it is read off the pixels the screen
@@ -1131,7 +1135,8 @@ def prompt_rename_need(icon_img: Image, idx: int, on_ui_thread: bool = False) ->
         if not on_ui_thread:
             focus_roblox_click()   # the dialog took the focus
     else:
-        print(f"{prompt} ", end="", flush=True)                           # (a question to the person at the terminal, not a log line)
+        sys.stdout.write(f"{prompt} ")                                       # (a question to the person at the terminal, not a log line)
+        sys.stdout.flush()
         answer = input()
     need_name = (answer or "").strip().lower() or f"unnamed_{idx}"
 
@@ -1422,6 +1427,8 @@ def release_all_inputs() -> None:
 # BUTTON DETECTION
 # ============================================================================
 
+BUTTON_KERNEL = np.ones((3, 3), np.uint8)               # (what cv2.dilate and cv2.erode use when they are given no kernel: a 3 x 3 square)
+
 def detect_buttons() -> list[Point]:
     """Detect purple, white-outlined action buttons in the middle of the screen.
     Assumes the character is already positioned where the buttons are visible."""
@@ -1439,8 +1446,8 @@ def detect_buttons() -> list[Point]:
     purple_mask = cv2.inRange(hsv, *cfg.PURPLE_RANGE)
     white_mask = cv2.inRange(hsv, *cfg.WHITE_RANGE)
 
-    purple_dilated = cv2.dilate(purple_mask, None, iterations=cfg.BUTTON_PURPLE_DILATE_ITERATIONS)  # type: ignore[call-overload]
-    outline_zone = cv2.subtract(purple_dilated, cv2.erode(purple_mask, None, iterations=cfg.BUTTON_PURPLE_ERODE_ITERATIONS))  # type: ignore[call-overload]
+    purple_dilated = cv2.dilate(purple_mask, BUTTON_KERNEL, iterations=cfg.BUTTON_PURPLE_DILATE_ITERATIONS)
+    outline_zone = cv2.subtract(purple_dilated, cv2.erode(purple_mask, BUTTON_KERNEL, iterations=cfg.BUTTON_PURPLE_ERODE_ITERATIONS))
     has_white = cv2.bitwise_and(outline_zone, white_mask)
 
     contours, _ = cv2.findContours(purple_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -2879,7 +2886,7 @@ def run_deeplink(server: Optional[tuple[str, str]] = None) -> None:
         uri = f"roblox://placeID={cfg.ROBLOX_PLACE_ID}&linkcode={server[1]}"
     else:
         uri = f"roblox://navigation/share_links?code={server[1]}&type=Server"
-    os.startfile(uri)  # type: ignore[attr-defined]  # Windows only
+    getattr(os, "startfile")(uri)                                  # (Windows only)
 
 def close_roblox(clean_leave: bool = True) -> None:
     """Leave the game cleanly (only if `clean_leave`), kill any Roblox process left and
@@ -4916,7 +4923,7 @@ class RunRecorder:
         could be opened (nothing is recorded then)."""
         for extension, codec in ((".mp4", "mp4v"), (".avi", "MJPG")):
             path = os.path.splitext(self.path)[0] + extension
-            writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*codec), cfg.RECORD_FPS, (cfg.RECORD_WIDTH, cfg.RECORD_HEIGHT))  # type: ignore[attr-defined]
+            writer = cv2.VideoWriter(path, cv2.VideoWriter.fourcc(*codec), cfg.RECORD_FPS, (cfg.RECORD_WIDTH, cfg.RECORD_HEIGHT))
             if writer.isOpened():
                 self.path, self.writer = path, writer
                 self.thread = threading.Thread(target=self._record, daemon=True)
@@ -5015,7 +5022,7 @@ def pressed_inputs() -> set[str]:
     empty off Windows."""
     if os.name != "nt":
         return set()
-    get_state = ctypes.windll.user32.GetAsyncKeyState  # type: ignore[attr-defined]  # Windows only
+    get_state = windll().user32.GetAsyncKeyState
     return {name for code, name in VK_NAMES.items() if get_state(code) & 0x8000}
 
 def cursor_position() -> Point:
@@ -5024,7 +5031,7 @@ def cursor_position() -> Point:
         return 0, 0
     from ctypes import wintypes
     point = wintypes.POINT()
-    ctypes.windll.user32.GetCursorPos(ctypes.byref(point))  # type: ignore[attr-defined]  # Windows only
+    windll().user32.GetCursorPos(ctypes.byref(point))
     return point.x, point.y
 
 def to_reference(x: float, y: float) -> Point:
@@ -5588,7 +5595,7 @@ def process_memory_mb() -> Optional[float]:
                         "QuotaPeakNonPagedPoolUsage", "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage")]
             counters = MemoryCounters()
             counters.cb = ctypes.sizeof(counters)
-            kernel32, psapi = ctypes.windll.kernel32, ctypes.windll.psapi  # type: ignore[attr-defined]  # Windows only
+            kernel32, psapi = windll().kernel32, windll().psapi
             kernel32.GetCurrentProcess.restype = wintypes.HANDLE
             psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(MemoryCounters), wintypes.DWORD]
             if not psapi.GetProcessMemoryInfo(kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb):
@@ -5606,7 +5613,7 @@ def system_cpu_times() -> Optional[tuple[float, float]]:
         if os.name == "nt":
             from ctypes import wintypes
             idle, kernel, user = wintypes.FILETIME(), wintypes.FILETIME(), wintypes.FILETIME()
-            if not ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)):  # type: ignore[attr-defined]  # Windows only
+            if not windll().kernel32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)):
                 return None
             def value(ft: Any) -> float:
                 return float((ft.dwHighDateTime << 32) | ft.dwLowDateTime)
@@ -5629,7 +5636,7 @@ def system_memory_percent() -> Optional[float]:
                         "ullAvailVirtual", "ullAvailExtendedVirtual")]
             status = MemoryStatus()
             status.dwLength = ctypes.sizeof(status)
-            if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):  # type: ignore[attr-defined]  # Windows only
+            if not windll().kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
                 return None
             return float(status.dwMemoryLoad)
         info = {}
@@ -6364,7 +6371,7 @@ def virtual_display_present() -> bool:
         class DisplayDevice(ctypes.Structure):
             _fields_ = [("cb", wintypes.DWORD), ("DeviceName", ctypes.c_wchar * 32), ("DeviceString", ctypes.c_wchar * 128), ("StateFlags", wintypes.DWORD),
                         ("DeviceID", ctypes.c_wchar * 128), ("DeviceKey", ctypes.c_wchar * 128)]
-        user32 = ctypes.windll.user32  # type: ignore[attr-defined]  # Windows only
+        user32 = windll().user32
         for number in range(cfg.DISPLAY_ADAPTERS_MAX):
             device = DisplayDevice()
             device.cb = ctypes.sizeof(device)
@@ -6409,7 +6416,7 @@ def keep_awake(on: bool) -> None:
         return
     flags = 0x80000000 | (0x00000001 | 0x00000002 if on else 0)               # ES_CONTINUOUS, with ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED while on
     try:
-        ctypes.windll.kernel32.SetThreadExecutionState(flags)  # type: ignore[attr-defined]  # Windows only
+        windll().kernel32.SetThreadExecutionState(flags)
     except (OSError, AttributeError):
         pass
 
@@ -6514,7 +6521,7 @@ class Blackout:
         if self.window is None or not self.supported():
             return
         try:
-            user32 = ctypes.windll.user32  # type: ignore[attr-defined]  # Windows only
+            user32 = windll().user32
             hwnd = user32.GetParent(self.window.winfo_id()) or self.window.winfo_id()
             topmost = ctypes.c_void_p(-1)                                            # HWND_TOPMOST (a handle is as wide as a pointer: a plain -1 would be passed as 32 bits and not be the value)
             if not user32.SetWindowPos(ctypes.c_void_p(hwnd), topmost, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010):     # SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
@@ -6557,7 +6564,7 @@ class Blackout:
         window.configure(bg="white", cursor="none")
         window.geometry(f"{self.root.winfo_screenwidth()}x{self.root.winfo_screenheight()}+0+0")
         window.update_idletasks()
-        user32 = ctypes.windll.user32  # type: ignore[attr-defined]  # Windows only
+        user32 = windll().user32
         hwnd = user32.GetParent(window.winfo_id()) or window.winfo_id()
         style = user32.GetWindowLongW(hwnd, -20)                                       # GWL_EXSTYLE
         user32.SetWindowLongW(hwnd, -20, style | 0x00080000 | 0x00000020 | 0x08000000 | 0x00000080)    # layered, transparent (click-through), no-activate, tool window
@@ -7164,7 +7171,7 @@ class AdoptMeGUI:
                 # Tkinter widgets may only be touched from the main thread; root.after() hands this callback to it instead of calling
                 # .config() directly from this background thread. The flag goes down there too, in the same step as the buttons: set from here
                 # first, an action asked for from outside could start in between and have its buttons put back to "Ready" under it.
-                self.root.after(0, lambda status=final_status: self._finish_running(status))  # type: ignore[misc]
+                self.root.after(0, partial(self._finish_running, final_status))
 
         self.worker = threading.Thread(target=worker, daemon=True)
         self.worker.start()
@@ -7187,9 +7194,9 @@ class AdoptMeGUI:
         """Single place that toggles button state + status text. Called both
         right before a background task starts and from its finally block
         when it ends, so the two are always kept in sync."""
-        button_state = tk.DISABLED if running else tk.NORMAL
+        button_state: Literal["normal", "disabled"] = tk.DISABLED if running else tk.NORMAL
         for btn in self.action_buttons:
-            btn.config(state=button_state)  # type: ignore[call-overload]
+            btn.config(state=button_state)
         self.status.config(text="Running..." if running else (status_text or "Ready"))
         run_stats.busy = running                                         # (in the status file, for the bot)
         write_status()
@@ -7201,10 +7208,18 @@ class AdoptMeGUI:
         var = tk.BooleanVar(value=config[key])
         self.config_flag_vars[key] = var
         tk.Checkbutton(parent, text=label, variable=var,
-                       command=lambda k=key, v=var: self.set_config_flag(k, v.get()),  # type: ignore[misc]
+                       command=partial(self.config_flag_clicked, key, var),
                        font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.bg, fg=self.fg,
                        selectcolor=self.bg, activebackground=self.bg, activeforeground=self.fg,
                        anchor=tk.W, cursor="hand2").pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
+
+    def config_flag_clicked(self, key: str, var: tk.BooleanVar) -> None:
+        """A checkbox of a persisted switch was clicked: keep what it says now."""
+        self.set_config_flag(key, var.get())
+
+    def need_clicked(self, name: str, var: tk.BooleanVar) -> None:
+        """A need's checkbox was clicked: keep what it says now."""
+        self.set_need_enabled(name, var.get())
 
     def set_config_flag(self, key: str, value: Any) -> None:
         """Persist one of the config's on/off switches (a checkbox was clicked)."""
@@ -7260,10 +7275,10 @@ class AdoptMeGUI:
             cell.grid(row=2 + i // 2, column=i % 2, sticky=tk.EW, padx=cfg.GUI_WIDGET_SPACING)
             var = tk.BooleanVar(value=need_is_enabled(name))
             self.need_vars[name] = var
-            tk.Checkbutton(cell, text=name.capitalize(), variable=var, command=lambda n=name, v=var: self.set_need_enabled(n, v.get()),  # type: ignore[misc]
+            tk.Checkbutton(cell, text=name.capitalize(), variable=var, command=partial(self.need_clicked, name, var),
                            font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.fg, selectcolor=self.bg,
                            activebackground=self.bg, activeforeground=self.fg, anchor=tk.W, cursor="hand2").pack(side=tk.LEFT)
-            btn = tk.Button(cell, text="Test", command=lambda n=name, c=handler_cls: self.test_handler(n, c),  # type: ignore[misc]
+            btn = tk.Button(cell, text="Test", command=partial(self.test_handler, name, handler_cls),
                             font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.accent, fg=cfg.GUI_ON_ACCENT, cursor="hand2", padx=cfg.GUI_ROW_SPACING, pady=0)
             btn.pack(side=tk.RIGHT, pady=cfg.GUI_LABEL_PADDING)
             self.action_buttons.append(btn)
@@ -7337,10 +7352,10 @@ class AdoptMeGUI:
             row.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
             var = tk.BooleanVar(value=config[f"{name}_hotkey_enabled"])
             self.config_flag_vars[f"{name}_hotkey_enabled"] = var
-            tk.Checkbutton(row, text=label, variable=var, command=lambda k=f"{name}_hotkey_enabled", v=var: self.set_config_flag(k, v.get()),     # type: ignore[misc]
+            tk.Checkbutton(row, text=label, variable=var, command=partial(self.config_flag_clicked, f"{name}_hotkey_enabled", var),
                            font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.bg, fg=self.fg, selectcolor=self.bg,
                            activebackground=self.bg, activeforeground=self.fg, anchor=tk.W, cursor="hand2").pack(side=tk.LEFT, fill=tk.X, expand=True)
-            button = tk.Button(row, text=hotkey_key(name).upper() or "-", width=cfg.GUI_HOTKEY_BUTTON_WIDTH, command=lambda n=name: self.change_hotkey(n),  # type: ignore[misc]
+            button = tk.Button(row, text=hotkey_key(name).upper() or "-", width=cfg.GUI_HOTKEY_BUTTON_WIDTH, command=partial(self.change_hotkey, name),
                                font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"), bg=self.accent, fg=cfg.GUI_ON_ACCENT, cursor="hand2", bd=0, highlightthickness=0)
             button.pack(side=tk.RIGHT)
             self.hotkey_buttons[name] = button

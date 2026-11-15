@@ -8,8 +8,8 @@ jobs:
       matrix:
         python: ["3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with: { python-version: "${{ matrix.python }}" }
       - run: sudo apt-get update && sudo apt-get install -y libgl1          # (what opencv-python, the package of requirements.txt, loads)
       - run: pip install -r requirements.txt pyflakes mypy pytest pytest-xdist    # the packages a user gets, at their pinned versions
@@ -21,8 +21,8 @@ jobs:
     # The macro is Windows-only (input, window and display code); the tests stub those libraries, so this job shows that the packages install and the suite passes on the system the macro runs on.
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - run: pip install -r requirements.txt pytest pytest-xdist
       - run: python -m pytest -q -n auto

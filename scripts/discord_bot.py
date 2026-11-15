@@ -41,7 +41,7 @@ async def say(interaction: discord.Interaction, text: Optional[str] = None, **kw
             if not bot_lib.followup_needs_the_channel(error.status, False):
                 raise
     channel = interaction.channel or await interaction.client.fetch_channel(interaction.channel_id or 0)
-    return await channel.send(text, **kwargs)  # type: ignore[union-attr,arg-type]
+    return await channel.send(text, **kwargs)  # type: ignore[union-attr]
 
 
 def roblox_region(monitor: dict) -> dict:
@@ -132,7 +132,7 @@ def release_inputs() -> None:
         import ctypes
         for button, code in (("left", 0x01), ("right", 0x02)):
             try:
-                if ctypes.windll.user32.GetAsyncKeyState(code) & 0x8000:  # type: ignore[attr-defined]
+                if getattr(ctypes, "windll").user32.GetAsyncKeyState(code) & 0x8000:
                     mouse_up(button=button)
             except Exception:
                 pass
@@ -597,6 +597,12 @@ async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say, l
     return True
 
 
+class MacroClient(discord.Client):
+    """The bot's Discord client, with what the commands and watch() share on it: `bot_state` (what the bot has dealt with, bot_lib.BotState) and `tree` (the slash commands, kept so that they can be listed)."""
+    bot_state: bot_lib.BotState
+    tree: app_commands.CommandTree
+
+
 class ConfirmView(discord.ui.View):
     """Yes and Cancel buttons that only the owner in the one channel can press; `answer` is True, False, or None if nobody pressed one in time."""
 
@@ -673,9 +679,9 @@ class OwnerOnlyTree(app_commands.CommandTree):
 
 
 def build(config: bot_lib.Config) -> discord.Client:
-    client = discord.Client(intents=discord.Intents.default(), allowed_mentions=discord.AllowedMentions.none())     # (nothing the bot says pings anybody, whatever a log line holds)
+    client = MacroClient(intents=discord.Intents.default(), allowed_mentions=discord.AllowedMentions.none())     # (nothing the bot says pings anybody, whatever a log line holds)
     tree = OwnerOnlyTree(client, config)
-    client.bot_state = bot_lib.load_state(bot_lib.state_path())  # type: ignore[attr-defined]   # (what the bot has dealt with; the commands and watch() share it)
+    client.bot_state = bot_lib.load_state(bot_lib.state_path())   # (what the bot has dealt with; the commands and watch() share it)
     guild = discord.Object(id=config.guild_id) if config.guild_id else None
 
     def command(name: str, description: str):
@@ -780,7 +786,7 @@ def build(config: bot_lib.Config) -> discord.Client:
             await say(interaction, os.path.basename(path), file=discord.File(path))
 
     def remember(desired: str) -> None:
-        state = client.bot_state  # type: ignore[attr-defined]
+        state = client.bot_state
         state.desired_state, state.crash_reported = desired, False
         bot_lib.save_state(bot_lib.state_path(), state)
 
@@ -1036,7 +1042,7 @@ def build(config: bot_lib.Config) -> discord.Client:
 
     async def plan_and_apply(interaction: discord.Interaction, rollback: bool) -> None:
         global UPDATING
-        state = client.bot_state  # type: ignore[attr-defined]
+        state = client.bot_state
         try:
             plan, move, head = await asyncio.to_thread(bot_lib.make_plan, git_runner(config), config.update_remote, config.update_branch, state.previous_commit, rollback)
         except RuntimeError as error:
@@ -1085,7 +1091,7 @@ def build(config: bot_lib.Config) -> discord.Client:
             return
         async with update_lock:
             try:
-                state = client.bot_state  # type: ignore[attr-defined]
+                state = client.bot_state
                 pids = await running_pids()
                 loop_running = bool(pids) and not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path()))
                 if pids:
@@ -1201,7 +1207,7 @@ def build(config: bot_lib.Config) -> discord.Client:
             await tell_channel(client, config, f"**The slash commands could not be registered:** {error}\nThe ones Discord already has still work; a new or changed command will not show until this is fixed (see the bot's console).")
         await tell_channel(client, config, await online_text(config))
 
-    client.tree = tree  # type: ignore[attr-defined]       # (kept, so the commands can be listed)
+    client.tree = tree       # (kept, so the commands can be listed)
     return client
 
 
@@ -1260,12 +1266,12 @@ async def tell_channel(client: discord.Client, config: bot_lib.Config, text: str
     if channel is None:
         return
     try:
-        await channel.send(bot_lib.clip_message(text))  # type: ignore[attr-defined]
+        await channel.send(bot_lib.clip_message(text))
     except (discord.HTTPException, OSError):
         log.exception("could not post to the channel")
 
 
-async def watch(client: discord.Client, config: bot_lib.Config) -> None:
+async def watch(client: MacroClient, config: bot_lib.Config) -> None:
     """Every BOT_WATCH_INTERVAL seconds look at what the macro wrote and post what is new: failures (with their screenshot), a status that has gone
     stale (and its recovery), a heartbeat, a macro that is gone. A failure inside a look is logged and the watching
     goes on. What it has dealt with is kept in bot_state.json, so a restart neither posts it again nor misses what came while it was down."""
@@ -1274,7 +1280,7 @@ async def watch(client: discord.Client, config: bot_lib.Config) -> None:
     if channel is None:
         return
     path = bot_lib.state_path()
-    state = client.bot_state  # type: ignore[attr-defined]
+    state = client.bot_state
     limiter = bot_lib.RateLimiter(cfg.BOT_ALERT_GAP)
     if state.log_offset is None:                                   # the first start: what is there already is not news
         state.log_offset = bot_lib.file_end(bot_lib.run_log_path())

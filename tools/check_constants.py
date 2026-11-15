@@ -78,8 +78,8 @@ def key_labels():
     """The labels of the key tables of magic_numbers.py (KEYS, KEY_SEQUENCES, HOTKEYS), read without importing it."""
     labels = {}
     for node in ast.parse(read("magic_numbers.py")).body:
-        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id in ("KEYS", "KEY_SEQUENCES", "HOTKEYS"):
-            labels[node.targets[0].id] = {key.value for key in node.value.keys if isinstance(key, ast.Constant)}   # type: ignore[attr-defined]
+        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) and node.targets[0].id in ("KEYS", "KEY_SEQUENCES", "HOTKEYS") and isinstance(node.value, ast.Dict):
+            labels[node.targets[0].id] = {key.value for key in node.value.keys if isinstance(key, ast.Constant)}
     return labels
 
 

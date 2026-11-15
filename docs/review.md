@@ -49,7 +49,7 @@ The first review's docs findings (a split table, names that did not exist, value
 
 Found by reading the repository (layout, size, CI, docs, hygiene), not the game logic. Done the same day:
 
-- **Done:** CI installs `requirements.txt` (the pinned packages users get), runs on Python 3.12 and 3.13 on Linux and a Windows job, mypy covers `main.py`, `magic_numbers.py`, `scripts/` and `tools/` and warns about unused ignores; `# type: ignore` went from 36 to 5 (`windll()`, `functools.partial` for the Tk callbacks, a client class for the bot, explicit kernels for OpenCV); no `print` left in `main.py`; GitHub's actions are at checkout v5 and setup-python v6; `requirements.txt` is UTF-8; `.gitattributes` pins LF; the event archive left the working tree (tag `archive-halloween-2026`); `tests/icon_detection/halloween1` is `busy_scenes`; a stale `HALLOWEEN` flag left three test comments.
+- **Done:** CI installs `requirements.txt` (the pinned packages users get), runs on Python 3.12 and 3.13 on Linux and a Windows job, mypy covers `main.py`, `magic_numbers.py`, `scripts/` and `tools/` and warns about unused ignores; `# type: ignore` went from 36 to 5 (`windll()`, `functools.partial` for the Tk callbacks, a client class for the bot, explicit kernels for OpenCV); no `print` left in `main.py`; GitHub's actions are at checkout v5 and setup-python v6; `requirements.txt` is UTF-8; `.gitattributes` pins LF; `tests/icon_detection/halloween1` is `busy_scenes`; a stale `HALLOWEEN` flag left three test comments.
 - **The Windows job found real differences:** two bot tests assumed Linux (a path left as it is, a text file's byte count). They were fixed. A pinned `mss` that can return no PNG made mypy fail where an unpinned install had hidden it.
 
 Still open:
@@ -57,7 +57,7 @@ Still open:
 | Area | Finding |
 |---|---|
 | Privacy | The test fixtures are real screenshots with other players' names, chat and the account's own state (Bucks, pet names). Not every fixture was looked at. They need a scan, and blurring or cropping, before the repository is made widely public |
-| Size | `tests/` is 128 MB (162 PNGs, 60 over 1 MB). Lossless recompression saves about a fifth (12 sampled files: 10.1 MB to 8.0 MB); cropping fixtures to the region a test reads saves more. Removing a folder does not shrink the git history |
+| Size | `tests/` is 128 MB (162 PNGs, 60 over 1 MB). Lossless recompression saves about a fifth (12 sampled files: 10.1 MB to 8.0 MB); cropping fixtures to the region a test reads saves more. `archive/` is another 82 MB; removing a folder does not shrink the git history |
 | Dependencies | The pins are exact and nothing updates them. A Dependabot configuration for pip and for the actions would open update PRs that CI then tests |
 | Docs | 32 lines of `ARCHITECTURE.md` are over 1,000 characters (the longest 6,042) and 5 items of `PLANNED.md`: accurate, hard to read and to review |
 | Release basics | No version number, changelog, contributing guide, `SECURITY.md` (the bot runs with the user's Discord token) or issue templates; the README is a few lines |

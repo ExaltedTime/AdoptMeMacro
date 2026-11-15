@@ -589,6 +589,21 @@ def test_a_notice_is_closed_by_its_button_reported_once_and_left_alone_when_it_d
     assert any("left alone" in line for line in events)
 
 
+def test_notices_that_each_go_when_clicked_are_never_left_alone_however_many_come(macro, monkeypatch):
+    """Run 2: an event's admin gave a prize about every 10 seconds for 15 minutes; after 3 closed notices the next was "left alone" for 5 minutes, over the game, and needs failed under it."""
+    shown = [True]
+    clicks = []
+    monkeypatch.setattr(macro, "grab_screen", lambda: notice_screen(macro) if shown[0] else np.full((1080, 1920, 3), 30, np.uint8))
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: (clicks.append((x, y)), shown.__setitem__(0, False)))
+    monkeypatch.setattr(macro.time, "sleep", lambda s: None)
+    monkeypatch.setattr(macro, "log_run_event", lambda text: None)
+    monkeypatch.setattr(macro, "save_failure_report", lambda reason: None)
+    for _ in range(macro.cfg.NOTICE_MAX_CLICKS * 3):
+        shown[0] = True                                                                   # (a new one)
+        assert macro.dismiss_notice() == "notice"
+    assert len(clicks) == macro.cfg.NOTICE_MAX_CLICKS * 3 and macro.state.notice_pause_until == 0
+
+
 def test_a_notice_is_not_looked_for_while_something_is_open_on_purpose(macro, monkeypatch):
     monkeypatch.setattr(macro, "grab_screen", lambda: notice_screen(macro))
     monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: macro.clicks.append((x, y)))

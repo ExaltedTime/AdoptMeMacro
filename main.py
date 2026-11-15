@@ -3708,8 +3708,8 @@ def find_notice_button(img: Image) -> Optional[Point]:
 
 def dismiss_notice() -> Optional[str]:
     """Close a notice of the game that is over the screen (find_notice_button(): the popups of an event change every time, so no crop of them) by clicking its button; "notice" when one was. Not while a handler
-    has something open on purpose (the backpack, the pet's view, the Task Board). A button that was clicked NOTICE_MAX_CLICKS times within NOTICE_CLICK_WINDOW seconds and is still there is not a notice: left alone
-    for NOTICE_PAUSE seconds. The first one in NOTICE_REPORT_INTERVAL seconds saves a failure report, so that what it was can be seen."""
+    has something open on purpose (the backpack, the pet's view, the Task Board). A button that was clicked NOTICE_MAX_CLICKS times within NOTICE_CLICK_WINDOW seconds and was still there after each click is not a notice: left alone
+    for NOTICE_PAUSE seconds (a click that closed it does not count: in run 2 an event's admin gave a prize every 10 seconds or so for 15 minutes, and after 3 closed notices the next was left alone for 5 minutes, over the game). The first one in NOTICE_REPORT_INTERVAL seconds saves a failure report, so that what it was can be seen."""
     if state.backpack_wanted or state.pet_focus_wanted or state.task_board_wanted:
         return None
     now = time.time()
@@ -3732,6 +3732,8 @@ def dismiss_notice() -> Optional[str]:
         save_failure_report("notice: closed an unknown popup (its screen is here)")
     hover_click(*point)
     time.sleep(cfg.STRAY_CLOSE_SETTLE)
+    if find_notice_button(grab_screen()) is None:
+        state.notice_clicks.remove(now)                                    # (it went: the next one is a new notice - an event's admin gave something again - and not this one that will not close)
     return "notice"
 
 def detect_paycheck() -> bool:
@@ -4929,7 +4931,8 @@ class InputCapture:
         self.dropped = 0
         self._kept: list[tuple[str, int]] = []          # the frames on disk, oldest first, with their sizes
         self._gap = self.interval if max_zips else 0.0     # least seconds between two saved frames
-        self.protected: set[str] = set()                # frames the thinning leaves alone: saved around a mark(), or in the tail of a run that went wrong
+        self.protected: set[str] = set()                # frames the thinning leaves alone: saved around a mark(), or in the tail of a run that went wrong, and the phase screens
+        self.phase_names: set[str] = set()              # the phase screens among them (keep_frame()): they have a budget of their own, so that the marks' frames do not use it up (in a run of 19 hours they had, in the first two)
         self._burst_until = 0.0                         # until then every look saves a frame, however far apart the thinning has put them
         self.stop_event = threading.Event()
         self.shot_now = threading.Event()
@@ -4995,10 +4998,10 @@ class InputCapture:
         self._burst_until = time.time() + cfg.RUN_CAPTURE_BURST
         self.shot_now.set()
 
-    def keep_frame(self, png: bytes, seconds: float, label: str) -> None:
+    def keep_frame(self, png: bytes, seconds: float, label: str, essential: bool = True) -> None:
         """Save a screen taken earlier (`seconds` into the capture, as PNG bytes) as a frame the thinning keeps, with its `label` in events.jsonl: the screens of the phases of a need that failed (phase_commit()).
-        Only on a capture with a budget, and while its protected frames are not used up."""
-        if not self.running or not self.max_zips or len(self.protected) >= self.protected_max:
+        Only on a capture with a budget, and while the phase screens (MOMENTS_PHASE_PROTECTED, `essential` ones - a need that failed - up to all of it, the others up to half) are not used up."""
+        if not self.running or not self.max_zips or len(self.phase_names) >= (cfg.MOMENTS_PHASE_PROTECTED if essential else cfg.MOMENTS_PHASE_PROTECTED // 2):
             return
         with self._lock:
             self._phase_frames = getattr(self, "_phase_frames", 0) + 1
@@ -5008,6 +5011,7 @@ class InputCapture:
         self._emit("frame", file=name, label=label, **self._context())
         self._kept.append((name, len(png)))
         self.protected.add(name)
+        self.phase_names.add(name)
         self._keep_within_budget()
 
     def note(self, text: str) -> None:
@@ -5018,7 +5022,7 @@ class InputCapture:
         """Keep the frames of the last `seconds` of the run from being thinned out - where a run that went wrong shows why."""
         horizon = time.time() - self.started - seconds
         for name, _ in self._kept:
-            if len(self.protected) < self.protected_max and float(name[:-len(".png")].rsplit("_", 1)[1]) >= horizon:
+            if len(self.protected) - len(self.phase_names) < self.protected_max and float(name[:-len(".png")].rsplit("_", 1)[1]) >= horizon:
                 self.protected.add(name)
 
     def _context(self) -> dict[str, Any]:
@@ -5086,7 +5090,7 @@ class InputCapture:
                 seconds = time.time() - self.started
                 screen = grab_screen()
                 small = cv2.resize(cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY), cfg.CAPTURE_COMPARE_SIZE, interpolation=cv2.INTER_AREA)
-                bursting = time.time() < self._burst_until and len(self.protected) < self.protected_max     # (around a mark(): every look)
+                bursting = time.time() < self._burst_until and len(self.protected) - len(self.phase_names) < self.protected_max     # (around a mark(): every look)
                 if bursting or seconds - last_saved >= self._gap and (
                         clicked or last_small is None or seconds - last_saved >= max(cfg.CAPTURE_MAX_SKIP, self._gap)
                         or np.count_nonzero(cv2.absdiff(small, last_small) > cfg.CAPTURE_CHANGE_LEVEL) / small.size >= cfg.CAPTURE_CHANGE_FRACTION):
@@ -5283,7 +5287,7 @@ def phase_commit(why: str) -> None:
     try:
         capture.note(f"phase screens kept: {why} ({len(shots)})")
         for seconds, label, png in shots:
-            capture.keep_frame(png, seconds, f"{why}: {label}")
+            capture.keep_frame(png, seconds, f"{why}: {label}", essential=not why.endswith("went well"))
     except Exception as error:
         logger.debug(f"The screens of the phases were not kept: {error}")
 

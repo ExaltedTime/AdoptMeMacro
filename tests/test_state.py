@@ -2417,3 +2417,42 @@ def test_the_new_hotkey_switches_are_in_the_config_and_the_bots_options(macro):
     for name in ("stop", "capture", "screenshot"):
         assert macro.load_game_config()[f"{name}_hotkey_enabled"] is True
         assert macro.cfg.OPTION_SWITCHES[f"{name}_hotkey"] == f"{name}_hotkey_enabled"
+
+
+def test_a_hotkey_can_be_changed_kept_and_put_back_and_a_key_that_cannot_be_one_is_refused(macro):
+    cfg = macro.cfg
+    try:
+        assert macro.hotkey_key("stop") == cfg.HOTKEYS["stop"]
+        assert macro.save_hotkey("stop", "k") is None and macro.hotkey_key("stop") == "k"
+        assert macro.load_game_config()["hotkeys"] == {"stop": "k"}                                        # (only what was changed is kept)
+        macro.HOTKEYS_NOW.update(cfg.HOTKEYS)
+        macro.load_hotkeys()
+        assert macro.hotkey_key("stop") == "k" and macro.hotkey_key("capture") == cfg.HOTKEYS["capture"]   # (read back from the config)
+        assert macro.save_hotkey("stop", cfg.HOTKEYS["stop"]) is None and macro.load_game_config()["hotkeys"] == {}      # (the default again: not kept)
+        assert "one letter" in macro.save_hotkey("stop", "ab") and "one letter" in macro.save_hotkey("stop", " ")
+        held = next(iter(cfg.HELD_KEYS))
+        assert "presses in the game" in macro.save_hotkey("stop", held[0] if len(held) == 1 else "w")
+        assert "capture hotkey already" in macro.save_hotkey("stop", cfg.HOTKEYS["capture"])               # (another hotkey's key)
+        assert macro.hotkey_key("stop") == cfg.HOTKEYS["stop"]                                             # (refused: unchanged)
+        macro.save_hotkey("capture", "j")
+        macro.update_game_config(lambda c: c.update(hotkeys={"stop": "j", "screenshot": "ab", "nothing": "z"}))     # (a saved file that is wrong: the key of another, a bad one, an unknown name)
+        macro.load_hotkeys()
+        assert macro.HOTKEYS_NOW == dict(cfg.HOTKEYS) | {"stop": "j"}
+        macro.reset_hotkeys()
+        assert macro.HOTKEYS_NOW == dict(cfg.HOTKEYS) and macro.load_game_config()["hotkeys"] == {}
+    finally:
+        macro.reset_hotkeys()
+
+
+def test_the_stop_key_says_the_key_it_was_changed_to(macro, monkeypatch):
+    logged = []
+    monkeypatch.setattr(macro.logger, "info", lambda text, *a, **k: logged.append(text))
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.is_running = True
+    gui.stop = lambda: None
+    try:
+        macro.save_hotkey("stop", "j")
+        gui.stop_by_hotkey()
+        assert "'J' pressed" in logged
+    finally:
+        macro.reset_hotkeys()

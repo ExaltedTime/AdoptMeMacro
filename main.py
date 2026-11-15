@@ -98,6 +98,55 @@ def save_screenshot() -> str:
         raise OSError(f"could not write {path}")
     return path
 
+HOTKEYS_NOW: dict[str, str] = dict(cfg.HOTKEYS)         # the hotkeys as they are now: HOTKEYS with the game config's `hotkeys` over it (load_hotkeys()); what hotkey_key() answers, so the watcher need not read a file
+
+def hotkey_key(name: str) -> str:
+    """The key of the hotkey `name` ("stop", "capture", "blackout", "screenshot", "new_need") now: the one the Settings tab's Hotkeys subtab set, else HOTKEYS'."""
+    return HOTKEYS_NOW[name]
+
+def check_hotkey(name: str, key: str) -> Optional[str]:
+    """Why `key` cannot be the hotkey `name`, or None when it can: it must be one character that is a key of its own (hotkey_vk()), not a key the macro presses in the game (HELD_KEYS) - it would
+    be taken for a hotkey while it is being held - and not the key of another hotkey."""
+    if len(key) != 1 or not key.strip():
+        return "a hotkey is one letter, digit or character"
+    try:
+        if hotkey_vk(key) is None:
+            return f"'{key}' is not a key of its own on this keyboard layout"
+    except (AttributeError, OSError):
+        pass                                                                          # (no Windows: the tests)
+    if key.lower() in {held.lower() for held in cfg.HELD_KEYS}:
+        return f"'{key}' is a key the macro presses in the game"
+    taken = next((other for other, other_key in HOTKEYS_NOW.items() if other != name and other_key.lower() == key.lower()), None)
+    return f"'{key}' is the key of the {taken} hotkey already" if taken else None
+
+def load_hotkeys() -> None:
+    """HOTKEYS_NOW from HOTKEYS and the game config's `hotkeys` (a key that check_hotkey() refuses is left at its default, said in the log)."""
+    chosen = load_game_config().get("hotkeys") or {}
+    HOTKEYS_NOW.clear()
+    HOTKEYS_NOW.update(cfg.HOTKEYS)
+    for name, key in chosen.items():
+        if name in cfg.HOTKEYS and isinstance(key, str):
+            problem = check_hotkey(name, key)
+            if problem:
+                logger.warning(f"The saved {name} hotkey is not used: {problem}")
+            else:
+                HOTKEYS_NOW[name] = key.lower()
+
+def save_hotkey(name: str, key: str) -> Optional[str]:
+    """Make `key` the hotkey `name` and keep it in the game config (the default's is not kept: the config holds only what was changed); the reason it cannot be, else None."""
+    key = key.lower()
+    problem = check_hotkey(name, key)
+    if problem:
+        return problem
+    HOTKEYS_NOW[name] = key
+    update_game_config(lambda c: c.update(hotkeys={**{n: k for n, k in (c.get("hotkeys") or {}).items() if n != name}, **({name: key} if key != cfg.HOTKEYS[name].lower() else {})}))
+    return None
+
+def reset_hotkeys() -> None:
+    """Every hotkey back to HOTKEYS' key."""
+    update_game_config(lambda c: c.update(hotkeys={}))
+    load_hotkeys()
+
 def hotkey_fires(down: bool, was_down: bool, only_while_running: bool, running: bool, only_in_roblox: bool) -> bool:
     """Whether a hotkey seen `down` (and not `was_down` at the last look) is to act: not while it is just being held, not when it is
     one for a run that isn't going (`only_while_running`), and not when it is for Roblox's window only (`only_in_roblox`) and another is focused."""
@@ -849,6 +898,7 @@ def _read_game_config() -> dict[str, Any]:
         "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
         "setup_next_loop": False,   # run Setup at the next pass of the loop (once; cleared when it runs)
         "record_next_run": False,   # record the next run as a low quality video; cleared when that run starts
+        "hotkeys": {},                     # the keys of the hotkeys that were changed in the Settings tab ({"stop": "q"}): the others are HOTKEYS' (load_hotkeys())
         "stop_hotkey_enabled": True,       # whether HOTKEYS["stop"] stops the macro (off: that key can be typed anywhere; the [STOP] button and the bot's stop work either way)
         "capture_hotkey_enabled": True,    # whether HOTKEYS["capture"] starts and stops an input capture (off: that key can be typed in Roblox)
         "screenshot_hotkey_enabled": True, # whether HOTKEYS["screenshot"] saves a screenshot (off: that key can be typed in Roblox)
@@ -922,6 +972,7 @@ def reset_game_config() -> None:
             pass
         if link:
             save_game_config({**_read_game_config(), "private_server_link": link})
+    load_hotkeys()
 
 # ============================================================================
 # ICON PROCESSING
@@ -5124,7 +5175,7 @@ class InputCapture:
         last_move = 0.0
         while not self.stop_event.wait(cfg.CAPTURE_POLL_INTERVAL):
             try:
-                now_held = pressed_inputs() - {cfg.HOTKEYS["capture"]}
+                now_held = pressed_inputs() - {hotkey_key("capture")}
                 for name in sorted(now_held - held):
                     if name.startswith("mouse_"):
                         self._emit("mouse_down", button=name[len("mouse_"):], **self._where())
@@ -5294,7 +5345,7 @@ def toggle_input_capture() -> Optional[InputCapture]:
     capture = InputCapture(os.path.join(cfg.CAPTURES_DIR, "capture_" + time.strftime("%Y%m%d_%H%M%S")))
     capture.start()
     state.capture = capture
-    logger.info(f"Capture started (press {cfg.HOTKEYS['capture'].upper()} again to stop): {capture.folder}")
+    logger.info(f"Capture started (press {hotkey_key('capture').upper()} again to stop): {capture.folder}")
     return capture
 
 # The moments of a run: a capture of the whole run kept to MOMENTS_ZIPS zips however long it goes (InputCapture with a budget: it thins itself out, so what is left is spread over the run), with the
@@ -6425,7 +6476,7 @@ class Blackout:
             return False
         if self.switch_display():
             keep_awake(True)
-            logger.info(f"Screen off: the game is on the virtual display ({cfg.HOTKEYS['blackout'].upper()} again to show it)")
+            logger.info(f"Screen off: the game is on the virtual display ({hotkey_key('blackout').upper()} again to show it)")
             return True
         before = grab_screen()
         window = self.make_window()
@@ -6440,7 +6491,7 @@ class Blackout:
             logger.warning("The screen was not blanked: " + ("the macro's screenshots would see the black window too" if seen else "the screen is too bright to test whether they would (try again from a darker view)"))
             return False
         window.configure(bg="black")
-        logger.info(f"Screen blanked ({cfg.HOTKEYS['blackout'].upper()} again to show it)")
+        logger.info(f"Screen blanked ({hotkey_key('blackout').upper()} again to show it)")
         keep_awake(True)
         self.keep_on_top()
         return True
@@ -6521,7 +6572,7 @@ GUIDE: tuple[tuple[str, tuple[str, ...]], ...] = (
         "{screenshot} saves a screenshot to debug/screenshots (in Roblox).",
         "{blackout} blanks the screen while the macro works, and shows it again (in Roblox).",
         "{new_need} teaches a need icon the macro does not know (in Roblox).",
-        "Each key can be switched off in Settings (Keys), so that it is typed in the game; the red button and the bot still stop the macro.")),
+        "Settings > Hotkeys: each key can be changed (click its button, then press the new key) and switched off, so that it is typed in the game; the red button and the bot still stop the macro.")),
     ("Main", (
         "The blue button starts the loop, the red one stops it.",
         "Run Setup at the next loop: once, the next time the loop starts or comes round (equip the pet, set the filters).")),
@@ -6540,6 +6591,14 @@ GUIDE: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
+# What each hotkey does, for the Settings tab's Hotkeys subtab (the keys of HOTKEYS, in the order shown).
+HOTKEY_LABELS = {"stop": "Stop the macro (in any window)",
+                 "capture": "Start / stop a capture (in Roblox)",
+                 "screenshot": "Save a screenshot (in Roblox)",
+                 "blackout": "Blank the screen (in Roblox)",
+                 "new_need": "Teach a new need icon (in Roblox)"}
+
+
 class AdoptMeGUI:
     def __init__(self, root: tk.Tk) -> None:
         state.macro_window = self
@@ -6555,6 +6614,7 @@ class AdoptMeGUI:
         self.fg = cfg.GUI_FG
         self.root.configure(bg=self.bg)
 
+        load_hotkeys()
         self.set_style()
         self.create_ui()
 
@@ -6745,20 +6805,25 @@ class AdoptMeGUI:
     def watch_stop_hotkey(self) -> None:
         """Start a thread that watches the hotkeys: HOTKEYS["stop"] stops the macro (in any window), HOTKEYS["capture"] starts or
         stops an input capture (only while Roblox is focused). See docs/ARCHITECTURE.md#gui-internals."""
-        hotkeys = [(cfg.HOTKEYS["stop"], self.stop_by_hotkey, True, False),
-                   (cfg.HOTKEYS["capture"], self.capture_by_hotkey, False, True),
-                   (cfg.HOTKEYS["blackout"], self.blackout_by_hotkey, False, True),
-                   (cfg.HOTKEYS["screenshot"], self.screenshot_by_hotkey, False, True),
-                   (cfg.HOTKEYS["new_need"], self.new_need_by_hotkey, False, True)]   # (key, action, only while a run is going, only while Roblox is focused)
+        hotkeys = [("stop", self.stop_by_hotkey, True, False),
+                   ("capture", self.capture_by_hotkey, False, True),
+                   ("blackout", self.blackout_by_hotkey, False, True),
+                   ("screenshot", self.screenshot_by_hotkey, False, True),
+                   ("new_need", self.new_need_by_hotkey, False, True)]   # (name, action, only while a run is going, only while Roblox is focused); the key is looked up at every look: it can be changed
 
         def watch():
             was_down = [False] * len(hotkeys)
             reported = [False] * len(hotkeys)
+            keys = [hotkey_key(name) for name, *_ in hotkeys]
             while True:
-                for i, (key, action, only_while_running, only_in_roblox) in enumerate(hotkeys):
+                for i, (name, action, only_while_running, only_in_roblox) in enumerate(hotkeys):
+                    key = hotkey_key(name)
                     try:
                         down = hotkey_down(key)
-                        in_roblox_only = only_in_roblox and not (key == cfg.HOTKEYS["blackout"] and self.blackout.shown)      # (a blank screen is shown again from any window: with the panel off the focus may be anywhere)
+                        if key != keys[i]:                                         # (changed in the Settings tab: the key that was just pressed to set it does not act)
+                            keys[i], was_down[i] = key, down
+                            continue
+                        in_roblox_only = only_in_roblox and not (name == "blackout" and self.blackout.shown)      # (a blank screen is shown again from any window: with the panel off the focus may be anywhere)
                         if not state.typing and hotkey_fires(down, was_down[i], only_while_running, self.is_running, in_roblox_only):         # (not while the macro types a word: its own letters)
                             self.root.after(0, action)
                         was_down[i] = down
@@ -6849,10 +6914,10 @@ class AdoptMeGUI:
     def stop_by_hotkey(self) -> None:
         """HOTKEYS["stop"] was pressed: stop, same as the [STOP] button, and say so (unless its checkbox has the key off)."""
         if self.is_running and self.hotkey_enabled("stop"):
-            logger.info(f"'{cfg.HOTKEYS['stop'].upper()}' pressed")
+            logger.info(f"'{hotkey_key('stop').upper()}' pressed")
             self.stop()   # first: a failing log write must not keep the macro running
             try:
-                log_run_event(f"stopped with the {cfg.HOTKEYS['stop'].upper()} key")
+                log_run_event(f"stopped with the {hotkey_key('stop').upper()} key")
             except OSError:
                 pass
 
@@ -6890,7 +6955,13 @@ class AdoptMeGUI:
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill=tk.X, padx=cfg.GUI_OUTER_PADDING, pady=(cfg.GUI_OUTER_PADDING, 0))
         btn_frame = tk.Frame(notebook, bg=self.bg)
-        options_tab, options_inner = self.add_scrolled_frame(notebook)
+        options_tab = tk.Frame(notebook, bg=self.bg)
+        settings_pages = ttk.Notebook(options_tab)
+        settings_pages.pack(fill=tk.BOTH, expand=True)
+        general_page, options_inner = self.add_scrolled_frame(settings_pages)
+        hotkeys_page = tk.Frame(settings_pages, bg=self.bg)
+        settings_pages.add(general_page, text="General")
+        settings_pages.add(hotkeys_page, text="Hotkeys")
         debug_tab = tk.Frame(notebook, bg=self.bg)
         notebook.add(btn_frame, text="Main")
         notebook.add(options_tab, text="Settings")
@@ -6938,6 +7009,7 @@ class AdoptMeGUI:
         # action_buttons: they must stay usable while a workflow is running,
         # which is safe since update_game_config() is locked.
         self.build_settings_tab(options_inner)
+        self.build_hotkeys_tab(hotkeys_page)
 
         # Debug tab: the need handlers (a switch and a Test button each, regardless of whether it's in
         # ENABLED_NEEDS, so any can be run on its own, plus one that runs them all in turn).
@@ -7197,10 +7269,17 @@ class AdoptMeGUI:
         logger.info(f"{name} need {'on' if value else 'off'}")
 
     def build_guide_tab(self, parent: Any) -> None:
-        """Fill the Guide tab: what the keys and the switches do (read only; GUIDE has the text, the key letters come from HOTKEYS)."""
-        keys = {name: key.upper() for name, key in cfg.HOTKEYS.items()}
-        text = self.add_scrolled_text(parent, height=cfg.GUI_GUIDE_HEIGHT, width=cfg.GUI_CONSOLE_WIDTH, wrap=tk.WORD, bg=self.bg, fg=self.fg, font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE))
-        text.tag_configure("heading", foreground=self.accent, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"))
+        """Fill the Guide tab: what the keys and the switches do (read only; GUIDE has the text, the key letters come from HOTKEYS_NOW)."""
+        self.guide_text = self.add_scrolled_text(parent, height=cfg.GUI_GUIDE_HEIGHT, width=cfg.GUI_CONSOLE_WIDTH, wrap=tk.WORD, bg=self.bg, fg=self.fg, font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE))
+        self.guide_text.tag_configure("heading", foreground=self.accent, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"))
+        self.fill_guide()
+
+    def fill_guide(self) -> None:
+        """The Guide tab's text, with the hotkeys as they are now (again when one is changed)."""
+        keys = {name: key.upper() for name, key in HOTKEYS_NOW.items()}
+        text = self.guide_text
+        text.configure(state=tk.NORMAL)
+        text.delete("1.0", tk.END)
         for heading, lines in GUIDE:
             text.insert(tk.END, heading + "\n", "heading")
             for line in lines:
@@ -7220,7 +7299,7 @@ class AdoptMeGUI:
                  ).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
 
     def build_settings_tab(self, parent: Any) -> None:
-        """Fill the Settings tab, in three groups: what the loop does, the rejoin and the keys (the debugging options are on the Debug tab). Every checkbox is a persisted switch (add_config_checkbox()), usable while a run goes on."""
+        """Fill the Settings tab's General subtab, in two groups: what the loop does and the rejoin (the hotkeys are the Hotkeys subtab, the debugging options on the Debug tab). Every checkbox is a persisted switch (add_config_checkbox()), usable while a run goes on."""
         config = load_game_config()
         self.add_section(parent, "The loop")
         for label, key in (("Tend the money tree", "money_tree_enabled"),
@@ -7241,12 +7320,61 @@ class AdoptMeGUI:
         server_link_entry.bind("<FocusOut>", lambda e: self.save_server_link())
         server_link_entry.bind("<Return>", lambda e: self.save_server_link())
 
-        self.add_section(parent, "Keys")
-        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['stop'].upper()} stops the macro, in any window", "stop_hotkey_enabled", config)
-        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['capture'].upper()} starts and stops a capture in Roblox", "capture_hotkey_enabled", config)
-        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['screenshot'].upper()} saves a screenshot in Roblox", "screenshot_hotkey_enabled", config)
-        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['blackout'].upper()} blanks the screen in Roblox", "blackout_hotkey_enabled", config)
-        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['new_need'].upper()} teaches a new need icon in Roblox", "new_need_hotkey_enabled", config)
+    def build_hotkeys_tab(self, parent: Any) -> None:
+        """Fill the Settings tab's Hotkeys subtab: for each hotkey a checkbox (on: the key acts; off: it is typed as usual) and a button with its key - click it, then press the new key (Escape keeps the old one)
+        - and a button for every key back to its default. The keys are kept in the game config (`hotkeys`) and act at once."""
+        config = load_game_config()
+        self.hotkey_buttons: dict[str, Any] = {}
+        self.hotkey_note = tk.StringVar(value="")
+        for name, label in HOTKEY_LABELS.items():
+            row = tk.Frame(parent, bg=self.bg)
+            row.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+            var = tk.BooleanVar(value=config[f"{name}_hotkey_enabled"])
+            self.config_flag_vars[f"{name}_hotkey_enabled"] = var
+            tk.Checkbutton(row, text=label, variable=var, command=lambda k=f"{name}_hotkey_enabled", v=var: self.set_config_flag(k, v.get()),     # type: ignore[misc]
+                           font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.bg, fg=self.fg, selectcolor=self.bg,
+                           activebackground=self.bg, activeforeground=self.fg, anchor=tk.W, cursor="hand2").pack(side=tk.LEFT, fill=tk.X, expand=True)
+            button = tk.Button(row, text=hotkey_key(name).upper(), width=cfg.GUI_HOTKEY_BUTTON_WIDTH, command=lambda n=name: self.change_hotkey(n),  # type: ignore[misc]
+                               font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"), bg=self.accent, fg=cfg.GUI_ON_ACCENT, cursor="hand2", bd=0, highlightthickness=0)
+            button.pack(side=tk.RIGHT)
+            self.hotkey_buttons[name] = button
+        tk.Label(parent, textvariable=self.hotkey_note, font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W, justify=tk.LEFT,
+                 wraplength=cfg.GUI_HOTKEY_NOTE_WIDTH).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_ROW_SPACING)
+        tk.Button(parent, text="All keys back to their defaults", command=self.reset_hotkeys_clicked, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
+                  bg=cfg.GUI_STOP_COLOR, fg=self.fg, cursor="hand2", bd=0, highlightthickness=0).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_ROW_SPACING)
+
+    def show_hotkeys(self) -> None:
+        """The hotkey buttons and the Guide tab show the keys as they are now."""
+        for name, button in self.hotkey_buttons.items():
+            button.configure(text=hotkey_key(name).upper())
+        self.fill_guide()
+
+    def change_hotkey(self, name: str) -> None:
+        """The hotkey `name`'s button was clicked: the next key pressed in this window is its new key (Escape: no change; a key that cannot be one - save_hotkey() says why - is refused and the old one kept)."""
+        button = self.hotkey_buttons[name]
+        button.configure(text="press a key...")
+        self.hotkey_note.set(f"Press the new key for: {HOTKEY_LABELS[name]} (Escape keeps {hotkey_key(name).upper()})")
+
+        def pressed(event: Any) -> str:
+            if event.keysym in ("Shift_L", "Shift_R", "Control_L", "Control_R", "Alt_L", "Alt_R", "Caps_Lock", "Num_Lock"):
+                return "break"                                              # (a modifier alone is not a key to take)
+            self.root.unbind("<Key>", binding)
+            if event.keysym != "Escape":
+                problem = save_hotkey(name, event.char or "")
+                self.hotkey_note.set(problem or f"{HOTKEY_LABELS[name]}: {hotkey_key(name).upper()}")
+                if not problem:
+                    logger.info(f"The {name} hotkey is now '{hotkey_key(name).upper()}'")
+            else:
+                self.hotkey_note.set("")
+            self.show_hotkeys()
+            return "break"
+        binding = self.root.bind("<Key>", pressed, add="+")
+
+    def reset_hotkeys_clicked(self) -> None:
+        """The button for every hotkey back to its default."""
+        reset_hotkeys()
+        self.hotkey_note.set("")
+        self.show_hotkeys()
 
     def build_debug_options(self, parent: Any) -> None:
         """Fill the Debug tab's Options subtab: record the next run, capture the moments, show the debug lines in the output, refresh the debug folder, reset the config."""

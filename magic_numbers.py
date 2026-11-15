@@ -973,6 +973,8 @@ WHITE_RANGE = (np.array([0, 0, 200]), np.array([180, 40, 255]))
 # ============================================================================
 GUI_GEOMETRY = "380x650+1533+110"   # size + position (docked top-right)
 GUI_ALPHA = 0.95
+GUI_HOTKEY_BUTTON_WIDTH = 10        # chars, a hotkey's button in the Settings tab
+GUI_HOTKEY_NOTE_WIDTH = 340         # px, the line under them that says what to do or why a key was refused
 GUI_GUIDE_HEIGHT = 14               # lines, the Guide tab
 GUI_SCROLL_PAGE_HEIGHT = 230        # px, the Settings tab (a page that scrolls past it)
 GUI_FONT = "Courier"

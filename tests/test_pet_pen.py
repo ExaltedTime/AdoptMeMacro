@@ -519,7 +519,7 @@ def test_a_new_task_is_logged_and_the_board_is_kept_in_the_moments(macro, monkey
     monkeypatch.setattr(macro.cfg, "DAILY_TASKS_DIR", str(tmp_path / "daily"))
     log, kept = [], []
     monkeypatch.setattr(macro, "log_run_event", log.append)
-    macro.state.moments = type("Capture", (), {"started": 1000.0, "keep_frame": lambda self, png, seconds, label: kept.append(label)})()
+    macro.state.moments = type("Capture", (), {"started": 1000.0, "keep_frame": lambda self, png, seconds, label, essential=True: kept.append(label)})()
     assert macro.keep_new_daily_tasks(shot("board_daily_tasks")) == 2
     assert log == ["daily tasks: 2 new task(s) seen (saved in debug/daily_tasks)"] and kept == ["new daily task (2)"]
     assert macro.keep_new_daily_tasks(shot("board_daily_tasks")) == 0 and len(kept) == 1

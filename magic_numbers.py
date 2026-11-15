@@ -335,6 +335,7 @@ MOMENTS_MIN_RUN = 60 * 60              # seconds a run lasts for its moments to 
 MOMENTS_ZIPS = 20                      # the most zips (of CAPTURE_ZIP_MB) a run's moments come to: the frames are thinned out to fit
 MOMENTS_FRAME_INTERVAL = 20.0          # seconds between two looks (a mark makes every CAPTURE_FRAME_INTERVAL look save a frame for RUN_CAPTURE_BURST seconds)
 MOMENTS_PROTECTED = 100                # the most frames that marks and the tail keep from being thinned out (the zips hold about 200)
+MOMENTS_PHASE_PROTECTED = 80           # the most phase screens (of needs that failed, and of some that went well, up to half of this) the thinning leaves alone: they have a budget of their own (run 2, 19 hours: the marks used up MOMENTS_PROTECTED in two hours and the phase screens of 20 sick needs, after that, were not kept)
 MOMENTS_MAX_HOURS = 48                 # a run's capture stops by itself after this long
 MOMENTS_MARK_PREFIXES = ("FAILURE", "scheduled rejoin", "white screen", "recovery complete", "disabled:", "quiet:")     # the run-log lines that are moments worth keeping frames of
 PHASE_SHOTS_MAX = 14                   # the most screens of the phases of one need kept in memory (phase_shot())

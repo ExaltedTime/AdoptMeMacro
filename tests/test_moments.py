@@ -233,7 +233,7 @@ def test_the_zips_of_a_capture_hold_its_text_files_in_the_first_part_deflated(ma
 def test_the_screens_of_a_need_that_failed_are_kept_in_the_moments_and_those_of_one_that_went_well_are_dropped_but_one_in_a_while(macro, monkeypatch):
     import numpy as np
     kept, notes = [], []
-    capture = type("Capture", (), {"started": 1000.0, "note": lambda self, text: notes.append(text), "keep_frame": lambda self, png, seconds, label: kept.append(label)})()
+    capture = type("Capture", (), {"started": 1000.0, "note": lambda self, text: notes.append(text), "keep_frame": lambda self, png, seconds, label, essential=True: kept.append(label)})()
     macro.state.moments = capture
     monkeypatch.setattr(macro, "grab_screen", lambda: np.zeros((1080, 1920, 3), np.uint8))
     monkeypatch.setattr(macro.time, "time", lambda: 1005.0)
@@ -270,3 +270,22 @@ def test_the_zips_hold_the_frames_in_time_order_with_the_screens_of_the_phases_a
         with zipfile.ZipFile(path) as z:
             names += [n for n in z.namelist() if n.startswith("frame_")]
     assert names == ["frame_000001_0.500.png", "frame_p00001_16.127.png", "frame_p00002_742.447.png", "frame_000002_900.250.png", "frame_000003_1800.000.png"]
+
+
+def test_the_phase_screens_have_a_budget_of_their_own_that_the_marks_frames_do_not_use_up(macro, tmp_path, monkeypatch):
+    """Run 2 (19 hours): the marks' frames used up the protected frames in two hours, and the phase screens of 20 sick needs after that were logged as kept and were not."""
+    monkeypatch.setattr(macro.cfg, "MOMENTS_PHASE_PROTECTED", 4)
+    recorder = macro.InputCapture(str(tmp_path), max_zips=5, protected_max=2, inputs=False)
+    recorder.start = lambda: None
+    recorder._threads = [object()]                                   # (running)
+    recorder.protected.update({"frame_a", "frame_b", "frame_c"})     # the marks' share is used up
+    os.makedirs(tmp_path, exist_ok=True)
+    for i in range(6):
+        recorder.keep_frame(b"x" * 10, float(i), "sick could not be resolved: landing", essential=True)
+    assert len(recorder.phase_names) == 4                           # (the budget of the phases, whatever the marks hold)
+    fresh = macro.InputCapture(str(tmp_path / "b"), max_zips=5, protected_max=2, inputs=False)
+    os.makedirs(tmp_path / "b")
+    fresh._threads = [object()]
+    for i in range(6):
+        fresh.keep_frame(b"x" * 10, float(i), "sick went well: landing", essential=False)
+    assert len(fresh.phase_names) == 2                              # (the screens of needs that went well: half of it)

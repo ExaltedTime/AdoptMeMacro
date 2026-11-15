@@ -2023,7 +2023,7 @@ def set_backpack_filter() -> bool:
                 log_run_event("setup: the backpack's filters are as they should be already")
                 ok = True
             else:
-                hover_click(*cfg.SETUP_CONFIRM_POS)
+                click_dialog_button("filter_confirm", cfg.SETUP_CONFIRM_POS)
                 wait_interruptible(cfg.UI_SETTLE)
                 panel_open = open_filter_panel()                                                  # (looked at again: the Confirm took)
                 ok = panel_open and scroll_filters_to_top() and sort_is_favorites() and (not growing or (scroll_filters_to_age() and age_filter_is_right()))     # (the panel is where it was scrolled to: back up to the sort first)
@@ -2032,7 +2032,7 @@ def set_backpack_filter() -> bool:
                 else:
                     log_setup_problem("setup: the backpack's filters are not as set after Confirm")
             if panel_open:
-                hover_click(*cfg.SETUP_FILTER_CANCEL_POS)                                         # (a panel only looked at - or one that could not be set - is left as it was)
+                click_dialog_button("filter_cancel", cfg.SETUP_FILTER_CANCEL_POS)                                         # (a panel only looked at - or one that could not be set - is left as it was)
                 wait_interruptible(cfg.UI_SETTLE)
         pick_pet_in_open_backpack(growing, on_pets, pet_out)
         close_backpack("setup")
@@ -2092,11 +2092,11 @@ def equip_task_pet(kind: str) -> bool:
         elif open_filter_panel() and scroll_filters_to_top():
             if set_filter_rows(task_pet_rows(kind)):
                 phase_shot(f"the filters as set for a {kind} pet, before Confirm")
-                hover_click(*cfg.SETUP_CONFIRM_POS)
+                click_dialog_button("filter_confirm", cfg.SETUP_CONFIRM_POS)
                 wait_interruptible(cfg.UI_SETTLE)
                 ok = True
             else:
-                hover_click(*cfg.SETUP_FILTER_CANCEL_POS)
+                click_dialog_button("filter_cancel", cfg.SETUP_FILTER_CANCEL_POS)
                 wait_interruptible(cfg.UI_SETTLE)
             if ok and kind != "all":
                 select_backpack_tab(cfg.INVENTORY_PETS_TAB_POS)
@@ -2150,6 +2150,8 @@ def find_equip_button(img: Image) -> Optional[Point]:
     """The middle of the green Equip button of the backpack's card of the item clicked, or None (an item that is equipped has another button, an Unequip): the blob of GREEN_BUTTON_COLOR of the
     size of one (EQUIP_BUTTON_SIZE) in EQUIP_BUTTON_BOX, where a card can be (the green plus tile of the pets tab is smaller)."""
     left, top, right, bottom = cfg.EQUIP_BUTTON_BOX
+    if img[top:bottom, left:right].size == 0:
+        return None                                                  # (a picture too small to have the box)
     mask = exact_color_mask(img[top:bottom, left:right], cfg.GREEN_BUTTON_COLOR, cfg.GREEN_BUTTON_TOLERANCE)
     count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
     (min_w, max_w), (min_h, max_h) = cfg.EQUIP_BUTTON_SIZE
@@ -2236,7 +2238,7 @@ def disable_trades() -> bool:
                     hover_click(*option)
                     ok = wait_for_any(("trading_no_one",)) is not None
                     log_run_event("setup: trading is set to No One" if ok else "setup: trading does not say No One after the click")
-        hover_click(*cfg.SETUP_TRADES_CLOSE_POS)
+        click_dialog_button("setup_trades_close", cfg.SETUP_TRADES_CLOSE_POS)
         wait_interruptible(cfg.UI_SETTLE)
         if wait_for_any(("settings_title",), 0.0) is not None:
             log_run_event("setup: the game's settings did not close")
@@ -2657,7 +2659,7 @@ def close_trade_phone() -> None:
         hover_click(*cfg.TRADES_BACK_POS)
         wait_interruptible(cfg.UI_SETTLE)
     if trade_screen(grab_screen()) in ("offers", "listings", "menu", "phone"):
-        hover_click(*cfg.TRADES_CLOSE_POS)
+        click_dialog_button("trades_close", cfg.TRADES_CLOSE_POS)
 
 def write_json_file(path: str, data: dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -3124,7 +3126,10 @@ def equip_favorite_vehicle() -> None:
         wait_interruptible(cfg.UI_SETTLE)
 
         logger.debug("Equipping vehicle...")
-        hover_click(*cfg.RIDE_EQUIP_POS)
+        equip = find_equip_button(grab_screen())
+        if equip is None:
+            logger.debug(f"The vehicle's Equip button was not found on the screen - the fixed position {cfg.RIDE_EQUIP_POS} is clicked")
+        hover_click(*(equip or cfg.RIDE_EQUIP_POS))
         wait_interruptible(cfg.UI_SETTLE)
 
         logger.debug("Closing backpack...")
@@ -4067,6 +4072,8 @@ def wanting_pet_focus() -> Iterator[None]:
 def find_dialog_button(img: Image, spec: dict[str, Any]) -> Optional[Point]:
     """The middle of the biggest blob of colour `spec` (DIALOG_BUTTONS: "box", "hsv" - one or two (low, high) ranges -, "size" - (width, height) ranges, and "join": the px the blobs are grown by first) in `img`, or None."""
     left, top, right, bottom = spec["box"]
+    if img is None or img[top:bottom, left:right].size == 0:
+        return None
     hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(hsv, *spec["hsv"][0])
     for extra in spec["hsv"][1:]:
@@ -4081,6 +4088,19 @@ def find_dialog_button(img: Image, spec: dict[str, Any]) -> Optional[Point]:
         if min_w <= width <= max_w and min_h <= height <= max_h and (best is None or area > best[0]):
             best = (area, (left + int(centres[i][0]), top + int(centres[i][1])))
     return best[1] if best is not None else None
+
+def click_dialog_button(name: str, fixed: Point) -> Point:
+    """Click the button `name` (DIALOG_BUTTONS) at `fixed`, where it was measured on the captures - or, when it is found on the screen (find_dialog_button(), within its box) more than BUTTON_FOUND_SLACK px from there,
+    where it is found: a panel that has moved is still hit, and a button found a pixel or two off (the blob's middle is not the measured point) is clicked where it always was. The point clicked."""
+    found = find_dialog_button(grab_screen(), cfg.DIALOG_BUTTONS[name])
+    point = fixed
+    if found is None:
+        logger.debug(f"The {name} button was not found on the screen - the fixed position {fixed} is clicked")
+    elif abs(found[0] - fixed[0]) > cfg.BUTTON_FOUND_SLACK or abs(found[1] - fixed[1]) > cfg.BUTTON_FOUND_SLACK:
+        logger.debug(f"The {name} button is at {found}, not at {fixed}: clicked where it is")
+        point = found
+    hover_click(*point)
+    return point
 
 def dismiss_stray_windows() -> Optional[str]:
     """Close any window from STRAY_WINDOWS that is open (found by its title crop); returns
@@ -4693,18 +4713,18 @@ def ensure_pen_age_filter() -> bool:
         return False
     changed = untick_egg_and_full_grown()
     if changed is None:
-        hover_click(*cfg.SETUP_FILTER_CANCEL_POS)
+        click_dialog_button("filter_cancel", cfg.SETUP_FILTER_CANCEL_POS)
         wait_interruptible(cfg.UI_SETTLE)
         return False
     if not changed:
-        hover_click(*cfg.SETUP_FILTER_CANCEL_POS)                                      # (already as it should be: left as it is)
+        click_dialog_button("filter_cancel", cfg.SETUP_FILTER_CANCEL_POS)                                      # (already as it should be: left as it is)
         wait_interruptible(cfg.UI_SETTLE)
         return True
-    hover_click(*cfg.SETUP_CONFIRM_POS)
+    click_dialog_button("filter_confirm", cfg.SETUP_CONFIRM_POS)
     wait_interruptible(cfg.UI_SETTLE)
     ok = open_filter_panel(cfg.PET_PEN_FILTER_BUTTON_POS) and scroll_filters_to_age() and age_filter_is_right()
     log_run_event("pet pen: the backpack's Age filter is set" if ok else "pet pen: the backpack's Age filter did not take")
-    hover_click(*cfg.SETUP_FILTER_CANCEL_POS)
+    click_dialog_button("filter_cancel", cfg.SETUP_FILTER_CANCEL_POS)
     wait_interruptible(cfg.UI_SETTLE)
     return ok
 
@@ -4720,20 +4740,20 @@ def put_a_pet_in_the_pen() -> bool:
         log_run_event("pet pen: the backpack did not come up after Add Pet")
         return False
     if not ensure_pen_age_filter():
-        hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
+        click_dialog_button("backpack_close", cfg.PET_PEN_BACKPACK_CLOSE_POS)
         wait_interruptible(cfg.PET_PEN_UI_SETTLE)
         return False
     pet = choose_pen_pet()
     if pet is None:
         log_run_event("pet pen: no pet fits (all in a trade listing, equipped or none left)")
-        hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
+        click_dialog_button("backpack_close", cfg.PET_PEN_BACKPACK_CLOSE_POS)
         wait_interruptible(cfg.PET_PEN_UI_SETTLE)
         return False
     hover_click(*pet)
     wait_interruptible(cfg.PET_PEN_UI_SETTLE)
     if popup_visible(grab_screen(), "pet_backpack_title"):
         log_run_event("pet pen: the pet clicked did not go in")
-        hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
+        click_dialog_button("backpack_close", cfg.PET_PEN_BACKPACK_CLOSE_POS)
         return False
     return True
 
@@ -4777,7 +4797,7 @@ def switch_pen_pets() -> bool:
             log_run_event(f"pet pen: {out} full-grown pet(s) switched")
     phase_shot("before the pen is closed")
     phase_commit("the pet pen switch")
-    hover_click(*cfg.PET_PEN_CLOSE_POS)
+    click_dialog_button("pen_close", cfg.PET_PEN_CLOSE_POS)
     wait_interruptible(cfg.PET_PEN_UI_SETTLE)
     return True
 

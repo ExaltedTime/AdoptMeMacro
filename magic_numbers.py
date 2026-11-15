@@ -91,6 +91,12 @@ DIALOG_BUTTONS: dict[str, dict[str, Any]] = {                              # (an
     "nice":    {"box": (800, 970, 1120, 1070), "hsv": (((45, 110, 130), (80, 255, 255)),), "size": ((240, 300), (50, 80))},                              # the buttons of those cards (measured on a real frame: Decline 174 x 47 and Accept 174 x 49 side by side, Okay 360 x 49)
     "decline": {"box": (700, 540, 1260, 790), "hsv": (((170, 150, 150), (180, 255, 255)), ((0, 150, 150), (5, 255, 255))), "size": ((150, 210), (30, 60))},
     "okay":    {"box": (700, 540, 1260, 790), "hsv": (((45, 110, 130), (80, 255, 255)),), "size": ((300, 420), (30, 60))},
+    "filter_confirm": {"box": (940, 875, 1160, 945), "hsv": (((45, 110, 130), (80, 255, 255)),), "size": ((100, 230), (25, 55))},                  # the green Confirm and the red Cancel at the bottom of the FILTERS panel (165 x 35 at 1045, 906 and 873, 906 on the captures)...
+    "filter_cancel":  {"box": (780, 875, 980, 945), "hsv": (((170, 150, 150), (180, 255, 255)), ((0, 150, 150), (8, 255, 255))), "size": ((100, 230), (25, 55))},
+    "pen_close":      {"box": (1142, 255, 1232, 345), "hsv": (((170, 150, 150), (180, 255, 255)), ((0, 150, 150), (8, 255, 255))), "size": ((18, 60), (18, 60))},                   # the red X of the pen's screen (1187, 303)...
+    "trades_close":   {"box": (1247, 309, 1307, 369), "hsv": (((170, 150, 150), (180, 255, 255)), ((0, 150, 150), (8, 255, 255))), "size": ((18, 60), (18, 60))},                   # ...of the trade phone's window (1277, 344)...
+    "setup_trades_close": {"box": (1096, 333, 1146, 383), "hsv": (((170, 150, 150), (180, 255, 255)), ((0, 150, 150), (8, 255, 255))), "size": ((18, 60), (18, 60))},                # ...and of the settings page of Setup (1117, 358; a box this small: the phone's X is another, 28 px away)
+    "backpack_close": {"box": (1150, 605, 1230, 675), "hsv": (((170, 150, 150), (180, 255, 255)), ((0, 150, 150), (8, 255, 255))), "size": ((18, 55), (18, 55))},   # ...and the red X of the normal backpack (1188, 641)
 }
 
 # Other things recognised by a crop in STRAY_WINDOW_DIR (file name = the name here) found within "box"
@@ -791,7 +797,7 @@ LURE_RECOLLECT_INTERVAL = 4 * 60 * 60  # seconds (4 hours)
 SETUP_LOCK_HOUSE_POS = (1112, 65)
 SETUP_BACKPACK_SETTINGS_POS = (977, 646)
 SETUP_SORT_MENU_POS = (1031, 680)
-SETUP_CONFIRM_POS = (1047, 908)
+SETUP_CONFIRM_POS = (1047, 908)                       # (where the buttons are on the captures: used when click_dialog_button() does not find them on the screen)
 AGE_ALTERNATES = {"age_full_grown": ("age_full_grown_pen",)}   # other crops of the same row, tried when the first is not found
 FILTER_NEON_ROWS = ("filter_effect_neon", "filter_effect_mega_neon")        # the Effect rows a neon pet is under...
 FILTER_EFFECT_ROWS = ("filter_effect_regular", *FILTER_NEON_ROWS, "filter_effect_no_potion", "filter_effect_rideable", "filter_effect_flyable")      # ...of all of them
@@ -948,6 +954,7 @@ BUTTON_SLOTS_X = (673, 752, 858, 998, 1219)    # where each of them is across th
 BUTTON_SLOTS_DY = (0, 0, -28, -32, -50)          # px each button sits above (minus) the thirsty one, whatever the camera (67 scans of run 5: 0 / 0 / -30..-27 / -34..-30 / -52..-47): the one button that is not seen is where these say
 BUTTON_FILL_LOOK_HALF = 28                       # px: the square round where a button that was not seen should be is looked at for the purple of its ring...
 BUTTON_FILL_MIN_PURPLE = 300                     # ...at least this many px of it (580-990 where the ring shows, 0 where the character stands before it)
+BUTTON_FOUND_SLACK = 12                          # px a button found on the screen may be from its fixed position before the run log says so (click_dialog_button())
 BUTTON_SLOT_TOLERANCE = 35                     # px: a button this close to a slot is that one (the slots are 77 or more apart)
 BUTTON_LOOSE_AREA_FACTOR = 0.7         # how much looser than BUTTON_MIN_AREA a candidate may be
 BUTTON_MAX_AREA_FRACTION = 0.5         # reject a blob covering more than this fraction of the band

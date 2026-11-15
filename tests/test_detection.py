@@ -611,3 +611,50 @@ def test_a_notice_is_not_looked_for_while_something_is_open_on_purpose(macro, mo
         setattr(macro.state, attribute, value)
         assert macro.dismiss_notice() is None, attribute
         setattr(macro.state, attribute, 0 if attribute == "backpack_wanted" else False)
+
+
+def test_a_fixed_button_is_clicked_where_it_is_found_on_the_screen_else_where_it_was_on_the_captures(macro, monkeypatch):
+    """The FILTERS panel's Confirm and Cancel and the backpack's X were clicked at fixed pixels: found now, within a box, so that a panel that has moved is still hit."""
+    import cv2
+    here = os.path.join(os.path.dirname(__file__), "setup")
+    clicks = []
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: clicks.append((x, y)))
+    top = cv2.imread(os.path.join(here, "filters_top.png"))
+    monkeypatch.setattr(macro, "grab_screen", lambda: top)
+    for name, fixed in (("filter_confirm", macro.cfg.SETUP_CONFIRM_POS), ("filter_cancel", macro.cfg.SETUP_FILTER_CANCEL_POS)):
+        point = macro.click_dialog_button(name, fixed)
+        assert point == fixed and clicks[-1] == fixed                                                           # (found a pixel or two off: clicked where it was measured)
+    moved = np.full((1080, 1920, 3), 40, np.uint8)
+    moved[915:950, 960:1125] = (85, 198, 74)                                                                    # (a Confirm button 10 px lower and 10 px to the left)
+    monkeypatch.setattr(macro, "grab_screen", lambda: moved)
+    point = macro.click_dialog_button("filter_confirm", macro.cfg.SETUP_CONFIRM_POS)
+    assert abs(point[0] - 1042) <= 3 and abs(point[1] - 931) <= 4
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.full((1080, 1920, 3), 40, np.uint8))                 # (nothing there: the fixed position)
+    assert macro.click_dialog_button("filter_confirm", macro.cfg.SETUP_CONFIRM_POS) == macro.cfg.SETUP_CONFIRM_POS
+    monkeypatch.setattr(macro, "grab_screen", lambda: cv2.imread(os.path.join(here, "backpack_pets.png")))
+    point = macro.click_dialog_button("backpack_close", macro.cfg.PET_PEN_BACKPACK_CLOSE_POS)
+    assert point == macro.cfg.PET_PEN_BACKPACK_CLOSE_POS
+    pen = cv2.imread(os.path.join(os.path.dirname(__file__), "pet_pen", "pen_full_grown.png"))
+    monkeypatch.setattr(macro, "grab_screen", lambda: pen)
+    assert macro.click_dialog_button("pen_close", macro.cfg.PET_PEN_CLOSE_POS) == macro.cfg.PET_PEN_CLOSE_POS
+    shifted = np.roll(pen, (30, -25), axis=(0, 1))                                                              # (the whole screen 30 px lower and 25 left: the X is found)
+    monkeypatch.setattr(macro, "grab_screen", lambda: shifted)
+    point = macro.click_dialog_button("pen_close", macro.cfg.PET_PEN_CLOSE_POS)
+    assert abs(point[0] - (1187 - 25)) <= 5 and abs(point[1] - (303 + 30)) <= 5
+
+
+def test_the_vehicles_equip_button_is_found_on_the_screen_and_the_fixed_one_clicked_when_it_is_not(macro, monkeypatch):
+    clicks = []
+    monkeypatch.setattr(macro, "hover_click", lambda x, y, duration=0: clicks.append((x, y)))
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "close_backpack", lambda step: None)
+    monkeypatch.setattr(macro, "select_backpack_tab", lambda pos: None)
+    monkeypatch.setattr(macro.pydirectinput, "press", lambda *a, **k: None, raising=False)
+    card = np.full((1080, 1920, 3), 40, np.uint8)
+    card[800:835, 1100:1248] = (85, 198, 74)                                                                     # (an Equip button, 148 x 35, away from where it was measured)
+    monkeypatch.setattr(macro, "grab_screen", lambda: card)
+    macro.equip_favorite_vehicle()
+    assert abs(clicks[-1][0] - 1174) <= 3 and abs(clicks[-1][1] - 817) <= 3
+    monkeypatch.setattr(macro, "grab_screen", lambda: np.full((1080, 1920, 3), 40, np.uint8))
+    macro.equip_favorite_vehicle()
+    assert clicks[-1] == macro.cfg.RIDE_EQUIP_POS

@@ -394,6 +394,8 @@ the buttons:
 
 ## Click & input primitives
 
+**Fixed clicks that look first.** Some buttons are at a fixed pixel measured on a capture. `click_dialog_button(name, fixed)` clicks one of them where it was measured, unless the button is found on the screen (`find_dialog_button()` with its `DIALOG_BUTTONS` entry, within a small box round it) more than `BUTTON_FOUND_SLACK` px from there: then it is clicked where it is found, so that a panel that has moved is still hit, and a found position a pixel or two off (the blob's middle is not the measured point) changes nothing. Not found: the fixed position, as before, with a debug line. Done for the FILTERS panel's Confirm and Cancel (`filter_confirm`, `filter_cancel`), the backpack's red X (`backpack_close`), the pen's red X (`pen_close`), the trade phone's and the settings page's red X (`trades_close`, `setup_trades_close`); the vehicle's Equip button is found by its green (`find_equip_button()`, the fixed `RIDE_EQUIP_POS` when it is not found). The positions measured on the captures are within 5 px of where these are found, on every frame there is. Still fixed with nothing to find them by: the sort menu, the lock button, the backpack's tabs and expand button, the first vehicle's tile, the trades windows' other buttons, the lure's.
+
 Every click in the macro goes through **`hover_click()`** /
 **`hover_move()`**: moves with SendInput (`pydirectinput`), nudges
 `HOVER_NUDGE_PIXELS` and back so Roblox registers real mouse movement

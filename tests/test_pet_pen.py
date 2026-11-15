@@ -286,7 +286,7 @@ def pen_filter_world(macro, monkeypatch, start):
         clicks.append((x, y))
         if (x, y) == macro.cfg.PET_PEN_FILTER_BUTTON_POS:
             state["open"] = True
-        elif (x, y) in (macro.cfg.SETUP_CONFIRM_POS, macro.cfg.SETUP_FILTER_CANCEL_POS):
+        elif conftest.near_click((x, y), macro.cfg.SETUP_CONFIRM_POS) or conftest.near_click((x, y), macro.cfg.SETUP_FILTER_CANCEL_POS):
             state["open"] = False
         elif abs(x - egg_box[0]) < 15 and abs(y - egg_box[1]) < 15:
             state["egg"] = not state["egg"]
@@ -300,7 +300,7 @@ def pen_filter_world(macro, monkeypatch, start):
 def test_a_filter_that_is_already_set_is_looked_at_and_left_alone_and_cancelled(macro, monkeypatch):
     state, clicks, egg_box, full_box = pen_filter_world(macro, monkeypatch, (False, False))
     assert macro.ensure_pen_age_filter() is True
-    assert clicks == [macro.cfg.PET_PEN_FILTER_BUTTON_POS, macro.cfg.SETUP_FILTER_CANCEL_POS]                  # (no box was clicked: that would have ticked it again)
+    assert len(clicks) == 2 and clicks[0] == macro.cfg.PET_PEN_FILTER_BUTTON_POS and conftest.near_click(clicks[1], macro.cfg.SETUP_FILTER_CANCEL_POS)                  # (no box was clicked: that would have ticked it again)
     assert (state["egg"], state["full"]) == (False, False)
 
 
@@ -308,8 +308,8 @@ def test_only_the_boxes_that_are_ticked_are_clicked_then_confirmed_and_looked_at
     state, clicks, egg_box, full_box = pen_filter_world(macro, monkeypatch, (True, False))
     assert macro.ensure_pen_age_filter() is True
     assert [c for c in clicks if abs(c[0] - full_box[0]) < 15 and abs(c[1] - full_box[1]) < 15] == []          # (Full Grown was unticked: not clicked)
-    assert (state["egg"], state["full"]) == (False, False) and macro.cfg.SETUP_CONFIRM_POS in clicks
-    assert clicks[-1] == macro.cfg.SETUP_FILTER_CANCEL_POS and clicks.count(macro.cfg.PET_PEN_FILTER_BUTTON_POS) == 2     # (opened, changed, confirmed, opened again to look, cancelled)
+    assert (state["egg"], state["full"]) == (False, False) and any(conftest.near_click(c, macro.cfg.SETUP_CONFIRM_POS) for c in clicks)
+    assert conftest.near_click(clicks[-1], macro.cfg.SETUP_FILTER_CANCEL_POS) and clicks.count(macro.cfg.PET_PEN_FILTER_BUTTON_POS) == 2     # (opened, changed, confirmed, opened again to look, cancelled)
     state, clicks, *_ = pen_filter_world(macro, monkeypatch, (True, True))
     assert macro.ensure_pen_age_filter() is True and (state["egg"], state["full"]) == (False, False)
 
@@ -322,7 +322,7 @@ def test_a_pet_is_not_put_in_when_the_filter_did_not_come_up_and_the_picking_wai
     monkeypatch.setattr(macro, "look_until", lambda find, seconds, poll=0: (1, 1))
     monkeypatch.setattr(macro, "ensure_pen_age_filter", lambda: False)
     monkeypatch.setattr(macro, "popup_found", lambda img, name: (857, 584))
-    assert macro.put_a_pet_in_the_pen() is False and macro.clicks[-1] == macro.cfg.PET_PEN_BACKPACK_CLOSE_POS
+    assert macro.put_a_pet_in_the_pen() is False and conftest.near_click(macro.clicks[-1], macro.cfg.PET_PEN_BACKPACK_CLOSE_POS)
     assert macro.cfg.PET_REPICK_INTERVAL == 30 * 60
 
 

@@ -67,7 +67,10 @@ def grab_roblox_png() -> tuple[bytes, bool]:
     import mss.tools
     with mss.MSS() as sct:
         shot = sct.grab(roblox_region(sct.monitors[1]))
-    return mss.tools.to_png(shot.rgb, shot.size), bot_lib.looks_blank(shot.rgb)
+    png = mss.tools.to_png(shot.rgb, shot.size)
+    if png is None:
+        raise RuntimeError("the picture could not be encoded")
+    return png, bot_lib.looks_blank(shot.rgb)
 
 
 def grab_roblox_jpeg() -> tuple[bytes, bool]:

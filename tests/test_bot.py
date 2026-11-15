@@ -223,7 +223,7 @@ def test_a_log_that_was_deleted_or_started_again_is_read_from_its_start(tmp_path
 
 def test_a_log_that_cannot_be_read_keeps_the_offset_and_a_missing_one_does_not(tmp_path, monkeypatch):
     log = tmp_path / "run_log.txt"
-    log.write_text("one\n")
+    log.write_bytes(b"one\n")                                                          # (bytes: a text write on Windows would be "one\r\n", 5 bytes)
     real_open = open
 
     def locked(path, *args, **kwargs):
@@ -549,7 +549,8 @@ def test_a_copy_that_fails_half_way_takes_away_what_it_made_but_not_what_was_the
 
 
 def test_a_windows_path_is_made_long_so_it_may_pass_max_path(monkeypatch):
-    assert bot_lib.long_path("/tmp/x") == "/tmp/x"                                    # (not Windows: as it is)
+    if os.name != "nt":
+        assert bot_lib.long_path("/tmp/x") == "/tmp/x"                                # (not Windows: as it is)
     monkeypatch.setattr(bot_lib.os, "name", "nt")
     long = bot_lib.long_path("/tmp/x")
     assert long.startswith("\\\\?\\") and long.endswith("x") and bot_lib.long_path(long) == long

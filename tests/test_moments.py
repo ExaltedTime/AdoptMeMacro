@@ -244,13 +244,20 @@ def test_the_screens_of_a_need_that_failed_are_kept_in_the_moments_and_those_of_
     macro.phase_commit("bored was not cleared")
     assert kept == ["bored was not cleared: the landing", "bored was not cleared: after the last step"] and macro.state.phase_shots == [] and notes == ["phase screens kept: bored was not cleared (2)"]
     kept.clear()
-    for _ in range(macro.cfg.PHASE_KEEP_GOOD_EVERY - 1):
-        macro.phase_shot("the landing")
-        macro.phase_done_well("bored")
-    assert kept == []                                                                          # (the good ones are dropped)
     macro.phase_shot("the landing")
     macro.phase_done_well("bored")
-    assert kept == ["bored went well: the landing"]                                            # (the tenth is kept to compare with)
+    assert kept == ["bored went well: the landing"]                                            # (the first good one of a stretch of the run is kept to compare with)
+    kept.clear()
+    macro.phase_shot("the landing")
+    macro.phase_done_well("bored")
+    assert kept == []                                                                          # (the second is dropped)
+    for _ in range(macro.cfg.PHASE_FAILED_PER_WINDOW):
+        macro.phase_shot("the landing")
+        macro.phase_commit("school was not cleared")
+    macro.phase_shot("the landing")
+    kept.clear()
+    macro.phase_commit("school was not cleared")
+    assert kept == [] and macro.state.phase_shots == []                                        # (more than the quota of one stretch: not kept, though they fail every few minutes)
     macro.state.moments = None
     macro.phase_shot("nothing without a capture")
     assert macro.state.phase_shots == []

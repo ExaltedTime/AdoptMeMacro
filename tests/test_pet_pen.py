@@ -651,3 +651,39 @@ def test_a_temporary_pet_is_found_by_its_pill_and_replaced_by_the_pick_that_skip
     monkeypatch.setattr(macro, "grab_screen", lambda: shot("world_after"))
     macro.replace_temporary_pet()
     assert len(seen) == n                                                                              # (no temporary pet: nothing)
+
+
+def test_the_trick_task_is_told_from_the_board_and_asks_for_no_kind_of_pet(macro):
+    """Run 2, day 1: "Showstopper - Make your pet do a trick (0/1)" and "Hard Worker - Earn 50 Bucks at a job (0/50)"."""
+    board = shot("board_daily_trick_and_job")
+    assert macro.daily_task_kinds(board) == ["trick", None]
+    assert macro.trick_task_open(board) is True
+    assert macro.task_pet_wanted(board, {}) == ""                                                  # (a trick is no kind of pet: no pet is switched for it)
+    done = board.copy()
+    top = macro.daily_bars(board)[0][0]
+    done[top:top + 14, 846:1100] = (73, 197, 84)                                                    # (its bar full: done)
+    assert macro.trick_task_open(done) is False
+    assert macro.daily_task_kinds(shot("board_daily_tasks")) == ["neon", "common"]
+
+
+def test_the_pets_tricks_menu_is_looked_at_once_after_each_reset_for_the_trick_task_and_nothing_is_picked(macro, monkeypatch):
+    log, phases = [], []
+    monkeypatch.setattr(macro, "log_run_event", log.append)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "save_screenshot", lambda: "x.png")
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "focus_pet_reliably", lambda: True)
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: None)
+    monkeypatch.setattr(macro, "phase_shot", phases.append)
+    monkeypatch.setattr(macro, "phase_commit", lambda why: phases.append("commit: " + why))
+    monkeypatch.setattr(macro, "grab_screen", lambda: cv2.imread(os.path.join(os.path.dirname(__file__), "popups", "pet_focus_tricks.png")))
+    macro.update_game_config(lambda c: c.update(trick_open=False, trick_looked=0.0))
+    macro.look_at_tricks()
+    assert macro.clicks == [] and phases == []                                                      # (no trick task open: nothing)
+    macro.update_game_config(lambda c: c.update(trick_open=True))
+    macro.look_at_tricks()
+    assert len(macro.clicks) == 1 and abs(macro.clicks[0][0] - 383) <= 10 and abs(macro.clicks[0][1] - 646) <= 10      # (the TRICKS button: one click, and nothing after it)
+    assert phases[-1] == "commit: daily trick looked" and len(phases) == 4 and any("Tricks menu" in p for p in phases)
+    assert any("Tricks menu looked at" in line for line in log)
+    macro.look_at_tricks()
+    assert len(macro.clicks) == 1                                                                   # (once after a reset)

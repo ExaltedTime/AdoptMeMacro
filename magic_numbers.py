@@ -160,6 +160,8 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "daily_claim_all": {"box": (1100, 700, 1340, 800), "threshold": 0.85},   # the green Claim All button at the bottom right of the Task Board's Tasks tab, shown when a task is done
     "daily_neon": {"box": (842, 440, 1200, 700), "threshold": 0.85},          # the bold word Neon / Common in the text of a daily task (what the task wants of the pet), found above its progress bar
     "daily_common": {"box": (842, 440, 1200, 700), "threshold": 0.85},
+    "daily_trick": {"box": (842, 440, 1200, 700), "threshold": 0.85},       # the line "Make your pet do a trick" of the daily task Showstopper (run 2, day 1)
+    "pet_tricks": {"box": (300, 420, 500, 700), "threshold": 0.85},          # the TRICKS button at the left of the pet's focus view (under DRESS UP)
     "filter_effect_regular": {"box": (800, 640, 1130, 880), "threshold": 0.85},
     "filter_effect_neon": {"box": (800, 640, 1130, 880), "threshold": 0.85},
     "filter_effect_mega_neon": {"box": (800, 640, 1130, 880), "threshold": 0.85},
@@ -332,14 +334,16 @@ PULL_SOURCES = {"failures": FAILURE_DIR, "logs": LOGS_DIR, "runs": RUNS_DIR, "ca
 RUN_CAPTURE_BURST = 4.0
 RUN_CAPTURE_PROTECTED = 25
 MOMENTS_MIN_RUN = 60 * 60              # seconds a run lasts for its moments to be kept (a shorter run leaves nothing)
-MOMENTS_ZIPS = 20                      # the most zips (of CAPTURE_ZIP_MB) a run's moments come to: the frames are thinned out to fit
+MOMENTS_ZIPS = 30                      # the most zips (of CAPTURE_ZIP_MB) a run's moments come to: the frames are thinned out to fit
 MOMENTS_FRAME_INTERVAL = 20.0          # seconds between two looks (a mark makes every CAPTURE_FRAME_INTERVAL look save a frame for RUN_CAPTURE_BURST seconds)
-MOMENTS_PROTECTED = 100                # the most frames that marks and the tail keep from being thinned out (the zips hold about 200)
-MOMENTS_PHASE_PROTECTED = 80           # the most phase screens (of needs that failed, and of some that went well, up to half of this) the thinning leaves alone: they have a budget of their own (run 2, 19 hours: the marks used up MOMENTS_PROTECTED in two hours and the phase screens of 20 sick needs, after that, were not kept)
+MOMENTS_PROTECTED = 200                # the most frames that marks and the tail keep from being thinned out (30 zips hold about 1200)
+MOMENTS_PHASE_PROTECTED = 400           # the most phase screens (of needs that failed, and of some that went well, up to half of this) the thinning leaves alone: they have a budget of their own (run 2, 19 hours: the marks used up MOMENTS_PROTECTED in two hours and the phase screens of 20 sick needs, after that, were not kept)
 MOMENTS_MAX_HOURS = 48                 # a run's capture stops by itself after this long
-MOMENTS_MARK_PREFIXES = ("FAILURE", "scheduled rejoin", "white screen", "recovery complete", "disabled:", "quiet:")     # the run-log lines that are moments worth keeping frames of
+MOMENTS_MARK_PREFIXES = ("FAILURE", "scheduled rejoin", "white screen", "recovery complete", "disabled:", "quiet:", "button scan found", "teleport:", "notice: a green button")     # the run-log lines that are moments worth keeping frames of
 PHASE_SHOTS_MAX = 14                   # the most screens of the phases of one need kept in memory (phase_shot())
-PHASE_KEEP_GOOD_EVERY = 10             # one execution of a need in this many that went well keeps its phase screens, to compare a failing one with
+PHASE_WINDOW_HOURS = 3                 # the run is cut into stretches this long, and phase_commit() keeps a few sets of phase screens of each kind in each...
+PHASE_FAILED_PER_WINDOW = 2            # ...this many of a need that failed...
+PHASE_GOOD_PER_WINDOW = 1              # ...and this many of one that went well, to compare a failing one with
 MOMENTS_MARK_GAP = 60.0                # at most one mark this often (a failure repeated every cycle is one moment)
 MOMENTS_TAIL = 90.0                    # seconds at the end of a run whose frames are kept
 MOMENTS_LOG_MB = 8                     # the most of the macro's output kept with a run's moments (the last part of it)
@@ -728,6 +732,8 @@ DAILY_TASKS_RESET_HOUR = 16               # the daily tasks reset at this hour (
 DAILY_TASKS_DIR = os.path.join(DEBUG_DIR, "daily_tasks")   # a crop of each daily task seen (task_<n>.png), so that a new one is told (new_daily_tasks())
 DAILY_TASK_TEXT_X = (842, 1200)           # the columns of a task's name and what to do (not the reward at the right)
 DAILY_TASK_TEXT_HEIGHT = 80               # the rows above its progress bar that hold them
+DAILY_PET_KINDS = ("neon", "common")      # the kinds of task (daily_task_kinds()) that ask for a kind of pet; "trick" is the one that asks the pet to do a trick
+TRICKS_LOOK_WAIT = 3.0                    # seconds after the TRICKS button was clicked that its menu is looked at twice (a screen at each end), for a person to see what it holds
 DAILY_KIND_MATCH = 0.85                  # the bold word of a task's text (daily_neon, daily_common) found at least this well in the rows above its bar
 DAILY_TASK_MATCH = 0.9                    # a crop that matches a saved one at least this well is the same task
 FILTERS_ROW_LOOK = 2.0                    # seconds a row of the FILTERS panel is waited for before the list is scrolled to look further (the list is still moving just after a scroll)

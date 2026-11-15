@@ -408,7 +408,7 @@ class State:
     temporary_pet_tried: float = 0.0       # when replace_temporary_pet() last tried to put the temporary pet away
     display_switching: bool = False        # Blackout is switching the display (Win+P's way): Windows moves the windows and Roblox loses the focus for a moment - the running macro waits at its next check instead of stopping
     phase_shots: list = field(default_factory=list)      # (seconds into the capture, label, PNG bytes) of the screens taken during the need that runs: kept in the moments when it fails (phase_shot())
-    phase_ok: dict = field(default_factory=dict)          # {need: executions that went well since one of them was kept}
+    phase_kept: dict = field(default_factory=dict)        # {(why, window): the sets of phase screens kept in that stretch of the run} (phase_commit()'s quota)
     notice_clicks: list = field(default_factory=list)     # when dismiss_notice() clicked (a notice that does not go is left alone for a while)
     notice_pause_until: float = 0.0
     notice_reported: float = 0.0
@@ -859,6 +859,8 @@ def _read_game_config() -> dict[str, Any]:
         "daily_tasks_enabled": False,       # whether the Task Board's daily tasks are looked at (read_daily_tasks()) when collect_pet_pen() has the board open: logged, with a screenshot kept
         "daily_tasks_looked": 0.0,          # when they were last looked at
         "task_pet": "",                     # "neon" or "common" while the pet out and the backpack's filters are for a daily task that is open (apply_task_pet()); "" otherwise
+        "trick_open": False,                # the Task Board showed a daily task that asks for a trick of the pet and its bar is not full (look_at_daily_tasks())
+        "trick_looked": 0.0,                # when the pet's Tricks menu was last looked at for it (look_at_tricks(): once after each reset)
         "task_pet_failed": {},              # {kind: when} a pet of that kind could not be had for a task: not tried again before the next reset
         "pet_repicked": 0.0,               # when pet_repick() last picked the pet to level
         "pet_pen_looked": 0.0,
@@ -2081,6 +2083,7 @@ def equip_task_pet(kind: str) -> bool:
     if not focus_roblox():
         return False
     ok = False
+    phase_reset()
     with backpack_on_purpose():
         pydirectinput.press(cfg.KEYS["backpack"])
         wait_interruptible(cfg.UI_SETTLE)
@@ -2088,6 +2091,7 @@ def equip_task_pet(kind: str) -> bool:
             log_setup_problem("task pet: the pets tab could not be selected")
         elif open_filter_panel() and scroll_filters_to_top():
             if set_filter_rows(task_pet_rows(kind)):
+                phase_shot(f"the filters as set for a {kind} pet, before Confirm")
                 hover_click(*cfg.SETUP_CONFIRM_POS)
                 wait_interruptible(cfg.UI_SETTLE)
                 ok = True
@@ -2097,6 +2101,7 @@ def equip_task_pet(kind: str) -> bool:
             if ok and kind != "all":
                 select_backpack_tab(cfg.INVENTORY_PETS_TAB_POS)
                 wait_interruptible(cfg.UI_SETTLE)
+                phase_shot(f"the list of {kind} pets after Confirm")
                 pick = choose_list_pet(stop_at_equipped=True)
                 if pick is None:
                     log_run_event(f"task pet: no {kind} pet in the list (the Age filter leaves out eggs and full-grown pets too)")
@@ -2106,7 +2111,12 @@ def equip_task_pet(kind: str) -> bool:
                 else:
                     ok = equip_pet(f"the first {kind} pet", lambda: pick[1])
                     log_run_event(f"task pet: a {kind} pet {'equipped' if ok else 'could not be equipped'}")
+        phase_shot("before the backpack is closed")
         close_backpack("task pet")
+    if kind != "all":
+        phase_commit(f"task pet ({kind}) {'went well' if ok else 'failed'}")
+    else:
+        phase_reset()
     return ok
 
 def restore_pet_filters() -> bool:
@@ -2160,6 +2170,7 @@ def equip_pet(what: str, where: Callable[[], Optional[Point]]) -> bool:
         return False
     hover_click(*point)
     wait_interruptible(cfg.UI_SETTLE)
+    phase_shot(f"the card of {what}, after its click")
     button = find_equip_button(grab_screen())
     if button is None:
         equipped = wait_for_template("pet_unequip", cfg.SETUP_LOOK_WAIT) is not None
@@ -4335,7 +4346,7 @@ def daily_task_kinds(img: Image) -> list[Optional[str]]:
     for bar_top, _ in daily_bars(img):
         box = (cfg.DAILY_TASK_TEXT_X[0], max(0, bar_top - cfg.DAILY_TASK_TEXT_HEIGHT), cfg.DAILY_TASK_TEXT_X[1], bar_top)
         kind = None
-        for name, label in (("daily_neon", "neon"), ("daily_common", "common")):
+        for name, label in (("daily_neon", "neon"), ("daily_common", "common"), ("daily_trick", "trick")):
             crop = templates.get(name)
             if crop is not None and find_template(img, crop, box)[0] >= cfg.DAILY_KIND_MATCH:
                 kind = label
@@ -4399,9 +4410,13 @@ def task_pet_wanted(img: Image, failed: dict[str, float]) -> str:
     was not given up on since the last reset (`failed`); "" when there is none (every such task is done, or there are none)."""
     reset = last_daily_boundary(time.time(), cfg.DAILY_TASKS_RESET_HOUR)
     for (_, share), kind in zip(daily_bars(img), daily_task_kinds(img)):
-        if kind is not None and share < cfg.DAILY_TASK_DONE_SHARE and failed.get(kind, 0.0) < reset:
+        if kind in cfg.DAILY_PET_KINDS and share < cfg.DAILY_TASK_DONE_SHARE and failed.get(kind, 0.0) < reset:
             return kind
     return ""
+
+def trick_task_open(img: Image) -> bool:
+    """Whether the board shows a daily task that asks for a trick of the pet ("Make your pet do a trick", `daily_trick`) whose bar is not full."""
+    return any(kind == "trick" and share < cfg.DAILY_TASK_DONE_SHARE for (_, share), kind in zip(daily_bars(img), daily_task_kinds(img)))
 
 def look_at_daily_tasks() -> Optional[str]:
     """With the Task Board open: when daily_tasks_enabled and the tasks are due (daily_tasks_due(): the first look after the reset hour, then every DAILY_TASKS_INTERVAL - DAILY_TASKS_ACTIVE_INTERVAL while a task pet
@@ -4420,6 +4435,8 @@ def look_at_daily_tasks() -> Optional[str]:
         return None
     kinds = daily_task_kinds(img)
     log_run_event("daily tasks: " + ", ".join(f"{share:.0%}" + (f" ({kind})" if kind else "") for share, kind in zip(shares, kinds)))
+    trick = trick_task_open(img)
+    update_game_config(lambda c: c.update(trick_open=trick))
     keep_new_daily_tasks(img)
     try:
         save_screenshot()
@@ -4458,6 +4475,41 @@ def apply_task_pet(wanted: Optional[str]) -> None:
     restore_pet_filters()
     update_game_config(lambda c: c.update(task_pet="", task_pet_failed={**c["task_pet_failed"], wanted: time.time()}, pet_repicked=time.time()))
 
+def look_at_tricks() -> None:
+    """For the daily task that asks for a trick of the pet (config `trick_open`, once after each reset): focus the pet, click the TRICKS button of its view (`pet_tricks`) and keep the screen of what that opens,
+    twice (TRICKS_LOOK_WAIT apart), in the moments (`daily trick looked`) and SCREENSHOTS_DIR - the menu has not been seen, so no trick is picked yet: this is only to see it. Then the pet's view is closed
+    (dismiss_stray_windows()). Never raises."""
+    try:
+        config = load_game_config()
+        if not config["trick_open"] or config["trick_looked"] >= last_daily_boundary(time.time(), cfg.DAILY_TASKS_RESET_HOUR) or not focus_roblox():
+            return
+        update_game_config(lambda c: c.update(trick_looked=time.time()))
+        phase_reset()
+        with wanting_pet_focus():
+            if not focus_pet_reliably():
+                log_run_event("daily tasks: the pet's view did not come up for the trick task")
+                return
+            wait_interruptible(cfg.UI_SETTLE)
+            button = popup_found(grab_screen(), "pet_tricks")
+            phase_shot("the pet's view" + ("" if button is not None else ", with no TRICKS button found"))
+            if button is None:
+                log_run_event("daily tasks: no TRICKS button in the pet's view (screen kept)")
+            else:
+                hover_click(*button)
+                wait_interruptible(cfg.UI_SETTLE)
+                phase_shot("the Tricks menu, after the click")
+                wait_interruptible(cfg.TRICKS_LOOK_WAIT)
+                phase_shot("the Tricks menu, a little after")
+                log_run_event("daily tasks: the pet's Tricks menu looked at for the trick task (screens kept)")
+                try:
+                    save_screenshot()
+                except OSError:
+                    pass
+        dismiss_stray_windows()
+        phase_commit("daily trick looked")
+    except Exception:
+        logger.exception("Looking at the pet's tricks failed")
+
 def collect_pet_pen() -> bool:
     """Open the Task Board and, when it has the "Pet Pen Ready" card, click it, wait out the age-up screen and click its NICE!. True once the board has been looked at (and the pets collected if they were
     ready), False when the game was not in front or the NICE! never came."""
@@ -4480,6 +4532,7 @@ def collect_pet_pen() -> bool:
             wait_interruptible(cfg.PET_PEN_UI_SETTLE)
             state.task_board_wanted = False
             apply_task_pet(wanted)                                                        # (the backpack, with the board closed)
+            look_at_tricks()
             return True
         hover_click(*card)
         wait_interruptible(cfg.PET_PEN_ANIMATION_WAIT)
@@ -5283,27 +5336,27 @@ def phase_reset() -> None:
     state.phase_shots.clear()
 
 def phase_commit(why: str) -> None:
-    """Put the screens of the phases of the need that ran into the moments capture (labelled with `why` and the phase), and forget them. Never raises."""
+    """Put the screens of the phases of the need that ran into the moments capture (labelled with `why` and the phase), and forget them. At most PHASE_FAILED_PER_WINDOW sets of one `why` (PHASE_GOOD_PER_WINDOW
+    when it ends "went well") in each PHASE_WINDOW_HOURS of the run, so that the screens are spread over the whole run and a need that fails every few minutes does not use all of the budget in its first hour. Never raises."""
     capture, shots = state.moments, list(state.phase_shots)
     state.phase_shots.clear()
     if capture is None or not shots:
         return
     try:
+        good = why.endswith("went well")
+        key = (why, int((time.time() - capture.started) // (cfg.PHASE_WINDOW_HOURS * 3600)))
+        if state.phase_kept.get(key, 0) >= (cfg.PHASE_GOOD_PER_WINDOW if good else cfg.PHASE_FAILED_PER_WINDOW):
+            return
+        state.phase_kept[key] = state.phase_kept.get(key, 0) + 1
         capture.note(f"phase screens kept: {why} ({len(shots)})")
         for seconds, label, png in shots:
-            capture.keep_frame(png, seconds, f"{why}: {label}", essential=not why.endswith("went well"))
+            capture.keep_frame(png, seconds, f"{why}: {label}", essential=not good)
     except Exception as error:
         logger.debug(f"The screens of the phases were not kept: {error}")
 
 def phase_done_well(need_name: str) -> None:
-    """A need went well: its screens are dropped, but one execution in PHASE_KEEP_GOOD_EVERY is kept, as the good one to compare a failing one with."""
-    count = state.phase_ok.get(need_name, 0) + 1
-    if count >= cfg.PHASE_KEEP_GOOD_EVERY:
-        state.phase_ok[need_name] = 0
-        phase_commit(f"{need_name} went well")
-    else:
-        state.phase_ok[need_name] = count
-        phase_reset()
+    """A need went well: its screens are kept as the good one to compare a failing one with, within the quota of phase_commit() (the first of each window), else dropped."""
+    phase_commit(f"{need_name} went well")
 
 def note_moment(message: str) -> None:
     """A line of the run log for the moments capture (log_run_event() calls it); one that starts as MOMENTS_MARK_PREFIXES says is also a moment to keep (at most one every MOMENTS_MARK_GAP seconds). Never raises."""

@@ -347,6 +347,7 @@ MOMENTS_RUN_LOG_MB = 2                 # the most of the run's own log kept (its
 MOMENTS_FAILURE_SHOTS = 30             # the most failure screenshots (JPEG, about 0.3 MB each) kept with a run's moments
 MOMENTS_RESERVE_MB = 16                # room left in the first zip for those files (they are deflated, so they take less)
 MOMENTS_KEEP = 3                       # the moments of this many runs are kept (the oldest folders go)
+CAPTURE_THIN_FRACTION = 0.1              # a capture over its zips has this share of its frames that are not protected deleted at a time (and the frames after are saved that much further apart)
 CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into zips of at most this size (chat attachments are limited to 30 MB)
 
 

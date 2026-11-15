@@ -5112,27 +5112,31 @@ class InputCapture:
                 self.stop_event.wait(0.02)      # let the click land on screen before looking
 
     def _keep_within_budget(self) -> None:
-        """Needing more than `max_zips` zips: delete every other saved frame, never the newest, and save frames twice as
-        far apart from now on - until the zips needed are few enough."""
+        """Needing more than `max_zips` zips: delete a tenth (CAPTURE_THIN_FRACTION) of the saved frames that are not protected - the ones with the closest neighbours, none next to another, so that no hole is made - never the first or the newest, and save frames that much further
+        apart from now on - until the zips needed are few enough. (Deleting every other frame, and doubling the gap, as this once did, left the capture anywhere between half of the zips and all of them: 12 to 14 of 20 in
+        two long runs.) A tenth at a time, the capture is kept at 90-100% of its zips."""
         events = os.path.join(self.folder, "events.jsonl")
         while self.max_zips and len(self._kept) > 1 and len(plan_zip_parts(
                 [size for _, size in self._kept], (os.path.getsize(events) if os.path.exists(events) else 0) + self.reserve_bytes)) > self.max_zips:
-            keep = [frame for i, frame in enumerate(self._kept) if i % 2 == 0 or i == len(self._kept) - 1 or frame[0] in self.protected]
-            if len(keep) == len(self._kept):            # nothing went: the oldest frame that isn't protected (or the newest) goes
-                loose = [frame for frame in self._kept[:-1] if frame[0] not in self.protected]
-                if not loose:
-                    break                               # only frames that must stay are left
-                keep = [frame for frame in self._kept if frame != loose[0]]
-            for name, size in self._kept:
-                if (name, size) not in keep:
-                    try:
-                        os.remove(os.path.join(self.folder, name))
-                    except OSError:
-                        pass
-                    self._emit("frame_dropped", file=name)
-                    self.dropped += 1
-            self._kept = keep
-            self._gap *= 2
+            loose = [frame for frame in self._kept[1:-1] if frame[0] not in self.protected] or [frame for frame in self._kept[:-1] if frame[0] not in self.protected]
+            if not loose:
+                break                                   # only frames that must stay are left
+            count = max(1, round(len(loose) * cfg.CAPTURE_THIN_FRACTION))
+            at = {frame: i for i, frame in enumerate(self._kept)}
+            moment = lambda frame: float(frame[0][:-len(".png")].rsplit("_", 1)[1])
+            going = set()
+            for frame in sorted(loose, key=lambda f: moment(self._kept[at[f] + 1]) - moment(self._kept[at[f] - 1]) if at[f] > 0 else 0.0):      # (the frames whose neighbours are the closest go first: no hole is made)
+                if len(going) < count and not any(self._kept[at[frame] + step] in going for step in (-1, 1) if 0 <= at[frame] + step < len(self._kept)):
+                    going.add(frame)
+            for name, size in going:
+                try:
+                    os.remove(os.path.join(self.folder, name))
+                except OSError:
+                    pass
+                self._emit("frame_dropped", file=name)
+                self.dropped += 1
+            self._kept = [frame for frame in self._kept if frame not in going]
+            self._gap /= 1 - cfg.CAPTURE_THIN_FRACTION
 
     def _give_up(self, reason: str) -> None:
         self.stopped_because = reason

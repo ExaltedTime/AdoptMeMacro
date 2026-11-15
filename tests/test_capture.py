@@ -335,7 +335,7 @@ def test_frames_are_spread_over_the_run_not_all_at_its_start_or_end(macro, captu
     times = [float(f.split("_")[2][:-4]) for f in sorted(os.listdir(capture["folder"])) if f.endswith(".png")]
     gaps = np.diff(times)
     assert len(times) >= 4 and gaps.max() <= (times[-1] - times[0]) / 2        # no big hole anywhere in the run
-    assert recorder._gap >= 2 * macro.cfg.CAPTURE_FRAME_INTERVAL               # frames are taken further apart as the run goes on (the gap doubles with each thinning)
+    assert recorder._gap > 1.5 * macro.cfg.CAPTURE_FRAME_INTERVAL              # frames are taken further apart as the run goes on (the gap grows by a ninth with each thinning)
 
 
 def test_a_capture_without_a_budget_keeps_every_frame(macro, capture, monkeypatch):
@@ -436,3 +436,22 @@ def test_frames_around_a_mark_survive_the_thinning(macro, capture, monkeypatch):
 
 
 
+
+
+def test_thinning_keeps_the_capture_nearly_to_its_zips_and_leaves_no_hole(macro, tmp_path, monkeypatch):
+    """The thinning deleted every other frame, which left a capture anywhere between half of its zips and all of them (12 and 14 of 20 in two long runs); a tenth at a time it stays near the limit."""
+    monkeypatch.setattr(macro.cfg, "CAPTURE_ZIP_MB", 0.01)                         # ~10 KB: 10 frames of 1 KB a zip
+    folder = str(tmp_path / "capture_t")
+    os.makedirs(folder)
+    recorder = macro.InputCapture(folder, max_zips=20)
+    used = []
+    for n in range(1, 1500):
+        name = f"frame_{n:06d}_{n}.000.png"
+        open(os.path.join(folder, name), "wb").write(b"x" * 1000)
+        recorder._kept.append((name, 1000))
+        recorder._keep_within_budget()
+        used.append(len(macro.plan_zip_parts([size for _, size in recorder._kept])))
+    assert max(used) <= 20 and min(used[300:]) >= 17                                  # (once it has filled: never under 17 of the 20)
+    times = [float(name[:-4].rsplit("_", 1)[1]) for name, _ in recorder._kept]
+    gaps = np.diff(times)
+    assert gaps.max() <= 8 * np.median(gaps) and times[0] == 1.0 and times[-1] == 1499.0     # (spread over the whole run, the first and the newest kept)

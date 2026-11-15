@@ -5394,7 +5394,7 @@ def copy_tail(source: str, target: str, limit: int) -> None:
 
 def write_moments_files(capture: InputCapture, seconds: float) -> None:
     """The files of a kept run's moments besides the frames: README.txt (what everything is and what the macro is, for a reader with nothing else), the run's own log (run_log.txt), status.json,
-    config.json (the game config but for the private server link), failures.txt (what was saved for the run's failures), the commit in info.json. Never raises."""
+    config.json (the game config but for the private server link), failures.txt (what was saved for the run's failures), daily_task_<n>.png (a crop of each daily task seen, from DAILY_TASKS_DIR), the commit in info.json. Never raises."""
     folder = capture.folder
     try:
         run = state.run_number
@@ -5418,6 +5418,10 @@ def write_moments_files(capture: InputCapture, seconds: float) -> None:
             picture = cv2.imread(os.path.join(cfg.FAILURE_DIR, name, "screen.png"))
             if picture is not None:
                 cv2.imwrite(os.path.join(folder, f"failure_{name}.jpg"), picture, [cv2.IMWRITE_JPEG_QUALITY, cfg.FAILURE_JPEG_QUALITY])
+        if os.path.isdir(cfg.DAILY_TASKS_DIR):                                                       # (the crop of every daily task seen: small, and only on the PC otherwise)
+            for name in sorted(os.listdir(cfg.DAILY_TASKS_DIR)):
+                if name.startswith("task_") and name.endswith(".png"):
+                    shutil.copyfile(os.path.join(cfg.DAILY_TASKS_DIR, name), os.path.join(folder, "daily_" + name))
         version = macro_version()
         info_path = os.path.join(folder, "info.json")
         with open(info_path, encoding="utf-8") as f:
@@ -5451,6 +5455,7 @@ THE FILES:
   output.log     everything the macro printed, debug lines too (the last part of the run when it was long), with times.
   run_log.txt    the run's own log (the same lines as the "log" events, with their wall-clock times).
   failures.txt   what the macro saved for each failure (reason, time, what was detected, disabled needs); failure_<folder>.jpg are their screenshots (the game window, JPEG; at most {shots} of them, spread over the run).
+  daily_task_<n>.png   a crop of each daily task the macro has seen on the Task Board (its name, what to do, the reward's side left out), one file for each different task.
   status.json    the macro's status when the run ended. config.json: its settings (the private server link is left out), the enabled needs and the counts of the run.
   info.json      the capture's facts, the commit, and the moments.
 

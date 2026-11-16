@@ -102,3 +102,8 @@ def world(macro, monkeypatch):
     monkeypatch.setattr(macro.pydirectinput, "press", lambda key, **k: world.keys.append(("press", key, clock.now)), raising=False)
     monkeypatch.setattr(macro, "to_screen", lambda x, y: (x, y))
     yield world
+
+
+def near_click(click, position, tolerance=4):
+    """Whether a click is at `position`, or where the button is found on the screen (click_dialog_button(): a pixel or two from the fixed position)."""
+    return abs(click[0] - position[0]) <= tolerance and abs(click[1] - position[1]) <= tolerance

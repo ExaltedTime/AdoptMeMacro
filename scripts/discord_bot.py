@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional, cast
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -29,19 +29,27 @@ from scripts import bot_lib  # noqa: E402
 log = logging.getLogger("adoptme-bot")
 
 
-async def say(interaction: discord.Interaction, text: Optional[str] = None, **kwargs) -> Any:
+def postable(channel: object) -> Optional[discord.abc.Messageable]:
+    """`channel` as something that can be posted in (it has a `send`: a text channel, a thread, a DM), or None (a category, a forum, nothing). discord.py types a channel as one of many kinds,
+    most of which cannot be posted in; this is the check that the one in hand can."""
+    return cast(discord.abc.Messageable, channel) if callable(getattr(channel, "send", None)) else None
+
+
+async def say(interaction: discord.Interaction, text: Optional[str] = None, **kwargs: Any) -> Any:
     """Follow up on a command with `text`, cut to fit a message first (bot_lib.clip_message()): a message over Discord's limit is refused, and the command would
     end with nothing said. An interaction can only be followed up for 15 minutes (a long /update or /pull outlasts that): after that, or when Discord says the
     token is no good, the answer goes to the channel itself (bot_lib.followup_needs_the_channel()). The message that was sent."""
     text = bot_lib.clip_message(text) if text else text
     if not interaction.is_expired():
         try:
-            return await interaction.followup.send(text, **kwargs)  # type: ignore[arg-type]
+            return await interaction.followup.send(discord.utils.MISSING if text is None else text, **kwargs)
         except discord.HTTPException as error:
             if not bot_lib.followup_needs_the_channel(error.status, False):
                 raise
-    channel = interaction.channel or await interaction.client.fetch_channel(interaction.channel_id or 0)
-    return await channel.send(text, **kwargs)  # type: ignore[union-attr,arg-type]
+    channel = postable(interaction.channel) or postable(await interaction.client.fetch_channel(interaction.channel_id or 0))
+    if channel is None:
+        raise RuntimeError("there is no channel to answer in")
+    return await channel.send(text, **kwargs)
 
 
 def roblox_region(monitor: dict) -> dict:
@@ -67,7 +75,10 @@ def grab_roblox_png() -> tuple[bytes, bool]:
     import mss.tools
     with mss.MSS() as sct:
         shot = sct.grab(roblox_region(sct.monitors[1]))
-    return mss.tools.to_png(shot.rgb, shot.size), bot_lib.looks_blank(shot.rgb)
+    png = mss.tools.to_png(shot.rgb, shot.size)
+    if png is None:
+        raise RuntimeError("the picture could not be encoded")
+    return png, bot_lib.looks_blank(shot.rgb)
 
 
 def grab_roblox_jpeg() -> tuple[bytes, bool]:
@@ -79,7 +90,7 @@ def grab_roblox_jpeg() -> tuple[bytes, bool]:
         shot = sct.grab(roblox_region(sct.monitors[1]))
     picture = np.frombuffer(shot.bgra, np.uint8).reshape(shot.height, shot.width, 4)[:, :, :3]
     if shot.width > cfg.BOT_RVIEW_WIDTH:
-        picture = cv2.resize(picture, (cfg.BOT_RVIEW_WIDTH, round(shot.height * cfg.BOT_RVIEW_WIDTH / shot.width)), interpolation=cv2.INTER_AREA)
+        picture = np.asarray(cv2.resize(picture, (cfg.BOT_RVIEW_WIDTH, round(shot.height * cfg.BOT_RVIEW_WIDTH / shot.width)), interpolation=cv2.INTER_AREA), np.uint8)
     done, encoded = cv2.imencode(".jpg", picture, [cv2.IMWRITE_JPEG_QUALITY, cfg.BOT_RVIEW_JPEG_QUALITY])
     if not done:
         raise RuntimeError("the picture could not be encoded")
@@ -129,7 +140,7 @@ def release_inputs() -> None:
         import ctypes
         for button, code in (("left", 0x01), ("right", 0x02)):
             try:
-                if ctypes.windll.user32.GetAsyncKeyState(code) & 0x8000:  # type: ignore[attr-defined]
+                if getattr(ctypes, "windll").user32.GetAsyncKeyState(code) & 0x8000:
                     mouse_up(button=button)
             except Exception:
                 pass
@@ -594,6 +605,12 @@ async def apply_commit(config: bot_lib.Config, move: list[str], old: str, say, l
     return True
 
 
+class MacroClient(discord.Client):
+    """The bot's Discord client, with what the commands and watch() share on it: `bot_state` (what the bot has dealt with, bot_lib.BotState) and `tree` (the slash commands, kept so that they can be listed)."""
+    bot_state: bot_lib.BotState
+    tree: app_commands.CommandTree
+
+
 class ConfirmView(discord.ui.View):
     """Yes and Cancel buttons that only the owner in the one channel can press; `answer` is True, False, or None if nobody pressed one in time."""
 
@@ -670,9 +687,9 @@ class OwnerOnlyTree(app_commands.CommandTree):
 
 
 def build(config: bot_lib.Config) -> discord.Client:
-    client = discord.Client(intents=discord.Intents.default(), allowed_mentions=discord.AllowedMentions.none())     # (nothing the bot says pings anybody, whatever a log line holds)
+    client = MacroClient(intents=discord.Intents.default(), allowed_mentions=discord.AllowedMentions.none())     # (nothing the bot says pings anybody, whatever a log line holds)
     tree = OwnerOnlyTree(client, config)
-    client.bot_state = bot_lib.load_state(bot_lib.state_path())  # type: ignore[attr-defined]   # (what the bot has dealt with; the commands and watch() share it)
+    client.bot_state = bot_lib.load_state(bot_lib.state_path())   # (what the bot has dealt with; the commands and watch() share it)
     guild = discord.Object(id=config.guild_id) if config.guild_id else None
 
     def command(name: str, description: str):
@@ -777,7 +794,7 @@ def build(config: bot_lib.Config) -> discord.Client:
             await say(interaction, os.path.basename(path), file=discord.File(path))
 
     def remember(desired: str) -> None:
-        state = client.bot_state  # type: ignore[attr-defined]
+        state = client.bot_state
         state.desired_state, state.crash_reported = desired, False
         bot_lib.save_state(bot_lib.state_path(), state)
 
@@ -1033,7 +1050,7 @@ def build(config: bot_lib.Config) -> discord.Client:
 
     async def plan_and_apply(interaction: discord.Interaction, rollback: bool) -> None:
         global UPDATING
-        state = client.bot_state  # type: ignore[attr-defined]
+        state = client.bot_state
         try:
             plan, move, head = await asyncio.to_thread(bot_lib.make_plan, git_runner(config), config.update_remote, config.update_branch, state.previous_commit, rollback)
         except RuntimeError as error:
@@ -1082,7 +1099,7 @@ def build(config: bot_lib.Config) -> discord.Client:
             return
         async with update_lock:
             try:
-                state = client.bot_state  # type: ignore[attr-defined]
+                state = client.bot_state
                 pids = await running_pids()
                 loop_running = bool(pids) and not bot_lib.loop_idle(bot_lib.read_json(bot_lib.status_path()))
                 if pids:
@@ -1198,7 +1215,7 @@ def build(config: bot_lib.Config) -> discord.Client:
             await tell_channel(client, config, f"**The slash commands could not be registered:** {error}\nThe ones Discord already has still work; a new or changed command will not show until this is fixed (see the bot's console).")
         await tell_channel(client, config, await online_text(config))
 
-    client.tree = tree  # type: ignore[attr-defined]       # (kept, so the commands can be listed)
+    client.tree = tree       # (kept, so the commands can be listed)
     return client
 
 
@@ -1231,15 +1248,23 @@ def task_ended(task: asyncio.Task) -> None:
         log.error("the watcher ended", exc_info=task.exception())
 
 
+def usable_channel(channel_id: int, channel: object) -> Optional[discord.abc.Messageable]:
+    """`channel` if it can be posted in (postable()), else None, said in the log: the id is of a channel the bot cannot post in (a category, say)."""
+    found = postable(channel)
+    if found is None:
+        log.error("channel %s is not one the bot can post in - check channel_id in bot_config.json", channel_id)
+    return found
+
+
 async def find_channel(client: discord.Client, channel_id: int) -> Optional[discord.abc.Messageable]:
     """The bot's channel: from the cache, else fetched, trying `BOT_CHANNEL_TRIES` times with a doubling wait for a network or Discord hiccup. A channel that is
     not there or not allowed (NotFound, Forbidden) is not retried - the id or the permissions are wrong. None when it could not be had; said in the log."""
     channel = client.get_channel(channel_id)
     if channel is not None:
-        return channel  # type: ignore[return-value]
+        return usable_channel(channel_id, channel)
     for attempt in range(cfg.BOT_CHANNEL_TRIES):
         try:
-            return await client.fetch_channel(channel_id)  # type: ignore[return-value]
+            return usable_channel(channel_id, await client.fetch_channel(channel_id))
         except (discord.NotFound, discord.Forbidden) as error:
             log.error("channel %s cannot be used (%s) - check channel_id in bot_config.json and the bot's permissions there", channel_id, error)
             return None
@@ -1257,12 +1282,12 @@ async def tell_channel(client: discord.Client, config: bot_lib.Config, text: str
     if channel is None:
         return
     try:
-        await channel.send(bot_lib.clip_message(text))  # type: ignore[attr-defined]
+        await channel.send(bot_lib.clip_message(text))
     except (discord.HTTPException, OSError):
         log.exception("could not post to the channel")
 
 
-async def watch(client: discord.Client, config: bot_lib.Config) -> None:
+async def watch(client: MacroClient, config: bot_lib.Config) -> None:
     """Every BOT_WATCH_INTERVAL seconds look at what the macro wrote and post what is new: failures (with their screenshot), a status that has gone
     stale (and its recovery), a heartbeat, a macro that is gone. A failure inside a look is logged and the watching
     goes on. What it has dealt with is kept in bot_state.json, so a restart neither posts it again nor misses what came while it was down."""
@@ -1271,7 +1296,7 @@ async def watch(client: discord.Client, config: bot_lib.Config) -> None:
     if channel is None:
         return
     path = bot_lib.state_path()
-    state = client.bot_state  # type: ignore[attr-defined]
+    state = client.bot_state
     limiter = bot_lib.RateLimiter(cfg.BOT_ALERT_GAP)
     if state.log_offset is None:                                   # the first start: what is there already is not news
         state.log_offset = bot_lib.file_end(bot_lib.run_log_path())

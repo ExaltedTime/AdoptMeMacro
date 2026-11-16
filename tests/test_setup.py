@@ -4,6 +4,7 @@ import os
 import types
 
 import cv2
+import conftest
 import numpy as np
 import pytest
 
@@ -155,7 +156,8 @@ def test_the_backpack_is_sorted_by_favorites_with_eggs_and_full_grown_pets_filte
     clicks = game.clicks
     assert clicks[:2] == [cfg.SETUP_BACKPACK_SETTINGS_POS, cfg.SETUP_SORT_MENU_POS] and abs(clicks[2][0] - 1028) <= 6 and abs(clicks[2][1] - 806) <= 6        # (Favorites where its text is)
     assert [c for c in clicks if abs(c[0] - EGG_BOX[0]) <= 3 and abs(c[1] - EGG_BOX[1]) <= 3] and [c for c in clicks if abs(c[0] - FULL_GROWN_BOX[0]) <= 3 and abs(c[1] - FULL_GROWN_BOX[1]) <= 3]
-    assert clicks.count(cfg.SETUP_CONFIRM_POS) == 1 and len(settings_clicks(game, cfg)) == 2 and clicks[clicks.index(cfg.SETUP_CONFIRM_POS) + 1] == cfg.SETUP_BACKPACK_SETTINGS_POS      # (reopened after Confirm)
+    confirms = [i for i, c in enumerate(clicks) if conftest.near_click(c, cfg.SETUP_CONFIRM_POS)]
+    assert len(confirms) == 1 and len(settings_clicks(game, cfg)) == 2 and clicks[confirms[0] + 1] == cfg.SETUP_BACKPACK_SETTINGS_POS      # (reopened after Confirm)
     assert game.scrolls and set(game.scrolls) == {("down", 1), ("up", 1)}                  # (a notch at a time, until the rows are in view; back up to the sort when the panel is opened again to be looked at)
     assert "setup: the backpack's filters are set" in texts(game) and cfg.FILTERS_SCROLL_TRIES >= backpack.notches
     assert backpack.card == "unequip" and backpack.pet_out and FIRST_PET in game.clicks                                 # (the first pet of the list is equipped)
@@ -166,7 +168,7 @@ def test_filters_that_are_right_already_are_left_as_they_are_and_cancelled(macro
     cfg = macro.cfg
     backpack = Backpack(macro, game, monkeypatch, sort="favorites", egg=False, full_grown=False, pet_out=True)
     assert macro.set_backpack_filter() is True
-    assert cfg.SETUP_CONFIRM_POS not in game.clicks and game.clicks.count(cfg.SETUP_FILTER_CANCEL_POS) == 1 and "setup: the backpack's filters are as they should be already" in texts(game)
+    assert not any(conftest.near_click(c, cfg.SETUP_CONFIRM_POS) for c in game.clicks) and sum(conftest.near_click(c, cfg.SETUP_FILTER_CANCEL_POS) for c in game.clicks) == 1 and "setup: the backpack's filters are as they should be already" in texts(game)
     assert backpack.applied == {"sort": "favorites", "egg": False, "fg": False}
     assert "setup: the first pet of the list is equipped already" in texts(game)                  # (its card says Unequip: Equip is not pressed)
     only_full_grown = Backpack(macro, game, monkeypatch, sort="favorites", egg=False, full_grown=True, pet_out=True)
@@ -183,7 +185,7 @@ def test_a_sort_a_box_or_a_confirm_that_does_not_take_is_a_failure_and_the_panel
         game.state = "world"
         assert macro.set_backpack_filter() is False, stuck
         assert any(said in text or text.endswith(said) or said.replace("egg box", "age_egg box") in text for text in texts(game)), (stuck, texts(game))
-        assert cfg.SETUP_CONFIRM_POS not in game.clicks and game.clicks.count(cfg.SETUP_FILTER_CANCEL_POS) == 1 and backpack.applied == {"sort": "default", "egg": True, "fg": True}      # (nothing confirmed: nothing changed)
+        assert not any(conftest.near_click(c, cfg.SETUP_CONFIRM_POS) for c in game.clicks) and sum(conftest.near_click(c, cfg.SETUP_FILTER_CANCEL_POS) for c in game.clicks) == 1 and backpack.applied == {"sort": "default", "egg": True, "fg": True}      # (nothing confirmed: nothing changed)
     game.clicks.clear(), game.log.clear()
     backpack = Backpack(macro, game, monkeypatch, stuck=("confirm",))
     game.state = "world"

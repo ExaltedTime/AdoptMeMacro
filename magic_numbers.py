@@ -91,6 +91,12 @@ DIALOG_BUTTONS: dict[str, dict[str, Any]] = {                              # (an
     "nice":    {"box": (800, 970, 1120, 1070), "hsv": (((45, 110, 130), (80, 255, 255)),), "size": ((240, 300), (50, 80))},                              # the buttons of those cards (measured on a real frame: Decline 174 x 47 and Accept 174 x 49 side by side, Okay 360 x 49)
     "decline": {"box": (700, 540, 1260, 790), "hsv": (((170, 150, 150), (180, 255, 255)), ((0, 150, 150), (5, 255, 255))), "size": ((150, 210), (30, 60))},
     "okay":    {"box": (700, 540, 1260, 790), "hsv": (((45, 110, 130), (80, 255, 255)),), "size": ((300, 420), (30, 60))},
+    "filter_confirm": {"box": (940, 875, 1160, 945), "hsv": (((45, 110, 130), (80, 255, 255)),), "size": ((100, 230), (25, 55))},                  # the green Confirm and the red Cancel at the bottom of the FILTERS panel (165 x 35 at 1045, 906 and 873, 906 on the captures)...
+    "filter_cancel":  {"box": (780, 875, 980, 945), "hsv": (((170, 150, 150), (180, 255, 255)), ((0, 150, 150), (8, 255, 255))), "size": ((100, 230), (25, 55))},
+    "pen_close":      {"box": (1142, 255, 1232, 345), "hsv": (((170, 150, 150), (180, 255, 255)), ((0, 150, 150), (8, 255, 255))), "size": ((18, 60), (18, 60))},                   # the red X of the pen's screen (1187, 303)...
+    "trades_close":   {"box": (1247, 309, 1307, 369), "hsv": (((170, 150, 150), (180, 255, 255)), ((0, 150, 150), (8, 255, 255))), "size": ((18, 60), (18, 60))},                   # ...of the trade phone's window (1277, 344)...
+    "setup_trades_close": {"box": (1096, 333, 1146, 383), "hsv": (((170, 150, 150), (180, 255, 255)), ((0, 150, 150), (8, 255, 255))), "size": ((18, 60), (18, 60))},                # ...and of the settings page of Setup (1117, 358; a box this small: the phone's X is another, 28 px away)
+    "backpack_close": {"box": (1150, 605, 1230, 675), "hsv": (((170, 150, 150), (180, 255, 255)), ((0, 150, 150), (8, 255, 255))), "size": ((18, 55), (18, 55))},   # ...and the red X of the normal backpack (1188, 641)
 }
 
 # Other things recognised by a crop in STRAY_WINDOW_DIR (file name = the name here) found within "box"
@@ -160,6 +166,8 @@ POPUP_TEMPLATES: dict[str, dict[str, Any]] = {
     "daily_claim_all": {"box": (1100, 700, 1340, 800), "threshold": 0.85},   # the green Claim All button at the bottom right of the Task Board's Tasks tab, shown when a task is done
     "daily_neon": {"box": (842, 440, 1200, 700), "threshold": 0.85},          # the bold word Neon / Common in the text of a daily task (what the task wants of the pet), found above its progress bar
     "daily_common": {"box": (842, 440, 1200, 700), "threshold": 0.85},
+    "daily_trick": {"box": (842, 440, 1200, 700), "threshold": 0.85},       # the line "Make your pet do a trick" of the daily task Showstopper (run 2, day 1)
+    "pet_tricks": {"box": (300, 420, 500, 700), "threshold": 0.85},          # the TRICKS button at the left of the pet's focus view (under DRESS UP)
     "filter_effect_regular": {"box": (800, 640, 1130, 880), "threshold": 0.85},
     "filter_effect_neon": {"box": (800, 640, 1130, 880), "threshold": 0.85},
     "filter_effect_mega_neon": {"box": (800, 640, 1130, 880), "threshold": 0.85},
@@ -332,14 +340,16 @@ PULL_SOURCES = {"failures": FAILURE_DIR, "logs": LOGS_DIR, "runs": RUNS_DIR, "ca
 RUN_CAPTURE_BURST = 4.0
 RUN_CAPTURE_PROTECTED = 25
 MOMENTS_MIN_RUN = 60 * 60              # seconds a run lasts for its moments to be kept (a shorter run leaves nothing)
-MOMENTS_ZIPS = 20                      # the most zips (of CAPTURE_ZIP_MB) a run's moments come to: the frames are thinned out to fit
+MOMENTS_ZIPS = 30                      # the most zips (of CAPTURE_ZIP_MB) a run's moments come to: the frames are thinned out to fit
 MOMENTS_FRAME_INTERVAL = 20.0          # seconds between two looks (a mark makes every CAPTURE_FRAME_INTERVAL look save a frame for RUN_CAPTURE_BURST seconds)
-MOMENTS_PROTECTED = 100                # the most frames that marks and the tail keep from being thinned out (the zips hold about 200)
-MOMENTS_PHASE_PROTECTED = 80           # the most phase screens (of needs that failed, and of some that went well, up to half of this) the thinning leaves alone: they have a budget of their own (run 2, 19 hours: the marks used up MOMENTS_PROTECTED in two hours and the phase screens of 20 sick needs, after that, were not kept)
+MOMENTS_PROTECTED = 200                # the most frames that marks and the tail keep from being thinned out (30 zips hold about 1200)
+MOMENTS_PHASE_PROTECTED = 400           # the most phase screens (of needs that failed, and of some that went well, up to half of this) the thinning leaves alone: they have a budget of their own (run 2, 19 hours: the marks used up MOMENTS_PROTECTED in two hours and the phase screens of 20 sick needs, after that, were not kept)
 MOMENTS_MAX_HOURS = 48                 # a run's capture stops by itself after this long
-MOMENTS_MARK_PREFIXES = ("FAILURE", "scheduled rejoin", "white screen", "recovery complete", "disabled:", "quiet:")     # the run-log lines that are moments worth keeping frames of
+MOMENTS_MARK_PREFIXES = ("FAILURE", "scheduled rejoin", "white screen", "recovery complete", "disabled:", "quiet:", "button scan found", "teleport:", "notice: a green button")     # the run-log lines that are moments worth keeping frames of
 PHASE_SHOTS_MAX = 14                   # the most screens of the phases of one need kept in memory (phase_shot())
-PHASE_KEEP_GOOD_EVERY = 10             # one execution of a need in this many that went well keeps its phase screens, to compare a failing one with
+PHASE_WINDOW_HOURS = 3                 # the run is cut into stretches this long, and phase_commit() keeps a few sets of phase screens of each kind in each...
+PHASE_FAILED_PER_WINDOW = 2            # ...this many of a need that failed...
+PHASE_GOOD_PER_WINDOW = 1              # ...and this many of one that went well, to compare a failing one with
 MOMENTS_MARK_GAP = 60.0                # at most one mark this often (a failure repeated every cycle is one moment)
 MOMENTS_TAIL = 90.0                    # seconds at the end of a run whose frames are kept
 MOMENTS_LOG_MB = 8                     # the most of the macro's output kept with a run's moments (the last part of it)
@@ -347,6 +357,7 @@ MOMENTS_RUN_LOG_MB = 2                 # the most of the run's own log kept (its
 MOMENTS_FAILURE_SHOTS = 30             # the most failure screenshots (JPEG, about 0.3 MB each) kept with a run's moments
 MOMENTS_RESERVE_MB = 16                # room left in the first zip for those files (they are deflated, so they take less)
 MOMENTS_KEEP = 3                       # the moments of this many runs are kept (the oldest folders go)
+CAPTURE_THIN_FRACTION = 0.1              # a capture over its zips has this share of its frames that are not protected deleted at a time (and the frames after are saved that much further apart)
 CAPTURE_ZIP_MB = 25                       # a stopped capture is also split into zips of at most this size (chat attachments are limited to 30 MB)
 
 
@@ -647,12 +658,12 @@ KEY_SEQUENCES = {                  # keys pressed one after the other, each held
     "respawn": ("esc", "r", "enter"),
     "leave_game": ("esc", "l", "enter"),
 }
-HOTKEYS = {                        # the macro's own keys, each a letter or digit (or a character that is a key of its own on the keyboard layout), read in any window (the last three only while Roblox is focused)
-    "stop": "p",                   # stops a running macro
-    "capture": "m",                # starts or stops an input capture
-    "blackout": "h",               # blanks the screen with a black window (and again, to take it away)
-    "new_need": "ú",               # looks at the need bar and asks the name of an icon on it that no saved need matches (taught for the next look; same layout lookup as the screenshot key)
-    "screenshot": "ô",             # saves a picture of the whole screen in SCREENSHOTS_DIR (not a letter of the alphabet: its key is looked up on the keyboard layout, see hotkey_vk())
+HOTKEYS = {                        # the macro's own keys, each blank ("": no key, the hotkey is off until one is chosen in the Settings tab's Hotkeys subtab) or one letter or digit (or a character that is a key of its own on the keyboard layout), read in any window (all but stop only while Roblox is focused)
+    "stop": "",                    # stops a running macro (the [STOP] button, the bot's /stop and the mouse in a corner of the screen - pyautogui's fail-safe - stop it without a key)
+    "capture": "",                 # starts or stops an input capture
+    "blackout": "",                # blanks the screen with a black window (and again, to take it away)
+    "new_need": "",                # looks at the need bar and asks the name of an icon on it that no saved need matches (taught for the next look)
+    "screenshot": "",              # saves a picture of the whole screen in SCREENSHOTS_DIR
 }
 MOVE_KEYS = tuple(KEYS[name] for name in ("forward", "left", "back", "right"))
 HELD_KEYS = tuple(dict.fromkeys([*KEYS.values(), *(key for keys in KEY_SEQUENCES.values() for key in keys)]))   # every key the macro can hold down: let go of when it ends, at a stop, or when it is killed
@@ -727,6 +738,8 @@ DAILY_TASKS_RESET_HOUR = 16               # the daily tasks reset at this hour (
 DAILY_TASKS_DIR = os.path.join(DEBUG_DIR, "daily_tasks")   # a crop of each daily task seen (task_<n>.png), so that a new one is told (new_daily_tasks())
 DAILY_TASK_TEXT_X = (842, 1200)           # the columns of a task's name and what to do (not the reward at the right)
 DAILY_TASK_TEXT_HEIGHT = 80               # the rows above its progress bar that hold them
+DAILY_PET_KINDS = ("neon", "common")      # the kinds of task (daily_task_kinds()) that ask for a kind of pet; "trick" is the one that asks the pet to do a trick
+TRICKS_LOOK_WAIT = 3.0                    # seconds after the TRICKS button was clicked that its menu is looked at twice (a screen at each end), for a person to see what it holds
 DAILY_KIND_MATCH = 0.85                  # the bold word of a task's text (daily_neon, daily_common) found at least this well in the rows above its bar
 DAILY_TASK_MATCH = 0.9                    # a crop that matches a saved one at least this well is the same task
 FILTERS_ROW_LOOK = 2.0                    # seconds a row of the FILTERS panel is waited for before the list is scrolled to look further (the list is still moving just after a scroll)
@@ -784,7 +797,7 @@ LURE_RECOLLECT_INTERVAL = 4 * 60 * 60  # seconds (4 hours)
 SETUP_LOCK_HOUSE_POS = (1112, 65)
 SETUP_BACKPACK_SETTINGS_POS = (977, 646)
 SETUP_SORT_MENU_POS = (1031, 680)
-SETUP_CONFIRM_POS = (1047, 908)
+SETUP_CONFIRM_POS = (1047, 908)                       # (where the buttons are on the captures: used when click_dialog_button() does not find them on the screen)
 AGE_ALTERNATES = {"age_full_grown": ("age_full_grown_pen",)}   # other crops of the same row, tried when the first is not found
 FILTER_NEON_ROWS = ("filter_effect_neon", "filter_effect_mega_neon")        # the Effect rows a neon pet is under...
 FILTER_EFFECT_ROWS = ("filter_effect_regular", *FILTER_NEON_ROWS, "filter_effect_no_potion", "filter_effect_rideable", "filter_effect_flyable")      # ...of all of them
@@ -941,6 +954,7 @@ BUTTON_SLOTS_X = (673, 752, 858, 998, 1219)    # where each of them is across th
 BUTTON_SLOTS_DY = (0, 0, -28, -32, -50)          # px each button sits above (minus) the thirsty one, whatever the camera (67 scans of run 5: 0 / 0 / -30..-27 / -34..-30 / -52..-47): the one button that is not seen is where these say
 BUTTON_FILL_LOOK_HALF = 28                       # px: the square round where a button that was not seen should be is looked at for the purple of its ring...
 BUTTON_FILL_MIN_PURPLE = 300                     # ...at least this many px of it (580-990 where the ring shows, 0 where the character stands before it)
+BUTTON_FOUND_SLACK = 12                          # px a button found on the screen may be from its fixed position before the run log says so (click_dialog_button())
 BUTTON_SLOT_TOLERANCE = 35                     # px: a button this close to a slot is that one (the slots are 77 or more apart)
 BUTTON_LOOSE_AREA_FACTOR = 0.7         # how much looser than BUTTON_MIN_AREA a candidate may be
 BUTTON_MAX_AREA_FRACTION = 0.5         # reject a blob covering more than this fraction of the band
@@ -959,6 +973,8 @@ WHITE_RANGE = (np.array([0, 0, 200]), np.array([180, 40, 255]))
 # ============================================================================
 GUI_GEOMETRY = "380x650+1533+110"   # size + position (docked top-right)
 GUI_ALPHA = 0.95
+GUI_HOTKEY_BUTTON_WIDTH = 10        # chars, a hotkey's button in the Settings tab
+GUI_HOTKEY_NOTE_WIDTH = 340         # px, the line under them that says what to do or why a key was refused
 GUI_GUIDE_HEIGHT = 14               # lines, the Guide tab
 GUI_SCROLL_PAGE_HEIGHT = 230        # px, the Settings tab (a page that scrolls past it)
 GUI_FONT = "Courier"

@@ -202,6 +202,9 @@ def test_a_long_runs_folder_is_self_explaining_with_its_log_status_config_failur
         os.makedirs(os.path.join(cfg.FAILURE_DIR, name))
         open(os.path.join(cfg.FAILURE_DIR, name, "info.txt"), "w").write(f"reason: failure of run {run}\n")
         cv2.imwrite(os.path.join(cfg.FAILURE_DIR, name, "screen.png"), np.full((40, 60, 3), 80, np.uint8))
+    monkeypatch.setattr(cfg, "DAILY_TASKS_DIR", str(tmp_path / "daily_tasks"))
+    os.makedirs(cfg.DAILY_TASKS_DIR)
+    cv2.imwrite(os.path.join(cfg.DAILY_TASKS_DIR, "task_001.png"), np.full((20, 30, 3), 90, np.uint8))
     macro.update_game_config(lambda c: c.update(keep_moments=True, private_server_link="https://www.roblox.com/share?code=SECRET"))
     macro.start_moments()
     capture = macro.state.moments
@@ -209,7 +212,7 @@ def test_a_long_runs_folder_is_self_explaining_with_its_log_status_config_failur
     capture.started -= macro.cfg.MOMENTS_MIN_RUN + 100
     macro.finish_moments()
     folder = capture.folder
-    assert sorted(f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))) == ["README.txt", "config.json", "failure_20261106_100500_run7_hungry_still.jpg", "failures.txt", "info.json", "output.log", "run_log.txt", "status.json"]
+    assert sorted(f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))) == ["README.txt", "config.json", "daily_task_001.png", "failure_20261106_100500_run7_hungry_still.jpg", "failures.txt", "info.json", "output.log", "run_log.txt", "status.json"]
     readme = open(os.path.join(folder, "README.txt"), encoding="utf-8").read()
     assert "RUN 7" in readme and "FAILURE: hungry still showing" in readme and "events.jsonl" in readme and "private server link" in readme
     assert "failure of run 7" in open(os.path.join(folder, "failures.txt")).read() and "failure of run 8" not in open(os.path.join(folder, "failures.txt")).read()
@@ -244,13 +247,20 @@ def test_the_screens_of_a_need_that_failed_are_kept_in_the_moments_and_those_of_
     macro.phase_commit("bored was not cleared")
     assert kept == ["bored was not cleared: the landing", "bored was not cleared: after the last step"] and macro.state.phase_shots == [] and notes == ["phase screens kept: bored was not cleared (2)"]
     kept.clear()
-    for _ in range(macro.cfg.PHASE_KEEP_GOOD_EVERY - 1):
-        macro.phase_shot("the landing")
-        macro.phase_done_well("bored")
-    assert kept == []                                                                          # (the good ones are dropped)
     macro.phase_shot("the landing")
     macro.phase_done_well("bored")
-    assert kept == ["bored went well: the landing"]                                            # (the tenth is kept to compare with)
+    assert kept == ["bored went well: the landing"]                                            # (the first good one of a stretch of the run is kept to compare with)
+    kept.clear()
+    macro.phase_shot("the landing")
+    macro.phase_done_well("bored")
+    assert kept == []                                                                          # (the second is dropped)
+    for _ in range(macro.cfg.PHASE_FAILED_PER_WINDOW):
+        macro.phase_shot("the landing")
+        macro.phase_commit("school was not cleared")
+    macro.phase_shot("the landing")
+    kept.clear()
+    macro.phase_commit("school was not cleared")
+    assert kept == [] and macro.state.phase_shots == []                                        # (more than the quota of one stretch: not kept, though they fail every few minutes)
     macro.state.moments = None
     macro.phase_shot("nothing without a capture")
     assert macro.state.phase_shots == []

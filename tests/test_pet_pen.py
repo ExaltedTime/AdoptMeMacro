@@ -286,7 +286,7 @@ def pen_filter_world(macro, monkeypatch, start):
         clicks.append((x, y))
         if (x, y) == macro.cfg.PET_PEN_FILTER_BUTTON_POS:
             state["open"] = True
-        elif (x, y) in (macro.cfg.SETUP_CONFIRM_POS, macro.cfg.SETUP_FILTER_CANCEL_POS):
+        elif conftest.near_click((x, y), macro.cfg.SETUP_CONFIRM_POS) or conftest.near_click((x, y), macro.cfg.SETUP_FILTER_CANCEL_POS):
             state["open"] = False
         elif abs(x - egg_box[0]) < 15 and abs(y - egg_box[1]) < 15:
             state["egg"] = not state["egg"]
@@ -300,7 +300,7 @@ def pen_filter_world(macro, monkeypatch, start):
 def test_a_filter_that_is_already_set_is_looked_at_and_left_alone_and_cancelled(macro, monkeypatch):
     state, clicks, egg_box, full_box = pen_filter_world(macro, monkeypatch, (False, False))
     assert macro.ensure_pen_age_filter() is True
-    assert clicks == [macro.cfg.PET_PEN_FILTER_BUTTON_POS, macro.cfg.SETUP_FILTER_CANCEL_POS]                  # (no box was clicked: that would have ticked it again)
+    assert len(clicks) == 2 and clicks[0] == macro.cfg.PET_PEN_FILTER_BUTTON_POS and conftest.near_click(clicks[1], macro.cfg.SETUP_FILTER_CANCEL_POS)                  # (no box was clicked: that would have ticked it again)
     assert (state["egg"], state["full"]) == (False, False)
 
 
@@ -308,8 +308,8 @@ def test_only_the_boxes_that_are_ticked_are_clicked_then_confirmed_and_looked_at
     state, clicks, egg_box, full_box = pen_filter_world(macro, monkeypatch, (True, False))
     assert macro.ensure_pen_age_filter() is True
     assert [c for c in clicks if abs(c[0] - full_box[0]) < 15 and abs(c[1] - full_box[1]) < 15] == []          # (Full Grown was unticked: not clicked)
-    assert (state["egg"], state["full"]) == (False, False) and macro.cfg.SETUP_CONFIRM_POS in clicks
-    assert clicks[-1] == macro.cfg.SETUP_FILTER_CANCEL_POS and clicks.count(macro.cfg.PET_PEN_FILTER_BUTTON_POS) == 2     # (opened, changed, confirmed, opened again to look, cancelled)
+    assert (state["egg"], state["full"]) == (False, False) and any(conftest.near_click(c, macro.cfg.SETUP_CONFIRM_POS) for c in clicks)
+    assert conftest.near_click(clicks[-1], macro.cfg.SETUP_FILTER_CANCEL_POS) and clicks.count(macro.cfg.PET_PEN_FILTER_BUTTON_POS) == 2     # (opened, changed, confirmed, opened again to look, cancelled)
     state, clicks, *_ = pen_filter_world(macro, monkeypatch, (True, True))
     assert macro.ensure_pen_age_filter() is True and (state["egg"], state["full"]) == (False, False)
 
@@ -322,7 +322,7 @@ def test_a_pet_is_not_put_in_when_the_filter_did_not_come_up_and_the_picking_wai
     monkeypatch.setattr(macro, "look_until", lambda find, seconds, poll=0: (1, 1))
     monkeypatch.setattr(macro, "ensure_pen_age_filter", lambda: False)
     monkeypatch.setattr(macro, "popup_found", lambda img, name: (857, 584))
-    assert macro.put_a_pet_in_the_pen() is False and macro.clicks[-1] == macro.cfg.PET_PEN_BACKPACK_CLOSE_POS
+    assert macro.put_a_pet_in_the_pen() is False and conftest.near_click(macro.clicks[-1], macro.cfg.PET_PEN_BACKPACK_CLOSE_POS)
     assert macro.cfg.PET_REPICK_INTERVAL == 30 * 60
 
 
@@ -651,3 +651,39 @@ def test_a_temporary_pet_is_found_by_its_pill_and_replaced_by_the_pick_that_skip
     monkeypatch.setattr(macro, "grab_screen", lambda: shot("world_after"))
     macro.replace_temporary_pet()
     assert len(seen) == n                                                                              # (no temporary pet: nothing)
+
+
+def test_the_trick_task_is_told_from_the_board_and_asks_for_no_kind_of_pet(macro):
+    """Run 2, day 1: "Showstopper - Make your pet do a trick (0/1)" and "Hard Worker - Earn 50 Bucks at a job (0/50)"."""
+    board = shot("board_daily_trick_and_job")
+    assert macro.daily_task_kinds(board) == ["trick", None]
+    assert macro.trick_task_open(board) is True
+    assert macro.task_pet_wanted(board, {}) == ""                                                  # (a trick is no kind of pet: no pet is switched for it)
+    done = board.copy()
+    top = macro.daily_bars(board)[0][0]
+    done[top:top + 14, 846:1100] = (73, 197, 84)                                                    # (its bar full: done)
+    assert macro.trick_task_open(done) is False
+    assert macro.daily_task_kinds(shot("board_daily_tasks")) == ["neon", "common"]
+
+
+def test_the_pets_tricks_menu_is_looked_at_once_after_each_reset_for_the_trick_task_and_nothing_is_picked(macro, monkeypatch):
+    log, phases = [], []
+    monkeypatch.setattr(macro, "log_run_event", log.append)
+    monkeypatch.setattr(macro, "wait_interruptible", lambda s: None)
+    monkeypatch.setattr(macro, "save_screenshot", lambda: "x.png")
+    monkeypatch.setattr(macro, "focus_roblox", lambda: True)
+    monkeypatch.setattr(macro, "focus_pet_reliably", lambda: True)
+    monkeypatch.setattr(macro, "dismiss_stray_windows", lambda: None)
+    monkeypatch.setattr(macro, "phase_shot", phases.append)
+    monkeypatch.setattr(macro, "phase_commit", lambda why: phases.append("commit: " + why))
+    monkeypatch.setattr(macro, "grab_screen", lambda: cv2.imread(os.path.join(os.path.dirname(__file__), "popups", "pet_focus_tricks.png")))
+    macro.update_game_config(lambda c: c.update(trick_open=False, trick_looked=0.0))
+    macro.look_at_tricks()
+    assert macro.clicks == [] and phases == []                                                      # (no trick task open: nothing)
+    macro.update_game_config(lambda c: c.update(trick_open=True))
+    macro.look_at_tricks()
+    assert len(macro.clicks) == 1 and abs(macro.clicks[0][0] - 383) <= 10 and abs(macro.clicks[0][1] - 646) <= 10      # (the TRICKS button: one click, and nothing after it)
+    assert phases[-1] == "commit: daily trick looked" and len(phases) == 4 and any("Tricks menu" in p for p in phases)
+    assert any("Tricks menu looked at" in line for line in log)
+    macro.look_at_tricks()
+    assert len(macro.clicks) == 1                                                                   # (once after a reset)

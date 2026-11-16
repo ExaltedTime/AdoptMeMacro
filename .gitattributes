@@ -1,0 +1,11 @@
+# Line endings: text files are LF in the repository whatever the system (git converts on checkout where it must).
+* text=auto eol=lf
+# A launcher for Windows keeps its CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+# Never treated as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.zip binary

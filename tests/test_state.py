@@ -358,7 +358,7 @@ def test_a_run_log_that_cannot_be_written_does_not_lose_the_combined_line(macro,
 @pytest.fixture
 def walker(macro, monkeypatch):
     """A made-up teleport-walk need with an entry of its own, so these tests don't depend on how the real ones are
-    tuned (or on HALLOWEEN, which decides which of them exist). Returns make(**extra_keys) -> handler, and the
+    tuned. Returns make(**extra_keys) -> handler, and the
     list of max_wait values wait_until_need_gone() was called with."""
     waited = []
     monkeypatch.setattr(macro, "focus_roblox", lambda: True)
@@ -923,8 +923,7 @@ def sick_screen(name):
 def sick_run(macro, world, monkeypatch):
     """The sick handler up to its Yes, on real screenshots (the detectors are the real ones): run["screen"] is what is on screen
     now; the prompt's click changes it to run["after_prompt"], backing out of the pet view to run["after_back_out"].
-    The need has an entry of its own here (positions made up), so none of this depends on how the real one is tuned
-    or on HALLOWEEN, which decides whether the real one exists."""
+    The need has an entry of its own here (positions made up), so none of this depends on how the real one is tuned."""
     from functools import partial
     final = (610, 620)
     monkeypatch.setitem(macro.cfg.TELEPORT_WALK_NEEDS, "sick", dict(teleport_pos=(1, 2), steps=(("w", 1.0),), helicopter=False,
@@ -1220,7 +1219,7 @@ def test_the_real_white_transition_is_white_and_no_other_real_screenshot_is(macr
     import glob
     import os
     import cv2
-    folder = os.path.join(os.path.dirname(__file__), "icon_detection", "halloween1")
+    folder = os.path.join(os.path.dirname(__file__), "icon_detection", "busy_scenes")
     white = [os.path.basename(f) for f in sorted(glob.glob(os.path.join(folder, "*.png")))
              if macro.detect_white_screen(cv2.imread(f))]
     assert [name.split("__")[0] for name in white] == ["white_screen"]
@@ -2282,7 +2281,7 @@ def test_the_new_need_key_teaches_what_the_need_bar_shows_that_no_saved_need_mat
     assert taught == [1]
     monkeypatch.setattr(macro, "teach_new_needs", lambda: 1 / 0)
     gui.new_need_by_hotkey()                                                                 # (a look that failed is logged, not raised into Tk)
-    assert macro.load_game_config()["new_need_hotkey_enabled"] is True and macro.cfg.HOTKEYS["new_need"] == "ú"
+    assert macro.load_game_config()["new_need_hotkey_enabled"] is True and macro.cfg.HOTKEYS["new_need"] == ""
 
 
 def test_teaching_new_needs_asks_for_each_icon_on_the_bar_that_matches_nothing_and_none_that_is_known(macro, monkeypatch):
@@ -2417,3 +2416,44 @@ def test_the_new_hotkey_switches_are_in_the_config_and_the_bots_options(macro):
     for name in ("stop", "capture", "screenshot"):
         assert macro.load_game_config()[f"{name}_hotkey_enabled"] is True
         assert macro.cfg.OPTION_SWITCHES[f"{name}_hotkey"] == f"{name}_hotkey_enabled"
+
+
+def test_a_hotkey_is_blank_at_first_can_be_set_kept_cleared_and_a_key_that_cannot_be_one_is_refused(macro):
+    cfg = macro.cfg
+    try:
+        assert all(key == "" for key in cfg.HOTKEYS.values()) and all(macro.hotkey_key(name) == "" for name in cfg.HOTKEYS)       # (no key is set until one is chosen)
+        assert macro.hotkey_down("") is False                                                              # (a blank key is never down, and not warned about)
+        assert macro.save_hotkey("stop", "k") is None and macro.hotkey_key("stop") == "k"
+        assert macro.load_game_config()["hotkeys"] == {"stop": "k"}                                        # (only what was changed is kept)
+        macro.HOTKEYS_NOW.update(cfg.HOTKEYS)
+        macro.load_hotkeys()
+        assert macro.hotkey_key("stop") == "k" and macro.hotkey_key("capture") == ""                       # (read back from the config)
+        assert macro.save_hotkey("stop", "") is None and macro.load_game_config()["hotkeys"] == {} and macro.hotkey_key("stop") == ""      # (cleared: the default again, not kept)
+        assert macro.save_hotkey("capture", "") is None and macro.save_hotkey("screenshot", "") is None   # (two blank keys are not the same key)
+        assert "one letter" in macro.save_hotkey("stop", "ab") and "one letter" in macro.save_hotkey("stop", " ")
+        held = next(iter(cfg.HELD_KEYS))
+        assert "presses in the game" in macro.save_hotkey("stop", held[0] if len(held) == 1 else "w")
+        macro.save_hotkey("capture", "j")
+        assert "capture hotkey already" in macro.save_hotkey("stop", "j")                                  # (another hotkey's key)
+        assert macro.hotkey_key("stop") == ""                                                              # (refused: unchanged)
+        macro.update_game_config(lambda c: c.update(hotkeys={"stop": "j", "screenshot": "ab", "nothing": "z"}))     # (a saved file that is wrong: the key of another, a bad one, an unknown name)
+        macro.load_hotkeys()
+        assert macro.HOTKEYS_NOW == dict(cfg.HOTKEYS) | {"stop": "j"}
+        macro.reset_hotkeys()
+        assert macro.HOTKEYS_NOW == dict(cfg.HOTKEYS) and macro.load_game_config()["hotkeys"] == {}
+    finally:
+        macro.reset_hotkeys()
+
+
+def test_the_stop_key_says_the_key_it_was_changed_to(macro, monkeypatch):
+    logged = []
+    monkeypatch.setattr(macro.logger, "info", lambda text, *a, **k: logged.append(text))
+    gui = object.__new__(macro.AdoptMeGUI)
+    gui.is_running = True
+    gui.stop = lambda: None
+    try:
+        macro.save_hotkey("stop", "j")
+        gui.stop_by_hotkey()
+        assert "'J' pressed" in logged
+    finally:
+        macro.reset_hotkeys()

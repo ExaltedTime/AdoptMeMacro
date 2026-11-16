@@ -21,7 +21,7 @@ import logging
 import logging.handlers
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field, fields
-from typing import Any, Callable, ContextManager, Iterable, Iterator, Optional, Sequence, TypeAlias, Union
+from typing import Any, Callable, ContextManager, Iterable, Iterator, Literal, Optional, Sequence, TypeAlias, Union
 from abc import ABC, abstractmethod
 from functools import lru_cache, partial
 import tkinter as tk
@@ -62,6 +62,10 @@ class FocusLost(Exception):
     """
     pass
 
+def windll() -> Any:
+    """`ctypes.windll` (Windows only: an AttributeError anywhere else), typed Any, so that the Windows-only calls need no `type: ignore`."""
+    return getattr(ctypes, "windll")
+
 _WARNED_HOTKEYS: set[str] = set()
 
 def hotkey_vk(key: str) -> Optional[int]:
@@ -69,7 +73,7 @@ def hotkey_vk(key: str) -> Optional[int]:
     keyboard layout in use (VkKeyScanW). None when the layout has no key for it by itself - it is typed with Shift, AltGr or a dead key, or not at all."""
     if key.isascii() and key.isalnum():
         return ord(key.upper())
-    scan = ctypes.windll.user32.VkKeyScanW(ord(key)) & 0xFFFF  # type: ignore[attr-defined]  # Windows only
+    scan = windll().user32.VkKeyScanW(ord(key)) & 0xFFFF
     if scan == 0xFFFF or scan >> 8:                         # (no key, or one that needs a modifier)
         return None
     return scan & 0xFF
@@ -77,13 +81,15 @@ def hotkey_vk(key: str) -> Optional[int]:
 def hotkey_down(key: str) -> bool:
     """True while `key` (a single letter or digit, or a character of its own key on the layout: hotkey_vk()) is held down, whichever window has the focus
     (Windows). A key the layout does not have is never down (said once)."""
+    if not key:
+        return False                                                                  # (blank: the hotkey is not set)
     vk = hotkey_vk(key)
     if vk is None:
         if key not in _WARNED_HOTKEYS:
             _WARNED_HOTKEYS.add(key)
             logger.warning(f"The '{key}' hotkey is not a key of its own on this keyboard layout - it does nothing")
         return False
-    return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)  # type: ignore[attr-defined]  # Windows only
+    return bool(windll().user32.GetAsyncKeyState(vk) & 0x8000)
 
 def save_screenshot() -> str:
     """The whole primary monitor now, at its own size (grab_full_screen(): nothing cut out or scaled, so what is read off it is read off the pixels the screen
@@ -97,6 +103,57 @@ def save_screenshot() -> str:
     if not cv2.imwrite(path, grab_full_screen()):
         raise OSError(f"could not write {path}")
     return path
+
+HOTKEYS_NOW: dict[str, str] = dict(cfg.HOTKEYS)         # the hotkeys as they are now: HOTKEYS with the game config's `hotkeys` over it (load_hotkeys()); what hotkey_key() answers, so the watcher need not read a file
+
+def hotkey_key(name: str) -> str:
+    """The key of the hotkey `name` ("stop", "capture", "blackout", "screenshot", "new_need") now: the one the Settings tab's Hotkeys subtab set, else HOTKEYS' - which is "", no key, until one is chosen."""
+    return HOTKEYS_NOW[name]
+
+def check_hotkey(name: str, key: str) -> Optional[str]:
+    """Why `key` cannot be the hotkey `name`, or None when it can: blank (no key) always can; else it must be one character that is a key of its own (hotkey_vk()), not a key the macro presses in the game (HELD_KEYS) - it would
+    be taken for a hotkey while it is being held - and not the key of another hotkey."""
+    if not key:
+        return None                                                                   # (blank: no key, the hotkey is off)
+    if len(key) != 1 or not key.strip():
+        return "a hotkey is one letter, digit or character"
+    try:
+        if hotkey_vk(key) is None:
+            return f"'{key}' is not a key of its own on this keyboard layout"
+    except (AttributeError, OSError):
+        pass                                                                          # (no Windows: the tests)
+    if key.lower() in {held.lower() for held in cfg.HELD_KEYS}:
+        return f"'{key}' is a key the macro presses in the game"
+    taken = next((other for other, other_key in HOTKEYS_NOW.items() if other != name and other_key and other_key.lower() == key.lower()), None)
+    return f"'{key}' is the key of the {taken} hotkey already" if taken else None
+
+def load_hotkeys() -> None:
+    """HOTKEYS_NOW from HOTKEYS and the game config's `hotkeys` (a key that check_hotkey() refuses is left at its default, said in the log)."""
+    chosen = load_game_config().get("hotkeys") or {}
+    HOTKEYS_NOW.clear()
+    HOTKEYS_NOW.update(cfg.HOTKEYS)
+    for name, key in chosen.items():
+        if name in cfg.HOTKEYS and isinstance(key, str):
+            problem = check_hotkey(name, key)
+            if problem:
+                logger.warning(f"The saved {name} hotkey is not used: {problem}")
+            else:
+                HOTKEYS_NOW[name] = key.lower()
+
+def save_hotkey(name: str, key: str) -> Optional[str]:
+    """Make `key` the hotkey `name` ("": none) and keep it in the game config (the default's is not kept: the config holds only what was changed); the reason it cannot be, else None."""
+    key = key.lower()
+    problem = check_hotkey(name, key)
+    if problem:
+        return problem
+    HOTKEYS_NOW[name] = key
+    update_game_config(lambda c: c.update(hotkeys={**{n: k for n, k in (c.get("hotkeys") or {}).items() if n != name}, **({name: key} if key != cfg.HOTKEYS[name].lower() else {})}))
+    return None
+
+def reset_hotkeys() -> None:
+    """Every hotkey back to HOTKEYS' key."""
+    update_game_config(lambda c: c.update(hotkeys={}))
+    load_hotkeys()
 
 def hotkey_fires(down: bool, was_down: bool, only_while_running: bool, running: bool, only_in_roblox: bool) -> bool:
     """Whether a hotkey seen `down` (and not `was_down` at the last look) is to act: not while it is just being held, not when it is
@@ -408,7 +465,7 @@ class State:
     temporary_pet_tried: float = 0.0       # when replace_temporary_pet() last tried to put the temporary pet away
     display_switching: bool = False        # Blackout is switching the display (Win+P's way): Windows moves the windows and Roblox loses the focus for a moment - the running macro waits at its next check instead of stopping
     phase_shots: list = field(default_factory=list)      # (seconds into the capture, label, PNG bytes) of the screens taken during the need that runs: kept in the moments when it fails (phase_shot())
-    phase_ok: dict = field(default_factory=dict)          # {need: executions that went well since one of them was kept}
+    phase_kept: dict = field(default_factory=dict)        # {(why, window): the sets of phase screens kept in that stretch of the run} (phase_commit()'s quota)
     notice_clicks: list = field(default_factory=list)     # when dismiss_notice() clicked (a notice that does not go is left alone for a while)
     notice_pause_until: float = 0.0
     notice_reported: float = 0.0
@@ -849,23 +906,26 @@ def _read_game_config() -> dict[str, Any]:
         "resume_on_focus_loss": False,  # whether the loop takes Roblox's focus back instead of stopping
         "setup_next_loop": False,   # run Setup at the next pass of the loop (once; cleared when it runs)
         "record_next_run": False,   # record the next run as a low quality video; cleared when that run starts
-        "stop_hotkey_enabled": True,       # whether HOTKEYS["stop"] stops the macro (off: that key can be typed anywhere; the [STOP] button and the bot's stop work either way)
-        "capture_hotkey_enabled": True,    # whether HOTKEYS["capture"] starts and stops an input capture (off: that key can be typed in Roblox)
-        "screenshot_hotkey_enabled": True, # whether HOTKEYS["screenshot"] saves a screenshot (off: that key can be typed in Roblox)
-        "blackout_hotkey_enabled": True,   # whether HOTKEYS["blackout"] blanks the screen (off: that key can be typed in Roblox)
+        "hotkeys": {},                     # the keys of the hotkeys that were changed in the Settings tab ({"stop": "q"}): the others are HOTKEYS' (load_hotkeys())
+        "stop_hotkey_enabled": True,       # whether HOTKEYS["stop"] stops the macro (off: the macro ignores that key; the [STOP] button and the bot's stop work either way)
+        "capture_hotkey_enabled": True,    # whether HOTKEYS["capture"] starts and stops an input capture (off: the macro ignores that key)
+        "screenshot_hotkey_enabled": True, # whether HOTKEYS["screenshot"] saves a screenshot (off: the macro ignores that key)
+        "blackout_hotkey_enabled": True,   # whether HOTKEYS["blackout"] blanks the screen (off: the macro ignores that key)
         "keep_moments": True,              # whether the loop captures the run's moments (start_moments()), kept when the run lasted MOMENTS_MIN_RUN seconds or more
         "pet_pen_enabled": True,           # whether pet_pen() collects the Pet Pen when the Task Board says it is ready
         "pet_outgrown": False,             # the game said the pet that is out is full grown ("Yay! Your pet is full grown!"): the next pick does not keep it, even if it still shows in the list
         "daily_tasks_enabled": False,       # whether the Task Board's daily tasks are looked at (read_daily_tasks()) when collect_pet_pen() has the board open: logged, with a screenshot kept
         "daily_tasks_looked": 0.0,          # when they were last looked at
         "task_pet": "",                     # "neon" or "common" while the pet out and the backpack's filters are for a daily task that is open (apply_task_pet()); "" otherwise
+        "trick_open": False,                # the Task Board showed a daily task that asks for a trick of the pet and its bar is not full (look_at_daily_tasks())
+        "trick_looked": 0.0,                # when the pet's Tricks menu was last looked at for it (look_at_tricks(): once after each reset)
         "task_pet_failed": {},              # {kind: when} a pet of that kind could not be had for a task: not tried again before the next reset
         "pet_repicked": 0.0,               # when pet_repick() last picked the pet to level
         "pet_pen_looked": 0.0,
         "pet_pen_swap": False,             # a pet of the pen reached Friend: pet_pen_swap_due() switches the full-grown ones out
         "pet_pen_swap_tried": 0.0,         # when it last tried             # when pet_pen() last opened the board
         "level_growing_pet": True,         # whether Setup filters the eggs and full-grown pets out of the backpack and equips the first pet left (off: the pet is left, the Alicorn equipped if none is out)
-        "new_need_hotkey_enabled": True,   # whether HOTKEYS["new_need"] teaches the macro a need icon it does not know (off: that key can be typed in Roblox)
+        "new_need_hotkey_enabled": True,   # whether HOTKEYS["new_need"] teaches the macro a need icon it does not know (off: the macro ignores that key)
         "needs_enabled": {},        # {need: whether it is acted on}, the Debug tab's switches; a need not in it follows ENABLED_NEEDS (see need_is_enabled())
         "private_server_link": "",  # used by leave_and_rejoin(); kept here, not in the source, since it's a join key
         "use_private_server": True,   # whether a rejoin goes to that private server (off: a public one, with the link kept)
@@ -920,6 +980,7 @@ def reset_game_config() -> None:
             pass
         if link:
             save_game_config({**_read_game_config(), "private_server_link": link})
+    load_hotkeys()
 
 # ============================================================================
 # ICON PROCESSING
@@ -1074,7 +1135,8 @@ def prompt_rename_need(icon_img: Image, idx: int, on_ui_thread: bool = False) ->
         if not on_ui_thread:
             focus_roblox_click()   # the dialog took the focus
     else:
-        print(f"{prompt} ", end="", flush=True)                           # (a question to the person at the terminal, not a log line)
+        sys.stdout.write(f"{prompt} ")                                       # (a question to the person at the terminal, not a log line)
+        sys.stdout.flush()
         answer = input()
     need_name = (answer or "").strip().lower() or f"unnamed_{idx}"
 
@@ -1365,6 +1427,8 @@ def release_all_inputs() -> None:
 # BUTTON DETECTION
 # ============================================================================
 
+BUTTON_KERNEL = np.ones((3, 3), np.uint8)               # (what cv2.dilate and cv2.erode use when they are given no kernel: a 3 x 3 square)
+
 def detect_buttons() -> list[Point]:
     """Detect purple, white-outlined action buttons in the middle of the screen.
     Assumes the character is already positioned where the buttons are visible."""
@@ -1382,8 +1446,8 @@ def detect_buttons() -> list[Point]:
     purple_mask = cv2.inRange(hsv, *cfg.PURPLE_RANGE)
     white_mask = cv2.inRange(hsv, *cfg.WHITE_RANGE)
 
-    purple_dilated = cv2.dilate(purple_mask, None, iterations=cfg.BUTTON_PURPLE_DILATE_ITERATIONS)  # type: ignore[call-overload]
-    outline_zone = cv2.subtract(purple_dilated, cv2.erode(purple_mask, None, iterations=cfg.BUTTON_PURPLE_ERODE_ITERATIONS))  # type: ignore[call-overload]
+    purple_dilated = cv2.dilate(purple_mask, BUTTON_KERNEL, iterations=cfg.BUTTON_PURPLE_DILATE_ITERATIONS)
+    outline_zone = cv2.subtract(purple_dilated, cv2.erode(purple_mask, BUTTON_KERNEL, iterations=cfg.BUTTON_PURPLE_ERODE_ITERATIONS))
     has_white = cv2.bitwise_and(outline_zone, white_mask)
 
     contours, _ = cv2.findContours(purple_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -1970,7 +2034,7 @@ def untick_egg_and_full_grown() -> Optional[bool]:
     return clicked
 
 def level_growing_pets() -> bool:
-    """Whether Setup is to leave the pets that cannot grow out of the backpack and equip the first that can (the game config's level_growing_pet, the Options subtab's checkbox)."""
+    """Whether Setup is to leave the pets that cannot grow out of the backpack and equip the first that can (the game config's level_growing_pet, the Settings tab's checkbox)."""
     return bool(load_game_config()["level_growing_pet"])
 
 def ensure_pets_tab() -> bool:
@@ -2021,7 +2085,7 @@ def set_backpack_filter() -> bool:
                 log_run_event("setup: the backpack's filters are as they should be already")
                 ok = True
             else:
-                hover_click(*cfg.SETUP_CONFIRM_POS)
+                click_dialog_button("filter_confirm", cfg.SETUP_CONFIRM_POS)
                 wait_interruptible(cfg.UI_SETTLE)
                 panel_open = open_filter_panel()                                                  # (looked at again: the Confirm took)
                 ok = panel_open and scroll_filters_to_top() and sort_is_favorites() and (not growing or (scroll_filters_to_age() and age_filter_is_right()))     # (the panel is where it was scrolled to: back up to the sort first)
@@ -2030,7 +2094,7 @@ def set_backpack_filter() -> bool:
                 else:
                     log_setup_problem("setup: the backpack's filters are not as set after Confirm")
             if panel_open:
-                hover_click(*cfg.SETUP_FILTER_CANCEL_POS)                                         # (a panel only looked at - or one that could not be set - is left as it was)
+                click_dialog_button("filter_cancel", cfg.SETUP_FILTER_CANCEL_POS)                                         # (a panel only looked at - or one that could not be set - is left as it was)
                 wait_interruptible(cfg.UI_SETTLE)
         pick_pet_in_open_backpack(growing, on_pets, pet_out)
         close_backpack("setup")
@@ -2081,6 +2145,7 @@ def equip_task_pet(kind: str) -> bool:
     if not focus_roblox():
         return False
     ok = False
+    phase_reset()
     with backpack_on_purpose():
         pydirectinput.press(cfg.KEYS["backpack"])
         wait_interruptible(cfg.UI_SETTLE)
@@ -2088,15 +2153,17 @@ def equip_task_pet(kind: str) -> bool:
             log_setup_problem("task pet: the pets tab could not be selected")
         elif open_filter_panel() and scroll_filters_to_top():
             if set_filter_rows(task_pet_rows(kind)):
-                hover_click(*cfg.SETUP_CONFIRM_POS)
+                phase_shot(f"the filters as set for a {kind} pet, before Confirm")
+                click_dialog_button("filter_confirm", cfg.SETUP_CONFIRM_POS)
                 wait_interruptible(cfg.UI_SETTLE)
                 ok = True
             else:
-                hover_click(*cfg.SETUP_FILTER_CANCEL_POS)
+                click_dialog_button("filter_cancel", cfg.SETUP_FILTER_CANCEL_POS)
                 wait_interruptible(cfg.UI_SETTLE)
             if ok and kind != "all":
                 select_backpack_tab(cfg.INVENTORY_PETS_TAB_POS)
                 wait_interruptible(cfg.UI_SETTLE)
+                phase_shot(f"the list of {kind} pets after Confirm")
                 pick = choose_list_pet(stop_at_equipped=True)
                 if pick is None:
                     log_run_event(f"task pet: no {kind} pet in the list (the Age filter leaves out eggs and full-grown pets too)")
@@ -2106,7 +2173,12 @@ def equip_task_pet(kind: str) -> bool:
                 else:
                     ok = equip_pet(f"the first {kind} pet", lambda: pick[1])
                     log_run_event(f"task pet: a {kind} pet {'equipped' if ok else 'could not be equipped'}")
+        phase_shot("before the backpack is closed")
         close_backpack("task pet")
+    if kind != "all":
+        phase_commit(f"task pet ({kind}) {'went well' if ok else 'failed'}")
+    else:
+        phase_reset()
     return ok
 
 def restore_pet_filters() -> bool:
@@ -2140,6 +2212,8 @@ def find_equip_button(img: Image) -> Optional[Point]:
     """The middle of the green Equip button of the backpack's card of the item clicked, or None (an item that is equipped has another button, an Unequip): the blob of GREEN_BUTTON_COLOR of the
     size of one (EQUIP_BUTTON_SIZE) in EQUIP_BUTTON_BOX, where a card can be (the green plus tile of the pets tab is smaller)."""
     left, top, right, bottom = cfg.EQUIP_BUTTON_BOX
+    if img[top:bottom, left:right].size == 0:
+        return None                                                  # (a picture too small to have the box)
     mask = exact_color_mask(img[top:bottom, left:right], cfg.GREEN_BUTTON_COLOR, cfg.GREEN_BUTTON_TOLERANCE)
     count, _, stats, centres = cv2.connectedComponentsWithStats(mask, connectivity=8)
     (min_w, max_w), (min_h, max_h) = cfg.EQUIP_BUTTON_SIZE
@@ -2160,6 +2234,7 @@ def equip_pet(what: str, where: Callable[[], Optional[Point]]) -> bool:
         return False
     hover_click(*point)
     wait_interruptible(cfg.UI_SETTLE)
+    phase_shot(f"the card of {what}, after its click")
     button = find_equip_button(grab_screen())
     if button is None:
         equipped = wait_for_template("pet_unequip", cfg.SETUP_LOOK_WAIT) is not None
@@ -2225,7 +2300,7 @@ def disable_trades() -> bool:
                     hover_click(*option)
                     ok = wait_for_any(("trading_no_one",)) is not None
                     log_run_event("setup: trading is set to No One" if ok else "setup: trading does not say No One after the click")
-        hover_click(*cfg.SETUP_TRADES_CLOSE_POS)
+        click_dialog_button("setup_trades_close", cfg.SETUP_TRADES_CLOSE_POS)
         wait_interruptible(cfg.UI_SETTLE)
         if wait_for_any(("settings_title",), 0.0) is not None:
             log_run_event("setup: the game's settings did not close")
@@ -2646,7 +2721,7 @@ def close_trade_phone() -> None:
         hover_click(*cfg.TRADES_BACK_POS)
         wait_interruptible(cfg.UI_SETTLE)
     if trade_screen(grab_screen()) in ("offers", "listings", "menu", "phone"):
-        hover_click(*cfg.TRADES_CLOSE_POS)
+        click_dialog_button("trades_close", cfg.TRADES_CLOSE_POS)
 
 def write_json_file(path: str, data: dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -2811,7 +2886,7 @@ def run_deeplink(server: Optional[tuple[str, str]] = None) -> None:
         uri = f"roblox://placeID={cfg.ROBLOX_PLACE_ID}&linkcode={server[1]}"
     else:
         uri = f"roblox://navigation/share_links?code={server[1]}&type=Server"
-    os.startfile(uri)  # type: ignore[attr-defined]  # Windows only
+    getattr(os, "startfile")(uri)                                  # (Windows only)
 
 def close_roblox(clean_leave: bool = True) -> None:
     """Leave the game cleanly (only if `clean_leave`), kill any Roblox process left and
@@ -3113,7 +3188,10 @@ def equip_favorite_vehicle() -> None:
         wait_interruptible(cfg.UI_SETTLE)
 
         logger.debug("Equipping vehicle...")
-        hover_click(*cfg.RIDE_EQUIP_POS)
+        equip = find_equip_button(grab_screen())
+        if equip is None:
+            logger.debug(f"The vehicle's Equip button was not found on the screen - the fixed position {cfg.RIDE_EQUIP_POS} is clicked")
+        hover_click(*(equip or cfg.RIDE_EQUIP_POS))
         wait_interruptible(cfg.UI_SETTLE)
 
         logger.debug("Closing backpack...")
@@ -4056,6 +4134,8 @@ def wanting_pet_focus() -> Iterator[None]:
 def find_dialog_button(img: Image, spec: dict[str, Any]) -> Optional[Point]:
     """The middle of the biggest blob of colour `spec` (DIALOG_BUTTONS: "box", "hsv" - one or two (low, high) ranges -, "size" - (width, height) ranges, and "join": the px the blobs are grown by first) in `img`, or None."""
     left, top, right, bottom = spec["box"]
+    if img is None or img[top:bottom, left:right].size == 0:
+        return None
     hsv = cv2.cvtColor(img[top:bottom, left:right], cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(hsv, *spec["hsv"][0])
     for extra in spec["hsv"][1:]:
@@ -4070,6 +4150,19 @@ def find_dialog_button(img: Image, spec: dict[str, Any]) -> Optional[Point]:
         if min_w <= width <= max_w and min_h <= height <= max_h and (best is None or area > best[0]):
             best = (area, (left + int(centres[i][0]), top + int(centres[i][1])))
     return best[1] if best is not None else None
+
+def click_dialog_button(name: str, fixed: Point) -> Point:
+    """Click the button `name` (DIALOG_BUTTONS) at `fixed`, where it was measured on the captures - or, when it is found on the screen (find_dialog_button(), within its box) more than BUTTON_FOUND_SLACK px from there,
+    where it is found: a panel that has moved is still hit, and a button found a pixel or two off (the blob's middle is not the measured point) is clicked where it always was. The point clicked."""
+    found = find_dialog_button(grab_screen(), cfg.DIALOG_BUTTONS[name])
+    point = fixed
+    if found is None:
+        logger.debug(f"The {name} button was not found on the screen - the fixed position {fixed} is clicked")
+    elif abs(found[0] - fixed[0]) > cfg.BUTTON_FOUND_SLACK or abs(found[1] - fixed[1]) > cfg.BUTTON_FOUND_SLACK:
+        logger.debug(f"The {name} button is at {found}, not at {fixed}: clicked where it is")
+        point = found
+    hover_click(*point)
+    return point
 
 def dismiss_stray_windows() -> Optional[str]:
     """Close any window from STRAY_WINDOWS that is open (found by its title crop); returns
@@ -4335,7 +4428,7 @@ def daily_task_kinds(img: Image) -> list[Optional[str]]:
     for bar_top, _ in daily_bars(img):
         box = (cfg.DAILY_TASK_TEXT_X[0], max(0, bar_top - cfg.DAILY_TASK_TEXT_HEIGHT), cfg.DAILY_TASK_TEXT_X[1], bar_top)
         kind = None
-        for name, label in (("daily_neon", "neon"), ("daily_common", "common")):
+        for name, label in (("daily_neon", "neon"), ("daily_common", "common"), ("daily_trick", "trick")):
             crop = templates.get(name)
             if crop is not None and find_template(img, crop, box)[0] >= cfg.DAILY_KIND_MATCH:
                 kind = label
@@ -4399,9 +4492,13 @@ def task_pet_wanted(img: Image, failed: dict[str, float]) -> str:
     was not given up on since the last reset (`failed`); "" when there is none (every such task is done, or there are none)."""
     reset = last_daily_boundary(time.time(), cfg.DAILY_TASKS_RESET_HOUR)
     for (_, share), kind in zip(daily_bars(img), daily_task_kinds(img)):
-        if kind is not None and share < cfg.DAILY_TASK_DONE_SHARE and failed.get(kind, 0.0) < reset:
+        if kind in cfg.DAILY_PET_KINDS and share < cfg.DAILY_TASK_DONE_SHARE and failed.get(kind, 0.0) < reset:
             return kind
     return ""
+
+def trick_task_open(img: Image) -> bool:
+    """Whether the board shows a daily task that asks for a trick of the pet ("Make your pet do a trick", `daily_trick`) whose bar is not full."""
+    return any(kind == "trick" and share < cfg.DAILY_TASK_DONE_SHARE for (_, share), kind in zip(daily_bars(img), daily_task_kinds(img)))
 
 def look_at_daily_tasks() -> Optional[str]:
     """With the Task Board open: when daily_tasks_enabled and the tasks are due (daily_tasks_due(): the first look after the reset hour, then every DAILY_TASKS_INTERVAL - DAILY_TASKS_ACTIVE_INTERVAL while a task pet
@@ -4420,6 +4517,8 @@ def look_at_daily_tasks() -> Optional[str]:
         return None
     kinds = daily_task_kinds(img)
     log_run_event("daily tasks: " + ", ".join(f"{share:.0%}" + (f" ({kind})" if kind else "") for share, kind in zip(shares, kinds)))
+    trick = trick_task_open(img)
+    update_game_config(lambda c: c.update(trick_open=trick))
     keep_new_daily_tasks(img)
     try:
         save_screenshot()
@@ -4458,6 +4557,41 @@ def apply_task_pet(wanted: Optional[str]) -> None:
     restore_pet_filters()
     update_game_config(lambda c: c.update(task_pet="", task_pet_failed={**c["task_pet_failed"], wanted: time.time()}, pet_repicked=time.time()))
 
+def look_at_tricks() -> None:
+    """For the daily task that asks for a trick of the pet (config `trick_open`, once after each reset): focus the pet, click the TRICKS button of its view (`pet_tricks`) and keep the screen of what that opens,
+    twice (TRICKS_LOOK_WAIT apart), in the moments (`daily trick looked`) and SCREENSHOTS_DIR - the menu has not been seen, so no trick is picked yet: this is only to see it. Then the pet's view is closed
+    (dismiss_stray_windows()). Never raises."""
+    try:
+        config = load_game_config()
+        if not config["trick_open"] or config["trick_looked"] >= last_daily_boundary(time.time(), cfg.DAILY_TASKS_RESET_HOUR) or not focus_roblox():
+            return
+        update_game_config(lambda c: c.update(trick_looked=time.time()))
+        phase_reset()
+        with wanting_pet_focus():
+            if not focus_pet_reliably():
+                log_run_event("daily tasks: the pet's view did not come up for the trick task")
+                return
+            wait_interruptible(cfg.UI_SETTLE)
+            button = popup_found(grab_screen(), "pet_tricks")
+            phase_shot("the pet's view" + ("" if button is not None else ", with no TRICKS button found"))
+            if button is None:
+                log_run_event("daily tasks: no TRICKS button in the pet's view (screen kept)")
+            else:
+                hover_click(*button)
+                wait_interruptible(cfg.UI_SETTLE)
+                phase_shot("the Tricks menu, after the click")
+                wait_interruptible(cfg.TRICKS_LOOK_WAIT)
+                phase_shot("the Tricks menu, a little after")
+                log_run_event("daily tasks: the pet's Tricks menu looked at for the trick task (screens kept)")
+                try:
+                    save_screenshot()
+                except OSError:
+                    pass
+        dismiss_stray_windows()
+        phase_commit("daily trick looked")
+    except Exception:
+        logger.exception("Looking at the pet's tricks failed")
+
 def collect_pet_pen() -> bool:
     """Open the Task Board and, when it has the "Pet Pen Ready" card, click it, wait out the age-up screen and click its NICE!. True once the board has been looked at (and the pets collected if they were
     ready), False when the game was not in front or the NICE! never came."""
@@ -4480,6 +4614,7 @@ def collect_pet_pen() -> bool:
             wait_interruptible(cfg.PET_PEN_UI_SETTLE)
             state.task_board_wanted = False
             apply_task_pet(wanted)                                                        # (the backpack, with the board closed)
+            look_at_tricks()
             return True
         hover_click(*card)
         wait_interruptible(cfg.PET_PEN_ANIMATION_WAIT)
@@ -4640,18 +4775,18 @@ def ensure_pen_age_filter() -> bool:
         return False
     changed = untick_egg_and_full_grown()
     if changed is None:
-        hover_click(*cfg.SETUP_FILTER_CANCEL_POS)
+        click_dialog_button("filter_cancel", cfg.SETUP_FILTER_CANCEL_POS)
         wait_interruptible(cfg.UI_SETTLE)
         return False
     if not changed:
-        hover_click(*cfg.SETUP_FILTER_CANCEL_POS)                                      # (already as it should be: left as it is)
+        click_dialog_button("filter_cancel", cfg.SETUP_FILTER_CANCEL_POS)                                      # (already as it should be: left as it is)
         wait_interruptible(cfg.UI_SETTLE)
         return True
-    hover_click(*cfg.SETUP_CONFIRM_POS)
+    click_dialog_button("filter_confirm", cfg.SETUP_CONFIRM_POS)
     wait_interruptible(cfg.UI_SETTLE)
     ok = open_filter_panel(cfg.PET_PEN_FILTER_BUTTON_POS) and scroll_filters_to_age() and age_filter_is_right()
     log_run_event("pet pen: the backpack's Age filter is set" if ok else "pet pen: the backpack's Age filter did not take")
-    hover_click(*cfg.SETUP_FILTER_CANCEL_POS)
+    click_dialog_button("filter_cancel", cfg.SETUP_FILTER_CANCEL_POS)
     wait_interruptible(cfg.UI_SETTLE)
     return ok
 
@@ -4667,20 +4802,20 @@ def put_a_pet_in_the_pen() -> bool:
         log_run_event("pet pen: the backpack did not come up after Add Pet")
         return False
     if not ensure_pen_age_filter():
-        hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
+        click_dialog_button("backpack_close", cfg.PET_PEN_BACKPACK_CLOSE_POS)
         wait_interruptible(cfg.PET_PEN_UI_SETTLE)
         return False
     pet = choose_pen_pet()
     if pet is None:
         log_run_event("pet pen: no pet fits (all in a trade listing, equipped or none left)")
-        hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
+        click_dialog_button("backpack_close", cfg.PET_PEN_BACKPACK_CLOSE_POS)
         wait_interruptible(cfg.PET_PEN_UI_SETTLE)
         return False
     hover_click(*pet)
     wait_interruptible(cfg.PET_PEN_UI_SETTLE)
     if popup_visible(grab_screen(), "pet_backpack_title"):
         log_run_event("pet pen: the pet clicked did not go in")
-        hover_click(*cfg.PET_PEN_BACKPACK_CLOSE_POS)
+        click_dialog_button("backpack_close", cfg.PET_PEN_BACKPACK_CLOSE_POS)
         return False
     return True
 
@@ -4724,7 +4859,7 @@ def switch_pen_pets() -> bool:
             log_run_event(f"pet pen: {out} full-grown pet(s) switched")
     phase_shot("before the pen is closed")
     phase_commit("the pet pen switch")
-    hover_click(*cfg.PET_PEN_CLOSE_POS)
+    click_dialog_button("pen_close", cfg.PET_PEN_CLOSE_POS)
     wait_interruptible(cfg.PET_PEN_UI_SETTLE)
     return True
 
@@ -4788,7 +4923,7 @@ class RunRecorder:
         could be opened (nothing is recorded then)."""
         for extension, codec in ((".mp4", "mp4v"), (".avi", "MJPG")):
             path = os.path.splitext(self.path)[0] + extension
-            writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*codec), cfg.RECORD_FPS, (cfg.RECORD_WIDTH, cfg.RECORD_HEIGHT))  # type: ignore[attr-defined]
+            writer = cv2.VideoWriter(path, cv2.VideoWriter.fourcc(*codec), cfg.RECORD_FPS, (cfg.RECORD_WIDTH, cfg.RECORD_HEIGHT))
             if writer.isOpened():
                 self.path, self.writer = path, writer
                 self.thread = threading.Thread(target=self._record, daemon=True)
@@ -4887,7 +5022,7 @@ def pressed_inputs() -> set[str]:
     empty off Windows."""
     if os.name != "nt":
         return set()
-    get_state = ctypes.windll.user32.GetAsyncKeyState  # type: ignore[attr-defined]  # Windows only
+    get_state = windll().user32.GetAsyncKeyState
     return {name for code, name in VK_NAMES.items() if get_state(code) & 0x8000}
 
 def cursor_position() -> Point:
@@ -4896,7 +5031,7 @@ def cursor_position() -> Point:
         return 0, 0
     from ctypes import wintypes
     point = wintypes.POINT()
-    ctypes.windll.user32.GetCursorPos(ctypes.byref(point))  # type: ignore[attr-defined]  # Windows only
+    windll().user32.GetCursorPos(ctypes.byref(point))
     return point.x, point.y
 
 def to_reference(x: float, y: float) -> Point:
@@ -5051,7 +5186,7 @@ class InputCapture:
         last_move = 0.0
         while not self.stop_event.wait(cfg.CAPTURE_POLL_INTERVAL):
             try:
-                now_held = pressed_inputs() - {cfg.HOTKEYS["capture"]}
+                now_held = pressed_inputs() - {hotkey_key("capture")}
                 for name in sorted(now_held - held):
                     if name.startswith("mouse_"):
                         self._emit("mouse_down", button=name[len("mouse_"):], **self._where())
@@ -5112,27 +5247,31 @@ class InputCapture:
                 self.stop_event.wait(0.02)      # let the click land on screen before looking
 
     def _keep_within_budget(self) -> None:
-        """Needing more than `max_zips` zips: delete every other saved frame, never the newest, and save frames twice as
-        far apart from now on - until the zips needed are few enough."""
+        """Needing more than `max_zips` zips: delete a tenth (CAPTURE_THIN_FRACTION) of the saved frames that are not protected - the ones with the closest neighbours, none next to another, so that no hole is made - never the first or the newest, and save frames that much further
+        apart from now on - until the zips needed are few enough. (Deleting every other frame, and doubling the gap, as this once did, left the capture anywhere between half of the zips and all of them: 12 to 14 of 20 in
+        two long runs.) A tenth at a time, the capture is kept at 90-100% of its zips."""
         events = os.path.join(self.folder, "events.jsonl")
         while self.max_zips and len(self._kept) > 1 and len(plan_zip_parts(
                 [size for _, size in self._kept], (os.path.getsize(events) if os.path.exists(events) else 0) + self.reserve_bytes)) > self.max_zips:
-            keep = [frame for i, frame in enumerate(self._kept) if i % 2 == 0 or i == len(self._kept) - 1 or frame[0] in self.protected]
-            if len(keep) == len(self._kept):            # nothing went: the oldest frame that isn't protected (or the newest) goes
-                loose = [frame for frame in self._kept[:-1] if frame[0] not in self.protected]
-                if not loose:
-                    break                               # only frames that must stay are left
-                keep = [frame for frame in self._kept if frame != loose[0]]
-            for name, size in self._kept:
-                if (name, size) not in keep:
-                    try:
-                        os.remove(os.path.join(self.folder, name))
-                    except OSError:
-                        pass
-                    self._emit("frame_dropped", file=name)
-                    self.dropped += 1
-            self._kept = keep
-            self._gap *= 2
+            loose = [frame for frame in self._kept[1:-1] if frame[0] not in self.protected] or [frame for frame in self._kept[:-1] if frame[0] not in self.protected]
+            if not loose:
+                break                                   # only frames that must stay are left
+            count = max(1, round(len(loose) * cfg.CAPTURE_THIN_FRACTION))
+            at = {frame: i for i, frame in enumerate(self._kept)}
+            moment = lambda frame: float(frame[0][:-len(".png")].rsplit("_", 1)[1])
+            going: set[tuple[str, int]] = set()
+            for frame in sorted(loose, key=lambda f: moment(self._kept[at[f] + 1]) - moment(self._kept[at[f] - 1]) if at[f] > 0 else 0.0):      # (the frames whose neighbours are the closest go first: no hole is made)
+                if len(going) < count and not any(self._kept[at[frame] + step] in going for step in (-1, 1) if 0 <= at[frame] + step < len(self._kept)):
+                    going.add(frame)
+            for name, size in going:
+                try:
+                    os.remove(os.path.join(self.folder, name))
+                except OSError:
+                    pass
+                self._emit("frame_dropped", file=name)
+                self.dropped += 1
+            self._kept = [frame for frame in self._kept if frame not in going]
+            self._gap /= 1 - cfg.CAPTURE_THIN_FRACTION
 
     def _give_up(self, reason: str) -> None:
         self.stopped_because = reason
@@ -5217,7 +5356,7 @@ def toggle_input_capture() -> Optional[InputCapture]:
     capture = InputCapture(os.path.join(cfg.CAPTURES_DIR, "capture_" + time.strftime("%Y%m%d_%H%M%S")))
     capture.start()
     state.capture = capture
-    logger.info(f"Capture started (press {cfg.HOTKEYS['capture'].upper()} again to stop): {capture.folder}")
+    logger.info(f"Capture started ({'press ' + hotkey_key('capture').upper() + ' again to stop' if hotkey_key('capture') else 'the capture key is not set: /capture stops it'}): {capture.folder}")
     return capture
 
 # The moments of a run: a capture of the whole run kept to MOMENTS_ZIPS zips however long it goes (InputCapture with a budget: it thins itself out, so what is left is spread over the run), with the
@@ -5279,27 +5418,27 @@ def phase_reset() -> None:
     state.phase_shots.clear()
 
 def phase_commit(why: str) -> None:
-    """Put the screens of the phases of the need that ran into the moments capture (labelled with `why` and the phase), and forget them. Never raises."""
+    """Put the screens of the phases of the need that ran into the moments capture (labelled with `why` and the phase), and forget them. At most PHASE_FAILED_PER_WINDOW sets of one `why` (PHASE_GOOD_PER_WINDOW
+    when it ends "went well") in each PHASE_WINDOW_HOURS of the run, so that the screens are spread over the whole run and a need that fails every few minutes does not use all of the budget in its first hour. Never raises."""
     capture, shots = state.moments, list(state.phase_shots)
     state.phase_shots.clear()
     if capture is None or not shots:
         return
     try:
+        good = why.endswith("went well")
+        key = (why, int((time.time() - capture.started) // (cfg.PHASE_WINDOW_HOURS * 3600)))
+        if state.phase_kept.get(key, 0) >= (cfg.PHASE_GOOD_PER_WINDOW if good else cfg.PHASE_FAILED_PER_WINDOW):
+            return
+        state.phase_kept[key] = state.phase_kept.get(key, 0) + 1
         capture.note(f"phase screens kept: {why} ({len(shots)})")
         for seconds, label, png in shots:
-            capture.keep_frame(png, seconds, f"{why}: {label}", essential=not why.endswith("went well"))
+            capture.keep_frame(png, seconds, f"{why}: {label}", essential=not good)
     except Exception as error:
         logger.debug(f"The screens of the phases were not kept: {error}")
 
 def phase_done_well(need_name: str) -> None:
-    """A need went well: its screens are dropped, but one execution in PHASE_KEEP_GOOD_EVERY is kept, as the good one to compare a failing one with."""
-    count = state.phase_ok.get(need_name, 0) + 1
-    if count >= cfg.PHASE_KEEP_GOOD_EVERY:
-        state.phase_ok[need_name] = 0
-        phase_commit(f"{need_name} went well")
-    else:
-        state.phase_ok[need_name] = count
-        phase_reset()
+    """A need went well: its screens are kept as the good one to compare a failing one with, within the quota of phase_commit() (the first of each window), else dropped."""
+    phase_commit(f"{need_name} went well")
 
 def note_moment(message: str) -> None:
     """A line of the run log for the moments capture (log_run_event() calls it); one that starts as MOMENTS_MARK_PREFIXES says is also a moment to keep (at most one every MOMENTS_MARK_GAP seconds). Never raises."""
@@ -5337,7 +5476,7 @@ def copy_tail(source: str, target: str, limit: int) -> None:
 
 def write_moments_files(capture: InputCapture, seconds: float) -> None:
     """The files of a kept run's moments besides the frames: README.txt (what everything is and what the macro is, for a reader with nothing else), the run's own log (run_log.txt), status.json,
-    config.json (the game config but for the private server link), failures.txt (what was saved for the run's failures), the commit in info.json. Never raises."""
+    config.json (the game config but for the private server link), failures.txt (what was saved for the run's failures), daily_task_<n>.png (a crop of each daily task seen, from DAILY_TASKS_DIR), the commit in info.json. Never raises."""
     folder = capture.folder
     try:
         run = state.run_number
@@ -5361,6 +5500,10 @@ def write_moments_files(capture: InputCapture, seconds: float) -> None:
             picture = cv2.imread(os.path.join(cfg.FAILURE_DIR, name, "screen.png"))
             if picture is not None:
                 cv2.imwrite(os.path.join(folder, f"failure_{name}.jpg"), picture, [cv2.IMWRITE_JPEG_QUALITY, cfg.FAILURE_JPEG_QUALITY])
+        if os.path.isdir(cfg.DAILY_TASKS_DIR):                                                       # (the crop of every daily task seen: small, and only on the PC otherwise)
+            for name in sorted(os.listdir(cfg.DAILY_TASKS_DIR)):
+                if name.startswith("task_") and name.endswith(".png"):
+                    shutil.copyfile(os.path.join(cfg.DAILY_TASKS_DIR, name), os.path.join(folder, "daily_" + name))
         version = macro_version()
         info_path = os.path.join(folder, "info.json")
         with open(info_path, encoding="utf-8") as f:
@@ -5394,6 +5537,7 @@ THE FILES:
   output.log     everything the macro printed, debug lines too (the last part of the run when it was long), with times.
   run_log.txt    the run's own log (the same lines as the "log" events, with their wall-clock times).
   failures.txt   what the macro saved for each failure (reason, time, what was detected, disabled needs); failure_<folder>.jpg are their screenshots (the game window, JPEG; at most {shots} of them, spread over the run).
+  daily_task_<n>.png   a crop of each daily task the macro has seen on the Task Board (its name, what to do, the reward's side left out), one file for each different task.
   status.json    the macro's status when the run ended. config.json: its settings (the private server link is left out), the enabled needs and the counts of the run.
   info.json      the capture's facts, the commit, and the moments.
 
@@ -5451,7 +5595,7 @@ def process_memory_mb() -> Optional[float]:
                         "QuotaPeakNonPagedPoolUsage", "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage")]
             counters = MemoryCounters()
             counters.cb = ctypes.sizeof(counters)
-            kernel32, psapi = ctypes.windll.kernel32, ctypes.windll.psapi  # type: ignore[attr-defined]  # Windows only
+            kernel32, psapi = windll().kernel32, windll().psapi
             kernel32.GetCurrentProcess.restype = wintypes.HANDLE
             psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(MemoryCounters), wintypes.DWORD]
             if not psapi.GetProcessMemoryInfo(kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb):
@@ -5469,7 +5613,7 @@ def system_cpu_times() -> Optional[tuple[float, float]]:
         if os.name == "nt":
             from ctypes import wintypes
             idle, kernel, user = wintypes.FILETIME(), wintypes.FILETIME(), wintypes.FILETIME()
-            if not ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)):  # type: ignore[attr-defined]  # Windows only
+            if not windll().kernel32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)):
                 return None
             def value(ft: Any) -> float:
                 return float((ft.dwHighDateTime << 32) | ft.dwLowDateTime)
@@ -5492,7 +5636,7 @@ def system_memory_percent() -> Optional[float]:
                         "ullAvailVirtual", "ullAvailExtendedVirtual")]
             status = MemoryStatus()
             status.dwLength = ctypes.sizeof(status)
-            if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):  # type: ignore[attr-defined]  # Windows only
+            if not windll().kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
                 return None
             return float(status.dwMemoryLoad)
         info = {}
@@ -6227,7 +6371,7 @@ def virtual_display_present() -> bool:
         class DisplayDevice(ctypes.Structure):
             _fields_ = [("cb", wintypes.DWORD), ("DeviceName", ctypes.c_wchar * 32), ("DeviceString", ctypes.c_wchar * 128), ("StateFlags", wintypes.DWORD),
                         ("DeviceID", ctypes.c_wchar * 128), ("DeviceKey", ctypes.c_wchar * 128)]
-        user32 = ctypes.windll.user32  # type: ignore[attr-defined]  # Windows only
+        user32 = windll().user32
         for number in range(cfg.DISPLAY_ADAPTERS_MAX):
             device = DisplayDevice()
             device.cb = ctypes.sizeof(device)
@@ -6272,7 +6416,7 @@ def keep_awake(on: bool) -> None:
         return
     flags = 0x80000000 | (0x00000001 | 0x00000002 if on else 0)               # ES_CONTINUOUS, with ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED while on
     try:
-        ctypes.windll.kernel32.SetThreadExecutionState(flags)  # type: ignore[attr-defined]  # Windows only
+        windll().kernel32.SetThreadExecutionState(flags)
     except (OSError, AttributeError):
         pass
 
@@ -6343,7 +6487,7 @@ class Blackout:
             return False
         if self.switch_display():
             keep_awake(True)
-            logger.info(f"Screen off: the game is on the virtual display ({cfg.HOTKEYS['blackout'].upper()} again to show it)")
+            logger.info(f"Screen off: the game is on the virtual display ({hotkey_key('blackout').upper() + ' again' if hotkey_key('blackout') else '/blank'} to show it)")
             return True
         before = grab_screen()
         window = self.make_window()
@@ -6358,7 +6502,7 @@ class Blackout:
             logger.warning("The screen was not blanked: " + ("the macro's screenshots would see the black window too" if seen else "the screen is too bright to test whether they would (try again from a darker view)"))
             return False
         window.configure(bg="black")
-        logger.info(f"Screen blanked ({cfg.HOTKEYS['blackout'].upper()} again to show it)")
+        logger.info(f"Screen blanked ({hotkey_key('blackout').upper() + ' again' if hotkey_key('blackout') else '/blank'} to show it)")
         keep_awake(True)
         self.keep_on_top()
         return True
@@ -6377,7 +6521,7 @@ class Blackout:
         if self.window is None or not self.supported():
             return
         try:
-            user32 = ctypes.windll.user32  # type: ignore[attr-defined]  # Windows only
+            user32 = windll().user32
             hwnd = user32.GetParent(self.window.winfo_id()) or self.window.winfo_id()
             topmost = ctypes.c_void_p(-1)                                            # HWND_TOPMOST (a handle is as wide as a pointer: a plain -1 would be passed as 32 bits and not be the value)
             if not user32.SetWindowPos(ctypes.c_void_p(hwnd), topmost, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010):     # SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
@@ -6420,7 +6564,7 @@ class Blackout:
         window.configure(bg="white", cursor="none")
         window.geometry(f"{self.root.winfo_screenwidth()}x{self.root.winfo_screenheight()}+0+0")
         window.update_idletasks()
-        user32 = ctypes.windll.user32  # type: ignore[attr-defined]  # Windows only
+        user32 = windll().user32
         hwnd = user32.GetParent(window.winfo_id()) or window.winfo_id()
         style = user32.GetWindowLongW(hwnd, -20)                                       # GWL_EXSTYLE
         user32.SetWindowLongW(hwnd, -20, style | 0x00080000 | 0x00000020 | 0x08000000 | 0x00000080)    # layered, transparent (click-through), no-activate, tool window
@@ -6434,12 +6578,13 @@ class Blackout:
 # The Guide tab: (heading, lines); {stop}, {capture}, {blackout}, {new_need} and {screenshot} are the keys of HOTKEYS.
 GUIDE: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Keys", (
-        "{stop} stops the macro, in any window.",
-        "{capture} starts and stops an input capture (in Roblox).",
-        "{screenshot} saves a screenshot to debug/screenshots (in Roblox).",
-        "{blackout} blanks the screen while the macro works, and shows it again (in Roblox).",
-        "{new_need} teaches a need icon the macro does not know (in Roblox).",
-        "Each key can be switched off in Settings (Keys), so that it is typed in the game; the red button and the bot still stop the macro.")),
+        "Stop the macro, in any window: {stop}.",
+        "Start and stop an input capture (in Roblox): {capture}.",
+        "Save a screenshot to debug/screenshots (in Roblox): {screenshot}.",
+        "Blank the screen while the macro works, and show it again (in Roblox): {blackout}.",
+        "Teach a need icon the macro does not know (in Roblox): {new_need}.",
+        "No key is set at first. Settings > Hotkeys: click a key's button, then press the key (Backspace clears it, Escape keeps it); the checkbox switches a key off, and the macro then ignores it while the game still gets it.",
+        "Without a stop key, the red button, the bot, or the mouse in a corner of the screen stops the macro.")),
     ("Main", (
         "The blue button starts the loop, the red one stops it.",
         "Run Setup at the next loop: once, the next time the loop starts or comes round (equip the pet, set the filters).")),
@@ -6458,6 +6603,14 @@ GUIDE: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
+# What each hotkey does, for the Settings tab's Hotkeys subtab (the keys of HOTKEYS, in the order shown).
+HOTKEY_LABELS = {"stop": "Stop the macro (in any window)",
+                 "capture": "Start / stop a capture (in Roblox)",
+                 "screenshot": "Save a screenshot (in Roblox)",
+                 "blackout": "Blank the screen (in Roblox)",
+                 "new_need": "Teach a new need icon (in Roblox)"}
+
+
 class AdoptMeGUI:
     def __init__(self, root: tk.Tk) -> None:
         state.macro_window = self
@@ -6473,6 +6626,7 @@ class AdoptMeGUI:
         self.fg = cfg.GUI_FG
         self.root.configure(bg=self.bg)
 
+        load_hotkeys()
         self.set_style()
         self.create_ui()
 
@@ -6663,20 +6817,25 @@ class AdoptMeGUI:
     def watch_stop_hotkey(self) -> None:
         """Start a thread that watches the hotkeys: HOTKEYS["stop"] stops the macro (in any window), HOTKEYS["capture"] starts or
         stops an input capture (only while Roblox is focused). See docs/ARCHITECTURE.md#gui-internals."""
-        hotkeys = [(cfg.HOTKEYS["stop"], self.stop_by_hotkey, True, False),
-                   (cfg.HOTKEYS["capture"], self.capture_by_hotkey, False, True),
-                   (cfg.HOTKEYS["blackout"], self.blackout_by_hotkey, False, True),
-                   (cfg.HOTKEYS["screenshot"], self.screenshot_by_hotkey, False, True),
-                   (cfg.HOTKEYS["new_need"], self.new_need_by_hotkey, False, True)]   # (key, action, only while a run is going, only while Roblox is focused)
+        hotkeys = [("stop", self.stop_by_hotkey, True, False),
+                   ("capture", self.capture_by_hotkey, False, True),
+                   ("blackout", self.blackout_by_hotkey, False, True),
+                   ("screenshot", self.screenshot_by_hotkey, False, True),
+                   ("new_need", self.new_need_by_hotkey, False, True)]   # (name, action, only while a run is going, only while Roblox is focused); the key is looked up at every look: it can be changed
 
         def watch():
             was_down = [False] * len(hotkeys)
             reported = [False] * len(hotkeys)
+            keys = [hotkey_key(name) for name, *_ in hotkeys]
             while True:
-                for i, (key, action, only_while_running, only_in_roblox) in enumerate(hotkeys):
+                for i, (name, action, only_while_running, only_in_roblox) in enumerate(hotkeys):
+                    key = hotkey_key(name)
                     try:
                         down = hotkey_down(key)
-                        in_roblox_only = only_in_roblox and not (key == cfg.HOTKEYS["blackout"] and self.blackout.shown)      # (a blank screen is shown again from any window: with the panel off the focus may be anywhere)
+                        if key != keys[i]:                                         # (changed in the Settings tab: the key that was just pressed to set it does not act)
+                            keys[i], was_down[i] = key, down
+                            continue
+                        in_roblox_only = only_in_roblox and not (name == "blackout" and self.blackout.shown)      # (a blank screen is shown again from any window: with the panel off the focus may be anywhere)
                         if not state.typing and hotkey_fires(down, was_down[i], only_while_running, self.is_running, in_roblox_only):         # (not while the macro types a word: its own letters)
                             self.root.after(0, action)
                         was_down[i] = down
@@ -6704,8 +6863,8 @@ class AdoptMeGUI:
         return ("blanked (display off)" if self.blackout.display_switched else "blanked") if self.blackout.shown else ("not blanked" if want else "shown")
 
     def new_need_by_hotkey(self) -> None:
-        """HOTKEYS["new_need"] was pressed in Roblox: look at the need bar and ask for the name of any icon on it the macro does not know (Tk's thread), unless the Options subtab's checkbox
-        has the key off (it is then typed in the game)."""
+        """HOTKEYS["new_need"] was pressed in Roblox: look at the need bar and ask for the name of any icon on it the macro does not know (Tk's thread), unless the Hotkeys subtab's checkbox
+        has the key off (the macro then ignores it)."""
         if not self.config_flag_vars["new_need_hotkey_enabled"].get():
             return
         try:
@@ -6747,8 +6906,8 @@ class AdoptMeGUI:
             return f"failed: {error}"
 
     def blackout_by_hotkey(self) -> None:
-        """HOTKEYS["blackout"] was pressed: blank the screen or show it again (Tk's thread), unless the Options subtab's checkbox has the key off (it is
-        then typed in the game). The screen is only blanked while the macro is doing something (the loop or an action such as Setup); one that is blank can always be shown again."""
+        """HOTKEYS["blackout"] was pressed: blank the screen or show it again (Tk's thread), unless the Hotkeys subtab's checkbox has the key off (it is
+        then ignored). The screen is only blanked while the macro is doing something (the loop or an action such as Setup); one that is blank can always be shown again."""
         if not self.config_flag_vars["blackout_hotkey_enabled"].get():
             return
         if not self.blackout.shown and not self.is_running:
@@ -6767,10 +6926,10 @@ class AdoptMeGUI:
     def stop_by_hotkey(self) -> None:
         """HOTKEYS["stop"] was pressed: stop, same as the [STOP] button, and say so (unless its checkbox has the key off)."""
         if self.is_running and self.hotkey_enabled("stop"):
-            logger.info(f"'{cfg.HOTKEYS['stop'].upper()}' pressed")
+            logger.info(f"'{hotkey_key('stop').upper()}' pressed")
             self.stop()   # first: a failing log write must not keep the macro running
             try:
-                log_run_event(f"stopped with the {cfg.HOTKEYS['stop'].upper()} key")
+                log_run_event(f"stopped with the {hotkey_key('stop').upper()} key")
             except OSError:
                 pass
 
@@ -6808,7 +6967,13 @@ class AdoptMeGUI:
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill=tk.X, padx=cfg.GUI_OUTER_PADDING, pady=(cfg.GUI_OUTER_PADDING, 0))
         btn_frame = tk.Frame(notebook, bg=self.bg)
-        options_tab, options_inner = self.add_scrolled_frame(notebook)
+        options_tab = tk.Frame(notebook, bg=self.bg)
+        settings_pages = ttk.Notebook(options_tab)
+        settings_pages.pack(fill=tk.BOTH, expand=True)
+        general_page, options_inner = self.add_scrolled_frame(settings_pages)
+        hotkeys_page = tk.Frame(settings_pages, bg=self.bg)
+        settings_pages.add(general_page, text="General")
+        settings_pages.add(hotkeys_page, text="Hotkeys")
         debug_tab = tk.Frame(notebook, bg=self.bg)
         notebook.add(btn_frame, text="Main")
         notebook.add(options_tab, text="Settings")
@@ -6856,6 +7021,7 @@ class AdoptMeGUI:
         # action_buttons: they must stay usable while a workflow is running,
         # which is safe since update_game_config() is locked.
         self.build_settings_tab(options_inner)
+        self.build_hotkeys_tab(hotkeys_page)
 
         # Debug tab: the need handlers (a switch and a Test button each, regardless of whether it's in
         # ENABLED_NEEDS, so any can be run on its own, plus one that runs them all in turn).
@@ -7005,7 +7171,7 @@ class AdoptMeGUI:
                 # Tkinter widgets may only be touched from the main thread; root.after() hands this callback to it instead of calling
                 # .config() directly from this background thread. The flag goes down there too, in the same step as the buttons: set from here
                 # first, an action asked for from outside could start in between and have its buttons put back to "Ready" under it.
-                self.root.after(0, lambda status=final_status: self._finish_running(status))  # type: ignore[misc]
+                self.root.after(0, partial(self._finish_running, final_status))
 
         self.worker = threading.Thread(target=worker, daemon=True)
         self.worker.start()
@@ -7028,9 +7194,9 @@ class AdoptMeGUI:
         """Single place that toggles button state + status text. Called both
         right before a background task starts and from its finally block
         when it ends, so the two are always kept in sync."""
-        button_state = tk.DISABLED if running else tk.NORMAL
+        button_state: Literal["normal", "disabled"] = tk.DISABLED if running else tk.NORMAL
         for btn in self.action_buttons:
-            btn.config(state=button_state)  # type: ignore[call-overload]
+            btn.config(state=button_state)
         self.status.config(text="Running..." if running else (status_text or "Ready"))
         run_stats.busy = running                                         # (in the status file, for the bot)
         write_status()
@@ -7042,10 +7208,18 @@ class AdoptMeGUI:
         var = tk.BooleanVar(value=config[key])
         self.config_flag_vars[key] = var
         tk.Checkbutton(parent, text=label, variable=var,
-                       command=lambda k=key, v=var: self.set_config_flag(k, v.get()),  # type: ignore[misc]
+                       command=partial(self.config_flag_clicked, key, var),
                        font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.bg, fg=self.fg,
                        selectcolor=self.bg, activebackground=self.bg, activeforeground=self.fg,
                        anchor=tk.W, cursor="hand2").pack(fill=tk.X, pady=cfg.GUI_WIDGET_SPACING)
+
+    def config_flag_clicked(self, key: str, var: tk.BooleanVar) -> None:
+        """A checkbox of a persisted switch was clicked: keep what it says now."""
+        self.set_config_flag(key, var.get())
+
+    def need_clicked(self, name: str, var: tk.BooleanVar) -> None:
+        """A need's checkbox was clicked: keep what it says now."""
+        self.set_need_enabled(name, var.get())
 
     def set_config_flag(self, key: str, value: Any) -> None:
         """Persist one of the config's on/off switches (a checkbox was clicked)."""
@@ -7101,10 +7275,10 @@ class AdoptMeGUI:
             cell.grid(row=2 + i // 2, column=i % 2, sticky=tk.EW, padx=cfg.GUI_WIDGET_SPACING)
             var = tk.BooleanVar(value=need_is_enabled(name))
             self.need_vars[name] = var
-            tk.Checkbutton(cell, text=name.capitalize(), variable=var, command=lambda n=name, v=var: self.set_need_enabled(n, v.get()),  # type: ignore[misc]
+            tk.Checkbutton(cell, text=name.capitalize(), variable=var, command=partial(self.need_clicked, name, var),
                            font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.fg, selectcolor=self.bg,
                            activebackground=self.bg, activeforeground=self.fg, anchor=tk.W, cursor="hand2").pack(side=tk.LEFT)
-            btn = tk.Button(cell, text="Test", command=lambda n=name, c=handler_cls: self.test_handler(n, c),  # type: ignore[misc]
+            btn = tk.Button(cell, text="Test", command=partial(self.test_handler, name, handler_cls),
                             font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.accent, fg=cfg.GUI_ON_ACCENT, cursor="hand2", padx=cfg.GUI_ROW_SPACING, pady=0)
             btn.pack(side=tk.RIGHT, pady=cfg.GUI_LABEL_PADDING)
             self.action_buttons.append(btn)
@@ -7115,10 +7289,17 @@ class AdoptMeGUI:
         logger.info(f"{name} need {'on' if value else 'off'}")
 
     def build_guide_tab(self, parent: Any) -> None:
-        """Fill the Guide tab: what the keys and the switches do (read only; GUIDE has the text, the key letters come from HOTKEYS)."""
-        keys = {name: key.upper() for name, key in cfg.HOTKEYS.items()}
-        text = self.add_scrolled_text(parent, height=cfg.GUI_GUIDE_HEIGHT, width=cfg.GUI_CONSOLE_WIDTH, wrap=tk.WORD, bg=self.bg, fg=self.fg, font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE))
-        text.tag_configure("heading", foreground=self.accent, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"))
+        """Fill the Guide tab: what the keys and the switches do (read only; GUIDE has the text, the key letters come from HOTKEYS_NOW)."""
+        self.guide_text = self.add_scrolled_text(parent, height=cfg.GUI_GUIDE_HEIGHT, width=cfg.GUI_CONSOLE_WIDTH, wrap=tk.WORD, bg=self.bg, fg=self.fg, font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE))
+        self.guide_text.tag_configure("heading", foreground=self.accent, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"))
+        self.fill_guide()
+
+    def fill_guide(self) -> None:
+        """The Guide tab's text, with the hotkeys as they are now (again when one is changed)."""
+        keys = {name: key.upper() or "not set" for name, key in HOTKEYS_NOW.items()}
+        text = self.guide_text
+        text.configure(state=tk.NORMAL)
+        text.delete("1.0", tk.END)
         for heading, lines in GUIDE:
             text.insert(tk.END, heading + "\n", "heading")
             for line in lines:
@@ -7138,7 +7319,7 @@ class AdoptMeGUI:
                  ).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING)
 
     def build_settings_tab(self, parent: Any) -> None:
-        """Fill the Settings tab, in three groups: what the loop does, the rejoin and the keys (the debugging options are on the Debug tab). Every checkbox is a persisted switch (add_config_checkbox()), usable while a run goes on."""
+        """Fill the Settings tab's General subtab, in two groups: what the loop does and the rejoin (the hotkeys are the Hotkeys subtab, the debugging options on the Debug tab). Every checkbox is a persisted switch (add_config_checkbox()), usable while a run goes on."""
         config = load_game_config()
         self.add_section(parent, "The loop")
         for label, key in (("Tend the money tree", "money_tree_enabled"),
@@ -7159,12 +7340,63 @@ class AdoptMeGUI:
         server_link_entry.bind("<FocusOut>", lambda e: self.save_server_link())
         server_link_entry.bind("<Return>", lambda e: self.save_server_link())
 
-        self.add_section(parent, "Keys")
-        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['stop'].upper()} stops the macro, in any window", "stop_hotkey_enabled", config)
-        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['capture'].upper()} starts and stops a capture in Roblox", "capture_hotkey_enabled", config)
-        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['screenshot'].upper()} saves a screenshot in Roblox", "screenshot_hotkey_enabled", config)
-        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['blackout'].upper()} blanks the screen in Roblox", "blackout_hotkey_enabled", config)
-        self.add_config_checkbox(parent, f"{cfg.HOTKEYS['new_need'].upper()} teaches a new need icon in Roblox", "new_need_hotkey_enabled", config)
+    def build_hotkeys_tab(self, parent: Any) -> None:
+        """Fill the Settings tab's Hotkeys subtab: for each hotkey a checkbox (on: the key acts; off: the macro ignores it, and the game still gets the key as it always does) and a button with its key - click it, then press the new key (Escape keeps the old one)
+        - and a button for every key back to its default. The keys are kept in the game config (`hotkeys`) and act at once."""
+        config = load_game_config()
+        self.hotkey_buttons: dict[str, Any] = {}
+        self.hotkey_note = tk.StringVar(value="")
+        self.add_hint(parent, "A checked key acts; an unchecked one is ignored by the macro. A button with - has no key.")
+        for name, label in HOTKEY_LABELS.items():
+            row = tk.Frame(parent, bg=self.bg)
+            row.pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_WIDGET_SPACING)
+            var = tk.BooleanVar(value=config[f"{name}_hotkey_enabled"])
+            self.config_flag_vars[f"{name}_hotkey_enabled"] = var
+            tk.Checkbutton(row, text=label, variable=var, command=partial(self.config_flag_clicked, f"{name}_hotkey_enabled", var),
+                           font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE), bg=self.bg, fg=self.fg, selectcolor=self.bg,
+                           activebackground=self.bg, activeforeground=self.fg, anchor=tk.W, cursor="hand2").pack(side=tk.LEFT, fill=tk.X, expand=True)
+            button = tk.Button(row, text=hotkey_key(name).upper() or "-", width=cfg.GUI_HOTKEY_BUTTON_WIDTH, command=partial(self.change_hotkey, name),
+                               font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE, "bold"), bg=self.accent, fg=cfg.GUI_ON_ACCENT, cursor="hand2", bd=0, highlightthickness=0)
+            button.pack(side=tk.RIGHT)
+            self.hotkey_buttons[name] = button
+        tk.Label(parent, textvariable=self.hotkey_note, font=(cfg.GUI_FONT, cfg.GUI_STATUS_FONT_SIZE), bg=self.bg, fg=self.accent, anchor=tk.W, justify=tk.LEFT,
+                 wraplength=cfg.GUI_HOTKEY_NOTE_WIDTH).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_ROW_SPACING)
+        tk.Button(parent, text="All keys back to their defaults", command=self.reset_hotkeys_clicked, font=(cfg.GUI_FONT, cfg.GUI_SECTION_FONT_SIZE),
+                  bg=cfg.GUI_STOP_COLOR, fg=self.fg, cursor="hand2", bd=0, highlightthickness=0).pack(fill=tk.X, padx=cfg.GUI_WIDGET_SPACING, pady=cfg.GUI_ROW_SPACING)
+
+    def show_hotkeys(self) -> None:
+        """The hotkey buttons and the Guide tab show the keys as they are now."""
+        for name, button in self.hotkey_buttons.items():
+            button.configure(text=hotkey_key(name).upper() or "-")
+        self.fill_guide()
+
+    def change_hotkey(self, name: str) -> None:
+        """The hotkey `name`'s button was clicked: the next key pressed in this window is its new key (Escape: no change; a key that cannot be one - save_hotkey() says why - is refused and the old one kept)."""
+        button = self.hotkey_buttons[name]
+        button.configure(text="press a key...")
+        self.hotkey_note.set(f"Press the new key for: {HOTKEY_LABELS[name]} (Backspace clears it, Escape keeps {hotkey_key(name).upper() or 'no key'})")
+
+        def pressed(event: Any) -> str:
+            if event.keysym in ("Shift_L", "Shift_R", "Control_L", "Control_R", "Alt_L", "Alt_R", "Caps_Lock", "Num_Lock"):
+                return "break"                                              # (a modifier alone is not a key to take)
+            self.root.unbind("<Key>", binding)
+            if event.keysym != "Escape":
+                clear = event.keysym in ("BackSpace", "Delete")
+                problem = save_hotkey(name, "" if clear else event.char or "")
+                self.hotkey_note.set(problem or f"{HOTKEY_LABELS[name]}: {hotkey_key(name).upper() or 'no key'}")
+                if not problem:
+                    logger.info(f"The {name} hotkey is now " + (f"'{hotkey_key(name).upper()}'" if hotkey_key(name) else "not set"))
+            else:
+                self.hotkey_note.set("")
+            self.show_hotkeys()
+            return "break"
+        binding = self.root.bind("<Key>", pressed, add="+")
+
+    def reset_hotkeys_clicked(self) -> None:
+        """The button for every hotkey back to its default."""
+        reset_hotkeys()
+        self.hotkey_note.set("")
+        self.show_hotkeys()
 
     def build_debug_options(self, parent: Any) -> None:
         """Fill the Debug tab's Options subtab: record the next run, capture the moments, show the debug lines in the output, refresh the debug folder, reset the config."""

@@ -11,7 +11,7 @@ What is in place and worth keeping:
 - **It reads the screen and presses keys.** No memory access, no injection (`pydirectinput`, `pyautogui`, `mss`). This is the line that keeps it a macro and not an exploit, and it stays.
 - **It recovers.** Rejoins on a timer and on failure, respawns, closes stray windows and notices, disables a need that keeps failing and gives it another chance.
 - **It can be diagnosed from outside.** The moments capture (`start_moments()`, `write_moments_files()`, `zip_capture()`) leaves a zip with frames, the run log, the failures and a README that explains itself; `tools/run_summary.py` reads it.
-- **It is tested on real frames.** About 700 tests, CI on every push (pyflakes, `tools/check_constants.py`, mypy, pytest), fixtures from real runs.
+- **It is tested on real frames.** About 700 tests, CI on every push (pyflakes, `tools/check_constants.py`, mypy, pytest; on Linux with Python 3.12 and 3.13 and on Windows, all from the pinned `requirements.txt`), fixtures from real runs.
 - **It has a GUI, a Guide tab and a Discord bot** (start, stop, status, update with rollback, pulling files out of the debug folder).
 - **It is documented** (`docs/ARCHITECTURE.md`; AI-written, which the README says).
 
@@ -22,9 +22,9 @@ What stops anyone else from using it:
 | Account | Setup equips the Alicorn when no pet is out, assumes the helicopter is the favourite vehicle, a locked house of one layout, and a backpack sorted by favourites. The pets, the house and the vehicles are the author's. |
 | Screen | Positions are in a 1920 x 1080 reference space (`REFERENCE_WIDTH`, `REFERENCE_HEIGHT`) scaled to the Roblox window. Other sizes were tried on fixtures only (1600 x 900 worked except one crop), never in the game. |
 | Crops | The need icons (`ref/needs`, 19) and the popup crops (`ref/popups`, about 90) were cut from one screen. A different render (the real window is scaled and softer than a sharp screenshot) already cost a feature once (the filter rows, run 5). |
-| Keys | `HOTKEYS` has two keys that exist only on some keyboard layouts (`ú`, `ô`) and is edited in code. |
+| Keys | Done in part (0.3): the five hotkeys are blank until chosen in the Settings tab's Hotkeys subtab. With no stop key set there is no keyboard stop at first. |
 | Settings | About 590 constants in `magic_numbers.py`; the GUI has switches for a handful of them. `GUI_GEOMETRY` is a position on the author's monitor. |
-| Install | The README is a few lines ("a lot of adjustments"). `requirements.txt` is UTF-16, pins everything and installs `discord.py` for people who do not want the bot. No Python version is stated (CI uses 3.12). |
+| Install | The README is a few lines ("a lot of adjustments"). `requirements.txt` is UTF-8 now, one file for the macro and the bot, pinned exactly, so `discord.py` is installed for people who do not want the bot. No Python version is stated (CI runs 3.12 and 3.13). |
 | Releases | None. No version number a user can quote, no changelog, no installer, no update from the GUI. |
 | Support | No issue templates, no FAQ, no place to ask. |
 | Code | `main.py` is one file of about 7,300 lines; contributors would have to read it all. |
@@ -57,8 +57,9 @@ Done: the keys are settings (the Settings tab's Hotkeys subtab, the game config'
 Left: with no stop key the first run has no keyboard stop. The first-run wizard (3.1) should ask for one, and the README should say the red button and the mouse in a corner of the screen stop the macro.
 
 **0.4 Requirements and Python (S).**
-Plan: `requirements.txt` in UTF-8, split into `requirements.txt` (the macro) and `requirements-bot.txt` (`discord.py` and what only the bot needs), a stated Python version (the one CI runs) and a note that Windows is required (the input and window code is Windows-only; the tests stub it so CI runs on Linux). Ranges instead of exact pins where a pin is not needed, so a user with another Python is not blocked.
-Done when: a fresh virtual environment on Windows installs the macro without the bot and `python main.py` opens the GUI.
+Done: `requirements.txt` is UTF-8 and CI installs it. By the owner's choice it stays one file (a split into a macro list and a bot list is left out).
+Plan: a stated Python version (the ones CI runs) and a note that Windows is required (the input and window code is Windows-only; the tests stub it so CI runs on Linux). Ranges instead of exact pins where a pin is not needed, so a user with another Python is not blocked.
+Done when: a fresh virtual environment on Windows installs `requirements.txt` and `python main.py` opens the GUI.
 
 **0.5 A README a stranger can follow (S).**
 Not written by Claude into `README.md` without the owner's say-so (the file is the owner's). Draft it as `docs/README_DRAFT.md` and let the owner move it: what the macro does and does not do, requirements (Windows, Python, Roblox in a window at a stated size, the game's UI settings), install, first run, what the Guide tab says, where to ask, the risk note from 5.1, the licence.

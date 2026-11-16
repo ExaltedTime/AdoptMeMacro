@@ -49,7 +49,7 @@ The first review's docs findings (a split table, names that did not exist, value
 
 Found by reading the repository (layout, size, CI, docs, hygiene), not the game logic. Done the same day:
 
-- **Done:** CI installs `requirements.txt` (the pinned packages users get), runs on Python 3.12 and 3.13 on Linux and a Windows job, mypy covers `main.py`, `magic_numbers.py`, `scripts/` and `tools/` and warns about unused ignores; `# type: ignore` went from 36 to 5 (`windll()`, `functools.partial` for the Tk callbacks, a client class for the bot, explicit kernels for OpenCV); no `print` left in `main.py`; GitHub's actions are at checkout v5 and setup-python v6; `requirements.txt` is UTF-8; `.gitattributes` pins LF; `tests/icon_detection/halloween1` is `busy_scenes`; a stale `HALLOWEEN` flag left three test comments.
+- **Done:** CI installs `requirements.txt` (the pinned packages users get), runs on Python 3.12 and 3.13 on Linux and a Windows job, mypy covers `main.py`, `magic_numbers.py`, `scripts/` and `tools/` and warns about unused ignores; `# type: ignore` went from 36 to 1 (`windll()`, `functools.partial` for the Tk callbacks, a client class for the bot, explicit kernels for OpenCV, `postable()` for the bot's channels); no `print` left in `main.py`; GitHub's actions are at checkout v5 and setup-python v6; `requirements.txt` is UTF-8; `.gitattributes` pins LF; `tests/icon_detection/halloween1` is `busy_scenes`; a stale `HALLOWEEN` flag left three test comments.
 - **The Windows job found real differences:** two bot tests assumed Linux (a path left as it is, a text file's byte count). They were fixed. A pinned `mss` that can return no PNG made mypy fail where an unpinned install had hidden it.
 
 Still open:
@@ -61,7 +61,7 @@ Still open:
 | Dependencies | The pins are exact and nothing updates them. A Dependabot configuration for pip and for the actions would open update PRs that CI then tests |
 | Docs | 32 lines of `ARCHITECTURE.md` are over 1,000 characters (the longest 6,042) and 5 items of `PLANNED.md`: accurate, hard to read and to review |
 | Release basics | No version number, changelog, contributing guide, `SECURITY.md` (the bot runs with the user's Discord token) or issue templates; the README is a few lines |
-| Code | `main.py` is one file of about 450 functions; `magic_numbers.py` has about 590 constants; 46 `except Exception` blocks (many are deliberate "never raises" helpers, some log and some do not); 5 `# type: ignore` left, all about discord.py's stubs |
+| Code | `main.py` is one file of about 450 functions; `magic_numbers.py` has about 590 constants; 46 `except Exception` blocks (many are deliberate "never raises" helpers, some log and some do not); 1 `# type: ignore` left (the bot's `setup_hook` assignment) |
 | Users | Single-user assumptions (the account, the one resolution, hotkeys on one keyboard layout) are the subject of `ROADMAP.md` |
 
 ## Ideas still open

@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional, cast
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -29,19 +29,27 @@ from scripts import bot_lib  # noqa: E402
 log = logging.getLogger("adoptme-bot")
 
 
-async def say(interaction: discord.Interaction, text: Optional[str] = None, **kwargs) -> Any:
+def postable(channel: object) -> Optional[discord.abc.Messageable]:
+    """`channel` as something that can be posted in (it has a `send`: a text channel, a thread, a DM), or None (a category, a forum, nothing). discord.py types a channel as one of many kinds,
+    most of which cannot be posted in; this is the check that the one in hand can."""
+    return cast(discord.abc.Messageable, channel) if callable(getattr(channel, "send", None)) else None
+
+
+async def say(interaction: discord.Interaction, text: Optional[str] = None, **kwargs: Any) -> Any:
     """Follow up on a command with `text`, cut to fit a message first (bot_lib.clip_message()): a message over Discord's limit is refused, and the command would
     end with nothing said. An interaction can only be followed up for 15 minutes (a long /update or /pull outlasts that): after that, or when Discord says the
     token is no good, the answer goes to the channel itself (bot_lib.followup_needs_the_channel()). The message that was sent."""
     text = bot_lib.clip_message(text) if text else text
     if not interaction.is_expired():
         try:
-            return await interaction.followup.send(text, **kwargs)  # type: ignore[arg-type]
+            return await interaction.followup.send(discord.utils.MISSING if text is None else text, **kwargs)
         except discord.HTTPException as error:
             if not bot_lib.followup_needs_the_channel(error.status, False):
                 raise
-    channel = interaction.channel or await interaction.client.fetch_channel(interaction.channel_id or 0)
-    return await channel.send(text, **kwargs)  # type: ignore[union-attr]
+    channel = postable(interaction.channel) or postable(await interaction.client.fetch_channel(interaction.channel_id or 0))
+    if channel is None:
+        raise RuntimeError("there is no channel to answer in")
+    return await channel.send(text, **kwargs)
 
 
 def roblox_region(monitor: dict) -> dict:
@@ -1240,15 +1248,23 @@ def task_ended(task: asyncio.Task) -> None:
         log.error("the watcher ended", exc_info=task.exception())
 
 
+def usable_channel(channel_id: int, channel: object) -> Optional[discord.abc.Messageable]:
+    """`channel` if it can be posted in (postable()), else None, said in the log: the id is of a channel the bot cannot post in (a category, say)."""
+    found = postable(channel)
+    if found is None:
+        log.error("channel %s is not one the bot can post in - check channel_id in bot_config.json", channel_id)
+    return found
+
+
 async def find_channel(client: discord.Client, channel_id: int) -> Optional[discord.abc.Messageable]:
     """The bot's channel: from the cache, else fetched, trying `BOT_CHANNEL_TRIES` times with a doubling wait for a network or Discord hiccup. A channel that is
     not there or not allowed (NotFound, Forbidden) is not retried - the id or the permissions are wrong. None when it could not be had; said in the log."""
     channel = client.get_channel(channel_id)
     if channel is not None:
-        return channel  # type: ignore[return-value]
+        return usable_channel(channel_id, channel)
     for attempt in range(cfg.BOT_CHANNEL_TRIES):
         try:
-            return await client.fetch_channel(channel_id)  # type: ignore[return-value]
+            return usable_channel(channel_id, await client.fetch_channel(channel_id))
         except (discord.NotFound, discord.Forbidden) as error:
             log.error("channel %s cannot be used (%s) - check channel_id in bot_config.json and the bot's permissions there", channel_id, error)
             return None

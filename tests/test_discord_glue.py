@@ -113,10 +113,20 @@ def slept(monkeypatch):
 
 def test_the_channel_is_fetched_again_after_a_hiccup_with_a_growing_wait(slept):
     import discord
-    client = FakeClient([_http_error(discord.HTTPException), OSError("net"), "the channel"])
-    assert asyncio.run(discord_bot.find_channel(client, 2)) == "the channel"
+    channel = FakeChannel()
+    client = FakeClient([_http_error(discord.HTTPException), OSError("net"), channel])
+    assert asyncio.run(discord_bot.find_channel(client, 2)) is channel
     assert client.fetches == 3 and slept == [discord_bot.cfg.BOT_CHANNEL_RETRY_WAIT, discord_bot.cfg.BOT_CHANNEL_RETRY_WAIT * 2]
-    assert asyncio.run(discord_bot.find_channel(FakeClient([], cached="cached"), 2)) == "cached"      # (no fetch when it is known)
+    assert asyncio.run(discord_bot.find_channel(FakeClient([], cached=channel), 2)) is channel      # (no fetch when it is known)
+
+
+def test_an_id_that_is_not_a_channel_to_post_in_is_not_taken_for_one(slept, caplog):
+    """discord.py hands back categories, forums and the like for an id: there is no `send` on them, and the bot said nothing about it and failed at its first post."""
+    category = object()
+    assert asyncio.run(discord_bot.find_channel(FakeClient([], cached=category), 2)) is None
+    assert asyncio.run(discord_bot.find_channel(FakeClient([category]), 2)) is None
+    assert "not one the bot can post in" in caplog.text
+    assert discord_bot.postable(FakeChannel()) is not None and discord_bot.postable(None) is None
 
 
 def test_a_channel_that_is_forbidden_is_not_retried_and_one_that_never_comes_is_given_up(slept):
@@ -802,3 +812,30 @@ def test_the_bot_starts_the_macros_window_without_its_loop_only_when_none_runs(t
     config = bot_lib.load_config(_config(tmp_path, launch_macro=setting))
     assert (discord_bot.launch_macro_at_start(config) == 9) is launches
     assert launched == ([False] if launches else [])                                                    # (never with its loop)
+
+
+def test_a_command_is_answered_in_the_followup_and_in_the_channel_once_the_interaction_has_expired():
+    """say(): the follow-up while the interaction lives (nothing given for no text), the channel itself after 15 minutes, and a clear error when no channel can be posted in."""
+    import types
+    import discord
+    followups = []
+
+    async def followup_send(content=None, **kwargs):
+        followups.append(content)
+        return "followed up"
+
+    channel = FakeChannel()
+    interaction = types.SimpleNamespace(is_expired=lambda: False, followup=types.SimpleNamespace(send=followup_send), channel=channel, channel_id=7)
+    assert asyncio.run(discord_bot.say(interaction, "hello")) == "followed up" and followups == ["hello"]
+    asyncio.run(discord_bot.say(interaction, None, ephemeral=True))
+    assert followups[-1] is discord.utils.MISSING                                          # (no text: no content, as the library has it)
+    interaction.is_expired = lambda: True
+    asyncio.run(discord_bot.say(interaction, "late"))
+    assert channel.sent == ["late"] and followups == ["hello", discord.utils.MISSING]       # (expired: in the channel, not the follow-up)
+
+    async def fetch_channel(channel_id):
+        return object()
+    interaction.channel = None
+    interaction.client = types.SimpleNamespace(fetch_channel=fetch_channel)
+    with pytest.raises(RuntimeError, match="no channel to answer in"):
+        asyncio.run(discord_bot.say(interaction, "nobody"))

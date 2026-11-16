@@ -2034,7 +2034,7 @@ def untick_egg_and_full_grown() -> Optional[bool]:
     return clicked
 
 def level_growing_pets() -> bool:
-    """Whether Setup is to leave the pets that cannot grow out of the backpack and equip the first that can (the game config's level_growing_pet, the Options subtab's checkbox)."""
+    """Whether Setup is to leave the pets that cannot grow out of the backpack and equip the first that can (the game config's level_growing_pet, the Settings tab's checkbox)."""
     return bool(load_game_config()["level_growing_pet"])
 
 def ensure_pets_tab() -> bool:
@@ -6863,7 +6863,7 @@ class AdoptMeGUI:
         return ("blanked (display off)" if self.blackout.display_switched else "blanked") if self.blackout.shown else ("not blanked" if want else "shown")
 
     def new_need_by_hotkey(self) -> None:
-        """HOTKEYS["new_need"] was pressed in Roblox: look at the need bar and ask for the name of any icon on it the macro does not know (Tk's thread), unless the Options subtab's checkbox
+        """HOTKEYS["new_need"] was pressed in Roblox: look at the need bar and ask for the name of any icon on it the macro does not know (Tk's thread), unless the Hotkeys subtab's checkbox
         has the key off (the macro then ignores it)."""
         if not self.config_flag_vars["new_need_hotkey_enabled"].get():
             return
@@ -6906,7 +6906,7 @@ class AdoptMeGUI:
             return f"failed: {error}"
 
     def blackout_by_hotkey(self) -> None:
-        """HOTKEYS["blackout"] was pressed: blank the screen or show it again (Tk's thread), unless the Options subtab's checkbox has the key off (it is
+        """HOTKEYS["blackout"] was pressed: blank the screen or show it again (Tk's thread), unless the Hotkeys subtab's checkbox has the key off (it is
         then ignored). The screen is only blanked while the macro is doing something (the loop or an action such as Setup); one that is blank can always be shown again."""
         if not self.config_flag_vars["blackout_hotkey_enabled"].get():
             return

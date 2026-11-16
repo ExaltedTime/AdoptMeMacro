@@ -56,7 +56,6 @@ Still open:
 
 | Area | Finding |
 |---|---|
-| Privacy | The test fixtures are real screenshots with other players' names, chat and the account's own state (Bucks, pet names). Not every fixture was looked at. They need a scan, and blurring or cropping, before the repository is made widely public |
 | Size | `tests/` is 128 MB (162 PNGs, 60 over 1 MB). Lossless recompression saves about a fifth (12 sampled files: 10.1 MB to 8.0 MB); cropping fixtures to the region a test reads saves more. `archive/` is another 82 MB; removing a folder does not shrink the git history |
 | Dependencies | The pins are exact and nothing updates them. A Dependabot configuration for pip and for the actions would open update PRs that CI then tests |
 | Docs | 32 lines of `ARCHITECTURE.md` are over 1,000 characters (the longest 6,042) and 5 items of `PLANNED.md`: accurate, hard to read and to review |

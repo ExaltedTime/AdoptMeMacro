@@ -28,13 +28,13 @@ What stops anyone else from using it:
 | Releases | None. No version number a user can quote, no changelog, no installer, no update from the GUI. |
 | Support | No issue templates, no FAQ, no place to ask. |
 | Code | `main.py` is one file of about 7,300 lines; contributors would have to read it all. |
-| Risk | Roblox's and the game publisher's view of macros is not stated anywhere; the capture zips contain other players' names and chat. |
+| Risk | Roblox's and the game publisher's view of macros is not stated anywhere. |
 
 ## Principles
 
 1. **Never make the working setup worse.** Every change here is made so that the author's PC behaves as before unless a setting says otherwise (the same rule `click_dialog_button()` follows: the measured position wins unless the button is found elsewhere).
 2. **Say what is unseen.** A step that has not run in the game is written down as unverified (see `docs/PLANNED.md`) and stays so until a run shows it.
-3. **A failure must leave something to fix it by.** A new user who hits a problem sends one zip; the zip is enough. That is already true for the author's runs and has to stay true for others', without leaking what is not theirs to leak.
+3. **A failure must leave something to fix it by.** A new user who hits a problem sends one zip; the zip is enough. That is already true for the author's runs and has to stay true for others'.
 4. **Fail early and say why.** A wrong window size, scale or backpack is a message at the start, not 20 failed needs.
 5. **Small steps that can be tested.** Each item below says how it is shown to work.
 
@@ -76,9 +76,9 @@ Plan: `preflight()` run at the first loop and from a Debug button, reporting eac
 Done when: it runs on the author's PC with every check green, on the fixtures (including the 1600 x 900 renders) with the expected result, and a deliberately wrong frame fails the right check.
 
 **1.3 A diagnostics zip made for strangers (S-M).**
-Today: the moments zip holds full frames: other players' names, chat and the author's own screen.
-Plan: a "Make a bug report" button that zips the last run's log, config (without the private server link, already left out), preflight result and a few frames, with the chat area and the name pills blurred (the regions are known: the chat box, `find_pet_pill()`-style pills, the name cards), and a note listing exactly what is inside. The long-run moments capture stays for the author and is off by default for others (a setting from 0.1).
-Done when: a test shows the regions of a real frame are blurred in the output and a README in the zip says what it holds.
+Today: the moments zip holds full frames, the run log and the failures.
+Plan: a "Make a bug report" button that zips the last run's log, config (without the private server link, already left out), preflight result and a few frames, with a note listing exactly what is inside. The long-run moments capture stays for the author and is off by default for others (a setting from 0.1).
+Done when: the button makes one zip and a README in it says what it holds.
 
 **1.4 Crops that survive another render (M).**
 Today: the need icons and popup crops are matched at the reference scale from one sharp or one real-window source; a second render can score under a threshold (run 5).
@@ -134,10 +134,9 @@ Decisions for the owner, with what each needs:
 
 1. **The risk note.** The macro is input-only and does not touch the game's memory. That is a fact about the design, not a promise about how the game's operator treats it. Read the current Roblox terms and the game's rules on automation yourself, decide what to say (at least: use at your own risk, bans are possible, no support for rule-breaking uses, an alt account suggestion), and put it first in the README and in the first-run wizard. The wording is not something to take from this file.
 2. **Names and logos.** A project name that says it is a fan tool (not "Adopt Me ..." as if official); no game art in the repository beyond the crops and fixtures that tests need (the crops are small and used for matching; whether to ship them is a decision to make with the risk note in front of you).
-3. **Privacy.** What the macro stores (`debug/`, the captures, the config), what leaves the PC (nothing by itself; the bot posts only to the user's own Discord; the optional update check), stated in one page. Captures contain other players' names and chat: blurred in the bug report (1.3), a warning on the long capture.
-4. **The Discord bot's keys.** The token and owner id in `bot_config.json` (git-ignored), the fixed command list and the single owner already keep it narrow; the setup page (3.4) repeats what a user must never do (share the token, give the bot a channel others can use).
-5. **Licence.** The repository is under the AGPL. That is a valid choice and it makes forks share their changes; it also puts some contributors off and means a hosted fork has to publish its source. Keep it or change it deliberately, before there are contributors whose agreement a change would need.
-6. **Antivirus and SmartScreen.** Input-sending programs and unsigned executables get flagged. Ship the zip-with-Python form first (2.1), and say in the README what to expect. A code-signing certificate is a cost to weigh only if an `.exe` is later wanted.
+3. **The Discord bot's keys.** The token and owner id in `bot_config.json` (git-ignored), the fixed command list and the single owner already keep it narrow; the setup page (3.4) repeats what a user must never do (share the token, give the bot a channel others can use).
+4. **Licence.** The repository is under the AGPL. That is a valid choice and it makes forks share their changes; it also puts some contributors off and means a hosted fork has to publish its source. Keep it or change it deliberately, before there are contributors whose agreement a change would need.
+5. **Antivirus and SmartScreen.** Input-sending programs and unsigned executables get flagged. Ship the zip-with-Python form first (2.1), and say in the README what to expect. A code-signing certificate is a cost to weigh only if an `.exe` is later wanted.
 
 ## Order and dependencies
 
@@ -169,9 +168,9 @@ Phase 0 and the owner's recruiting for phase 1 can start together. Phase 6 is de
 
 - A tester on an unfamiliar PC reaches a running loop from the README alone, in under half an hour, with the preflight green or with a message that says what to change.
 - Across the testers' runs, the share of needs resolved is close to the author's (the run summary's resolved and failure counts are the measure; set the number from the testers' actual runs, not in advance).
-- A bug report is one zip, it holds nothing that identifies other players, and the triage turns it into a fix without a second round of questions.
+- A bug report is one zip, and the triage turns it into a fix without a second round of questions.
 - A game update that breaks a crop is found by the script in 2.4 and fixed in a release within a few days.
-- The risk note, the privacy page and the licence decision are written.
+- The risk note and the licence decision are written.
 
 ## What is not in this plan
 

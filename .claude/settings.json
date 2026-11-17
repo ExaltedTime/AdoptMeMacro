@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./bot_config.json)",
+      "Read(./bot_state.json)",
+      "Read(./debug/.config)",
+      "Read(./debug/.config/**)"
+    ]
+  }
+}
